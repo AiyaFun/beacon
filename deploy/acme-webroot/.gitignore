@@ -1,0 +1,3 @@
+# ACME http-01 校验的临时文件，不入库。
+*
+!.gitignore

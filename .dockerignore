@@ -1,0 +1,14 @@
+node_modules
+.next
+.git
+*.db
+*.db-journal
+prisma/dev.db*
+.env
+.env.local
+npm-debug.log*
+docs
+README.md
+# 注意：不能忽略 scripts —— build 脚本会调 tsx scripts/pack-extension.ts 打包插件 zip。
+# 只忽略明确不需要进构建上下文的脚本（shell 运维脚本）。
+scripts/*.sh

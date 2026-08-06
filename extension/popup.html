@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>烽火台 AI 采集助手</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --surface: #ffffff;
+      --surface-2: #f0f2f5;
+      --border: #e5e7eb;
+      --border-strong: #d1d5db;
+      --text: #1a1d21;
+      --text-2: #5b6370;
+      --text-3: #8a919e;
+      --brand: #e8552d;
+      --brand-hover: #d1481f;
+      --brand-soft: #fdece6;
+      --accent: #2563eb;
+      --accent-soft: #e8f0fe;
+      --green: #16a34a;
+      --green-soft: #e7f6ec;
+      --red: #dc2626;
+      --red-soft: #fceaea;
+      --radius: 12px;
+      --radius-sm: 8px;
+      --shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 4px 16px rgba(16, 24, 40, 0.06);
+      --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--font);
+      width: 380px;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 13px;
+      line-height: 1.55;
+      user-select: none;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── 交互动效 ── */
+    button, .tab {
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    button:active:not(:disabled) {
+      transform: translateY(1px) scale(0.97) !important;
+    }
+
+    /* ── 顶栏 ── */
+    .topbar {
+      padding: 14px 16px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .brand-logo-img {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      object-fit: contain;
+      box-shadow: 0 2px 8px rgba(232, 85, 45, 0.2);
+    }
+    .brand-name {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: -0.2px;
+      line-height: 1.2;
+    }
+    .brand-sub {
+      font-size: 11px;
+      color: var(--text-3);
+      margin-top: 1px;
+    }
+
+    .top-actions { display: flex; gap: 6px; }
+    .btn-icon {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      color: var(--text-2);
+      padding: 6px 10px;
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+      font-weight: 550;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .btn-icon:hover { background: var(--border); color: var(--text); transform: translateY(-1px); }
+    .btn-icon-brand {
+      background: linear-gradient(135deg, var(--brand), #ff9a42);
+      border: none;
+      color: #fff;
+      padding: 6px 12px;
+      border-radius: var(--radius-sm);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 2px 6px rgba(232, 85, 45, 0.25);
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .btn-icon-brand:hover { opacity: 0.92; transform: translateY(-1px); }
+
+    /* ── Tabs ── */
+    .tabs {
+      display: flex;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 16px;
+    }
+    .tab {
+      flex: 1;
+      text-align: center;
+      padding: 10px 4px;
+      font-size: 12.5px;
+      font-weight: 550;
+      color: var(--text-2);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+    }
+    .tab:hover { color: var(--text); }
+    .tab.active {
+      color: var(--brand);
+      border-bottom-color: var(--brand);
+      font-weight: 600;
+    }
+
+    /* ── Content ── */
+    .content { padding: 14px; display: none; max-height: 440px; overflow-y: auto; }
+    .content.active { display: block; }
+
+    /* ── 渐变边框卡片 (主端同款) ── */
+    .card {
+      position: relative;
+      background: var(--surface);
+      border: 1px solid transparent;
+      background-image: linear-gradient(var(--surface), var(--surface)),
+        linear-gradient(135deg, rgba(232,85,45,0.22) 0%, rgba(255,154,66,0.12) 50%, rgba(37,99,235,0.08) 100%);
+      background-origin: border-box;
+      background-clip: padding-box, border-box;
+      border-radius: var(--radius);
+      padding: 16px;
+      margin-bottom: 12px;
+      box-shadow: var(--shadow);
+      transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .card:hover {
+      background-image: linear-gradient(var(--surface), var(--surface)),
+        linear-gradient(135deg, var(--brand) 0%, #ff9a42 60%, var(--accent) 100%);
+      box-shadow: 0 8px 28px rgba(232,85,45,0.12), 0 2px 8px rgba(0,0,0,0.04);
+      transform: translateY(-2px);
+    }
+    .card-title {
+      font-weight: 650;
+      font-size: 13.5px;
+      color: var(--text);
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      letter-spacing: -0.2px;
+    }
+    .card-title .ic { color: var(--brand); display: flex; align-items: center; }
+
+    /* ── 按钮 ── */
+    .btn-primary {
+      width: 100%;
+      padding: 10px 16px;
+      border-radius: var(--radius-sm);
+      border: none;
+      background: linear-gradient(135deg, var(--brand) 0%, #ff8c42 100%);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 3px 10px rgba(232, 85, 45, 0.25);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+    .btn-primary:hover { opacity: 0.92; transform: translateY(-1px); }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; box-shadow: none; }
+
+    .btn-secondary {
+      width: 100%;
+      margin-top: 8px;
+      padding: 8px 12px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+    }
+    .btn-secondary:hover { background: var(--border); transform: translateY(-1px); }
+
+    /* ── 结果消息 ── */
+    #result {
+      margin-top: 10px;
+      font-size: 12px;
+      line-height: 1.55;
+      padding: 10px 12px;
+      border-radius: var(--radius-sm);
+      display: none;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    #result.ok { display: block; background: var(--green-soft); border: 1px solid rgba(22, 163, 74, 0.3); color: var(--green); }
+    #result.err { display: block; background: var(--red-soft); border: 1px solid rgba(220, 38, 38, 0.3); color: var(--red); }
+
+    /* ── 分割线 ── */
+    .divider {
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--border), transparent);
+      margin: 14px 0;
+    }
+
+    /* ── 搜索框 ── */
+    .search-box {
+      width: 100%;
+      padding: 8px 12px;
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      font-size: 12.5px;
+      outline: none;
+    }
+    .search-box:focus { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
+
+    /* ── 竞对列表 ── */
+    .clist {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .citem {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      transition: all 0.15s ease;
+    }
+    .citem:hover { background: var(--surface); border-color: var(--border-strong); }
+    .cmeta { flex: 1; min-width: 0; padding-right: 8px; }
+    .cname { font-weight: 600; font-size: 12.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .csub { font-size: 11px; color: var(--text-2); margin-top: 2px; display: flex; align-items: center; gap: 6px; }
+    .badge { font-size: 10.5px; padding: 2px 7px; border-radius: 20px; background: var(--surface); color: var(--text-2); border: 1px solid var(--border); font-weight: 550; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+    .fresh { background: var(--green); }
+    .stale { background: var(--brand); }
+
+    .go {
+      padding: 5px 12px;
+      font-size: 11.5px;
+      font-weight: 600;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-strong);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .go:hover { background: var(--brand); color: #fff; border-color: var(--brand); transform: translateY(-1px); }
+
+    /* ── AI 助手聊天区 ── */
+    .chat-msgs {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      max-height: 220px;
+      overflow-y: auto;
+      margin-bottom: 10px;
+    }
+    .bubble {
+      max-width: 90%;
+      padding: 10px 14px;
+      border-radius: var(--radius-sm);
+      font-size: 12.5px;
+      line-height: 1.55;
+      word-break: break-word;
+    }
+    .bubble.user {
+      align-self: flex-end;
+      background: var(--brand);
+      color: #fff;
+      border-bottom-right-radius: 2px;
+    }
+    .bubble.assistant {
+      align-self: flex-start;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+      border-bottom-left-radius: 2px;
+    }
+    .quick-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+    .chip {
+      padding: 5px 10px;
+      border-radius: 16px;
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      color: var(--brand);
+      font-size: 11.5px;
+      font-weight: 550;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+    }
+    .chip:hover { background: var(--brand-soft); border-color: var(--brand); }
+    .chat-input-row {
+      display: flex;
+      gap: 6px;
+      border-top: 1px solid var(--border);
+      padding-top: 10px;
+    }
+    .chat-input {
+      flex: 1;
+      padding: 8px 12px;
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      font-size: 12.5px;
+      outline: none;
+    }
+    .chat-input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
+    .chat-send {
+      padding: 8px 14px;
+      border-radius: var(--radius-sm);
+      background: var(--brand);
+      border: none;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .chat-send:hover { background: var(--brand-hover); transform: translateY(-1px); }
+
+    /* ── 底部导航栏 ── */
+    .bottom-nav {
+      padding: 8px 16px;
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-around;
+    }
+    .bottom-nav-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+      padding: 4px 8px;
+      border: none;
+      background: none;
+      color: var(--text-3);
+      font-size: 10px;
+      font-weight: 550;
+      cursor: pointer;
+      border-radius: 6px;
+    }
+    .bottom-nav-btn:hover { color: var(--brand); background: var(--brand-soft); }
+    .bottom-nav-btn svg { color: inherit; }
+  </style>
+</head>
+<body>
+  <!-- 顶栏 Header -->
+  <div class="topbar">
+    <div class="brand">
+      <img src="logo.png" alt="烽火台" class="brand-logo-img">
+      <div>
+        <div class="brand-name">烽火台</div>
+        <div class="brand-sub">跨平台内容作战室</div>
+      </div>
+    </div>
+    <div class="top-actions">
+      <button id="jumpHome" class="btn-icon-brand" title="跳转到烽火台主页">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>
+        <span>主页</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- 有新版时才出现的更新条。默认隐藏，checkForUpdate 有结果才显示 -->
+  <div id="updateBar" style="display:none; align-items:center; gap:8px; padding:8px 12px; background:var(--brand-soft); border-bottom:1px solid var(--border)">
+    <span id="updateText" style="flex:1; font-size:11.5px; color:var(--text); line-height:1.5"></span>
+    <button id="updateBtn" class="btn-icon-brand" style="font-size:11px; padding:4px 10px; white-space:nowrap">一键更新</button>
+  </div>
+
+  <!-- 选项卡 Nav (2 Tabs) -->
+  <div class="tabs">
+    <div class="tab active" data-target="tab-collect">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 12l6-4.5"/><circle cx="12" cy="12" r="1.5"/></svg>
+      <span>智能采集</span>
+    </div>
+    <div class="tab" data-target="tab-ai">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8z"/><path d="M18 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg>
+      <span>AI 助手</span>
+    </div>
+  </div>
+
+  <!-- Tab 1: 智能采集（合并当前页面 + 竞对列表） -->
+  <div id="tab-collect" class="content active">
+    <!-- 当前页面状态 + 一键采集 -->
+    <div class="card">
+      <div class="card-title">
+        <div style="display:flex; align-items:center; gap:6px">
+          <span class="ic">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+          </span>
+          <span>当前页面</span>
+        </div>
+        <span id="pageTypeBadge" class="badge">检测中…</span>
+      </div>
+      <button id="collect" class="btn-primary">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+        <span>一键加为竞对并采集本页</span>
+      </button>
+      <button id="collectself" class="btn-secondary" style="display:none">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5-5 5 5"/><path d="M12 5v10"/></svg>
+        <span>这是我的作品 · 回填数据看板</span>
+      </button>
+      <!-- 回填到哪个账号：不选就由后端按平台猜。一个工作区经营两个抖音号时，猜必然错一半，
+           而挂错账号在数据看板上是**彻底看不见**（每页都 where accountId=当前账号），
+           还会带着另一个号的数字污染基线与学习信号。绑定关系存 chrome.storage.sync，三个入口共用。 -->
+      <div id="accountRow" style="display:none; align-items:center; gap:6px; margin-top:6px">
+        <span style="font-size:11px; color:var(--text-2); white-space:nowrap">回填到</span>
+        <select id="accountSel" style="flex:1; min-width:0; padding:5px 7px; border:1px solid var(--border-strong); border-radius:7px; font-size:11.5px; background:var(--card); color:var(--text)">
+          <option value="">（按平台自动匹配）</option>
+        </select>
+      </div>
+      <!-- 「采到了，但采得对不对」是另一个问题。这些后台在开发环境打不开，
+           唯一能对着真实页面核对的人是用户，所以给一个随时可看的入口：
+           它把这一趟采出来的标题/链接/时间/每个指标原样列出来，一键复制。 -->
+      <button id="diagnoseself" class="btn-secondary" style="display:none; font-size:11px; padding:5px 8px; margin-top:4px">
+        🔍 看看这一页采到了什么（核对标题/链接/数字）
+      </button>
+      <!-- 收进灵感箱：第三条通道（/api/ingest/inspiration），不认平台、不写竞对库、不写发布记录，
+           只往你自己工作区的收集箱加一行（标题+链接+备注）。
+           ⚠️ 它**不随页面类型显隐**——上面两个按钮认平台，这一个在任何网页上都在。
+           理由：在 X 这类既没有创作者后台、又可能压根不是你自己号的地方，「记一笔」常常是唯一能做的事；
+           而此前它只长在页内抽屉里，悬浮胶囊在 Chrome 116+ 上打开的是 SidePanel、抽屉根本不展开，
+           于是它在日常入口上等于不存在。 -->
+      <!-- 紫色与 SidePanel、页内侧栏的同名按钮一致：同一个动作在三个入口上要长得像同一个动作 -->
+      <button id="inspire" class="btn-secondary" style="margin-top:4px; border-color:transparent; background:linear-gradient(135deg,#7c3aed,#6d28d9); color:#fff">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 0-4 10c1 1 1 2 1 3h6c0-1 0-2 1-3a6 6 0 0 0-4-10z"/></svg>
+        <span>收进灵感箱</span>
+      </button>
+      <input type="text" id="inspireNote" class="search-box" style="width:100%; margin-top:6px; box-sizing:border-box" placeholder="为什么想记它？（选填，这句最有用）" />
+      <div id="result"></div>
+    </div>
+
+    <!-- 分割线 -->
+    <div class="divider"></div>
+
+    <!-- 竞对监控清单 -->
+    <div style="display:flex; gap:6px; margin-bottom:8px; align-items:center">
+      <input type="text" id="searchComp" class="search-box" style="flex:1" placeholder="搜索订阅对标账号…">
+      <button id="refresh" class="btn-icon" style="white-space:nowrap">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>
+        <span>刷新</span>
+      </button>
+    </div>
+
+    <!-- 我的账号：与下面的竞对清单同一个形态（清单 + 一键全部采集），只是走自有通道。
+         能不能一键采按账号标注——认不出入口的如实说「需手动」，不白开标签页装作在采。 -->
+    <div class="card" style="padding:12px; margin-bottom:8px">
+      <div style="display:flex; align-items:center; justify-content:space-between">
+        <span id="selfhead" style="font-size:12.5px; font-weight:600">我的账号</span>
+        <button id="batchself" class="btn-icon-brand" style="font-size:11px; padding:4px 10px">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg>
+          <span>采集我的数据</span>
+        </button>
+      </div>
+      <div id="selfmsg" style="margin-top:6px; font-size:11px; color:var(--text-3)"></div>
+      <div id="selflist" style="margin-top:8px"></div>
+    </div>
+
+    <div class="card" style="padding:12px; margin-bottom:8px">
+      <div style="display:flex; align-items:center; justify-content:space-between">
+        <span id="listhead" style="font-size:12.5px; font-weight:600; display:flex; align-items:center; gap:5px">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><path d="M16 5.5a3 3 0 0 1 0 5.5"/><path d="M18 15c2 .5 3.5 2 3.5 4.5"/></svg>
+          <span>订阅竞对清单</span>
+        </span>
+        <button id="batch" class="btn-icon-brand" style="font-size:11px; padding:4px 10px">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 12l6-4.5"/></svg>
+          <span>全部采集</span>
+        </button>
+      </div>
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-top:6px; font-size:11px">
+        <div id="batchmsg" style="color:var(--text-3)"></div>
+        <div id="scheduleBadgePill" style="color:var(--brand); font-weight:600">⏰ 定时采集加载中…</div>
+      </div>
+    </div>
+
+    <div id="clist" class="clist"></div>
+  </div>
+
+  <!-- Tab 2: AI 助手 -->
+  <div id="tab-ai" class="content">
+    <div class="card">
+      <div class="card-title">
+        <div style="display:flex; align-items:center; gap:6px">
+          <span class="ic">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8z"/><path d="M18 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg>
+          </span>
+          <span>AI 运营助手</span>
+        </div>
+      </div>
+
+      <div class="quick-chips">
+        <div class="chip" data-action="analyze">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8z"/></svg>
+          <span>爆款拆解</span>
+        </div>
+        <div class="chip" data-action="ideas">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 0-4 10c1 1 1 2 1 3h6c0-1 0-2 1-3a6 6 0 0 0-4-10z"/></svg>
+          <span>衍生选题</span>
+        </div>
+        <div class="chip" data-action="hooks">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3c1 3-2 4-2 7a4 4 0 0 0 8 0c0-1-1-2-1-3 2 1 3 3 3 6a8 8 0 1 1-15-1c0-4 5-5 4-9 .5.5 2 .8 3 0z"/></svg>
+          <span>开头钩子</span>
+        </div>
+      </div>
+
+      <div id="chatMsgs" class="chat-msgs">
+        <div class="bubble assistant">
+          您好！我是烽火台 AI 运营助手。可以随时帮您拆解当前浏览页面的爆款要素、提炼选题方向。
+        </div>
+      </div>
+
+      <div class="chat-input-row">
+        <input type="text" id="chatInput" class="chat-input" placeholder="针对当前页面提问…" />
+        <button id="chatSend" class="chat-send">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+          <span>发送</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 底部导航栏 -->
+  <div class="bottom-nav">
+    <button id="navHome" class="bottom-nav-btn" title="烽火台主页">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>
+      <span>主页</span>
+    </button>
+    <button id="navSidePanel" class="bottom-nav-btn" title="打开侧边栏">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/></svg>
+      <span>侧边栏</span>
+    </button>
+    <button id="navInPageAi" class="bottom-nav-btn" title="呼出网页AI助手">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a8 8 0 0 1-11 7.5L4 21l1.5-6A8 8 0 1 1 21 12z"/></svg>
+      <span>网页AI</span>
+    </button>
+    <button id="navSettings" class="bottom-nav-btn" title="插件设置">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg>
+      <span>设置</span>
+    </button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

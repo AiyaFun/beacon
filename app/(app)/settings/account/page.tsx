@@ -1,0 +1,52 @@
+import { PageHead } from '@/components/ui';
+import { prisma } from '@/lib/db';
+import { getSession } from '@/lib/session';
+import { getWechatConfig } from '@/lib/wechat-auth';
+import { can } from '@/lib/rbac';
+import { isDemoTenant } from '@/lib/demo/guard';
+import { AccountSecurityCard } from '../AccountSecurityCard';
+import { AccountDataCard } from '../AccountDataCard';
+import { PrivacyCard } from '../PrivacyCard';
+
+export const dynamic = 'force-dynamic';
+
+type SettingsQuery = { wx_bind?: string; wx_bind_error?: string };
+
+export default async function AccountSecurityPage(props: { searchParams: Promise<SettingsQuery> }) {
+  const s = await getSession();
+  const searchParams = await props.searchParams;
+  
+  const me = await prisma.member.findUnique({
+    where: { id: s.memberId },
+    select: { phone: true, wechatOpenId: true }
+  });
+
+  const maskedPhone = me?.phone ? me.phone.replace(/^(\d{3})\d{4}(\d{4})$/, '$1****$2') : null;
+
+  return (
+    <>
+      <PageHead
+        title="账号与安全"
+        desc="登录方式绑定与换绑 · 隐私与数据安全声明 · 数据导出与账号注销"
+      />
+
+      <AccountSecurityCard
+        maskedPhone={maskedPhone}
+        wechatBound={!!me?.wechatOpenId}
+        wechatEnabled={getWechatConfig().enabled}
+        isDemo={isDemoTenant(s.tenantId)}
+        wxBindOk={searchParams.wx_bind === 'ok'}
+        wxBindError={searchParams.wx_bind_error}
+      />
+
+      <PrivacyCard />
+
+      {/* 数据清单要跑近三十次 count，故不在此预取——卡片内点开注销确认时才按需拉 */}
+      <AccountDataCard
+        isDemo={isDemoTenant(s.tenantId)}
+        isOwner={s.role === 'owner'}
+        canExport={can(s.role, 'data.export')}
+      />
+    </>
+  );
+}

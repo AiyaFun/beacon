@@ -1,0 +1,42 @@
+node_modules
+.next
+out
+*.db
+*.db-journal
+.env
+.env.local
+.env.production
+docker-compose.override.yml
+prisma/dev.db*
+next-env.d.ts
+.DS_Store
+*.tsbuildinfo
+coverage
+# 插件打包产物（build 时由 npm run pack:ext 重新生成，不入库）
+.pack-stage
+public/downloads/*.zip
+public/downloads/downloads.manifest.json
+
+# xray 代理二进制与配置(含节点密钥,仅服务器)
+deploy/xray-bin
+deploy/xray-config.json
+
+# ── 部署配置（含服务器 IP / SSH 密钥路径）──
+deploy.config.json
+
+# ── 内部商业文档（不随源码开源）──
+docs/凭证清单.md
+docs/开发进度与交接.md
+docs/生产化部署.md
+docs/火山Supabase迁移.md
+docs/微信支付接入.md
+docs/方案-*.md
+
+# ── 内部 CI（cnb.cool 私有仓库）──
+.cnb.yml
+
+# ── 编辑器 / IDE ──
+.idea
+.vscode
+*.swp
+*.swo

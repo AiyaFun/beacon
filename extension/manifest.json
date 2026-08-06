@@ -1,0 +1,159 @@
+{
+  "manifest_version": 3,
+  "name": "烽火台采集助手",
+  "version": "0.8.1",
+  "description": "烽火台 AI 智能采集助手：竞对公开数据自动采集回传、全站 AI 爆款拆解与选题灵感、网页侧栏与 SidePanel 控制台。",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "alarms",
+    "notifications",
+    "sidePanel",
+    "contextMenus",
+    "scripting"
+  ],
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "background": {
+    "service_worker": "sw.js"
+  },
+  "options_page": "options.html",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "烽火台采集助手",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "logo.png",
+        "icon16.png",
+        "icon48.png",
+        "icon128.png",
+        "content/sidebar.css"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://space.bilibili.com/*",
+        "https://www.bilibili.com/video/*"
+      ],
+      "js": [
+        "content/common.js",
+        "content/bilibili.js",
+        "content/bili-video.js"
+      ]
+    },
+    {
+      "matches": [
+        "https://www.douyin.com/user/*",
+        "https://www.douyin.com/video/*"
+      ],
+      "js": [
+        "content/common.js",
+        "content/douyin.js",
+        "content/douyin-video.js"
+      ]
+    },
+    {
+      "matches": [
+        "https://www.xiaohongshu.com/user/profile/*",
+        "https://www.xiaohongshu.com/explore/*",
+        "https://www.xiaohongshu.com/discovery/item/*"
+      ],
+      "js": [
+        "content/common.js",
+        "content/xhs.js",
+        "content/xhs-note.js"
+      ]
+    },
+    {
+      "matches": [
+        "https://channels.weixin.qq.com/platform/*",
+        "https://mp.weixin.qq.com/cgi-bin/*",
+        "https://creator.douyin.com/*",
+        "https://creator.xiaohongshu.com/*",
+        "https://member.bilibili.com/*"
+      ],
+      "js": [
+        "content/common.js",
+        "content/self-backend.js"
+      ]
+    },
+    {
+      "matches": [
+        "https://mp.weixin.qq.com/cgi-bin/*"
+      ],
+      "js": [
+        "content/wechat-competitor.js"
+      ]
+    },
+    {
+      "matches": [
+        "https://x.com/*",
+        "https://twitter.com/*"
+      ],
+      "js": [
+        "content/common.js",
+        "content/x.js"
+      ]
+    },
+    {
+      "matches": [
+        "https://www.youtube.com/*"
+      ],
+      "js": [
+        "content/common.js",
+        "content/youtube.js"
+      ]
+    },
+    {
+      "matches": [
+        "https://www.tiktok.com/*"
+      ],
+      "js": [
+        "content/common.js",
+        "content/tiktok.js"
+      ]
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content/common.js",
+        "content/sidebar.js"
+      ],
+      "css": [
+        "content/sidebar.css"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://beacon.iyunci.cn/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": [
+        "content/bridge.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

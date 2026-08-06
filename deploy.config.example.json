@@ -1,0 +1,11 @@
+{
+  "host": "YOUR_SERVER_IP",
+  "port": 22,
+  "user": "deploy",
+  "key": "~/.ssh/id_ed25519_deploy",
+  "remotePath": "/var/www/beacon",
+  "type": "docker",
+  "buildCmd": "",
+  "postDeploy": "docker compose up -d --build redis web worker",
+  "url": "https://your-domain.example.com"
+}

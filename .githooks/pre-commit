@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+#
+# pre-commit: block commits that contain likely secrets.
+# Install: git config core.hooksPath .githooks
+#
+set -euo pipefail
+
+PATTERNS=(
+  'sk-[a-zA-Z0-9_-]{20,}'
+  'AKIA[0-9A-Z]{16}'
+  'AKLT[a-zA-Z0-9+/=]{20,}'
+  '-----BEGIN (RSA |EC )?PRIVATE KEY-----'
+  'password\s*[:=]\s*"[^"]{8,}"'
+  'secret\s*[:=]\s*"[^"]{8,}"'
+  'postgresql://[^:]+:[^@]+@[^/]+'
+  'redis://:[^@]+@'
+  'wxe[0-9a-f]{14}'
+  'apiv3.*key.*=.*"[^"]{32}"'
+)
+
+COMBINED=$(IFS='|'; echo "${PATTERNS[*]}")
+
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -z "$STAGED" ] && exit 0
+
+HITS=""
+for f in $STAGED; do
+  if git show ":$f" 2>/dev/null | grep -qEi "$COMBINED"; then
+    MATCHES=$(git show ":$f" | grep -nEi "$COMBINED" | head -5)
+    HITS="$HITS\n  $f:\n$MATCHES\n"
+  fi
+done
+
+if [ -n "$HITS" ]; then
+  echo ""
+  echo "!! SECRET DETECTED - commit blocked !!"
+  echo ""
+  echo "The following staged files contain patterns that look like secrets:"
+  echo -e "$HITS"
+  echo "If this is a false positive, commit with: git commit --no-verify"
+  echo ""
+  exit 1
+fi

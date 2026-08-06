@@ -1,0 +1,21 @@
+# 本机调试用：把 Redis 端口映射出来，方便 redis-cli / TablePlus 连。
+# 用法：cp docker-compose.override.yml.example docker-compose.override.yml
+#       （compose 会自动叠加同目录的 docker-compose.override.yml，无需额外 -f 参数）
+#
+# ⚠️ 数据库不在本编排里：改用火山引擎 Supabase 版后，本地已无 postgres 容器（见 docker-compose.yml）。
+#    要连库直接用火山连接串（psql / TablePlus / Prisma Studio），不经 compose、无需在这里映射端口。
+#    历史上这里还映射过 postgres:5432，那个 service 已删；若照旧写会让 compose 报
+#    「service "postgres" has neither an image nor a build context」而起不来。
+#
+# ⚠️ 只绑 127.0.0.1，不要写成 '6379:6379' —— 那等价于 0.0.0.0，宿主机有公网 IP 且防火墙没拦时，
+#    Redis 就直接挂在公网上了。
+# ⚠️ 生产服务器上不要放这个文件。调试完删掉：rm docker-compose.override.yml
+#
+# 连接串（宿主机上）：
+#   redis-cli -h 127.0.0.1 -p 6379 -a "$REDIS_PASSWORD"
+#   数据库：psql "postgresql://postgres:<火山密码>@<火山host>:5432/postgres?sslmode=require"（从火山控制台复制）
+
+services:
+  redis:
+    ports:
+      - '127.0.0.1:6379:6379'

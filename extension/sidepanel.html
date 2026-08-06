@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>烽火台 SidePanel 控制台</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --surface: #ffffff;
+      --surface-2: #f0f2f5;
+      --border: #e5e7eb;
+      --border-strong: #d1d5db;
+      --text: #1a1d21;
+      --text-2: #5b6370;
+      --text-3: #8a919e;
+      --brand: #e8552d;
+      --brand-hover: #d1481f;
+      --brand-soft: #fdece6;
+      --accent: #2563eb;
+      --accent-soft: #e8f0fe;
+      --green: #16a34a;
+      --green-soft: #e7f6ec;
+      --red: #dc2626;
+      --red-soft: #fceaea;
+      --radius: 12px;
+      --radius-sm: 8px;
+      --shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 4px 16px rgba(16, 24, 40, 0.06);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      font-size: 13px;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button { transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1); }
+    button:active:not(:disabled) { transform: translateY(1px) scale(0.97) !important; }
+
+    .sp-header {
+      padding: 12px 14px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-shrink: 0;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .brand-logo-img {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      object-fit: contain;
+      box-shadow: 0 2px 6px rgba(232, 85, 45, 0.2);
+    }
+    .title { font-size: 14px; font-weight: 700; color: var(--text); letter-spacing: -0.2px; }
+
+    .btn-home {
+      padding: 6px 12px;
+      border-radius: var(--radius-sm);
+      background: linear-gradient(135deg, var(--brand), #ff9a42);
+      border: none;
+      color: #fff;
+      font-size: 11.5px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      box-shadow: 0 2px 6px rgba(232, 85, 45, 0.2);
+    }
+    .btn-home:hover { opacity: 0.92; transform: translateY(-1px); }
+
+    .sp-tabs {
+      display: flex;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .sp-tab {
+      flex: 1;
+      text-align: center;
+      padding: 10px 4px;
+      font-size: 12.5px;
+      font-weight: 550;
+      color: var(--text-2);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all 0.15s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+    }
+    .sp-tab.active {
+      color: var(--brand);
+      border-bottom-color: var(--brand);
+      background: var(--brand-soft);
+      font-weight: 600;
+    }
+
+    .sp-content {
+      flex: 1;
+      overflow-y: auto;
+      display: none;
+      padding: 14px;
+      flex-direction: column;
+    }
+    .sp-content.active { display: flex; }
+
+    .chat-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    }
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .chat-bubble {
+      max-width: 90%;
+      padding: 10px 12px;
+      border-radius: var(--radius-sm);
+      font-size: 12.5px;
+      line-height: 1.55;
+      word-break: break-word;
+    }
+    .chat-bubble.user {
+      align-self: flex-end;
+      background: var(--brand);
+      color: #fff;
+      border-bottom-right-radius: 2px;
+    }
+    .chat-bubble.assistant {
+      align-self: flex-start;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      box-shadow: var(--shadow);
+      border-bottom-left-radius: 2px;
+    }
+
+    .quick-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .chip {
+      padding: 5px 10px;
+      border-radius: 16px;
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      color: var(--brand);
+      font-size: 11.5px;
+      font-weight: 550;
+      cursor: pointer;
+      transition: all 0.15s;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .chip:hover { background: var(--brand-soft); border-color: var(--brand); }
+
+    .chat-input-area {
+      display: flex;
+      gap: 6px;
+      padding-top: 8px;
+      border-top: 1px solid var(--border);
+    }
+    .chat-input {
+      flex: 1;
+      padding: 8px 12px;
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      font-size: 12.5px;
+      outline: none;
+    }
+    .chat-input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
+    .chat-send {
+      padding: 8px 14px;
+      border-radius: var(--radius-sm);
+      background: var(--brand);
+      border: none;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .chat-send:hover { background: var(--brand-hover); }
+
+    /* 渐变边框卡片 */
+    .card {
+      background: var(--surface);
+      border: 1px solid transparent;
+      background-image: linear-gradient(var(--surface), var(--surface)),
+        linear-gradient(135deg, rgba(232,85,45,0.22) 0%, rgba(255,154,66,0.12) 50%, rgba(37,99,235,0.08) 100%);
+      background-origin: border-box;
+      background-clip: padding-box, border-box;
+      border-radius: var(--radius);
+      padding: 14px;
+      margin-bottom: 12px;
+      box-shadow: var(--shadow);
+      transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .card:hover {
+      box-shadow: 0 6px 20px rgba(232,85,45,0.1);
+      transform: translateY(-1px);
+    }
+    .card-title {
+      font-size: 13px;
+      font-weight: 650;
+      color: var(--text);
+      margin-bottom: 8px;
+    }
+    .btn-action {
+      width: 100%;
+      padding: 9px 12px;
+      border-radius: var(--radius-sm);
+      background: linear-gradient(135deg, var(--brand) 0%, #ff8c42 100%);
+      border: none;
+      color: #fff;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 2px 6px rgba(232, 85, 45, 0.25);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+    }
+    .btn-action:hover { opacity: 0.92; transform: translateY(-1px); }
+
+    .clist { display: flex; flex-direction: column; gap: 6px; }
+    .citem {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 9px 12px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+    }
+    .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 4px; }
+    .fresh { background: var(--green); }
+    .stale { background: var(--brand); }
+  </style>
+</head>
+<body>
+  <div class="sp-header">
+    <div class="brand">
+      <img src="logo.png" alt="烽火台" class="brand-logo-img">
+      <div class="title">烽火台 SidePanel</div>
+    </div>
+    <button id="spJumpHome" class="btn-home">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg>
+      <span>打开主页</span>
+    </button>
+  </div>
+
+  <div class="sp-tabs">
+    <div class="sp-tab active" data-target="sp-tab-ai">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8z"/><path d="M18 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"/></svg>
+      <span>AI 运营助手</span>
+    </div>
+    <div class="sp-tab" data-target="sp-tab-list">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3 3-5 6-5s6 2 6 5"/><path d="M16 5.5a3 3 0 0 1 0 5.5"/><path d="M18 15c2 .5 3.5 2 3.5 4.5"/></svg>
+      <span>竞对监控</span>
+    </div>
+  </div>
+
+  <!-- Tab 1: AI 运营助手与快捷采集 -->
+  <div id="sp-tab-ai" class="sp-content active">
+    <div class="card" style="margin-bottom:10px; padding:12px">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px">
+        <span style="font-size:12px; font-weight:600; color:var(--text)">当前页面识别</span>
+        <span id="spPageBadge" class="badge" style="font-size:10.5px; padding:2px 7px; border-radius:10px; background:var(--brand-soft); color:var(--brand); font-weight:600">检测中…</span>
+      </div>
+      <div id="spPageTitle" style="font-size:12px; font-weight:600; color:var(--text); margin-bottom:8px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis">正在读取当前标签页…</div>
+      <button id="spCollect" class="btn-action">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+        <span>一键加为竞对并采集当前页</span>
+      </button>
+      <!-- 自有作品回填：与竞对采集是**两条不同的通道**（/api/ingest/self vs /api/ingest/competitor），
+           所以是两个按钮而不是一个按钮两种行为。默认隐藏，只在当前标签页确实是
+           「你自己的作品页 / 创作者后台」时由 sidepanel.js 显示出来（口径与 popup.js 的 SELF_SUPPORTED 同一份）。 -->
+      <button id="spCollectSelf" class="btn-action" style="display:none; margin-top:6px; background:linear-gradient(135deg,#2563eb,#1d4ed8)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg>
+        <span>这是我的作品 · 回填数据看板</span>
+      </button>
+      <!-- 回填到哪个账号：不选就由后端按平台猜。一个工作区经营两个抖音号时，猜必然错一半，
+           而挂错账号在数据看板上是**彻底看不见**（每页都 where accountId=当前账号），
+           还会带着另一个号的数字污染基线与学习信号。绑定关系存 chrome.storage.sync，三个入口共用。 -->
+      <div id="spAccountRow" style="display:none; align-items:center; gap:6px; margin-top:6px">
+        <span style="font-size:11px; color:var(--text-2); white-space:nowrap">回填到</span>
+        <select id="spAccountSel" style="flex:1; min-width:0; padding:5px 7px; border:1px solid var(--border-strong); border-radius:7px; font-size:11.5px; background:var(--card); color:var(--text)">
+          <option value="">（按平台自动匹配）</option>
+        </select>
+      </div>
+      <!-- 「回填成功」不等于「采对了」。这些后台在开发环境打不开，唯一能对着真实页面
+           核对的人是你——点它会把这一趟采出来的标题/链接/时间/每个指标原样列出来。 -->
+      <button id="spDiagnoseSelf" class="btn-home" style="display:none; width:100%; margin-top:6px; font-size:11px; justify-content:center">
+        🔍 看看这一页采到了什么（核对标题/链接/数字）
+      </button>
+      <!-- 收进灵感箱：第三条通道（/api/ingest/inspiration），不认平台、不写竞对库、不写发布记录，
+           只往你自己工作区的收集箱加一行（标题+链接+备注）。
+           ⚠️ 它**不随页面类型显隐**——上面两个按钮认平台，这一个在任何网页上都在。
+           理由：在 X 这类既没有创作者后台、又可能压根不是你自己号的地方，
+           「记一笔」常常是唯一能做的事；而此前这个按钮只长在页内抽屉里，
+           而悬浮胶囊在 Chrome 116+ 上打开的是本面板、抽屉根本不展开（同 spCollectSelf 那段），
+           于是它在日常入口上等于不存在。 -->
+      <button id="spInspire" class="btn-action" style="margin-top:6px; background:linear-gradient(135deg,#7c3aed,#6d28d9)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 0-4 10c1 1 1 2 1 3h6c0-1 0-2 1-3a6 6 0 0 0-4-10z"/></svg>
+        <span>收进灵感箱</span>
+      </button>
+      <input type="text" id="spInspireNote" class="chat-input" style="width:100%; margin-top:6px; box-sizing:border-box" placeholder="为什么想记它？（选填，这句最有用）" />
+      <div id="spResult" style="margin-top:6px; font-size:11.5px; display:none; white-space:pre-wrap; word-break:break-all; max-height:220px; overflow:auto"></div>
+    </div>
+
+    <div class="chat-container">
+      <div class="quick-chips">
+        <div class="chip" data-action="analyze">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8z"/></svg>
+          <span>爆款拆解当前页</span>
+        </div>
+        <div class="chip" data-action="ideas">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18h6"/><path d="M10 21h4"/><path d="M12 3a6 6 0 0 0-4 10c1 1 1 2 1 3h6c0-1 0-2 1-3a6 6 0 0 0-4-10z"/></svg>
+          <span>衍生 3 个选题</span>
+        </div>
+      </div>
+      <div id="chatMessages" class="chat-messages">
+        <div class="chat-bubble assistant">
+          您好！我是烽火台 AI 运营助手。在侧栏中，我可以随时帮您对当前浏览的短视频或图文进行爆款拆解、核心文案提取与选题衍生。
+        </div>
+      </div>
+      <div class="chat-input-area">
+        <input type="text" id="chatInput" class="chat-input" placeholder="输入问题或提示词…" />
+        <button id="chatSend" class="chat-send">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+          <span>发送</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab 2: 竞对监控清单 -->
+  <div id="sp-tab-list" class="sp-content">
+    <!-- 我的账号：与下面的竞对清单同一个形态（清单 + 一键全部采集），只是走自有通道。
+         能不能一键采按账号标注——认不出入口的账号如实说「需手动」，而不是白开一个标签页
+         让用户以为在采。 -->
+    <div class="card" style="margin-bottom:10px">
+      <div style="display:flex; justify-content:space-between; align-items:center">
+        <span id="spSelfHead" style="font-size:12.5px; font-weight:600">我的账号</span>
+        <button id="spBatchSelf" class="btn-home" style="font-size:11px">一键采集我的数据</button>
+      </div>
+      <div id="spSelfMsg" style="margin-top:6px; font-size:11px; color:var(--text-3)"></div>
+      <div id="spSelfList" style="margin-top:8px"></div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center">
+        <span id="spListHead" style="font-size:12.5px; font-weight:600">订阅竞对清单</span>
+        <button id="spBatch" class="btn-home" style="font-size:11px">一键全部采集</button>
+      </div>
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-top:6px; font-size:11px">
+        <div id="spBatchMsg" style="color:var(--text-3)"></div>
+        <div id="spScheduleBadgePill" style="color:var(--brand); font-weight:600">⏰ 定时采集加载中…</div>
+      </div>
+    </div>
+    <div id="spClist" class="clist"></div>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

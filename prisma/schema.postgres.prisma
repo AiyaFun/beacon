@@ -1,0 +1,1177 @@
+// 烽火台 · 数据模型 (PRD §14)
+// 开发态 provider=sqlite；生产态改为 postgresql 并启用 pgvector。
+// 注意：为 SQLite 兼容，枚举用 String 常量、JSON/数组字段用 String 存 JSON（应用层 lib/json.ts 序列化）。
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────── 域1：租户与账号 ───────────────────────────
+
+model Tenant {
+  id            String    @id @default(cuid())
+  name          String
+  plan          String    @default("free") // free | personal | team | enterprise
+  // 付费档到期时间。null = 无到期日（free 档，或从未付费）。
+  // 手动续费模式（不做委托代扣）下，「订阅」= plan + 这个到期时间，不另立 Subscription 表：
+  // Tenant.plan 已是 lib/quota.ts planOf() 的唯一真值来源，拆表必然造成双写漂移。
+  // 付费历史/对账由 PaymentOrder 流水承担。
+  planExpiresAt DateTime?
+  createdAt     DateTime  @default(now())
+
+  workspaces         Workspace[]
+  members            Member[]
+  invites            Invite[]
+  modelProviders     ModelProvider[]
+  paymentOrders      PaymentOrder[]
+  contentSkills      ContentSkill[]
+  skillInstalls      SkillInstall[]
+  complianceFeedback ComplianceFeedback[]
+
+  // 到期降级 job：扫 plan != 'free' 且 planExpiresAt < now
+  @@index([plan, planExpiresAt])
+}
+
+model Workspace {
+  id               String   @id @default(cuid())
+  tenantId         String
+  name             String
+  // 插件采集令牌（竞对监控 authorized 通道）：浏览器插件回传公开页数据时的鉴权凭证。
+  // null = 未启用。settings 页生成/轮换/停用；明文存储是权衡后的选择——它只授权
+  // 「向本工作区已订阅的竞对补充公开数据」这一件事，权限面远小于登录态，且需要支持回显。
+  ingestToken      String?  @unique
+  // 自动化任务开关（JSON）：每日推荐/数据同步/自动复盘/记忆优化等定时任务的按工作区开关。
+  // 缺省 '{}' → 各项取默认（多数为开），保持既有全自动行为。见 lib/jobs/automation.ts。
+  automationConfig String   @default("{}")
+  createdAt        DateTime @default(now())
+
+  tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  accounts        CreatorAccount[]
+  watchlistItems  WatchlistItem[]
+  memories        MemoryEntry[]
+  tasks           TaskItem[]
+  botIntegrations BotIntegration[]
+  inspirations    InspirationItem[]
+  collectionRuns  CollectionRun[]
+  ingestTokens    IngestToken[]
+}
+
+// 插件采集令牌（按设备签发，可逐枚吊销）。
+//
+// 为什么不能只留 Workspace.ingestToken 那一枚：它是工作区级的**单枚**凭证——谁装插件都填同一串，
+// 于是「吊销」只有全有或全无两档。成员离开工作区、某台电脑丢了、只想收回自己那一台，都做不到。
+// 2026-07-30 的注销缺口正是这么暴露的：服务端撤销不了「某个人的那一枚」，
+// 只能把整个工作区的采集一起掐掉（连还在用的同事一起）。
+//
+// 每次「一键配置到插件」或手动生成都签发一行。memberId 是签发人，
+// **成员被删除时外键级联带走他名下的全部令牌**——这条不能靠应用层记得去删，
+// 忘一次就等于「人已经离开工作区，他那台电脑还在往里写数据」。
+//
+// 明文存储沿用旧字段的权衡：只授权「向本工作区回传采集数据」这一件事，权限面远小于登录态，
+// 且用户需要把它重新复制到另一台设备的插件里。
+model IngestToken {
+  id          String    @id @default(cuid())
+  workspaceId String
+  // 令牌明文（bcn_ 前缀）。唯一约束 = 鉴权时一次 findUnique 命中
+  token       String    @unique
+  // 设备标签，签发时按 User-Agent 生成，如「Chrome · macOS」。用户靠它认出这是哪一台
+  label       String
+  // 签发人。null = 从旧的工作区级令牌迁移进来的，没有签发人可考
+  memberId    String?
+  createdAt   DateTime  @default(now())
+  // 最后一次鉴权成功的时间。**节流写入**（见 lib/ingest/token.ts TOUCH_INTERVAL_MS）：
+  // 每条回传都更新它，等于给每个采集请求平白加一次写库
+  lastUsedAt  DateTime?
+  // 非空 = 已吊销。不删行——用户要看得到「这台设备是什么时候、因为什么被收回的」
+  revokedAt   DateTime?
+  revokedNote String?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  member    Member?   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, revokedAt])
+  @@index([memberId])
+}
+
+// ─────────────────────────── 域: 采集台账 ───────────────────────────
+//
+// 每一次抓取动作落一行，核心是记下**这一批数据覆盖了哪段时间**。
+//
+// 为什么必须记：所有通道都只取"最近一小段"——公众号后台单次翻 2 页 / 近 7 天，
+// 自有后台跟着后台默认时段走，服务端 RSS 只给最新几条。用户在页面上看到的是
+// 「库里有 N 篇」，却无从知道**哪段时间采过、哪段是窟窿**；要补历史时更不知道从哪补起。
+// lastCrawledAt 只回答"最后一次是什么时候跑的"，回答不了"跑到的是哪几天的内容"。
+//
+// 一行 = 一次回传/一次抓取，不是一条作品。竞对档案虽是全局共享表，台账仍按工作区记——
+// 「谁在什么时候采到了哪个时段」是本工作区的操作记录，不该跨租户可见。
+//
+// 不设 targetId 外键：账号删除后台账要留着（"我采过什么"是操作历史，不随对象消失）。
+model CollectionRun {
+  id          String    @id @default(cuid())
+  workspaceId String
+  scope       String // self（自有账号）| rival（竞对账号）
+  platform    String
+  // 自有 = CreatorAccount.id；竞对 = CompetitorAccount.id。无外键，见上方注释
+  targetId    String?
+  // 采集当时的账号名快照（账号改名/删除后台账仍可读）
+  targetName  String
+  // plugin_home（插件在公开主页采）| plugin_backend（插件在后台采）| server（服务端定时/RSS）
+  // | import（文件导入）| manual（页面上手动点）
+  channel     String
+  ranAt       DateTime  @default(now())
+  // 本批内容的发布时间跨度，两端都含。整批都没有发布时间时为 null（如只回传了指标）
+  coveredFrom DateTime?
+  coveredTo   DateTime?
+  // 本批收到的条数（作品数，或账号级日数据的天数）；其中新入库 created / 更新已有 updated
+  items       Int       @default(0)
+  created     Int       @default(0)
+  updated     Int       @default(0)
+  // 降级、节流、没采到的原因；正常批次为 null
+  note        String?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, scope, ranAt])
+}
+
+// ─────────────────────────── 域: 机器人集成（飞书/其它平台 bot）───────────────────────────
+// 一键配置飞书机器人 + 通过 bot 收录内容、驱动内容引擎（需求③④）。
+// provider 可插拔：feishu 先落地；钉钉/企微/telegram 加 adapter 即可复用本表与 lib/bot。
+model BotIntegration {
+  id          String  @id @default(cuid())
+  workspaceId String
+  provider    String // feishu | dingtalk | wecom | telegram | slack
+  label       String  @default("")
+  enabled     Boolean @default(true)
+
+  // 出站（群自定义机器人 webhook）：把热点/提醒/合规/学习小结推到群。
+  webhookUrl String?
+
+  // 入站路由键（Feishu=app_id）：事件回调用它反查工作区。@unique 防串工作区。
+  // null = 只配了出站、没开入站。
+  inboundKey String? @unique
+
+  // 加密 JSON（lib/crypto.encryptKey）：{ signSecret?, appSecret?, verificationToken?, encryptKey? }。
+  // 出站签名密钥、入站应用密钥/校验串/加密串都在这里，明文不落库。
+  secretsEnc String @default("")
+
+  // 推送事件订阅（JSON string[]）：hot_ready | daily_recommend | refresh_reminder | compliance_alert | learning_summary
+  pushEvents String @default("[]")
+
+  // 定时推送配置（如 "09:00", "18:00", "09:00,18:00"）
+  pushSchedule String @default("09:00")
+
+  // 入站命令白名单（JSON string[]）：控制此 bot 能触发哪些操作；空=默认集（只收录、不自动发布）。
+  allowCommands String @default("[]")
+
+  // 观测：最后入/出站时间与错误，设置页显示健康。
+  lastInboundAt  DateTime?
+  lastOutboundAt DateTime?
+  lastError      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace     Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  conversations BotConversation[]
+
+  @@index([workspaceId, provider])
+}
+
+// 群内对话上下文（@机器人 多轮对话）。一个 (集成, 会话) 一行。
+//
+// 为什么不放内存：蓝绿部署每次切换都会换掉 web 容器，内存里的上下文会静默清空——
+// 用户看到的是「机器人突然不记得刚才聊了什么」，而这类偶发失忆最难被当成 bug 报上来。
+// 这张表是易失数据，超时（BOT_CHAT_TTL_MS）即视为新会话，不做历史归档。
+model BotConversation {
+  id            String   @id @default(cuid())
+  workspaceId   String // 冗余一份：RLS 按它做租户隔离，也便于按工作区清理
+  integrationId String
+  chatId        String // provider 内的会话 id（飞书 chat_id / 企微 FromUserName / 钉钉 conversationId）
+  // 本群「当前账号」：/账号 <名字> 绑定。对话上下文与 /分析 都以它为准。
+  // null = 未绑定，按「工作区唯一活跃账号」推断；多账号且未绑定时机器人会要求先绑定，
+  // 绝不替用户猜——猜错等于把数据记到别人名下（见 /data 的按 accountId 过滤）。
+  accountId     String?
+  turns         String   @default("[]") // 最近若干轮 JSON [{role,content}]
+  turnsAt       DateTime @default(now()) // 最后一轮时间；与 updatedAt 分开，绑账号不算续上对话
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  integration BotIntegration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@unique([integrationId, chatId])
+  @@index([workspaceId])
+}
+
+model Member {
+  id             String    @id @default(cuid())
+  tenantId       String
+  name           String
+  phone          String?   @unique // 手机号（短信验证码登录主标识）
+  email          String?   @unique
+  wechatOpenId   String?   @unique // 微信登录 openid（此前只加在 sqlite schema，生产构建因此类型报错）
+  role           String    @default("owner") // owner | admin | editor | viewer
+  status         String    @default("active") // active | suspended（停用成员：保留数据但禁止登录）
+  consentAt      DateTime? // F9-8 用户同意隐私政策+服务条款的时间
+  consentVersion String? // F9-8 同意时的法律文本版本号
+  createdAt      DateTime  @default(now())
+
+  tenant       Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  authSessions AuthSession[]
+  topicVotes   TopicVote[]
+  ingestTokens IngestToken[]
+
+  @@index([tenantId, phone])
+}
+
+// 团队成员邀请（RBAC 地基）：token 链接邀请，手机号可空表示"任何人凭链接可接受"
+model Invite {
+  id         String    @id @default(cuid())
+  tenantId   String
+  phone      String? // 被邀请人手机号；为空表示不限定接受者
+  role       String    @default("editor") // owner | admin | editor | viewer
+  token      String    @unique // 邀请链接 token
+  invitedBy  String // memberId（发起人，不设 FK：成员删除后保留邀请审计）
+  status     String    @default("pending") // pending | accepted | revoked | expired
+  expiresAt  DateTime
+  createdAt  DateTime  @default(now())
+  acceptedAt DateTime?
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
+  @@index([phone, status])
+  @@index([status, expiresAt])
+}
+
+// 短信验证码（登录/注册）
+model VerificationCode {
+  id        String   @id @default(cuid())
+  phone     String
+  code      String
+  purpose   String   @default("login") // login | rebind
+  expiresAt DateTime
+  consumed  Boolean  @default(false)
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([phone, createdAt])
+}
+
+// 登录会话（cookie token → member）
+model AuthSession {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  memberId  String
+  userAgent String?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+}
+
+// 注销存根（PRD §6 F9-8：「注销流程按时序自动执行并**可审计**」）。
+//
+// 为什么账号注销不能只是一句 `tenant.delete()`：Tenant 一删，级联会把 PaymentOrder /
+// WxPayRefund 一并带走——而《电子商务法》第 31 条要求交易信息自交易完成之日起**保存不少于三年**。
+// 于是删除权（PIPL 第 47 条）与留存义务在同一张表上直接对撞。
+//
+// 解法是把两者拆开：**人的数据即时删除，钱的凭证去标识化后留存**。这张表存的就是后者——
+// 只有商户单号/微信单号/金额/时间/档位，没有手机号、没有 openid、没有任何内容数据，
+// 单看这张表无法反查到任何自然人。
+//
+// tenantId / memberId 留的是**已被删除的行**的 id：它们此刻只是对账线索（无从再解析成人），
+// 用途是用户事后申诉「你们没删干净」时，能自证删除的时点、范围与清单。
+model AccountDeletion {
+  id             String @id @default(cuid())
+  tenantId       String
+  memberId       String
+  // tenant = 所有者注销，整个工作区与全部数据删除；member = 成员退出，工作区数据留给团队
+  scope          String
+  plan           String @default("free")
+  // 交易存根 JSON：[{outTradeNo, transactionId, plan, amountFen, status, paidAt, refunds:[…]}]
+  ledger         String @default("[]")
+  // 删除前的数据清单（各类条数）。事后能回答「删了什么、删了多少」，而不是只留一句「已删除」
+  counts         String @default("{}")
+  // 生成日志（LlmCallLog）不删、只摘除租户归属，留至法定期限届满——本字段记下被摘除的条数
+  logsAnonymized Int    @default(0)
+
+  deletedAt DateTime @default(now())
+
+  @@index([deletedAt])
+}
+
+// 被运营的创作者账号（含人设卡）
+model CreatorAccount {
+  id               String   @id @default(cuid())
+  workspaceId      String
+  name             String
+  platform         String // douyin | xiaohongshu | wechat | bilibili | x | youtube | tiktok | multi
+  handle           String?
+  avatar           String?
+  // 人设卡（结构化 JSON：身份/受众/价值主张/内容边界/语气风格）
+  personaCard      String   @default("{}")
+  // 风格指纹（三层：voice/format/topic）
+  styleFingerprint String   @default("{}")
+  status           String   @default("active")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  workspace       Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  personaVersions PersonaVersion[]
+  topicIdeas      TopicIdea[]
+  drafts          Draft[]
+  memories        MemoryEntry[]
+  publishRecords  PublishRecord[]
+  advisorSessions AdvisorSession[]
+  ownPosts        OwnPost[]
+  advisorPersonas AdvisorPersona[]
+  materials       Material[]
+  reviewReports   ReviewReport[]
+  dailyStats      AccountDailyStat[]
+  audience        AudienceProfile[]
+}
+
+// ─────────── 账号级数据（创作者后台回填；作品级数据放不下的那部分）───────────
+
+// 账号每日快照：粉丝数/净增/当日播放。创作者后台首页概览直接给这几个数，
+// 比从作品级数据反推可靠（后台的「净增」是去重后的真实值，作品播放加总不是）。
+//
+// date 用 YYYY-MM-DD **字符串**而不是 DateTime：这是「逻辑日」不是时刻，
+// 用 DateTime 会因时区/时分秒差异让同一天落成两条，@@unique 形同虚设。
+model AccountDailyStat {
+  id            String   @id @default(cuid())
+  accountId     String
+  platform      String // 分平台存：一个账号可能同时经营多个平台，混在一起的粉丝曲线没有意义
+  date          String // YYYY-MM-DD（逻辑日）
+  followers     Int? // 粉丝总数
+  followerDelta Int? // 当日净增（可为负——掉粉是真实信号，不许钳 0）
+  views         Int? // 当日总播放/阅读
+  interactions  Int? // 当日总互动
+  source        String   @default("plugin") // 与 PerformanceSnapshot.source 同一套分档口径
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  account CreatorAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  // 同账号同平台同一天只允许一条：重复回填走 upsert 更新，不堆历史垃圾
+  @@unique([accountId, platform, date])
+  // 粉丝曲线查询（按账号+平台取一段日期）走此索引
+  @@index([accountId, platform, date])
+}
+
+// 受众画像：性别/年龄/地域/兴趣分布。变化很慢（周级），只保留最新一份 + 更新时间，
+// 不做历史版本——存一堆几乎一样的快照没有信息量，需要趋势时再单开表。
+// 四个字段都是 JSON 字符串 {分组名: 占比0-1}，与 Metrics.sources 同一形态。
+model AudienceProfile {
+  id        String   @id @default(cuid())
+  accountId String
+  platform  String
+  gender    String   @default("{}")
+  age       String   @default("{}")
+  region    String   @default("{}")
+  interest  String   @default("{}")
+  source    String   @default("plugin")
+  updatedAt DateTime @updatedAt
+
+  account CreatorAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, platform])
+}
+
+model PersonaVersion {
+  id        String   @id @default(cuid())
+  accountId String
+  version   Int
+  snapshot  String // 当时人设卡 JSON
+  editedBy  String?
+  createdAt DateTime @default(now())
+
+  account CreatorAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+}
+
+// 自有账号历史作品（F9-2 回溯，用于风格指纹与基线）
+model OwnPost {
+  id          String    @id @default(cuid())
+  accountId   String
+  platform    String
+  title       String
+  contentRef  String?
+  publishedAt DateTime?
+  metrics     String    @default("{}") // {views, likes, comments, shares, completion}
+  createdAt   DateTime  @default(now())
+
+  account CreatorAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+}
+
+// F3-5 经历/观点素材库：差异化生成原料（热点人人可抄，经历不可复制）
+model Material {
+  id        String   @id @default(cuid())
+  accountId String
+  type      String // experience | case | opinion | catchphrase
+  content   String
+  tags      String   @default("[]") // JSON string[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  account CreatorAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, type])
+}
+
+// 灵感收集箱（F4 延伸候选源）：创作者刷到任何值得记一笔的东西，一键存进来。
+//
+// 存在的理由：热榜和竞对只覆盖「已经爆了的东西」，而创作者脑子里转瞬即逝的那些念头
+// ——刷到的一条评论、别的赛道的一个形式、一句想反驳的话——此前没有任何落点，
+// 想起来时早忘了。这张表把它变成结构化候选源，并支持「你收藏的灵感相关话题今天上榜了」的唤醒。
+//
+// 归属：workspace 级（小团队共享一个收集箱）；accountId 可空——插件回传时没有账号上下文，
+// 网页端可以把它归到某个账号。生成推荐时取 `accountId = 本账号 或 为空` 两类。
+model InspirationItem {
+  id          String    @id @default(cuid())
+  workspaceId String
+  accountId   String? // 空 = 工作区共享，任一账号都能用
+  title       String
+  note        String? // 用户自己写的一句「为什么收藏它」——比标题更能说明他想做什么
+  url         String?
+  platform    String? // 来源平台（插件按站点给，手动录入可空）
+  author      String? // 原作者/账号名
+  source      String    @default("plugin") // plugin | manual
+  tags        String    @default("[]") // JSON string[]
+  // open 待用 | used 已转成选题 | archived 已归档（用户主动收起，不再进候选池）
+  state       String    @default("open")
+  createdAt   DateTime  @default(now())
+  usedAt      DateTime?
+
+  // ── 文章剪藏（群里 @机器人 发链接/长正文时抓回来的内容）──
+  // ⚠️ 存的是**他人作品的正文**，与本文件原先「只存标题+链接」的口径不同，是 2026-07-29 按需求放开的。
+  // 三条护栏必须一起在，缺一条这功能就成了洗稿工具：
+  //   ① 只落到用户自己工作区（本表 workspaceId + RLS），不共享、不导出；
+  //   ② **绝不进入生成语料池**——原句样本只取 Material(type=sample)/PublishRecord/DraftVersion(human)，
+  //      剪藏正文一条都不在其中（tests/clip/never-in-exemplar.test.ts 钉死这条）；
+  //   ③ UI 与机器人回执都标注来源与「仅供分析，勿直接复用文字」。
+  content   String? // 正文（截断上限见 lib/clip）
+  summary   String? // AI 摘要
+  points    String    @default("[]") // AI 提取的要点 JSON string[]
+  analysis  String? // 结合本账号人设与真实数据的分析
+  clippedAt DateTime?
+
+  // ── 读者提问（source='comment'|'rival-comment'）专用 ──
+  // 被问到的累计次数（跨作品求和）
+  askedCount  Int       @default(0)
+  // 跨几条作品被问到：「三条作品下都在问」比「某条下问了五次」强得多
+  askedWorks  Int       @default(0)
+  // 幂等合并载体：JSON { workId: count }。合并语义是 max 不是 +=
+  askedBreak  String    @default("{}")
+  // 最近一次被问到：时效锚点 + 留存清理
+  lastAskedAt DateTime?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, state])
+  @@index([workspaceId, source, state])
+}
+
+// ─────────────────────────── 域2：竞对监控（全局共享）───────────────────────────
+
+// 全局共享，无 tenantId：同一竞对被 N 个租户订阅只采一次
+model CompetitorAccount {
+  id            String    @id @default(cuid())
+  platform      String
+  handle        String
+  name          String
+  avatar        String?
+  followers     Int       @default(0)
+  bio           String?
+  lastCrawledAt DateTime?
+  createdAt     DateTime  @default(now())
+
+  posts          CrawledPost[]
+  watchlistItems WatchlistItem[]
+
+  @@unique([platform, handle])
+}
+
+// F9-4 被监控账号移除申请：处理已公开个人信息的权利人拒绝权（PIPL）。
+// 全局无租户——竞对档案全局共享，申请也针对全局档案。
+model DataRemovalRequest {
+  id         String    @id @default(cuid())
+  platform   String
+  handle     String // 被监控账号主页标识/链接
+  contact    String // 申请人联系方式（邮箱/手机）
+  reason     String?
+  status     String    @default("pending") // pending | verified | removed | rejected
+  createdAt  DateTime  @default(now())
+  resolvedAt DateTime?
+
+  @@index([status])
+  @@index([platform, handle])
+}
+
+// 租户对竞对的订阅关系
+model WatchlistItem {
+  id           String   @id @default(cuid())
+  workspaceId  String
+  competitorId String
+  label        String?
+  addedAt      DateTime @default(now())
+
+  workspace  Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  competitor CompetitorAccount @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, competitorId])
+}
+
+// 全局共享作品
+model CrawledPost {
+  id             String    @id @default(cuid())
+  competitorId   String
+  platform       String
+  platformItemId String
+  title          String
+  summary        String?
+  url            String?
+  publishedAt    DateTime?
+  metrics        String    @default("{}") // {views,likes,comments,shares,collects}
+  hotScore       Float     @default(0)
+  crawledAt      DateTime  @default(now())
+
+  competitor CompetitorAccount    @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  snapshots  PostMetricSnapshot[]
+
+  @@unique([platform, platformItemId])
+  // 竞争饱和度取数（saturation.ts）按发布/采集时间过滤近 72h 全局作品，两列都要走时间窗口
+  @@index([publishedAt])
+  @@index([crawledAt])
+}
+
+model PostMetricSnapshot {
+  id      String   @id @default(cuid())
+  postId  String
+  metrics String   @default("{}")
+  takenAt DateTime @default(now())
+
+  post CrawledPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  // 竞对作品趋势查询（按作品取快照、按 takenAt 排序）走此索引
+  @@index([postId, takenAt])
+}
+
+// ─────────────────────────── 域3：热榜（全局广播型）───────────────────────────
+
+model HotItem {
+  id          String   @id @default(cuid())
+  source      String // douyin | weibo | x | bilibili | zhihu | baidu | toutiao | youtube | xiaohongshu
+  rank        Int
+  title       String
+  url         String?
+  heat        Float    @default(0)
+  extra       String   @default("{}")
+  isMock      Boolean  @default(false) // true=兜底示例数据（无真实源或采集失败），UI 标注
+  clusterId   String?
+  fetchedAt   DateTime @default(now())
+  firstSeenAt DateTime @default(now())
+  lastSeenAt  DateTime @default(now())
+  peakRank    Int?
+  peakHeat    Float?
+  lifecycle   String   @default("rising") // rising | peak | cooling | faded
+
+  cluster TopicCluster? @relation(fields: [clusterId], references: [id], onDelete: SetNull)
+
+  @@unique([source, title])
+  @@index([source, fetchedAt])
+}
+
+// 跨源话题聚类（LLM 产物，全租户共享）
+model TopicCluster {
+  id          String   @id @default(cuid())
+  title       String
+  summary     String?
+  sources     String   @default("[]") // JSON: 涉及的源
+  heat        Float    @default(0)
+  category    String   @default("general")
+  isSensitive Boolean  @default(false) // 敏感社会/政治话题：可看但不进推荐/生成
+  lifecycle   String   @default("rising") // rising | peak | decay
+  createdAt   DateTime @default(now())
+
+  hotItems HotItem[]
+}
+
+// ─────────────────────────── 域4：选题与创作 ───────────────────────────
+
+model TopicIdea {
+  id            String   @id @default(cuid())
+  accountId     String
+  title         String
+  angle         String // 差异化切入角（LLM 精排强制输出）
+  rationale     String?
+  // 六维评分 JSON: {traffic, personaFit, cost, monetization, compliance, differentiation}
+  scores        String   @default("{}")
+  totalScore    Float    @default(0)
+  // hot | competitor | advisor | manual：原有四种，来源于「别人已经做爆的东西」。
+  // gap | recycle | crossplat | evergreen：延伸候选源（lib/topic/sources/），分别是
+  // 跨平台时间差抢跑、旧文话题回温、A 平台爆款未发 B 平台、赛道常青储备。
+  sourceType    String   @default("hot")
+  sourceRef     String?
+  // 时间队列（lib/topic/queue.ts）：today 今日突击 | week 本周窗口 | evergreen 常青储备。
+  // 解决「所有推荐平权」——「现在不做就没了」和「何时做都行」不该混在一个列表里。
+  queue         String   @default("today")
+  // 「为什么是你 / 为什么是现在」的事实证据（由候选源产出，非 LLM 编造）。
+  // 落库是为了 UI 能把推荐理由摊开给人看，而不只是给模型看完就扔。
+  evidence      String?
+  // 时间窗口人话提示，如「微博已上榜 6 小时，抖音尚未出现 · 抢跑窗口约 30 小时」
+  windowHint    String?
+  // 蓝海度 0-1（lib/topic/bluesea.ts）：需求代理（在榜时长 × 跨平台扩散）× 供给还空着。
+  // null = 该候选拿不到热榜时间线（竞对/自搬运/常青/日历），不是「蓝海度为 0」——两者要能分开。
+  blueSea       Float?
+  // 七态状态机: candidate | recommended | accepted | rejected | drafting | published | reviewed
+  state         String   @default("candidate")
+  rejectReason  String?
+  isExploration Boolean  @default(false) // 探索位
+  // 评分是否由 Mock LLM 产生（与 HotItem.isMock 同约定）：UI 必须标注，杜绝伪随机分装真
+  mocked        Boolean  @default(false)
+  // mocked=true 的两种成因必须分开，否则界面只能二选一地说错话：
+  //   degraded=false → 压根没接真模型（dev/未配 Key），文案是「未接入真实 AI」，重试无意义；
+  //   degraded=true  → 接了真模型但这次调用失败/超时被 Mock 兜底，文案是「AI 调用失败」，且要给重试入口。
+  // 真机 2026-07-30：接着 MiniMax 跑推荐，两条因 30s 超时降级，卡上却写「未接入真实 AI」。
+  degraded      Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  account CreatorAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  drafts  Draft[]
+  votes   TopicVote[]
+}
+
+// 团队选题投票：多成员工作区里，对候选选题表态「想做 / 不想做」。
+//
+// 【它刻意不进算法】票数是**人的协调信号**，不是质量信号——三个人都想做不代表它会火。
+// 所以投票只影响页面上的展示与排序参考，绝不喂进六维评分或粗排权重。
+// 把「团队偏好」混进「内容潜力」的分里，等于用一个不可验证的东西污染一个可验证的东西。
+//
+// 一人一票，改票即覆盖（@@unique）；成员被删则票一并删（onDelete: Cascade），
+// 不留下无法归属的幽灵票。
+model TopicVote {
+  id        String   @id @default(cuid())
+  topicId   String
+  memberId  String
+  // up 想做 | down 不想做。不做「弃权」态——不投票本身就是弃权。
+  value     String   @default("up")
+  note      String? // 一句话理由（选填），团队沟通用
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  topic  TopicIdea @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  member Member    @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@unique([topicId, memberId])
+  @@index([topicId])
+}
+
+model Draft {
+  id            String   @id @default(cuid())
+  accountId     String
+  topicId       String?
+  title         String
+  platform      String // 目标发布平台
+  // editing | checking | ready | published | abandoned（W-4：起了初稿长期未完成；用户再生成初稿会回到 editing）
+  status        String   @default("editing")
+  // 一稿多平台：派生稿指向它的原稿。
+  // 为什么不复用 topicId 做血缘：用户自己粘进来的稿子压根没有选题（topicId 为空），
+  // 而「同一篇的多平台版本」恰恰是这类稿件最常见的需求。SetNull 而非 Cascade——
+  // 删掉原稿不该连坐已经派生出去、可能已经发布的兄弟稿。
+  parentDraftId String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  account  CreatorAccount    @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  topic    TopicIdea?        @relation(fields: [topicId], references: [id], onDelete: SetNull)
+  parent   Draft?            @relation("DraftDerive", fields: [parentDraftId], references: [id], onDelete: SetNull)
+  children Draft[]           @relation("DraftDerive")
+  versions DraftVersion[]
+  checks   ComplianceCheck[]
+
+  @@index([parentDraftId])
+}
+
+model DraftVersion {
+  id           String   @id @default(cuid())
+  draftId      String
+  seq          Int
+  authorType   String // ai | human
+  content      String
+  diffFromPrev String?
+  createdAt    DateTime @default(now())
+
+  draft Draft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+}
+
+// ─────────────────────────── 域5：合规 ───────────────────────────
+
+model SensitiveWord {
+  id         String   @id @default(cuid())
+  tenantId   String? // null=全局词库(法律/平台/行业)，非null=租户自定义(L4)
+  word       String
+  tier       String // legal | platform | industry | custom
+  platform   String? // 平台级词命中的平台，legal 级为空
+  action     String   @default("warn") // block | warn | suggest
+  suggestion String?
+  category   String?
+  version    String   @default("2026.07")
+  enabled    Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  @@index([tier, platform])
+}
+
+model ComplianceCheck {
+  id        String   @id @default(cuid())
+  draftId   String
+  platform  String
+  // 命中项 JSON 数组: [{word,tier,action,start,end,suggestion}]
+  hits      String   @default("[]")
+  riskLevel String   @default("pass") // pass | warn | block
+  checkedAt DateTime @default(now())
+
+  draft Draft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+}
+
+// F6-8 合规误报反馈/申诉
+model ComplianceFeedback {
+  id         String    @id @default(cuid())
+  tenantId   String
+  word       String
+  tier       String
+  context    String // 命中时的原文上下文
+  reason     String // 用户反馈原因
+  status     String    @default("pending") // pending | accepted | rejected
+  resolvedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
+}
+
+// ─────────────────────────── 域6：记忆 ───────────────────────────
+
+model MemoryEntry {
+  id          String    @id @default(cuid())
+  workspaceId String
+  accountId   String?
+  type        String // persona | preference | performance | fact
+  content     String
+  confidence  Float     @default(0.5) // 置信度分级注入
+  hitCount    Int       @default(1) // 同类行为累计次数
+  active      Boolean   @default(true)
+  embedding   String? // JSON float[]（开发态 JS 内算余弦）
+  validFrom   DateTime  @default(now())
+  validTo     DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  account   CreatorAccount? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, type])
+}
+
+// ─────────────────────────── 域7：发布与回流 ───────────────────────────
+
+model PublishRecord {
+  id             String   @id @default(cuid())
+  accountId      String
+  topicId        String?
+  draftId        String?
+  platform       String
+  title          String?
+  contentText    String? // 发布时定稿正文，支持随时重新复制回去二次分发
+  platformItemId String?
+  // 无 platformItemId = 自动回流（jobs/handlers.ts backfill_metrics 靠它挑记录）不可用。
+  // 恒等于 platformItemId==null，写入时同步不许漂移；单列出来是为了 /data 顶部能一次 count
+  // 出「N 篇缺链接学不到数据」并给补链接入口。
+  needsBackfill  Boolean  @default(false)
+  publishedAt    DateTime @default(now())
+  metrics        String   @default("{}")
+  fromRecommend  Boolean  @default(false) // 归因：是否来自产品推荐
+
+  account   CreatorAccount        @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  snapshots PerformanceSnapshot[]
+
+  // 同账号同作品ID只允许一条：登记发布与数据回填两个入口 upsert 到同一条，
+  // 不再各建一条污染 learn 基线与 /data 统计。platformItemId=null 因 SQL 中 NULL 互异
+  // 不受此约束（缺链接的记录本就无法按作品ID去重，各自独立）。
+  @@unique([accountId, platformItemId])
+}
+
+model PerformanceSnapshot {
+  id        String   @id @default(cuid())
+  publishId String
+  metrics   String   @default("{}")
+  takenAt   DateTime @default(now())
+  // 来源标记：与 HotItem.isMock 的约定一致——非用户手填的数据要能在 UI 上标出处，
+  // 否则手填值和适配器拉的真实值会混在同一条趋势曲线里，看不出哪个可信。
+  source    String   @default("manual") // manual | plugin | wechat-datacube | tikhub | youtube-official | twitterapi-io | newrank | bilibili-public
+  milestone String? // D+1..D+7 | D+14 | D+30（自动回流逐日里程碑；手动/插件回填为 null）
+
+  publish PublishRecord @relation(fields: [publishId], references: [id], onDelete: Cascade)
+
+  // 单篇逐日趋势查询（按发布记录取快照、按 takenAt 排序做时序）走此索引，避免全表扫
+  @@index([publishId, takenAt])
+}
+
+// 站内通知（触达兜底）。外部机器人(pushEvent)只在用户配了 feishu/wecom 等 webhook 时可达；
+// 个人创作者未必配，站内红点是人人可见的通用触达。独立表、无 FK（通知是易失数据，孤儿无害）。
+model Notification {
+  id          String   @id @default(cuid())
+  workspaceId String
+  accountId   String?
+  kind        String
+  refId       String?
+  title       String
+  body        String   @default("")
+  link        String?
+  read        Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([workspaceId, read, createdAt])
+}
+
+// AI 复盘报告（单篇 D+7 / 周度）。refId 对单篇=publishId，松引用不建 FK（发布记录可能被删，复盘留档）。
+// content 存结构化 JSON（表现判定/曲线归因/建议）；可重跑留历史。Mock 产物标注不入记忆。
+model ReviewReport {
+  id        String   @id @default(cuid())
+  accountId String
+  kind      String // article | weekly
+  refId     String? // 单篇=publishId
+  period    String? // 周度报告的周标识
+  content   String   @default("{}")
+  mocked    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  account CreatorAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, kind, createdAt])
+}
+
+// ─────────────────────────── 域8：智囊团（F10）───────────────────────────
+
+model AdvisorSession {
+  id        String   @id @default(cuid())
+  accountId String
+  trigger   String   @default("manual") // manual | cold_start | repeated_reject | draft_review(W-6 草稿会诊)
+  topicSeed String?
+  // W-6：草稿会诊场次指向的草稿（松引用，草稿删了仍保留会诊记录）。选题方向会诊为 null
+  draftRef  String?
+  status    String   @default("done") // running | done
+  summary   String?
+  createdAt DateTime @default(now())
+
+  account  CreatorAccount   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  opinions AdvisorOpinion[]
+}
+
+model AdvisorOpinion {
+  id          String   @id @default(cuid())
+  sessionId   String
+  // 人物卡快照
+  personaKey  String // 人物标识
+  personaName String
+  personaRole String // audience | expert
+  stance      String // 该人物的立场/关注点
+  suggestion  String // 选题方向
+  rationale   String?
+  adopted     Boolean? // 用户检验结果：采纳/拒绝
+  createdAt   DateTime @default(now())
+
+  session AdvisorSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+}
+
+// 智囊团人物卡：账号级可自定义身份 + 采纳/否决自学习权重
+model AdvisorPersona {
+  id            String   @id @default(cuid())
+  accountId     String
+  key           String // 稳定标识：内置沿用 builtin key，自定义为 custom_<cuid>
+  name          String
+  role          String // audience | expert
+  emoji         String   @default("🧑")
+  stance        String // 一句话世界观/立场
+  focus         String   @default("[]") // JSON string[]：打分时的注意力分配
+  source        String   @default("builtin") // builtin | custom
+  enabled       Boolean  @default(true)
+  weight        Float    @default(1) // 自学习权重 0.3–2.0（采纳加权/否决减权）
+  adoptedCount  Int      @default(0)
+  rejectedCount Int      @default(0)
+  learnedNotes  String   @default("[]") // JSON [{verdict, text, at}]：采纳/否决沉淀的经验，注入下次发言
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  account CreatorAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, key])
+}
+
+// ─────────────────────────── 域9：算法教练（F11）───────────────────────────
+
+model AlgorithmRule {
+  id          String   @id @default(cuid())
+  platform    String
+  signal      String // 排序信号，如 completion_rate / ces_score
+  weight      Float    @default(0.5)
+  advice      String // 建议模板
+  contentType String   @default("all") // short_video | image_text | article | long_video | all
+  confidence  String   @default("consensus") // official | opensource | consensus | rumor
+  version     String   @default("2026.07")
+  source      String?
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  @@index([platform, contentType])
+}
+
+// ─────────────────────────── 域10：BYOK 多模型（F12）───────────────────────────
+
+model ModelProvider {
+  id        String   @id @default(cuid())
+  tenantId  String
+  label     String
+  // 白名单七家，**没有 custom**：端点由平台锁定，不开放自定义（PRD §6 F12-1 / §10.5 L3）。
+  // 唯一事实来源是 lib/constants.ts:LLM_VENDORS，入库存的是预置 baseUrl 而非用户提交值。
+  vendor    String // deepseek | qwen | kimi | glm | openai | claude | gemini
+  baseUrl   String
+  apiKeyEnc String // 加密存储（开发态用可逆脱敏占位）
+  model     String
+  region    String   @default("cn") // cn(已备案) | overseas
+  // 按功能路由：JSON {scoring, generation, advisor, compliance, chat}
+  routing   String   @default("{}")
+  isDefault Boolean  @default(false)
+  status    String   @default("untested") // untested | ok | failed
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+}
+
+// ─────────────────────────── 域11：任务与助手（F8）───────────────────────────
+
+model TaskItem {
+  id          String   @id @default(cuid())
+  workspaceId String
+  title       String
+  done        Boolean  @default(false)
+  source      String   @default("user") // user | suggestion
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+}
+
+// ─────────────────────────── 域12：可观测性 / 成本账本 ───────────────────────────
+
+// 每次 LLM 调用记账（单租户单位经济仪表盘，毛利护栏；逆向预演 D5）
+model LlmCallLog {
+  id               String   @id @default(cuid())
+  tenantId         String?
+  fn               String // scoring | generation | advisor | compliance | chat | embed
+  provider         String
+  model            String
+  mocked           Boolean  @default(false)
+  promptTokens     Int      @default(0)
+  completionTokens Int      @default(0)
+  costUsd          Float    @default(0)
+  createdAt        DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([createdAt])
+}
+
+// 后台任务执行记录（三轨编排的可观测性）
+model JobRun {
+  id         String    @id @default(cuid())
+  name       String // ingest_hot | cluster_topics | crawl_competitors | daily_recommend | backfill_metrics
+  track      String // broadcast | batch_tenant | event
+  status     String    @default("running") // running | ok | failed
+  detail     String?
+  tenantId   String?
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  durationMs Int?
+
+  @@index([name, startedAt])
+}
+
+// ─────────────────────────── 域14：内容技能（Skill 市场与安装）───────────────────────────
+//
+// 「技能」= 一段带占位符的提示词模板 + 输出契约，把选题/草稿一键转成平台成品
+// （微信公众号排版、小红书图文、抖音口播稿…）。内置技能全租户可见（tenantId=null），
+// 用户在技能中心自行安装/停用；自定义技能归属租户。运行走 llmComplete 网关：
+// 配额、合规检测、AIGC 标识出口与其他生成路径同一套闸门，不另开后门。
+
+model ContentSkill {
+  id             String   @id @default(cuid())
+  // null = 平台内置技能（种子数据灌入）；非 null = 该租户的自定义技能
+  tenantId       String?
+  // 内置技能用固定 slug（seed 幂等 upsert 的锚点）；自定义生成 custom-<cuid>
+  slug           String   @unique
+  name           String
+  description    String
+  emoji          String   @default("✨")
+  // 目标平台：wechat | xiaohongshu | douyin | shipinhao | zhihu | generic
+  platform       String   @default("generic")
+  // format=排版成品 | generate=生成新内容 | check=检查类
+  category       String   @default("format")
+  // 提示词模板。占位符：{{content}} 正文、{{title}} 标题、{{persona}} 人设摘要。
+  // 模板是数据不是代码：渲染只做字符串替换，绝不 eval。
+  promptTemplate String
+  // 输出形态：markdown | html | text。html 仅用于富文本排版（微信公众号粘贴）。
+  outputKind     String   @default("markdown")
+  version        String   @default("1.0")
+  isBuiltin      Boolean  @default(false)
+  enabled        Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  tenant   Tenant?        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  installs SkillInstall[]
+
+  @@index([tenantId, enabled])
+}
+
+// 租户安装关系：内置技能装了才在创作工坊出现；自定义技能创建即自动安装
+model SkillInstall {
+  id        String   @id @default(cuid())
+  tenantId  String
+  skillId   String
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  tenant Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  skill  ContentSkill @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, skillId])
+}
+
+// ─────────────────────────── 域13：支付与订阅（微信支付 Native 扫码）───────────────────────────
+//
+// 产品形态：Native 扫码 + 手动续费（不做委托代扣，需额外资质）。按 plan 订阅制，
+// 付费即升档、到期由 job 降回 free。配额分档见 lib/quota.ts PLATFORM_TIERS。
+//
+// 金额一律**整数分**（字段名以 Fen 结尾），与微信 amount.total 同单位。
+// 绝不用 Float：浮点误差 + SQLite 没有真 Decimal，钱不能这么存。
+
+model PaymentOrder {
+  id           String @id @default(cuid())
+  // 商户订单号：6-32 位，只允许 [0-9A-Za-z_|*-]，同一商户号下唯一（微信硬约束）。
+  // 不能有中文/emoji。重试支付必须复用原单号，已支付/已关闭的单号不可再用。
+  outTradeNo   String @unique
+  tenantId     String
+  // 下单人。不设 FK：成员删除后保留支付审计（与 Invite.invitedBy 同约定）。
+  memberId     String
+  plan         String // personal | team | enterprise（本单购买的档位；free 不可下单）
+  periodMonths Int // 购买时长（月）：1 | 12
+  amountFen    Int // 应付金额，单位：分
+  currency     String @default("CNY")
+  // created=已下单待支付 | paid=已支付并兑现 | closed=超时/主动关单 | refunded=已退款 | failed=下单失败
+  status       String @default("created")
+  provider     String @default("wxpay_native")
+
+  codeUrl       String? // 微信返回的 weixin://wxpay/bizpayurl/... 原样转二维码，别自己拼参数
+  codeExpiresAt DateTime? // 二维码失效时间（下单 +2h）。失效需重新下单换新单号。
+  // 微信支付订单号。兑现幂等的**第二道锁**：同一笔支付全局唯一，
+  // 挡住「回调与查单兜底并发兑现」。可空 unique（多行 NULL 在 SQLite/PG 均允许）。
+  transactionId String?   @unique
+  paidAt        DateTime?
+  closedAt      DateTime?
+
+  // ── 兑现审计 ──
+  // 升档折算/续费叠加会让「买了 1 个月」≠「延了 30 天」。不记这些字段，
+  // 事后对账说不清一单钱到底换了什么，客服无法自证。
+  prevPlan          String? // 兑现前的 plan
+  prevPlanExpiresAt DateTime? // 兑现前的到期时间
+  grantedDays       Int? // 本单实际发放天数（含升档折算换算出的补偿天数）
+  newPlanExpiresAt  DateTime? // 兑现后的到期时间
+
+  failReason String? // 微信错误码 + message（如 NO_AUTH / OUT_TRADE_NO_USED）
+  // 微信应答头 Request-ID：微信侧请求唯一标识，报障必须提供 → 必须落库
+  requestId  String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  notifies WxPayNotifyLog[]
+  refunds  WxPayRefund[]
+
+  @@index([tenantId, createdAt]) // 租户订单列表
+  @@index([status, codeExpiresAt]) // 关单 job：扫 status='created' 且二维码已过期
+}
+
+// 微信支付回调去重日志。
+// 微信明确会重复发同一通知（失败/超时后最多重发 15 次），且要求「做好重入设计」。
+// notifyId 唯一索引是幂等的**第一道锁**：INSERT 冲突 = 重复通知 → 直接 204。
+//
+// 为什么两道锁都要（不是冗余）：查单兜底路径（GET /v3/pay/transactions/out-trade-no/...）
+// 没有 notifyId，第一道锁对它无效，必须靠 PaymentOrder.transactionId + 条件写兜住。
+// 两条不同入口共用一个兑现幂等点。
+//
+// 本表**不启用 RLS**：由无登录态的回调路由写入（微信要求 notify_url 不得做登录态校验），
+// 拿不到 app.current_tenant，启用 RLS 会让 INSERT 被 WITH CHECK 拒掉。详见 postgres/02-rls.sql 尾注。
+model WxPayNotifyLog {
+  id         String   @id @default(cuid())
+  notifyId   String   @unique // 回调外层 id，形如 EV-2018022511223320873
+  orderId    String? // 关联订单；解密失败/匹配不到订单时为空（仍记录，便于排障）
+  outTradeNo String?
+  eventType  String // TRANSACTION.SUCCESS
+  tradeState String? // SUCCESS | REFUND | NOTPAY | CLOSED（Native 只会出现这 4 个）
+  // 业务兑现是否完成。微信要求 5s 内应答 → 先验签应答、再异步兑现，本字段是异步进度。
+  processed  Boolean  @default(false)
+  // 摘要而非完整报文：解密后明文含 payer.openid 等个人信息，不落全量。
+  rawSummary String?
+  createdAt  DateTime @default(now())
+
+  order PaymentOrder? @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([processed, createdAt]) // 补偿 job：扫已收到但未兑现的通知
+}
+
+// 退款单。与 PaymentOrder 分表：一笔支付理论可多次部分退款（v1 只做全额），且退款有独立状态机。
+// 退款回调复用 WxPayNotifyLog 去重（eventType=REFUND.SUCCESS）。
+model WxPayRefund {
+  id              String  @id @default(cuid())
+  // 商户退款单号（bcr_ 前缀）。幂等键：重试退款必须复用同一个，否则退两次钱。
+  outRefundNo     String  @unique
+  orderId         String
+  outTradeNo      String
+  tenantId        String
+  amountRefundFen Int // 退款金额（分），v1 = 原订单全额
+  amountTotalFen  Int // 原订单总额（分）
+  reason          String?
+  // 发起人：memberId（人工客服代操作）或 'ops'（内部脚本/受控接口）。审计用。
+  operator        String
+  // created=已发起 | processing=微信处理中 | success=已退款并已尝试回收套餐
+  // | closed/abnormal=微信侧终止 | failed=发起失败
+  status          String  @default("created")
+  // 微信退款单号，全局唯一 → 兑现幂等的第二道锁（同 PaymentOrder.transactionId）。
+  refundId        String? @unique
+
+  // ── 套餐回收审计 ──
+  // 退款成功后是否安全回收了套餐（仅当退款时租户档位仍等于本单兑现结果时才回收，
+  // 否则说明其上叠加过后续购买，回收会误伤 → 不回收、只退钱，留 planRecovered=false 待人工）。
+  planRecovered          Boolean   @default(false)
+  recoveredPlan          String? // 回收后写回的 plan
+  recoveredPlanExpiresAt DateTime? // 回收后写回的到期时间
+
+  successAt  DateTime?
+  failReason String?
+  requestId  String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  order PaymentOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([status, createdAt])
+  @@index([tenantId, createdAt])
+}

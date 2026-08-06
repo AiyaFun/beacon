@@ -1,0 +1,470 @@
+/* 烽火台 网页侧边悬浮 AI 助手隔离样式 (Namespace: #beacon-ai-root) */
+
+#beacon-ai-root {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif !important;
+  color-scheme: light !important;
+}
+
+/* Toast 通知样式 */
+.beacon-toast {
+  position: fixed !important;
+  top: 16px !important;
+  right: 16px !important;
+  z-index: 2147483647 !important;
+  padding: 12px 18px !important;
+  border-radius: 10px !important;
+  font-size: 13px !important;
+  font-weight: 550 !important;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.12) !important;
+  transform: translateX(120%) !important;
+  transition: transform 0.3s cubic-bezier(0.16,1,0.3,1) !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+.beacon-toast.show { transform: translateX(0) !important; }
+.beacon-toast.ok { background: #e7f6ec !important; border: 1px solid rgba(22,163,74,0.3) !important; color: #16a34a !important; }
+.beacon-toast.err { background: #fceaea !important; border: 1px solid rgba(220,38,38,0.3) !important; color: #dc2626 !important; }
+
+/* ── 点击微动效与波纹反馈 (Matching Beacon Web App Click Feedback) ── */
+@keyframes beacon-ripple {
+  0% { box-shadow: 0 0 0 0 rgba(232, 85, 45, 0.35); }
+  70% { box-shadow: 0 0 0 10px rgba(232, 85, 45, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(232, 85, 45, 0); }
+}
+
+@keyframes beacon-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.beacon-spin {
+  animation: beacon-spin 0.8s linear infinite !important;
+  display: inline-block !important;
+}
+
+/* ── 悬浮竖条：收起态只有一个圆 logo，展开后是一列图标 ──────────────────
+   位置由 JS 写 inline top（可拖动并记忆），所以这里只给默认值，不写死。
+   ⚠️ 本文件通篇 !important 是为了压住宿主页面的样式；这也意味着**行内样式压不过它**
+   （这个坑之前踩过：行内渐变被 !important 吃掉）。要动态改的属性必须在这里留好 class。 */
+#beacon-rail {
+  position: fixed !important;
+  right: 10px !important;
+  /* ⚠️ 位置**必须**走自定义属性，不能让 JS 写行内 style.top：
+     本文件的 !important 会压过行内样式（同一个坑之前吃掉过行内渐变），
+     表现是「位置存进了 storage，但竖条纹丝不动」——真机桩上当场复现过。
+     行内声明的 --beacon-rail-top 不受这条规则影响，这里再 !important 读它即可。 */
+  top: var(--beacon-rail-top, 30%) !important;
+  z-index: 2147483647 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+#beacon-rail.dragging { user-select: none !important; cursor: grabbing !important; }
+/* 抽屉展开时把竖条让到抽屉左边——否则 380px 宽的抽屉会整个盖住它，
+   用户想收起抽屉却发现按钮在抽屉底下点不到。 */
+#beacon-ai-root.drawer-open #beacon-rail { right: 392px !important; }
+
+#beacon-rail-logo {
+  width: 44px !important;
+  height: 44px !important;
+  padding: 0 !important;
+  border-radius: 50% !important;
+  background: #ffffff !important;
+  border: 1px solid #e5e7eb !important;
+  box-shadow: 0 4px 16px rgba(16, 24, 40, 0.10), 0 0 0 3px rgba(232, 85, 45, 0.06) !important;
+  cursor: grab !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.18s ease !important;
+  outline: none !important;
+  touch-action: none !important; /* 不加这条，触摸板/触屏上的拖动会被浏览器当成滚动 */
+}
+#beacon-rail-logo:hover { transform: scale(1.06) !important; box-shadow: 0 6px 22px rgba(232, 85, 45, 0.22) !important; }
+#beacon-rail.dragging #beacon-rail-logo { cursor: grabbing !important; transform: scale(1.04) !important; }
+#beacon-rail-logo img {
+  width: 30px !important; height: 30px !important;
+  border-radius: 50% !important; object-fit: cover !important; pointer-events: none !important;
+}
+
+/* 图标条：收起时高度归零并淡出，展开时从 logo 下方长出来 */
+#beacon-rail-items {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  gap: 2px !important;
+  padding: 0 !important;
+  max-height: 0 !important;
+  opacity: 0 !important;
+  overflow: hidden !important;
+  background: #ffffff !important;
+  border-radius: 26px !important;
+  border: 1px solid #eceef1 !important;
+  box-shadow: 0 6px 24px rgba(16, 24, 40, 0.10) !important;
+  transition: max-height 0.26s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.18s ease, padding 0.26s ease !important;
+}
+#beacon-rail.open #beacon-rail-items {
+  max-height: 460px !important;
+  opacity: 1 !important;
+  padding: 8px 5px !important;
+}
+
+.beacon-rail-sep {
+  width: 22px !important; height: 1px !important;
+  background: #eceef1 !important;
+  margin: 5px 0 !important;
+  flex: none !important;
+}
+
+.beacon-rail-btn {
+  position: relative !important;
+  width: 38px !important; height: 38px !important;
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  border-radius: 12px !important;
+  color: #3d4450 !important;
+  cursor: pointer !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.12s ease !important;
+  outline: none !important;
+}
+.beacon-rail-btn:hover { background: #f5f6f8 !important; color: #e8552d !important; }
+.beacon-rail-btn:active { transform: scale(0.92) !important; }
+/* 不可用是置灰而不是消失：按钮消失会让下面的图标位置跳动，用户的肌肉记忆当场作废 */
+.beacon-rail-btn.off { color: #c6cad1 !important; cursor: not-allowed !important; }
+.beacon-rail-btn.off:hover { background: transparent !important; color: #c6cad1 !important; }
+.beacon-rail-btn.busy { animation: beacon-ripple 1.1s ease-out infinite !important; color: #e8552d !important; }
+
+/* 提示气泡：贴在左侧，鼠标移上去才出现。宿主页面可能有 overflow:hidden 的祖先，
+   但 #beacon-rail 是 position:fixed 且挂在 body 下，不受影响。 */
+.beacon-rail-tip {
+  position: absolute !important;
+  right: calc(100% + 10px) !important;
+  top: 50% !important;
+  transform: translateY(-50%) translateX(6px) !important;
+  background: #1a1d21 !important;
+  color: #fff !important;
+  padding: 7px 10px !important;
+  border-radius: 9px !important;
+  white-space: nowrap !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: opacity 0.14s ease, transform 0.14s ease !important;
+  box-shadow: 0 6px 20px rgba(16, 24, 40, 0.18) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+  max-width: 260px !important;
+}
+.beacon-rail-tip b { font-size: 12.5px !important; font-weight: 650 !important; color: #fff !important; }
+.beacon-rail-tip i {
+  font-style: normal !important; font-size: 11px !important; color: #b9bec7 !important;
+  white-space: normal !important; line-height: 1.45 !important;
+}
+.beacon-rail-btn:hover .beacon-rail-tip { opacity: 1 !important; transform: translateY(-50%) translateX(0) !important; }
+
+/* 抽屉里的小徽章按钮（「衍生 3 个选题」这类附属动作，不该长得和主按钮一样大） */
+.beacon-chip-btn {
+  margin-left: auto !important;
+  display: inline-flex !important; align-items: center !important; gap: 4px !important;
+  padding: 4px 9px !important;
+  font-size: 11.5px !important; font-weight: 600 !important;
+  color: #e8552d !important; background: rgba(232, 85, 45, 0.08) !important;
+  border: none !important; border-radius: 20px !important; cursor: pointer !important;
+  transition: background 0.15s ease !important;
+}
+.beacon-chip-btn:hover { background: rgba(232, 85, 45, 0.16) !important; }
+
+/* 侧栏抽屉容器 */
+#beacon-ai-drawer {
+  position: fixed !important;
+  top: 0 !important;
+  right: -400px !important;
+  width: 380px !important;
+  height: 100vh !important;
+  z-index: 2147483647 !important;
+  background: #f6f7f9 !important;
+  border-left: 1px solid #e5e7eb !important;
+  box-shadow: -8px 0 32px rgba(16, 24, 40, 0.1) !important;
+  transition: right 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  color: #1a1d21 !important;
+  box-sizing: border-box !important;
+}
+
+#beacon-ai-drawer.open {
+  right: 0 !important;
+}
+
+/* 抽屉头部 Header */
+#beacon-ai-header {
+  padding: 14px 16px !important;
+  background: #ffffff !important;
+  border-bottom: 1px solid #e5e7eb !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+}
+
+.beacon-hdr-brand {
+  display: flex !important;
+  align-items: center !important;
+  gap: 10px !important;
+}
+
+.beacon-hdr-logo {
+  width: 32px !important;
+  height: 32px !important;
+  border-radius: 8px !important;
+  object-fit: contain !important;
+  box-shadow: 0 2px 8px rgba(232, 85, 45, 0.2) !important;
+}
+
+.beacon-hdr-title {
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  color: #1a1d21 !important;
+  letter-spacing: -0.2px !important;
+  line-height: 1.2 !important;
+}
+
+.beacon-hdr-sub {
+  font-size: 11px !important;
+  color: #8a919e !important;
+  margin-top: 1px !important;
+}
+
+.beacon-hdr-actions {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+}
+
+.beacon-btn-home {
+  padding: 6px 12px !important;
+  border-radius: 8px !important;
+  background: linear-gradient(135deg, #e8552d, #ff9a42) !important;
+  border: none !important;
+  color: #ffffff !important;
+  font-size: 11.5px !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  text-decoration: none !important;
+  box-shadow: 0 2px 6px rgba(232, 85, 45, 0.25) !important;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+.beacon-btn-home:hover { opacity: 0.92 !important; transform: translateY(-1px) !important; }
+.beacon-btn-home:active { transform: translateY(1px) scale(0.97) !important; }
+
+.beacon-btn-close {
+  background: #f0f2f5 !important;
+  border: 1px solid #d1d5db !important;
+  color: #5b6370 !important;
+  width: 28px !important;
+  height: 28px !important;
+  border-radius: 50% !important;
+  cursor: pointer !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+.beacon-btn-close:hover { background: #e5e7eb !important; color: #1a1d21 !important; transform: scale(1.05) !important; }
+.beacon-btn-close:active { transform: scale(0.95) !important; }
+
+/* 抽屉主体 */
+#beacon-ai-body {
+  flex: 1 !important;
+  padding: 16px !important;
+  overflow-y: auto !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 14px !important;
+  background: #f6f7f9 !important;
+}
+
+/* 卡片容器 */
+.beacon-card {
+  background: #ffffff !important;
+  border: 1px solid transparent !important;
+  background-image: linear-gradient(#ffffff, #ffffff), linear-gradient(135deg, rgba(232,85,45,0.22) 0%, rgba(255,154,66,0.12) 50%, rgba(37,99,235,0.08) 100%) !important;
+  background-origin: border-box !important;
+  background-clip: padding-box, border-box !important;
+  border-radius: 12px !important;
+  padding: 14px 16px !important;
+  box-shadow: 0 1px 2px rgba(16,24,40,0.04), 0 4px 16px rgba(16,24,40,0.06) !important;
+  transition: all 0.22s cubic-bezier(0.16,1,0.3,1) !important;
+}
+.beacon-card:hover {
+  background-image: linear-gradient(#ffffff, #ffffff), linear-gradient(135deg, #e8552d 0%, #ff9a42 60%, #2563eb 100%) !important;
+  box-shadow: 0 8px 28px rgba(232,85,45,0.12), 0 2px 8px rgba(0,0,0,0.04) !important;
+  transform: translateY(-2px) !important;
+}
+
+.beacon-card-title {
+  font-size: 13.5px !important;
+  font-weight: 650 !important;
+  color: #1a1d21 !important;
+  margin-bottom: 10px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  letter-spacing: -0.2px !important;
+}
+
+.beacon-badge-platform {
+  font-size: 10.5px !important;
+  padding: 2px 8px !important;
+  border-radius: 20px !important;
+  background: #fdece6 !important;
+  color: #e8552d !important;
+  font-weight: 600 !important;
+}
+
+.beacon-btn-action {
+  width: 100% !important;
+  padding: 10px 14px !important;
+  border-radius: 8px !important;
+  border: none !important;
+  background: linear-gradient(135deg, #e8552d 0%, #ff8c42 100%) !important;
+  color: #ffffff !important;
+  font-size: 12.5px !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+  box-shadow: 0 3px 10px rgba(232, 85, 45, 0.25) !important;
+  margin-top: 8px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 6px !important;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+.beacon-btn-action:hover { opacity: 0.94 !important; transform: translateY(-1px) !important; box-shadow: 0 5px 14px rgba(232, 85, 45, 0.35) !important; }
+.beacon-btn-action:active { transform: translateY(1px) scale(0.97) !important; animation: beacon-ripple 0.4s ease-out !important; }
+.beacon-btn-action:disabled { opacity: 0.5 !important; cursor: not-allowed !important; transform: none !important; }
+
+/* 三颗按钮必须一眼分得开：橙=写共享竞对库，蓝=写你自己的数据看板，紫=只往收集箱记一笔。
+   ⚠️ 必须写成带 !important 的类，不能在 HTML 里写 style="background:…"——
+   上面 .beacon-btn-action 的 background 带 !important，行内样式**赢不过它**：
+   此前「收进灵感箱」的行内紫色一直是失效的，三颗按钮在真实页面上全是同一个橙色。
+   而 X 上「加为竞对」和「这是我的作品」是并排的两颗，长得一样意味着迟早点错，
+   点错的代价是竞对的推文被写成你自己的发布记录（见 content/x.js 顶部）。 */
+.beacon-btn-self {
+  background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%) !important;
+  box-shadow: 0 3px 10px rgba(37, 99, 235, 0.25) !important;
+}
+.beacon-btn-self:hover { box-shadow: 0 5px 14px rgba(37, 99, 235, 0.35) !important; }
+.beacon-btn-inspire {
+  background: linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%) !important;
+  box-shadow: 0 3px 10px rgba(124, 58, 237, 0.25) !important;
+}
+.beacon-btn-inspire:hover { box-shadow: 0 5px 14px rgba(124, 58, 237, 0.35) !important; }
+
+/* 聊天框 */
+.beacon-chat-messages {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 12px !important;
+  max-height: 280px !important;
+  overflow-y: auto !important;
+  padding-right: 2px !important;
+  margin-top: 8px !important;
+}
+
+.beacon-bubble {
+  display: flex !important;
+  gap: 8px !important;
+  max-width: 90% !important;
+  align-items: flex-start !important;
+}
+.beacon-bubble.user {
+  align-self: flex-end !important;
+  flex-direction: row-reverse !important;
+}
+.beacon-bubble.assistant {
+  align-self: flex-start !important;
+  flex-direction: row !important;
+}
+
+.beacon-avatar {
+  width: 26px !important;
+  height: 26px !important;
+  border-radius: 50% !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  color: #ffffff !important;
+  flex-shrink: 0 !important;
+}
+.beacon-avatar.user { background: #64748b !important; }
+.beacon-avatar.assistant { background: #e8552d !important; }
+
+.beacon-bubble-card {
+  padding: 10px 14px !important;
+  border-radius: 8px !important;
+  font-size: 13px !important;
+  line-height: 1.55 !important;
+  word-break: break-word !important;
+  transition: transform 0.15s ease !important;
+}
+.beacon-bubble-card.user {
+  background: #e8552d !important;
+  color: #ffffff !important;
+  border-bottom-right-radius: 2px !important;
+}
+.beacon-bubble-card.assistant {
+  background: #ffffff !important;
+  border: 1px solid #e5e7eb !important;
+  color: #1a1d21 !important;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04) !important;
+  border-bottom-left-radius: 2px !important;
+}
+
+/* 底部输入框 */
+.beacon-chat-input-row {
+  display: flex !important;
+  gap: 8px !important;
+  margin-top: 12px !important;
+}
+
+.beacon-chat-input {
+  flex: 1 !important;
+  padding: 9px 12px !important;
+  background: #ffffff !important;
+  border: 1px solid #d1d5db !important;
+  border-radius: 8px !important;
+  color: #1a1d21 !important;
+  font-size: 13px !important;
+  outline: none !important;
+  transition: all 0.15s ease !important;
+}
+.beacon-chat-input:focus {
+  border-color: #e8552d !important;
+  box-shadow: 0 0 0 3px #fdece6 !important;
+}
+
+.beacon-chat-send {
+  padding: 9px 14px !important;
+  border-radius: 8px !important;
+  background: #e8552d !important;
+  border: none !important;
+  color: #ffffff !important;
+  font-weight: 600 !important;
+  font-size: 12.5px !important;
+  cursor: pointer !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1) !important;
+}
+.beacon-chat-send:hover { background: #d1481f !important; transform: translateY(-1px) !important; }
+.beacon-chat-send:active { transform: translateY(1px) scale(0.97) !important; }
