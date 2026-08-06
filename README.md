@@ -41,12 +41,82 @@ Open [http://localhost:3000](http://localhost:3000). Dev mode uses mock data for
 
 ## Production Deployment
 
-See `.env.production.example` for the full production configuration template. The project ships with `docker-compose.yml` for container deployment.
+### Prerequisites
+
+- A Linux server (Ubuntu 20.04+ / CentOS 7+ recommended)
+- Docker & Docker Compose v2
+- A domain name with DNS pointed to your server
+- SSL certificate for HTTPS (Let's Encrypt or your own)
+- PostgreSQL 15+ with pgvector extension (self-hosted or managed, e.g. Supabase)
+
+### Step 1: Clone and configure
 
 ```bash
+git clone https://github.com/AiyaFun/beacon.git
+cd beacon
 cp .env.production.example .env.production
-# Fill in your real credentials, then:
+chmod 600 .env.production
+```
+
+Edit `.env.production` — the file is heavily commented with explanations for each variable. At minimum, fill in:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DATABASE_URL` | Yes | PostgreSQL connection string with `?schema=beacon` |
+| `BEACON_MASTER_KEY` | Yes | Encryption key for user API keys. Generate: `openssl rand -base64 48` |
+| `BEACON_SMS_VENDOR` | Yes | `"volcengine"` for China SMS, or implement your own provider |
+| `BEACON_DEFAULT_LLM_*` | Yes | Any OpenAI-compatible LLM endpoint (DeepSeek, Qwen, MiniMax, etc.) |
+| `BEACON_TRUSTED_PROXY_HOPS` | Yes | Number of reverse proxies in front of the app (default `"1"` for the built-in Nginx) |
+
+### Step 2: Initialize database
+
+```bash
+# Set Redis password
+export REDIS_PASSWORD="$(openssl rand -hex 32)"
+
+# First-time database setup (creates tables, pgvector extension, and RLS policies)
+DATABASE_URL="your-connection-string" bash scripts/db-init-supabase.sh
+```
+
+### Step 3: Deploy with Docker Compose
+
+```bash
 docker compose up -d --build
+```
+
+This starts 4 services:
+- **proxy** — Nginx reverse proxy (ports 80/443)
+- **web** — Next.js app server (internal only, port 3000)
+- **worker** — BullMQ background job processor
+- **redis** — Job queue and rate limiting
+
+### Step 4: Verify
+
+```bash
+# Check all containers are running
+docker compose ps
+
+# Health check
+curl -s https://your-domain.com/api/health | jq .
+
+# Send a test SMS verification code on the login page
+```
+
+### SSL Certificates
+
+Place your certificate files and run:
+
+```bash
+bash deploy/cert.sh
+```
+
+Or use Let's Encrypt with certbot before starting the containers.
+
+### Updating
+
+```bash
+git pull
+docker compose up -d --build redis web worker
 ```
 
 ## Extension
