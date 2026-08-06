@@ -37,7 +37,7 @@
 如需商业授权，请通过以下方式联系：
 
 - 产品主页: [beacon.iyunci.cn](https://beacon.iyunci.cn)
-- Email: wenhuang1006@gmail.com
+- Email: jiangwenhuang@iyunci.cn
 - 微信: iuda99
 
 ---

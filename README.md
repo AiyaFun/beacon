@@ -1,17 +1,33 @@
 # Beacon / 烽火台
 
-Cross-platform content operations SaaS for creators. Monitor trending topics, track competitor content, and generate optimized drafts — all from one dashboard.
+面向创作者和内容团队的 **跨平台内容作战室**。一站式完成热点追踪、竞对监控、AI 选题、智能创作与合规检测，帮助创作者用数据驱动内容决策。
 
-**Live Demo**: [beacon.iyunci.cn](https://beacon.iyunci.cn)
+Cross-platform content operations SaaS for creators — trending topics, competitor tracking, AI-powered topic selection, smart writing, and compliance checking in one dashboard.
 
-## Features
+**在线体验**: [beacon.iyunci.cn](https://beacon.iyunci.cn)
 
-- **Trending Topics** — Aggregates hot topics from 20+ Chinese and global platforms in real-time
-- **Competitor Monitoring** — Track competitor accounts across Douyin, WeChat, Xiaohongshu, Bilibili, YouTube, X
-- **AI Writing Workshop** — Generate platform-optimized drafts with humanization scoring and fact-drift detection
-- **Browser Extension** — One-click content collection, inspiration clipping, and data backfill
-- **Multi-account Dashboard** — Unified analytics across all your creator accounts
-- **Bot Integration** — Feishu/Lark bot for team notifications and conversational queries
+## 这个项目能做什么
+
+烽火台解决创作者日常面临的三个核心问题：**追什么热点、学谁的套路、怎么写得又快又合规**。
+
+- **热榜聚合** — 实时汇聚微博、抖音、B站、知乎、小红书、百度等 20+ 平台热榜，AI 自动聚类去重，一眼看清全网在聊什么
+- **竞对监控** — 跨平台追踪竞对账号（抖音、公众号、小红书、B站、YouTube、X），自动抓取新作品并分析数据表现
+- **选题引擎** — 12 位 AI 人物智囊团从不同视角评审选题，结合你的人设和账号定位给出切入建议
+- **创作工坊** — AI 辅助起稿、一稿多平台改写、人味评分、事实漂移检测，生成内容自动标注 AIGC 标识
+- **合规检测** — 四级敏感词库 + 分平台差异规则，发布前一键扫描，避免违规
+- **浏览器插件** — 一键收藏灵感素材、自有账号数据回填、竞对作品采集
+- **机器人集成** — 飞书群机器人推送热点通知、支持自然语言查询
+
+## 典型使用流程
+
+```
+1. 登录 → 绑定你的创作者账号（公众号、抖音、小红书等）
+2. 首页「今日概览」查看全网热榜 + 竞对动态 + AI 推荐选题
+3. 点进感兴趣的选题 → 智囊团给出多角度切入建议
+4. 进入「创作工坊」→ AI 起稿 → 一键改写成各平台风格
+5. 「合规检测」扫一遍 → 确认无敏感词 → 复制发布
+6. 发布后数据自动回流到「数据看板」→ 分析表现 → 指导下一次选题
+```
 
 ## Tech Stack
 
@@ -143,4 +159,4 @@ This project is dual-licensed:
 - **Open Source**: [AGPL-3.0](LICENSE) — free for personal and non-commercial use. You must retain the original author attribution and copyright notice, and share any modifications under the same license.
 - **Commercial**: A separate commercial license is available for paid SaaS deployment, private resale, or closed-source use. See [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md) for details.
 
-For commercial licensing inquiries: wenhuang1006@gmail.com
+For commercial licensing inquiries: jiangwenhuang@iyunci.cn
