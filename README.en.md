@@ -5,6 +5,10 @@
 <p align="center">A data-driven, cross-platform command center for content creators.</p>
 
 <p align="center">
+  <a href="https://beacon.iyunci.cn">👉 Live Demo</a>
+</p>
+
+<p align="center">
   <a href="https://github.com/AiyaFun/beacon"><img src="https://img.shields.io/badge/Platform-SaaS-blue" alt="Platform"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL--3.0-green" alt="License"></a>
   <a href="https://beacon.iyunci.cn"><img src="https://img.shields.io/badge/Demo-beacon.iyunci.cn-orange" alt="Demo"></a>

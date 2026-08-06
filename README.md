@@ -5,6 +5,10 @@
 <p align="center">「用数据驱动内容决策的跨平台创作者作战室。」</p>
 
 <p align="center">
+  <a href="https://beacon.iyunci.cn">👉 在线体验</a>
+</p>
+
+<p align="center">
   <a href="https://github.com/AiyaFun/beacon"><img src="https://img.shields.io/badge/Platform-SaaS-blue" alt="Platform"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL--3.0-green" alt="License"></a>
   <a href="https://beacon.iyunci.cn"><img src="https://img.shields.io/badge/Demo-beacon.iyunci.cn-orange" alt="Demo"></a>
