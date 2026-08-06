@@ -2,6 +2,8 @@
 
 Cross-platform content operations SaaS for creators. Monitor trending topics, track competitor content, and generate optimized drafts — all from one dashboard.
 
+**Live Demo**: [beacon.iyunci.cn](https://beacon.iyunci.cn)
+
 ## Features
 
 - **Trending Topics** — Aggregates hot topics from 20+ Chinese and global platforms in real-time
@@ -66,4 +68,9 @@ git config core.hooksPath .githooks
 
 ## License
 
-[AGPL-3.0](LICENSE)
+This project is dual-licensed:
+
+- **Open Source**: [AGPL-3.0](LICENSE) — free for personal and non-commercial use. You must retain the original author attribution and copyright notice, and share any modifications under the same license.
+- **Commercial**: A separate commercial license is available for paid SaaS deployment, private resale, or closed-source use. See [COMMERCIAL_LICENSE.md](COMMERCIAL_LICENSE.md) for details.
+
+For commercial licensing inquiries: wenhuang1006@gmail.com
