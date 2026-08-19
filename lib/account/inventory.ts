@@ -63,6 +63,8 @@ export async function dataInventory(scope: TenantScope): Promise<InventoryRow[]>
     advisorPersonas,
     memories,
     inspirations,
+    readerComments,
+    mediaAssets,
     watchlist,
     tasks,
     notifications,
@@ -93,6 +95,8 @@ export async function dataInventory(scope: TenantScope): Promise<InventoryRow[]>
     prisma.advisorPersona.count({ where: byAccount }),
     prisma.memoryEntry.count({ where: byWorkspace }),
     prisma.inspirationItem.count({ where: byWorkspace }),
+    prisma.readerComment.count({ where: byWorkspace }),
+    prisma.mediaAsset.count({ where: byWorkspace }),
     prisma.watchlistItem.count({ where: byWorkspace }),
     prisma.taskItem.count({ where: byWorkspace }),
     prisma.notification.count({ where: byWorkspace }),
@@ -125,6 +129,11 @@ export async function dataInventory(scope: TenantScope): Promise<InventoryRow[]>
     { key: 'advisorPersonas', label: '智囊团人物卡', count: advisorPersonas },
     { key: 'memories', label: '记忆条目', count: memories },
     { key: 'inspirations', label: '灵感收集箱', count: inspirations },
+    // 第三方写的评论正文，不随导出走（可携带权针对的是**你的**个人信息），但要让用户看得见它存在
+    { key: 'readerComments', label: '读者原声（评论正文 · 90 天自动删）', count: readerComments },
+    // 参考图与生成的封面。图片体积大、且人像属敏感个人信息，**不随导出走**（同 ReaderComment 的取舍），
+    // 但必须让用户看得见它存在、知道去哪删（封面工位的形象库）。
+    { key: 'mediaAssets', label: '封面与形象素材（图片 · 可在封面工位删除）', count: mediaAssets },
     { key: 'watchlist', label: '竞对订阅', count: watchlist },
     { key: 'tasks', label: '待办', count: tasks },
     { key: 'notifications', label: '站内通知', count: notifications },

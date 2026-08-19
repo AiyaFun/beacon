@@ -347,18 +347,39 @@ document.getElementById('spBatchSelf')?.addEventListener('click', () => {
   chrome.runtime.sendMessage({ type: 'batch-collect-self' });
 });
 
+// ⚠️ 两组进度消息要分别接，各写各的状态位。
+//
+// 此前只接了 `batch-self-*`（我的账号那半边），而竞对的「一键全部采集」发的是
+// `batch-progress` / `batch-done`——sw.js 的 reportBatch 一直在 broadcast，只是这里没人听。
+// 于是 `spBatchMsg` 这个状态位**从未被引用过**：用户点完按钮没有任何反馈，
+// 会以为没触发而反复点，实际后台已经在逐个开标签页了。
+//
+// 另外原来第一行是 `const msg = getElementById('spSelfMsg'); if (!msg) return;`——
+// 拿自有那半边的元素当整个监听器的前置条件，接竞对分支时必须先拆掉这个耦合。
 chrome.runtime.onMessage?.addListener((m) => {
-  const msg = document.getElementById('spSelfMsg');
-  if (!msg) return;
-  if (m?.type === 'batch-self-progress') {
-    msg.textContent = m.busy
+  const selfMsg = document.getElementById('spSelfMsg');
+  const batchMsg = document.getElementById('spBatchMsg');
+
+  if (m?.type === 'batch-self-progress' && selfMsg) {
+    selfMsg.textContent = m.busy
       ? '已有一批采集在跑，等它结束再点'
       : `采集中 ${m.done}/${m.total}${m.current ? ` · ${m.current}` : ''}`;
-  } else if (m?.type === 'batch-self-done') {
-    msg.textContent = `✓ ${m.total} 个账号采集完成，回填 ${m.posts} 条作品`
+  } else if (m?.type === 'batch-self-done' && selfMsg) {
+    selfMsg.textContent = `✓ ${m.total} 个账号采集完成，回填 ${m.posts} 条作品`
       + (m.wechat ? '；公众号后台正在后台回填，完成后有系统通知' : '');
     loadSelfList();
     loadAccounts(true);
+  } else if (m?.type === 'batch-progress' && batchMsg) {
+    batchMsg.textContent = m.busy
+      ? '已有一批采集在跑，等它结束再点'
+      : `采集中 ${m.done}/${m.total}${m.current ? ` · ${m.current}` : ''}`;
+  } else if (m?.type === 'batch-done' && batchMsg) {
+    // notes 是被节流/上限拦下的原因（公众号那条通道会带）。静默丢掉的话，
+    // 用户看到「10 个里成功 6 个」却不知道另外 4 个为什么没采。
+    batchMsg.textContent = `✓ ${m.total} 个竞对，成功采集 ${m.collected} 个`
+      + (m.notes?.length ? `；${m.notes.join('；')}` : '');
+    // batchCollect 结束前已经 getCompetitors(true) 刷过 sw 侧缓存，这里读缓存即是新数据
+    loadCompetitors();
   }
 });
 
@@ -391,7 +412,7 @@ document.getElementById('spCollect')?.addEventListener('click', async () => {
   const url = tab.url || '';
 
   if (url.includes('localhost') || url.includes('beacon.iyunci.cn') || url.includes('127.0.0.1')) {
-    spSay('💡 当前在「烽火台控制台」。请在 B站/抖音/小红书/YouTube/X 竞对主页或作品页上点击采集。', 'var(--accent)');
+    spSay('💡 当前在「烽火台控制台」。请在 B站/抖音/小红书/YouTube/X/TikTok 竞对主页或作品页上点击采集。', 'var(--accent)');
     return;
   }
 
@@ -405,7 +426,7 @@ document.getElementById('spCollect')?.addEventListener('click', async () => {
   if (!isCompetitorPage(url)) {
     // 认不出平台时兜底解析会默认 platform='bilibili' 并按路径瞎凑 handle，
     // 在竞对库里建出一个根本不存在的账号。
-    spSay('💡 这个站点不在竞对采集范围内（B站/抖音/小红书/YouTube/X）。', 'var(--accent)');
+    spSay('💡 这个站点不在竞对采集范围内（B站/抖音/小红书/YouTube/X/TikTok）。', 'var(--accent)');
     return;
   }
 
@@ -437,7 +458,7 @@ document.getElementById('spCollectSelf')?.addEventListener('click', async () => 
   const url = tab.url || '';
 
   if (!isSelfPage(url)) {
-    spSay('💡 请在你自己的作品页（B站/抖音/小红书/X），或创作者后台的「数据中心 · 作品数据」页使用。', 'var(--accent)');
+    spSay('💡 请在你自己的作品页（B站/抖音/小红书/X/YouTube/TikTok），或创作者后台的「数据中心 · 作品数据」页使用。', 'var(--accent)');
     return;
   }
 
@@ -552,6 +573,107 @@ document.getElementById('spInspire')?.addEventListener('click', async () => {
   }
   btn.disabled = false;
 });
+
+// ── 读评论提问 ──
+document.getElementById('spCollectComments')?.addEventListener('click', async () => {
+  const ccBtn = document.getElementById('spCollectComments');
+  // 没开就直送设置页（与竖条、popup 同一套口径）——让后台回一句「未开启」帮不到用户。
+  if (ccBtn.dataset.locked === '1') {
+    spSay('评论提问采集默认关闭，正在打开设置页…', 'var(--text-2)');
+    try { chrome.runtime.openOptionsPage(); } catch { /* 打不开就只剩这句提示 */ }
+    return;
+  }
+  ccBtn.disabled = true;
+  spSay('正在读取评论区提问…', 'var(--text-2)');
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) { spSay('无法获取当前标签页', 'var(--red)'); ccBtn.disabled = false; return; }
+  const r = await ask({ type: 'beacon-collect-comments', tabId: tab.id });
+  if (r?.ok) {
+    const n = (r.created || 0) + (r.updated || 0);
+    const c = r.comments || 0;
+    spSay(`✓ 读了 ${r.read ?? '?'} 条评论：${n} 条提问${r.created ? `（${r.created} 条新增）` : ''}、${c} 条读者原声`, 'var(--green)');
+  } else {
+    spSay('❌ ' + (r?.error || '评论采集失败'), 'var(--red)');
+  }
+  ccBtn.disabled = false;
+});
+
+// ── 补齐前 20 条作品详情 ──
+//
+// 主页给不了的字段（抖音的评论/收藏/转发、B站 的评论数）只有作品详情页才有。
+// 这颗按钮把前 20 条作品的详情页逐个打开、解析、回传。
+//
+// 只在**支持的竞对平台主页**上露出：详情页没有额外字段的平台点了也是白跑一趟。
+// ⚠️ 判据必须认到**路径**，不能只认域名。
+//
+// 此前三条写的是 `path: '/'`，而判定是 `url.includes(p.host) && url.includes(p.path)`
+// ——任何 URL 都包含 '/'，等于「域名匹配即显示」。于是这颗按钮在 youtube.com/watch、
+// x.com/home、bilibili.com/video/BVxxx 上都会露出，点了只会拿到「这一页没读到作品列表」。
+// 它自己的注释和隐私政策都写的是「只在支持的竞对平台**主页**上露出」。
+//
+// 改成整条 URL 的正则：主页/空间页才算数，作品页与功能页一律不露。
+//
+// ⚠️ **直接复用本文件上方已有的那五条**，不再抄一份。抄一份的下场这一轮已经见过太多次：
+// 两处各自维护、真机校准只改一处、然后静默不一致。这几条正是 AMBIGUOUS_PROFILE 用的同一批
+//（「我的主页」与「竞对主页」是同一种页面的那几个平台），语义上也正好就是「主页」。
+const DETAIL_HOME_PAGES = [
+  DY_SELF_PROFILE,
+  BILI_SELF_SPACE,
+  XHS_SELF_PROFILE,
+  YT_SELF_CHANNEL,
+  X_SELF_PAGE,
+];
+(async () => {
+  try {
+    const btn = document.getElementById('spCollectDetails');
+    if (!btn) return;
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const url = tab?.url || '';
+    const fit = DETAIL_HOME_PAGES.some((re) => re.test(url));
+    if (!fit) return;
+    btn.style.display = '';
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      const label = btn.querySelector('span');
+      const original = label ? label.textContent : '';
+      spSay('正在逐条打开作品详情页补齐数据…（一次最多 20 条，中间会有间隔，别关标签页）', 'var(--text-2)');
+      try {
+        const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
+        const r = await ask({ type: 'beacon-collect-details', tabId: t?.id });
+        if (r?.ok) {
+          // 被截断的条数必须说出来 —— 悄悄少采会让用户以为「全补齐了」
+          const more = r.skipped > 0 ? `；还有 ${r.skipped} 条这轮没采（每次最多 20 条），可以再点一次` : '';
+          spSay(`✓ 补齐 ${r.done}/${r.total} 条${r.failed ? `（${r.failed} 条没读到）` : ''}${more}`, 'var(--green)');
+        } else {
+          spSay('❌ ' + (r?.error || '补齐失败'), 'var(--red)');
+        }
+      } finally {
+        btn.disabled = false;
+        if (label) label.textContent = original;
+      }
+    });
+  } catch { /* 判定失败就保持隐藏，不影响侧栏其它功能 */ }
+})();
+
+// 评论按钮**始终显示**，没开开关时显示成「未开启」并直通设置页。
+// 藏起来等于这个功能不存在——用户真机上就是因为找不到才来问「有没有一键采集评论的按钮」。
+// ⚠️ 顶层语句抛异常会**整份脚本停在这里**——后面的 loadCompetitors()、页面自检、
+//    「这是我的作品」按钮全都不再绑定，表现是「侧栏一片死」而不是「少了一个按钮」。
+//    一个可选的显隐开关不配有这种权力，所以整块包起来：读不到就按「未开启」渲染。
+try {
+  const ccBtn0 = document.getElementById('spCollectComments');
+  if (ccBtn0) { ccBtn0.style.display = ''; ccBtn0.dataset.locked = '1'; }
+  chrome.storage?.sync?.get(['commentCollectOwn', 'commentCollectRival'])?.then?.((s) => {
+    const ccBtn = document.getElementById('spCollectComments');
+    if (!ccBtn) return;
+    const on = s?.commentCollectOwn === true || s?.commentCollectRival === true;
+    ccBtn.dataset.locked = on ? '' : '1';
+    ccBtn.title = on ? '' : '出于合规考虑默认关闭，点击去设置里打开';
+    ccBtn.style.opacity = on ? '' : '0.68';
+    const span = ccBtn.querySelector('span');
+    if (span && !on) span.textContent = '读评论提问（未开启）';
+  });
+} catch { /* 拿不到设置就按「未开启」渲染，按钮照样在 */ }
 
 loadCompetitors();
 

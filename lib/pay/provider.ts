@@ -2,6 +2,7 @@ import { isProd } from '../env';
 import { MockPayProvider } from './mock';
 import { WxPayNativeProvider } from './wxpay';
 import type { PayProvider } from './types';
+import { assertCan } from '@/lib/edition';
 
 // 支付通道工厂。开发态用 Mock（零凭证跑通全流程）；生产态必须设 BEACON_PAY_VENDOR=wxpay。
 //
@@ -83,6 +84,9 @@ export function readWxPayEnv(): WxPayEnv {
 }
 
 export function getPayProvider(): PayProvider {
+  // 形态闸：企业版不收钱。这里是所有下单/退款路径的共同入口，
+  // 放在这里等于一次性掐掉支付能力，不依赖上层每个调用点都记得判。
+  assertCan('payment');
   if (cached) return cached;
   const vendor = process.env.BEACON_PAY_VENDOR?.trim();
 

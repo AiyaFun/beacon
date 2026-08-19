@@ -19,7 +19,9 @@ import { isProd } from '@/lib/env';
 import { getSmsProvider } from '@/lib/sms/provider';
 import { encryptKey, decryptKey } from '@/lib/crypto';
 import { OpenAICompatibleProvider } from '@/lib/llm/openai-compatible';
-import { checkVendorEndpoint, canUseOverseas } from '@/lib/constants';
+import { checkVendorEndpoint, canUseOverseas, LLM_FUNCTIONS, looksNonChatModel } from '@/lib/constants';
+import { pingProvider } from '@/lib/llm/connectivity';
+import { parseJson } from '@/lib/json';
 
 // F12 模型接入(BYOK)：渠道 CRUD + 连通性测试 + 按功能路由。
 // 合规约束（PRD §10.5 / research-11 §4）：region=overseas 仅限企业版 + 出海场景，生成出口仍过合规检测。
@@ -66,34 +68,78 @@ export async function actAddProvider(data: {
       isDefault: existing === 0,
     },
   });
-  revalidatePath('/settings');
+  revalidatePath('/settings/keys');
   return { ok: true };
 }
 
 // ── 连通性测试：用该配置构造最小调用，探测可用性 ──
+//
+// 【为什么不能对图像/视频模型直接判 failed】测试发的是 chat/completions 的 ping。
+// 如果这条渠道填的是即梦（doubao-seedream-*）这类**图像模型**，chat 端点必然报错——
+// 但那说明的是「这个模型不是对话模型」，不是「这个 Key 不能用」。而 status='failed' 会被
+// lib/llm/image.ts 的 resolveImageProvider 与 gateway 的视频解析直接排除（两处都过滤 not:'failed'），
+// 于是用户明明配好了 Key，封面却报「还没有可用的生图渠道」——配了却用不了，还查不出为什么。
+//
+// 所以这里按错误性质分流：**认证类错误**（401/403/invalid api key…）才是真的坏，判 failed；
+// 其它错误（模型不存在、参数不合法…）对非对话模型是预期之内，判 ok 并如实说明「没做出图实测」。
+// 不做真实出图实测是有意的：一次出图要真花钱，点一下「连通性测试」不该扣用户的钱。
+// 'use server' 文件只能导出 async 函数，所以判据放 lib/constants.ts（那里也是端点白名单的家）。
 export async function actTestProvider(id: string) {
   const s = await getSession();
   requireRole(s, 'byok.manage');
   const p = await prisma.modelProvider.findFirst({ where: { id, tenantId: s.tenantId } });
   if (!p) return { ok: false, error: '渠道不存在' };
-  const provider = new OpenAICompatibleProvider({
-    name: p.label,
+  const routing = parseJson<Record<string, string>>(p.routing, {});
+  // 显式路由到图像/视频，或模型名一看就不是对话模型 → 按「非对话模型」口径判定
+  const nonChat = routing.image === p.id || routing.video === p.id || looksNonChatModel(p.model);
+  // 判定逻辑收在 lib/llm/connectivity.ts（租户设置 / 运维台 / 一键检测三处共用同一份）
+  const r = await pingProvider({
+    label: p.label,
     baseUrl: p.baseUrl,
     apiKey: decryptKey(p.apiKeyEnc),
     model: p.model,
+    nonChat,
   });
-  let status: 'ok' | 'failed' = 'failed';
-  let detail = '';
-  try {
-    const r = await provider.complete([{ role: 'user', content: 'ping' }], { temperature: 0 });
-    status = r.text.length >= 0 ? 'ok' : 'failed';
-  } catch (e) {
-    status = 'failed';
-    detail = (e as Error).message.slice(0, 120);
+  await prisma.modelProvider.update({ where: { id: p.id }, data: { status: r.status } });
+  revalidatePath('/settings/keys');
+  return { ok: r.ok, status: r.status, detail: r.ok && r.detail === '连通正常' ? '' : r.detail };
+}
+
+// ── 按功能路由：把某个功能指到某条渠道 ──
+//
+// 【修的是什么】ModelProvider.routing 此前**全仓只读不写**：设置页显示「图像 → 平台托管默认」，
+// 提示文案还教用户「把某个豆包渠道路由到图像」，但界面上根本没有能路由的地方——是一句做不到的承诺。
+//
+// 存储口径沿用读侧（lib/llm/gateway.ts / image.ts）：渠道自己的 routing JSON 里存 `{fn: 自己的 id}`，
+// 所以指定 fn→P 要做两件事：把 fn 从其它渠道的 routing 里摘掉，再写进 P 的 routing。
+// providerId 传空串 = 取消指定，回落到默认渠道/平台托管。
+export async function actSetRouting(fn: string, providerId: string) {
+  const s = await getSession();
+  requireRole(s, 'byok.manage');
+  if (!(LLM_FUNCTIONS as readonly string[]).includes(fn)) return { ok: false, error: '未知的功能' };
+
+  const providers = await prisma.modelProvider.findMany({ where: { tenantId: s.tenantId } });
+  const target = providerId ? providers.find((p) => p.id === providerId) : null;
+  if (providerId && !target) return { ok: false, error: '渠道不存在' };
+  // 图像/视频只能走火山方舟：读侧（image.ts:resolveImageProvider / gateway.ts:resolveVideoProvider）
+  // 只在 vendor='doubao' 里挑，指到别家等于指了个不会被采纳的值——与其静默无效，不如当场说清楚。
+  if (target && (fn === 'image' || fn === 'video') && target.vendor !== 'doubao') {
+    return { ok: false, error: `${fn === 'image' ? '封面生图' : '视频理解'}只能用「火山引擎 豆包」渠道` };
   }
-  await prisma.modelProvider.update({ where: { id: p.id }, data: { status } });
-  revalidatePath('/settings');
-  return { ok: status === 'ok', status, detail };
+
+  await Promise.all(
+    providers.map((p) => {
+      const routing = parseJson<Record<string, string>>(p.routing, {});
+      const shouldHave = target?.id === p.id;
+      const has = routing[fn] === p.id;
+      if (shouldHave === has) return null; // 无变化，不写库
+      if (shouldHave) routing[fn] = p.id;
+      else delete routing[fn];
+      return prisma.modelProvider.update({ where: { id: p.id }, data: { routing: JSON.stringify(routing) } });
+    }).filter(Boolean) as Promise<unknown>[],
+  );
+  revalidatePath('/settings/keys');
+  return { ok: true };
 }
 
 // ── 删除渠道 ──
@@ -101,7 +147,7 @@ export async function actDeleteProvider(id: string) {
   const s = await getSession();
   requireRole(s, 'byok.manage');
   await prisma.modelProvider.deleteMany({ where: { id, tenantId: s.tenantId } });
-  revalidatePath('/settings');
+  revalidatePath('/settings/keys');
   return { ok: true };
 }
 
@@ -111,7 +157,7 @@ export async function actSetDefault(id: string) {
   requireRole(s, 'byok.manage');
   await prisma.modelProvider.updateMany({ where: { tenantId: s.tenantId }, data: { isDefault: false } });
   await prisma.modelProvider.updateMany({ where: { id, tenantId: s.tenantId }, data: { isDefault: true } });
-  revalidatePath('/settings');
+  revalidatePath('/settings/keys');
   return { ok: true };
 }
 
@@ -130,7 +176,7 @@ export async function actIssueIngestToken(force = false) {
   // 让客户端填 = 一个可以随便伪造、看起来却很权威的名字。
   const label = deviceLabelFromUA((await headers()).get('user-agent'));
   const r = await issueIngestToken({ workspaceId: s.workspaceId, memberId: s.memberId, label, force });
-  revalidatePath('/settings');
+  revalidatePath('/settings/keys');
   revalidatePath('/extension');
   return { ok: true as const, ...r };
 }
@@ -140,7 +186,7 @@ export async function actRevokeIngestToken(id: string) {
   requireRole(s, 'competitor.manage');
   const { revokeIngestToken } = await import('@/lib/ingest/token');
   const r = await revokeIngestToken(s.workspaceId, id, `由 ${s.memberName} 手动吊销`);
-  revalidatePath('/settings');
+  revalidatePath('/settings/keys');
   revalidatePath('/extension');
   return r;
 }
@@ -154,7 +200,7 @@ export async function actRevokeLegacyIngestToken() {
   const s = await getSession();
   requireRole(s, 'competitor.manage');
   await prisma.workspace.updateMany({ where: { id: s.workspaceId }, data: { ingestToken: null } });
-  revalidatePath('/settings');
+  revalidatePath('/settings/keys');
   revalidatePath('/extension');
   return { ok: true };
 }
@@ -165,7 +211,7 @@ export async function actDisableIngestToken() {
   requireRole(s, 'competitor.manage');
   const { revokeAllIngestTokens } = await import('@/lib/ingest/token');
   const r = await revokeAllIngestTokens(s.workspaceId, `由 ${s.memberName} 全部停用`);
-  revalidatePath('/settings');
+  revalidatePath('/settings/keys');
   revalidatePath('/extension');
   return { ok: true, ...r };
 }
@@ -204,7 +250,7 @@ export async function actBindPhone(phone: string, code: string) {
   const codeCheck = await consumeVerificationCode(p, String(code ?? '').trim());
   if (!codeCheck.ok) return codeCheck;
   const bound = await bindPhoneToMember(s.memberId, p);
-  if (bound.ok) revalidatePath('/settings');
+  if (bound.ok) revalidatePath('/settings/account');
   return bound;
 }
 
@@ -212,7 +258,7 @@ export async function actUnbindPhone() {
   const s = await getSession();
   assertNotDemo(s.tenantId);
   const r = await unbindPhoneFromMember(s.memberId);
-  if (r.ok) revalidatePath('/settings');
+  if (r.ok) revalidatePath('/settings/account');
   return r;
 }
 
@@ -220,10 +266,64 @@ export async function actUnbindWechat() {
   const s = await getSession();
   assertNotDemo(s.tenantId);
   const r = await unbindWechatFromMember(s.memberId);
-  if (r.ok) revalidatePath('/settings');
+  if (r.ok) revalidatePath('/settings/account');
   return r;
 }
 
 // 邮箱绑定已下线（2026-07-30）：产品决定不铺邮件通道，到期/账单提醒改走
 // 「站内通知 + 顶部横幅 + 机器人推送」三条腿（见 lib/jobs/handlers.ts plan_expiry_notice
 // 与 components/ExpiryBanner.tsx）。发票沟通仍用 billing 页上的客服微信/邮箱（静态联系方式）。
+
+// ── 发布通道凭证（目前只有微信公众号用得上）──────────────────────────────────
+//
+// AppSecret 与模型 Key 同一套信封加密入库，界面永不回显明文。
+// 权限收在 byok.manage：它与「模型 Key」是同一类东西——一把能代表你去调平台接口的凭证。
+export async function actSavePublishCredential(data: {
+  platform: string;
+  appId: string;
+  appSecret: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  const s = await getSession();
+  requireRole(s, 'byok.manage');
+  if (data.platform !== 'wechat') return { ok: false, error: '目前只支持微信公众号' };
+  const appId = data.appId.trim();
+  const appSecret = data.appSecret.trim();
+  if (!appId || !appSecret) return { ok: false, error: 'AppID 与 AppSecret 都要填' };
+
+  await prisma.publishCredential.upsert({
+    where: { accountId_platform: { accountId: s.accountId, platform: 'wechat' } },
+    create: { accountId: s.accountId, platform: 'wechat', appId, appSecretEnc: encryptKey(appSecret), status: 'untested' },
+    update: { appId, appSecretEnc: encryptKey(appSecret), status: 'untested', lastError: null },
+  });
+  revalidatePath('/settings/keys');
+  return { ok: true };
+}
+
+export async function actDeletePublishCredential(platform: string): Promise<{ ok: boolean; error?: string }> {
+  const s = await getSession();
+  requireRole(s, 'byok.manage');
+  await prisma.publishCredential.deleteMany({ where: { accountId: s.accountId, platform } });
+  revalidatePath('/settings/keys');
+  return { ok: true };
+}
+
+/** 连通性测试：只换一次 access_token，不发任何内容（测试不该有副作用）。 */
+export async function actTestPublishCredential(platform: string): Promise<{ ok: boolean; error?: string; detail?: string }> {
+  const s = await getSession();
+  requireRole(s, 'byok.manage');
+  if (platform !== 'wechat') return { ok: false, error: '目前只支持微信公众号' };
+  const cred = await prisma.publishCredential.findUnique({
+    where: { accountId_platform: { accountId: s.accountId, platform: 'wechat' } },
+  });
+  if (!cred) return { ok: false, error: '还没配置公众号凭证' };
+
+  const { wxAccessToken, resetWxTokenCache } = await import('@/lib/publish/wechat-mp');
+  resetWxTokenCache(); // 测试要打真实请求，不能被上一枚缓存的 token 蒙混过关
+  const r = await wxAccessToken(cred.appId, decryptKey(cred.appSecretEnc));
+  await prisma.publishCredential.update({
+    where: { id: cred.id },
+    data: { status: r.ok ? 'ok' : 'failed', lastError: r.ok ? null : r.error.slice(0, 300) },
+  });
+  revalidatePath('/settings/keys');
+  return r.ok ? { ok: true, detail: '凭证有效，可以直发草稿箱' } : { ok: false, error: r.error };
+}

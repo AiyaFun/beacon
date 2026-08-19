@@ -1,4 +1,4 @@
-import type { ChatMessage, LlmProvider, LlmResult } from './types';
+import type { ChatMessage, LlmProvider, LlmResult, ToolDef, ToolCall } from './types';
 
 // 通用 OpenAI 兼容 provider：适配 DeepSeek / Qwen / Kimi / GLM / OpenAI / 任意兼容端点。
 // 这是 BYOK（自定义接入不同 AI 接口）的执行层，也是平台默认模型（fromEnv）的执行层。
@@ -29,6 +29,33 @@ export function stripJsonFences(text: string): string {
   return (fence ? fence[1] : t).trim();
 }
 
+/**
+ * 内部消息 → OpenAI 线格式。
+ *
+ * 我们的 ChatMessage 用 camelCase（toolCalls / toolCallId），线上要的是 snake_case
+ * 且形状不同（tool_calls[].function.{name,arguments}）。直接把内部对象 JSON.stringify 发出去，
+ * 多数端点会**忽略**这些字段——现象是模型完全不记得自己上一轮调用过工具，于是无限重复调用同一个工具。
+ */
+export function toWire(messages: ChatMessage[]): Record<string, unknown>[] {
+  return messages.map((m) => {
+    if (m.role === 'tool') {
+      return { role: 'tool', content: m.content, tool_call_id: m.toolCallId };
+    }
+    if (m.role === 'assistant' && m.toolCalls && m.toolCalls.length > 0) {
+      return {
+        role: 'assistant',
+        content: m.content ?? '',
+        tool_calls: m.toolCalls.map((c) => ({
+          id: c.id,
+          type: 'function',
+          function: { name: c.name, arguments: c.arguments },
+        })),
+      };
+    }
+    return { role: m.role, content: m.content };
+  });
+}
+
 export class OpenAICompatibleProvider implements LlmProvider {
   readonly name: string;
   readonly model: string;
@@ -47,9 +74,22 @@ export class OpenAICompatibleProvider implements LlmProvider {
     return this.baseUrl.endsWith('/chat/completions') ? this.baseUrl : `${this.baseUrl}/chat/completions`;
   }
 
-  private post(messages: ChatMessage[], temperature: number, nativeJson: boolean, timeoutMs?: number): Promise<Response> {
-    const body: Record<string, unknown> = { model: this.model, messages, temperature };
+  private post(
+    messages: ChatMessage[],
+    temperature: number,
+    nativeJson: boolean,
+    timeoutMs?: number,
+    tools?: ToolDef[],
+  ): Promise<Response> {
+    const body: Record<string, unknown> = { model: this.model, messages: toWire(messages), temperature };
     if (nativeJson) body.response_format = { type: 'json_object' };
+    if (tools && tools.length > 0) {
+      body.tools = tools.map((t) => ({
+        type: 'function',
+        function: { name: t.name, description: t.description, parameters: t.parameters },
+      }));
+      body.tool_choice = 'auto';
+    }
     return fetch(this.url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}` },
@@ -61,7 +101,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
 
   async *stream(messages: ChatMessage[], opts?: { temperature?: number }): AsyncIterable<string> {
     const temperature = opts?.temperature ?? 0.7;
-    const body: Record<string, unknown> = { model: this.model, messages, temperature, stream: true };
+    const body: Record<string, unknown> = { model: this.model, messages: toWire(messages), temperature, stream: true };
     const res = await fetch(this.url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${this.apiKey}` },
@@ -96,7 +136,10 @@ export class OpenAICompatibleProvider implements LlmProvider {
     }
   }
 
-  async complete(messages: ChatMessage[], opts?: { temperature?: number; json?: boolean; timeoutMs?: number }): Promise<LlmResult> {
+  async complete(
+    messages: ChatMessage[],
+    opts?: { temperature?: number; json?: boolean; timeoutMs?: number; tools?: ToolDef[] },
+  ): Promise<LlmResult> {
     const temperature = opts?.temperature ?? 0.7;
     const wantJson = !!opts?.json;
     const capKey = `${this.baseUrl}::${this.model}`;
@@ -108,14 +151,14 @@ export class OpenAICompatibleProvider implements LlmProvider {
       ? [{ role: 'system', content: JSON_NUDGE }, ...messages]
       : messages;
 
-    let res = await this.post(useNative ? messages : degradedMessages, temperature, useNative, opts?.timeoutMs);
+    let res = await this.post(useNative ? messages : degradedMessages, temperature, useNative, opts?.timeoutMs, opts?.tools);
 
     // 端点以 400 且报文明确提到 response_format（如 MiniMax "unknown response_format type"）→ 去字段重试一次。
     // 判据必须含 "response_format" 字样：与该字段无关的通用参数错误（含裸错误码）不该触发降级重试。
     if (!res.ok && useNative && res.status === 400) {
       const detail = await res.text().catch(() => '');
       if (/response_format/i.test(detail)) {
-        const retry = await this.post(degradedMessages, temperature, false, opts?.timeoutMs);
+        const retry = await this.post(degradedMessages, temperature, false, opts?.timeoutMs, opts?.tools);
         if (retry.ok) {
           noNativeJson.add(capKey); // 仅在重试确实成功后才记忆，避免无关 400 永久毒化降级
           res = retry;
@@ -133,12 +176,27 @@ export class OpenAICompatibleProvider implements LlmProvider {
       throw new Error(`LLM 调用失败 ${res.status}: ${detail.slice(0, 200)}`);
     }
     const data = (await res.json()) as {
-      choices?: { message?: { content?: string } }[];
+      choices?: {
+        message?: {
+          content?: string;
+          tool_calls?: { id?: string; function?: { name?: string; arguments?: string } }[];
+        };
+      }[];
       usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
-    let text = data.choices?.[0]?.message?.content ?? '';
+    const message = data.choices?.[0]?.message;
+    let text = message?.content ?? '';
     // json 模式下剥掉可能的代码块围栏，交给上层 parseJson（严格解析）时不至于兜底失败
     if (wantJson) text = stripJsonFences(text);
+    // 工具调用：名字为空的条目直接丢弃——没有名字的调用请求没法执行，
+    // 塞给执行层只会变成一条「未知工具」的错误回灌，白烧一轮对话。
+    const toolCalls: ToolCall[] = (message?.tool_calls ?? [])
+      .filter((c) => typeof c.function?.name === 'string' && c.function.name.length > 0)
+      .map((c, i) => ({
+        id: c.id ?? `call_${i}`,
+        name: c.function!.name as string,
+        arguments: c.function?.arguments ?? '{}',
+      }));
     return {
       text,
       provider: this.name,
@@ -148,6 +206,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
         promptTokens: data.usage?.prompt_tokens ?? 0,
         completionTokens: data.usage?.completion_tokens ?? 0,
       },
+      ...(toolCalls.length > 0 ? { toolCalls } : {}),
     };
   }
 }

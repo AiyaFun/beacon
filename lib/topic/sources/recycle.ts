@@ -4,6 +4,7 @@ import { platformName } from '../../constants';
 import { isSensitiveTitle } from '../../hot/sensitive';
 import { textShingles, type Candidate } from '../scoring';
 import type { PersonaCard } from '../../persona';
+import { beijingParts } from '../../beijing';
 
 // 候选源：旧文翻新（话题回温）与跨平台自搬运。
 //
@@ -86,7 +87,8 @@ function fmtViews(n: number): string {
 }
 
 function fmtDate(d: Date): string {
-  return `${d.getFullYear()}年${d.getMonth() + 1}月`;
+  const p = beijingParts(d); // 容器跑在 UTC 上，本地月份会在每月 1 日早上八点前说成上个月
+  return `${p.year}年${p.month}月`;
 }
 
 // 已有明确来源归属、不该被「你做过这个题」覆盖掉的候选类型。

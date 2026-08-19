@@ -119,7 +119,8 @@ export async function actSaveBot(data: SaveInput) {
     }
     return { ok: false, error: '保存失败' };
   }
-  revalidatePath('/settings');
+  revalidatePath('/settings/keys');
+  revalidatePath('/notifications');
   return { ok: true };
 }
 
@@ -159,7 +160,8 @@ export async function actTestBot(id: string) {
   const s = await getSession();
   requireRole(s, 'byok.manage');
   const r = await testPush(id, s.workspaceId);
-  revalidatePath('/settings');
+  revalidatePath('/settings/keys');
+  revalidatePath('/notifications');
   return r;
 }
 
@@ -167,7 +169,8 @@ export async function actToggleBot(id: string, enabled: boolean) {
   const s = await getSession();
   requireRole(s, 'byok.manage');
   await prisma.botIntegration.updateMany({ where: { id, workspaceId: s.workspaceId }, data: { enabled } });
-  revalidatePath('/settings');
+  revalidatePath('/settings/keys');
+  revalidatePath('/notifications');
   return { ok: true };
 }
 
@@ -175,6 +178,7 @@ export async function actDeleteBot(id: string) {
   const s = await getSession();
   requireRole(s, 'byok.manage');
   await prisma.botIntegration.deleteMany({ where: { id, workspaceId: s.workspaceId } });
-  revalidatePath('/settings');
+  revalidatePath('/settings/keys');
+  revalidatePath('/notifications');
   return { ok: true };
 }

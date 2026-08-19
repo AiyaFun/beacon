@@ -3,6 +3,7 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { actRollbackPersona } from './actions';
+import { fmtDateTime } from '@/lib/format';
 
 export type VersionRow = {
   id: string;
@@ -61,7 +62,7 @@ export function VersionHistory({ rows }: { rows: VersionRow[] }) {
                 {v.identity || '（未填定位）'}
                 {v.audience && <span className="muted"> · 受众：{v.audience}</span>}
               </span>
-              <span className="small muted">{new Date(v.createdAt).toLocaleString('zh-CN')}</span>
+              <span className="small muted">{fmtDateTime(v.createdAt)}</span>
               {v.editedBy && <span className="small muted">· {v.editedBy}</span>}
               {/* 当前版本没有「回到这一版」的意义 */}
               {i !== 0 && (

@@ -33,9 +33,54 @@ export type Candidate = {
   blueSea?: number;
 };
 
+// 「差异化切入角」的答案结构。
+//
+// 只要求「给个角度」，模型交回来的常常是「从家庭理财角度切入」这类没有形状的一句话——
+// 用户读完仍然不知道这条要写成什么样。所以先让它认领一种形状，再按那种形状把角度写实：
+// 对比型说不出对比维度、清单型说不出条目数，恰恰说明它其实没想清楚，含糊会当场露馅。
+//
+// 值用英文 slug 落库（与 queue / sourceType 同规矩：库里存稳定标识，中文只在 prompt 和界面出现）。
+export const ANGLE_SHAPES = ['definition', 'comparison', 'list', 'process', 'judgment'] as const;
+export type AngleShape = (typeof ANGLE_SHAPES)[number];
+
+export const ANGLE_SHAPE_LABELS: Record<AngleShape, string> = {
+  definition: '定义型',
+  comparison: '对比型',
+  list: '清单型',
+  process: '流程型',
+  judgment: '判断型',
+};
+
+// 每种形状「算写实了」的判据。**prompt 直接从这张表拼**，不在 prompt 里另抄一份：
+// 两处各写一遍，改了一处忘另一处，模型收到的要求就和这里的口径悄悄分了家。
+const ANGLE_SHAPE_RULES: Record<AngleShape, string> = {
+  definition: '必须划出边界——它是什么，更要说清它不是什么',
+  comparison: '必须点名对比的双方/多方，并给出至少两个对比维度（成本、门槛、适用人群……）',
+  list: '必须给出条目数，并说清这些条目的并列口径（按什么切分、彼此为什么不重叠）',
+  process: '必须给出步骤边界——从哪一步开始、到哪一步为止、中间大致几步',
+  judgment: '必须给出结论方向（该/不该、值/不值）和支撑它的判据，不许骑墙',
+};
+
+// 模型返回值归一化。中英两种写法都认：在一段全中文的 prompt 里要求模型只吐英文 slug
+// 从来不是个稳定约定，为一层措辞差异丢掉判定不值得。
+//
+// 认不出来的（拼错、自己发明的分类、'other'、根本没这个字段）一律 undefined，
+// **绝不落到某个默认形状上**——「没判定」和「判定为定义型」是两件事，
+// 后者会在界面上变成一个我们其实没有依据的结论（同 platform-metrics 那条：unknown 不许冒充 no）。
+export function normalizeAngleShape(raw: unknown): AngleShape | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  const lower = trimmed.toLowerCase();
+  return ANGLE_SHAPES.find((s) => s === lower || ANGLE_SHAPE_LABELS[s] === trimmed);
+}
+
 export type ScoredTopic = {
   title: string;
   angle: string;
+  // 模型对「这条切入角是哪种形状的答案」的判定。
+  // 可缺席：模型没返回这个字段 / 返回了集合外的值或 other / JSON 解析失败 /
+  // 这条被判 relevant=false —— 缺席就是「没判定」，不是某个默认形状。
+  angleShape?: AngleShape;
   rationale: string;
   scores: {
     traffic: number;
@@ -140,6 +185,11 @@ export function coarseRank(
 // 精排重试的超时预算（首次用 provider 默认 30s）。见 finePrompt 里那段说明。
 const RETRY_TIMEOUT_MS = 15_000;
 
+// 模型回包的形状。angleShape 刻意放宽成 unknown 而不是 AngleShape：
+// 回包是模型写的，漏字段、写中文、自己发明一个分类都完全可能，
+// 在类型上先当真会让「解析出来的东西」和「实际拿到的东西」对不上。统一交 normalizeAngleShape 收口。
+type FineReply = Partial<Omit<ScoredTopic, 'angleShape'>> & { angleShape?: unknown };
+
 // 阶段二：LLM 精排（对 topN 逐条打分）。
 // tenantId 必传：精排是「租户主动生成推荐」烧的钱，必须落到该租户头上走配额与成本归属；
 // 传 null 等于把这笔账记到平台自己名下、还绕过配额——那是只有全局广播型任务才允许的姿势。
@@ -162,6 +212,33 @@ export async function finePrompt(
     .filter(Boolean)
     .join('\n');
 
+  // 答案结构约束（对全部八个候选源一视同仁：热榜/竞对/gap/recycle/crossplat/calendar/evergreen/inspiration）。
+  //
+  // ⚠️ 它在 system 消息里的插入点刻意压在「关联度闸」那几句**之后**（见下面 messages）。
+  // 关联度闸的教训是「强制字段会逼模型硬造」，
+  // 而结构要求比「给个角度」更硬（要说出维度、条目数、步骤边界），
+  // 把它压在关联度判定之前，等于给硬造再加一道压力，那段真机事故会以更精致的形式复发：
+  // 硬凑的桥反而因为「有维度有条目数」显得更可信。所以先给它说 relevant=false 的机会，再谈形状。
+  const shapeBlock = [
+    '如果 relevant=true、你确实要给角度：先判定这个角度属于下面哪一种答案结构，再按那一种的形状把角度写实。',
+    ANGLE_SHAPES.map((s) => `· ${ANGLE_SHAPE_LABELS[s]}（angleShape="${s}"）：${ANGLE_SHAPE_RULES[s]}`).join('\n'),
+    '「从XX角度切入」「结合账号特点解读」这类没有形状的空话不算切入角。',
+    // 'other' 是这条指令自己的体面退出通道，和 relevant=false 是同一个道理：
+    // 有些题的角度天然就是一段叙事、一次复盘、一个观点，套上面任何一类都是硬套。
+    // 少一个标签远比按一个错标签便宜——错标签会被界面当成结论展示出去。
+    '如果这条角度天然不属于以上任何一种，angleShape 填 "other"，不要硬套。',
+    // 关联度闸的下半场：已经判了「不推荐」就别再回头为它设计形状。
+    // 让模型为一条自己刚否掉的题纠结结构，是把它往「那要不要干脆说 relevant=true」上推。
+    'relevant=false 时不必判定结构，angleShape 直接填 "other"——这条题已经不推荐了，不用再为它设计形状。',
+  ].join('\n');
+
+  // 这一句**只在真有风格指纹/数据基线时才注入**，理由与下面 evidence 那条完全相同：
+  // 无条件写进 system prompt，模型就会在一个我们压根没喂过任何数据的账号上断言
+  // 「你一贯擅长清单型」，把自己的猜测说成被验证过的偏好——正是本项目最不能出的那类错。
+  const shapePreference = extraContext.trim()
+    ? '若账号的风格指纹/真实数据基线里显示某一种结构在这个账号跑得更好，优先沿用那一种；基线里没有这个信息就按选题本身的性质判，不要凭空断言账号擅长某种结构。'
+    : '';
+
   const messages = [
     {
       role: 'system' as const,
@@ -179,6 +256,8 @@ export async function finePrompt(
         '（要绕两层才扯到账号的领域，或者只能泛泛谈"对普通人的启示"），就把 relevant 设为 false。',
         'relevant=false 是被鼓励的正确答案，不是失败——宁可这一轮少推一条，也不要为了凑数编一个牵强的切入角。',
         'relevant=false 时其余字段照常填（格式要完整），并在 rationale 里一句话说明为什么不适合这个账号。',
+        shapeBlock,
+        shapePreference,
         '评分要参考账号真实数据基线：若该方向贴近账号已被数据验证的擅长切入角，personaFit/traffic 应相应上调；反之保守。',
         'personaFit 要如实反映「这条跟这个账号有多贴」——不要因为你已经想出了一个角度就把它调高。',
         // 这条指令**只在真有证据时才注入**。实测（接真实模型）：无条件写进 system prompt 后，
@@ -192,7 +271,8 @@ export async function finePrompt(
         personaPromptBlock(persona),
         extraContext,
         memory,
-        '严格输出 JSON：{"relevant":true,"angle":"...","scores":{"traffic":0,"personaFit":0,"cost":0,"monetization":0,"compliance":0,"differentiation":0},"rationale":"..."}',
+        // angleShape 的取值同样从 ANGLE_SHAPES 拼，不手写第二份枚举
+        `严格输出 JSON：{"relevant":true,"angleShape":"${[...ANGLE_SHAPES, 'other'].join('|')}","angle":"...","scores":{"traffic":0,"personaFit":0,"cost":0,"monetization":0,"compliance":0,"differentiation":0},"rationale":"..."}`,
       ].filter(Boolean).join('\n\n'),
     },
     { role: 'user' as const, content: [`选题：${candidate.title}`, evidenceBlock].filter(Boolean).join('\n') },
@@ -214,9 +294,19 @@ export async function finePrompt(
       .catch(() => null); // 重试本身再炸就认了，用第一次的降级结果，别把整条生成拖挂
     if (retry && !retry.degraded) res = retry;
   }
-  const parsed = parseJson<Partial<ScoredTopic>>(res.text, {});
+  const parsed = parseJson<FineReply>(res.text, {});
   // AI 没给出可用评分 → 回退默认分。默认分只是占位，不能装成真判断：rationale 里明说
   const degraded = !parsed.scores;
+  const relevant = parsed.relevant !== false;
+  // 模型**真的给了**角度才算数；空串/缺席都退到占位文案（见下面 angle 字段）
+  const modelAngle = typeof parsed.angle === 'string' && parsed.angle.trim() ? parsed.angle : undefined;
+  // 结构判定只在「这条确实要推 + 模型确实给了角度」时才落下来：
+  //   · relevant=false：prompt 已经让它别判，这里再兜一道。被否掉的题挂个「对比型」标签，
+  //     只会让候选区看起来像我们认真为它设计过——那是假的。
+  //   · angle 缺席走占位文案时：给一个空壳盖形状章，等于凭空造了半个结论。
+  // 其余情况交给 normalizeAngleShape 收口：认不出就 undefined。
+  // 整条链路上多出来的这个字段没有任何一处会抛——模型不返回它，精排照旧出结果。
+  const angleShape = relevant && modelAngle ? normalizeAngleShape(parsed.angleShape) : undefined;
   const scores = {
     traffic: 60,
     personaFit: 60,
@@ -236,7 +326,8 @@ export async function finePrompt(
   );
   return {
     title: candidate.title,
-    angle: parsed.angle ?? '差异化切入角（待补充）',
+    angle: modelAngle ?? '差异化切入角（待补充）',
+    angleShape,
     // stripMemoryTags：模型会把记忆行的 `[人设记忆 · 今天]` 标注原样抄进理由（真机 6 条中 5 条），
     // prompt 三轮加码都没治住，只能在出口确定性地洗掉（见 lib/memory/core.ts 那段注释）。
     rationale: stripMemoryTags(parsed.rationale ?? '') + (degraded ? '（默认分：AI 返回异常，本条排序参考性低）' : ''),
@@ -246,7 +337,7 @@ export async function finePrompt(
     sourceRef: candidate.sourceRef,
     // 缺席即 true：Mock provider 和任何不认识这个字段的模型都照旧走原路径，
     // 只有模型**明确说 false** 才判定为硬凑。
-    relevant: parsed.relevant !== false,
+    relevant,
     mocked: res.mocked,
     llmDegraded: !!res.degraded,
     queue: resolveQueue(candidate),

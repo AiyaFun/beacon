@@ -7,11 +7,15 @@ import { createLogger } from '../logger';
 
 const log = createLogger({ module: 'llm' });
 import { estimateCostUsd } from './cost';
+import { readPlatformAiConfig, assertPlatformBudget, applyFnParams } from '../ops/platform-config';
 import type { LlmFunction } from '../constants';
-import type { ChatMessage, LlmProvider, LlmResult } from './types';
+import type { ChatMessage, LlmProvider, LlmResult, ToolDef } from './types';
 import { MockProvider } from './mock';
 import { OpenAICompatibleProvider } from './openai-compatible';
 import { looksVideoCapable, VIDEO_MODEL_HINT } from './ark';
+// 平台渠道的读侧收在一处（文本与图像共用同一份缓存与选路，见该文件顶部注释）
+import { pickPlatformProvider, invalidatePlatformProviderCache } from './platform-providers';
+import { can } from '../edition';
 
 // LLM 网关：按「租户 BYOK 配置 → 平台默认 env → Mock」优先级选 provider，并支持按功能路由。
 // 合规约束（PRD §10.5）：region=overseas 的 provider 仅用于出海内容场景，且生成出口仍过合规检测。
@@ -62,10 +66,11 @@ export async function llmVision(
   if (!provider) {
     return { ok: false, reason: 'not_configured', error: '未配置视觉模型（需在服务端设置 BEACON_VISION_LLM_MODEL）' };
   }
+  await assertPlatformBudget(); // 视觉模型走 env 平台渠道 = 平台垫付，同样受预算闸约束
   await assertLlmQuota(tenantId, 'platform'); // 真实付费调用，照常占额度
   try {
     const result = await provider.complete(messages, opts);
-    await recordUsage(tenantId, 'scoring', result);
+    await recordUsage(tenantId, 'scoring', result, 'platform');
     return { ok: true, text: result.text, model: result.model };
   } catch (err) {
     await releaseLlmQuota(tenantId); // 调用失败不占名额，与 llmComplete 同口径
@@ -123,14 +128,14 @@ export async function llmVideo(
     return {
       ok: false,
       reason: 'not_configured',
-      error: `视频分析要用你自己的火山方舟 API Key。到「设置 → 模型渠道」加一个「火山引擎 豆包」渠道即可。${VIDEO_MODEL_HINT}`,
+      error: `视频分析要用你自己的火山方舟 API Key。到「接入与密钥」加一个「火山引擎 豆包」渠道即可。${VIDEO_MODEL_HINT}`,
     };
   }
   await assertLlmQuota(tenantId, 'byok'); // 用户自付 token 费，配额只作防跑飞护栏
   try {
     // 视频推理是分钟级的，30s 默认预算必然超时——这里给 5 分钟。
     const result = await provider.complete(messages, { ...opts, timeoutMs: opts?.timeoutMs ?? VIDEO_TIMEOUT_MS });
-    await recordUsage(tenantId, 'video', result);
+    await recordUsage(tenantId, 'video', result, 'byok');
     return { ok: true, text: result.text, model: result.model };
   } catch (err) {
     await releaseLlmQuota(tenantId); // 调用失败不占名额，与 llmComplete/llmVision 同口径
@@ -168,8 +173,24 @@ async function resolveWithSource(
       return { provider: build(def), source: 'byok' };
     }
   }
+  // 平台级渠道（超管在 /ops/ai 配的）。排在租户 BYOK 之后、env 之前：
+  // env 是「库里还没配」时的兜底，一旦运维台配了渠道就该以库为准，否则改了没反应。
+  //
+  // 【企业版为什么整段跳过】
+  // 'platform' 这条来源的语义是「**平台**垫付、过平台预算闸、按套餐分档计费」。
+  // appliance / private 交付出去之后没有"平台"这个主体：机器上既没有 /ops/ai 运维台，
+  // 也没有谁替客户垫钱。留着它，客户机器上的每次调用都会去撞一个不存在的预算闸。
+  if (can('platformLlmChannel')) {
+    const platform = await pickPlatformProvider(fn, { allowOverseas: opts?.allowOverseas === true });
+    if (platform) return { provider: build(platform), source: 'platform' };
+  }
+
+  // env 兜底。**企业版里这把 Key 写在客户自己的 .env 里、烧的是客户自己的钱**，
+  // 所以标成 byok 而不是 platform —— 标错的后果是它被送进平台预算闸，
+  // 而那个闸在客户机器上根本没有配置来源，行为全看默认值。
   const env = fromEnv();
-  return env ? { provider: env, source: 'platform' } : { provider: mock, source: 'mock' };
+  if (env) return { provider: env, source: can('platformLlmChannel') ? 'platform' : 'byok' };
+  return { provider: mock, source: 'mock' };
 }
 
 // 选择 provider（含按功能路由）
@@ -206,22 +227,29 @@ export async function llmComplete(
   tenantId: string | null,
   fn: LlmFunction,
   messages: ChatMessage[],
-  opts?: { temperature?: number; json?: boolean; allowOverseas?: boolean; timeoutMs?: number },
+  // tools：工具调用（lib/agent/run.ts 用）。Mock provider 不支持，执行器据 result.mocked 硬停，
+  // 绝不让示例模型编出「我已经帮你做好了」——那在执行器里是谎报，不是无害的占位文案。
+  opts?: { temperature?: number; json?: boolean; allowOverseas?: boolean; timeoutMs?: number; tools?: ToolDef[] },
 ): Promise<LlmCompleteResult> {
   assertNotDemo(tenantId); // 演示租户不烧 token（viewer 已挡住绝大多数入口，这里再兜一道）
   const { provider, source } = await resolveWithSource(tenantId, fn, { allowOverseas: opts?.allowOverseas });
+  // 平台垫付的调用先过平台预算闸（BYOK 烧的是用户自己的钱，不受它约束）。
+  if (source === 'platform') await assertPlatformBudget();
   // 真实调用才校验配额；Mock 不花钱不占额度。故意放在下面 try 之外，让超限错误直达调用方。
   if (source !== 'mock') await assertLlmQuota(tenantId, source);
+  // 全域参数：平台配置里给这个功能配了温度/超时就覆盖调用点的值，没配则原样放过。
+  const cfg = await readPlatformAiConfig();
+  const callOpts = { ...opts, ...applyFnParams(cfg.functions[fn], { temperature: opts?.temperature, timeoutMs: opts?.timeoutMs }) };
   let result: LlmCompleteResult;
   try {
-    result = await provider.complete(messages, opts);
+    result = await provider.complete(messages, callOpts);
     // json 模式：真实响应必须能解析成 JSON。解析不出时调用方只会 parseJson→兜底默认值，却把这份
     // 模板/启发式结果标成真 AI（mocked=false，无「演示」标）——正是 review 指出的静默降级。
     // 处理：先重试一次（多为瞬时格式问题，重试即好）；仍解析不出则如实降级到 Mock（degraded=true，
     // 复用全站已有的「演示/Mock」徽标基建），并按「调用失败不占名额」口径归还配额。
     if (opts?.json && !result.mocked && !isParseableJson(result.text)) {
       log.warn('provider 返回非合法 JSON，重试一次', { provider: provider.name });
-      result = await provider.complete(messages, opts);
+      result = await provider.complete(messages, callOpts);
       if (!isParseableJson(result.text)) {
         log.warn('provider 重试仍非合法 JSON，降级 Mock', { provider: provider.name });
         if (source !== 'mock') await releaseLlmQuota(tenantId);
@@ -237,7 +265,7 @@ export async function llmComplete(
     if (source !== 'mock') await releaseLlmQuota(tenantId);
     result = { ...(await mock.complete(messages, opts)), degraded: true };
   }
-  await recordUsage(tenantId, fn, result); // 记账（cheap，内部已 try/catch 不抛）
+  await recordUsage(tenantId, fn, result, source); // 记账（cheap，内部已 try/catch 不抛）
   return result;
 }
 
@@ -260,10 +288,13 @@ export async function llmCompleteStream(
 ): Promise<ReadableStream<string>> {
   assertNotDemo(tenantId); // 演示租户不烧 token
   const { provider, source } = await resolveWithSource(tenantId, fn, { allowOverseas: opts?.allowOverseas });
+  if (source === 'platform') await assertPlatformBudget();
   if (source !== 'mock') await assertLlmQuota(tenantId, source);
+  const streamCfg = await readPlatformAiConfig();
+  const streamOpts = { ...opts, ...applyFnParams(streamCfg.functions[fn], { temperature: opts?.temperature }) };
   let fullText = '';
   let logged = false;
-  const iter = provider.stream(messages, opts)[Symbol.asyncIterator]();
+  const iter = provider.stream(messages, streamOpts)[Symbol.asyncIterator]();
 
   // 记账必须**恰好一次**，且三条出口都要覆盖：正常读完、客户端中途断开、出错。
   // 为什么这条不能漏：assertLlmQuota 是用 llmCallLog.count 重建当日/当月计数器的
@@ -277,7 +308,7 @@ export async function llmCompleteStream(
       model: provider.model,
       mocked: provider.mocked,
       usage: { promptTokens: 0, completionTokens: Math.round(fullText.length / 3) },
-    });
+    }, source);
   };
 
   return new ReadableStream<string>({
@@ -307,7 +338,7 @@ export async function llmCompleteStream(
 }
 
 // 写入成本账本（单租户单位经济仪表盘数据源）
-async function recordUsage(tenantId: string | null, fn: LlmFunction, r: LlmResult) {
+async function recordUsage(tenantId: string | null, fn: LlmFunction, r: LlmResult, source: ProviderSource) {
   try {
     const pt = r.usage?.promptTokens ?? 0;
     const ct = r.usage?.completionTokens ?? 0;
@@ -321,6 +352,9 @@ async function recordUsage(tenantId: string | null, fn: LlmFunction, r: LlmResul
         promptTokens: pt,
         completionTokens: ct,
         costUsd: estimateCostUsd(r.model, pt, ct, r.mocked),
+        // 记「这笔钱谁出的」：平台预算闸只数 platform 那部分（lib/ops/platform-config.ts）。
+        // 降级到 Mock 的那次，钱确实没花，如实记 mock。
+        source: r.mocked ? 'mock' : source,
       },
     });
   } catch (e) {
@@ -328,4 +362,4 @@ async function recordUsage(tenantId: string | null, fn: LlmFunction, r: LlmResul
   }
 }
 
-export { mock };
+export { mock, invalidatePlatformProviderCache };

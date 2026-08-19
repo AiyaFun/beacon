@@ -11,6 +11,7 @@ import { MockPayProvider } from '@/lib/pay/mock';
 import { renderQrSvg } from '@/lib/pay/qr';
 import { isPaidPlan, isPeriodMonths } from '@/lib/pay/pricing';
 import { invoiceContact } from '@/lib/constants';
+import { assertCan } from '@/lib/edition';
 
 // 计费相关 server action。
 // 权限：计费关系到租户钱包，仅 owner（lib/rbac.ts 的 billing.manage）。
@@ -18,6 +19,7 @@ import { invoiceContact } from '@/lib/constants';
 
 // ── 下单：返回二维码 SVG ──
 export async function actCreateOrder(data: { plan: string; periodMonths: number }) {
+  assertCan('payment'); // 形态闸：企业版没有计费面（server action 即公开 RPC，必须在这里拦）
   const s = await getSession();
   requireRole(s, 'billing.manage');
 
@@ -46,6 +48,7 @@ export async function actCreateOrder(data: { plan: string; periodMonths: number 
 
 // ── 轮询订单状态：顺便向微信查一次单（回调兜底）──
 export async function actPollOrder(outTradeNo: string) {
+  assertCan('payment'); // 形态闸：企业版没有计费面（server action 即公开 RPC，必须在这里拦）
   const s = await getSession();
   requireRole(s, 'billing.manage');
 
@@ -79,6 +82,7 @@ export async function actPollOrder(outTradeNo: string) {
 
 // ── dev 专用：模拟支付成功 ──
 export async function actMockPay(outTradeNo: string) {
+  assertCan('payment'); // 形态闸：企业版没有计费面（server action 即公开 RPC，必须在这里拦）
   const s = await getSession();
   requireRole(s, 'billing.manage');
 
@@ -109,6 +113,7 @@ export async function actMockPay(outTradeNo: string) {
 // 自助退款仅 owner（billing.manage）。口径：未消耗→全额；已消耗且非买断→按剩余天折算；
 // 买断已用→转人工。金额一律服务端算（previewRefund → refundPolicyFor），前端只传单号。
 export async function actRefundPreview(outTradeNo: string) {
+  assertCan('payment'); // 形态闸：企业版没有计费面（server action 即公开 RPC，必须在这里拦）
   const s = await getSession();
   requireRole(s, 'billing.manage');
 
@@ -139,6 +144,7 @@ export async function actRefundPreview(outTradeNo: string) {
 
 // ── 退款：发起 ──
 export async function actRefundOrder(outTradeNo: string, reason?: string) {
+  assertCan('payment'); // 形态闸：企业版没有计费面（server action 即公开 RPC，必须在这里拦）
   const s = await getSession();
   requireRole(s, 'billing.manage');
 

@@ -213,7 +213,12 @@ describe.each(CASES)('%s · 收进灵感箱常驻', (_name, src, html, ids) => {
 
     const unknown = mount(src, html, 'https://example.com/post/1');
     await unknown.click(ids.btn);
-    expect(unknown.sent.find((m) => m.type === 'beacon-save-inspiration')?.payload?.platform).toBeUndefined();
+    // ⚠️ 先锚「这条消息真的发出去了」。只写 `find(...)?.payload?.platform` 是**恒真**的：
+    //    压根没发这条消息（未知站点上功能整个坏掉）也会得到 undefined 而判绿——
+    //    而下一条用例恰好证明「不发消息」是真实会发生的状态（烽火台自己的页面上就不发）。
+    const msg = unknown.sent.find((m) => m.type === 'beacon-save-inspiration');
+    expect(msg, '未知站点也该收进灵感箱，只是不带 platform').toBeTruthy();
+    expect(msg?.payload?.platform).toBeUndefined();
   });
 
   it('烽火台自己的页面上不收（收自己的控制台没有意义）', async () => {

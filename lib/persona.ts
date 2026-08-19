@@ -12,6 +12,11 @@ export type PersonaCard = {
   tone: string; // 语气风格
   platforms: string[]; // 主战平台
   niche?: string; // 行业/赛道
+  // ── 品牌视觉（域14 · AI 封面）：封面工位的默认值 ──
+  // 放人设卡而不是另起一张表：它和「我是谁、什么语气」是同一类长期设定，
+  // 而且人设已经有版本历史与导出链路，白捡。空 = 按赛道推荐（rankStylesForPersona）。
+  coverStyle?: string; // 默认封面风格 key（lib/cover/styles.ts）
+  coverFont?: string;  // 默认字体倾向 key
 };
 
 export function emptyPersona(): PersonaCard {

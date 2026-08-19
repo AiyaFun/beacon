@@ -123,7 +123,12 @@ export async function collectAccountFacts(accountId: string, now = Date.now()): 
     platformLines: platformProfiles
       .filter((p) => p.sample > 0)
       .slice(0, 3)
-      .map((p) => `${platformName(p.platform)}：历史 ${p.sample} 条均播 ${p.avgViews}，互动率 ${(p.engagement * 100).toFixed(1)}%`),
+      // 互动率算不出来（该平台不给播放量）就不写这一段，别给机器人一个 0.0% 当真事说
+      .map(
+        (p) =>
+          `${platformName(p.platform)}：历史 ${p.sample} 条均播 ${p.avgViews}` +
+          (p.engagement === null ? '' : `，互动率 ${(p.engagement * 100).toFixed(1)}%`),
+      ),
     healthLines: health.slice(0, 2).map((i) => `${i.title}——${i.detail}`),
     missingLink: healthRows.filter((r) => r.needsBackfill).length,
   };

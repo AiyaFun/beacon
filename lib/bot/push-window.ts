@@ -11,12 +11,11 @@ export const PUSH_TICK_MINUTES = 10;
 // 中国全境单一时区、1991 年后无夏令时，固定 +8 就是精确值。
 // 不用 toLocaleString('zh-CN', { timeZone }) 是因为它依赖运行环境的 ICU 数据，
 // slim 镜像上格式与可用性都不保证——推送时刻这种业务判定不该押在 ICU 上。
-const BEIJING_OFFSET_MIN = 8 * 60;
+// 偏移与「当日第几分钟」现在收在 lib/beijing.ts（配额窗口、逻辑日、展示共用同一份），
+// 这里只做转发，保持既有调用方与测试不变。
+import { beijingMinuteOfDay } from '../beijing';
 
-// UTC 时刻 → 北京时间的「当日第几分钟」（0..1439）
-export function beijingMinuteOfDay(now: Date): number {
-  return (Math.floor(now.getTime() / 60_000) + BEIJING_OFFSET_MIN) % 1440;
-}
+export { beijingMinuteOfDay };
 
 // "09:00" / "09:00,18:00" / " 9:5 " → [540] / [540, 1080] / [545]；非法项丢弃
 export function parsePushSchedule(raw: string | null | undefined): number[] {

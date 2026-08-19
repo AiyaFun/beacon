@@ -1,5 +1,7 @@
 node_modules
 .next
+# dev 开着时验证构建用的临时产物：BEACON_DIST_DIR=.next-verify npm run build
+.next-*
 out
 *.db
 *.db-journal

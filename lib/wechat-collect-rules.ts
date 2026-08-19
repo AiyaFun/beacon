@@ -35,6 +35,13 @@ export const WECHAT_COLLECT_RULES = {
   betweenAccountsMs: 30_000,
   /** 撞上微信频控后，多少分钟内不再发起公众号采集 */
   rateLimitCooldownMinutes: 30,
+  /**
+   * 公众号名 → fakeid 在本机缓存多少天。
+   * 采一个号本来是三个请求：按名字搜号（searchbiz）+ 最多两页列表。搜号那一个口的配额最紧
+   * （2026-08-13 用户撞的频控就是它），而 fakeid 对一个号是固定的，没有理由每次重问一遍。
+   * 缓存期内重复采集直接跳过搜号，请求 3 → 2；到期复核一次，兜住「存错了/号迁移了」。
+   */
+  fakeidCacheDays: 30,
 } as const;
 
 export type WechatCollectRules = typeof WECHAT_COLLECT_RULES;
@@ -47,6 +54,7 @@ export function wechatCollectRuleLines(r: WechatCollectRules = WECHAT_COLLECT_RU
     `同一个公众号，你自己 ${r.perAccountCooldownHours} 小时内只采一次（别人采过不拦你；他采到的文章你本来就看得到，竞对数据全局共享）`,
     `一轮最多采 ${r.maxAccountsPerRun} 个公众号，换号之间再等 ${r.betweenAccountsMs / 1000} 秒`,
     `一旦被微信提示操作频繁，立即停止并 ${r.rateLimitCooldownMinutes} 分钟内不再发起，不重试`,
+    `第一次采过之后，公众号的 fakeid 记在你本机 ${r.fakeidCacheDays} 天，之后重复采集直接跳过「搜索公众号」这一步（配额最紧的就是它）`,
     '只读文章标题/链接/发布时间，不下正文、不取阅读量；用的是你自己公众号后台的登录态，token 不上传',
   ];
 }

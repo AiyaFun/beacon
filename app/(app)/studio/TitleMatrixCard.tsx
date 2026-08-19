@@ -19,7 +19,14 @@ function sevColor(sev: string): string {
   return 'var(--green)';
 }
 
-export function TitleMatrixCard({ draftId }: { draftId?: string }) {
+export function TitleMatrixCard({
+  draftId,
+  onUseAsCover,
+}: {
+  draftId?: string;
+  /** 把某条标题 / 封面建议写进封面工位的「大字 / 副字」（由 TitleCoverPanel 提供） */
+  onUseAsCover?: (mainTitle: string, subTitle?: string) => void;
+}) {
   const [data, setData] = useState<Ok | null>(null);
   const [err, setErr] = useState('');
   const [adopted, setAdopted] = useState('');
@@ -47,6 +54,8 @@ export function TitleMatrixCard({ draftId }: { draftId?: string }) {
       const r = await actAdoptTitle(draftId, title);
       if (r.ok) {
         setAdopted(title);
+        // 采纳的标题 = 封面主文案：顺手填进封面工位，用户不用再复制一遍
+        onUseAsCover?.(title);
         router.refresh();
       } else {
         setErr(r.error ?? '采纳失败');
@@ -93,8 +102,17 @@ export function TitleMatrixCard({ draftId }: { draftId?: string }) {
                     {t.diagnosis.notes.join('；')}
                   </div>
                 </div>
-                <div className="row" style={{ gap: 6, flexShrink: 0 }}>
+                <div className="row wrap" style={{ gap: 6, flexShrink: 0, justifyContent: 'flex-end' }}>
                   <CopyText text={t.title} label="复制" />
+                  {onUseAsCover && (
+                    <button
+                      className="btn btn-sm btn-ghost"
+                      onClick={() => onUseAsCover(t.title)}
+                      title="只把这条填进上面的封面大字框，不改草稿标题"
+                    >
+                      作封面大字
+                    </button>
+                  )}
                   <button
                     className="btn btn-sm btn-accent"
                     onClick={() => adopt(t.title)}
@@ -119,7 +137,16 @@ export function TitleMatrixCard({ draftId }: { draftId?: string }) {
                 <div><span className="muted">画面：</span>{data.cover.visual}</div>
                 {data.cover.note && <div className="muted" style={{ marginTop: 4 }}>为什么这么做：{data.cover.note}</div>}
               </div>
-              <div className="row" style={{ gap: 6, marginTop: 8 }}>
+              <div className="row wrap" style={{ gap: 6, marginTop: 8 }}>
+                {onUseAsCover && (
+                  <button
+                    className="btn btn-sm btn-primary"
+                    onClick={() => onUseAsCover(data.cover!.headline, data.cover!.sub)}
+                    title="把主文案 / 副文案填进上面的封面工位，直接出图"
+                  >
+                    用作封面文案 ↑
+                  </button>
+                )}
                 <CopyText
                   text={[data.cover.headline, data.cover.sub, data.cover.visual].filter(Boolean).join('\n')}
                   label="复制封面文案"

@@ -8,11 +8,14 @@ import { LoginForm } from './LoginForm';
 import { GuestButton } from './GuestButton';
 import { PromoCarousel } from './PromoCarousel';
 import { ExtUnlink } from './ExtUnlink';
+import { needsSetup } from '@/lib/setup/state';
+import { OaLoginPanel } from './OaLoginPanel';
+import { can, edition } from '@/lib/edition';
 
 export const dynamic = 'force-dynamic';
 
 // bye=tenant|member：刚刚完成账号注销后的回跳（app/(app)/settings/account-actions.ts）
-type InviteQuery = { invite?: string; wx_error?: string; bye?: string };
+type InviteQuery = { invite?: string; wx_error?: string; bye?: string; err?: string };
 type LoginPageParams = Promise<InviteQuery>;
 type LoginPageProps = {
   searchParams: LoginPageParams;
@@ -21,6 +24,9 @@ type LoginPageProps = {
 export default async function LoginPage(props: LoginPageProps) {
   const session = await getSessionOrNull();
   if (session) redirect('/');
+  // 企业版还没装机时，登录页是死路（没有短信通道、OA 也还没配）——直接送去向导。
+  // SaaS 上 needsSetup() 恒为 false。
+  if (await needsSetup()) redirect('/setup');
 
   const searchParams = await props.searchParams;
   const token = searchParams.invite;
@@ -29,6 +35,10 @@ export default async function LoginPage(props: LoginPageProps) {
   const preview = token ? await peekInvite(token) : null;
   const inviteInvalid = Boolean(token && !preview);
   const wechatEnabled = getWechatConfig().enabled;
+  // 企业版（appliance/private）：没有短信也没有微信登录，唯一入口是企业应用机器人。
+  // SaaS 上 can('oaLogin') 恒为 false，下面整块等于不存在。
+  const oaOnly = can('oaLogin');
+  const err = typeof searchParams.err === 'string' ? searchParams.err : undefined;
 
   let invite = null;
   if (preview && token) {
@@ -55,7 +65,11 @@ export default async function LoginPage(props: LoginPageProps) {
                 账号登录 / 注册
               </h2>
               <p style={{ fontSize: 14, color: '#475569' }}>
-                {invite ? '手机验证码登录即加入受邀工作区' : '验证码登录，未注册手机号将自动创建账号'}
+                {oaOnly
+                  ? '本版本通过企业应用登录'
+                  : invite
+                    ? '手机验证码登录即加入受邀工作区'
+                    : '验证码登录，未注册手机号将自动创建账号'}
               </p>
             </div>
 
@@ -117,7 +131,7 @@ export default async function LoginPage(props: LoginPageProps) {
               </div>
             ) : null}
 
-            {!invite && !inviteInvalid ? (
+            {!invite && !inviteInvalid && !oaOnly ? (
               <div
                 style={{
                   background: '#fff7ed',
@@ -138,26 +152,45 @@ export default async function LoginPage(props: LoginPageProps) {
               </div>
             ) : null}
 
-            <LoginForm invite={invite} wechatEnabled={wechatEnabled} wxError={wxError} />
-            {!invite && <GuestButton />}
+            {oaOnly ? (
+              <OaLoginPanel err={err} webAuth={edition() === 'private'} />
+            ) : (
+              <LoginForm invite={invite} wechatEnabled={wechatEnabled} wxError={wxError} />
+            )}
+            {/* 游客访问 = 演示租户，是 SaaS 的获客入口。客户自己的机器上放一个「免注册体验」
+                既没有意义，又等于给局域网里任何人开了一扇不需要身份的门。 */}
+            {!invite && !oaOnly && <GuestButton />}
           </div>
         </div>
       </div>
 
-      <footer className="login-footer">
-        <div className="login-footer-line">
-          <span>Copyright © 2013 - 2026 Yunci All Rights Reserved. 云磁数字 版权所有</span>
-        </div>
-        <div className="login-footer-line">
-          <span>ICP备案/许可证号：闽ICP备2020021857号-1</span>
-          <span style={{ color: '#cbd5e1' }}>|</span>
-          <span>闽公网安备：35010402351451号</span>
-          <span style={{ color: '#cbd5e1' }}>|</span>
-          <span>增值电信业务经营许可证: 闽B2-20230811</span>
-          <span style={{ color: '#cbd5e1' }}>|</span>
-          <span>广播电视节目制作经营许可证:（闽）字第00654号</span>
-        </div>
-      </footer>
+      {/* 资质栏只在 SaaS 上出现。
+          这些 ICP / 公网安备 / 增值电信 / 广播电视许可证是**我们这家公司**的，
+          印在客户自己那台机器（或客户自己云上的私有化实例）的登录页上，
+          等于用我们的资质给客户自建的服务背书 —— 那是冒名，不是版权声明。
+          企业版只留一行不含任何主体资质的产品署名。 */}
+      {oaOnly ? (
+        <footer className="login-footer">
+          <div className="login-footer-line">
+            <span>烽火台 · 企业版</span>
+          </div>
+        </footer>
+      ) : (
+        <footer className="login-footer">
+          <div className="login-footer-line">
+            <span>Copyright © 2013 - 2026 Yunci All Rights Reserved. 云磁数字 版权所有</span>
+          </div>
+          <div className="login-footer-line">
+            <span>ICP备案/许可证号：闽ICP备2020021857号-1</span>
+            <span style={{ color: '#cbd5e1' }}>|</span>
+            <span>闽公网安备：35010402351451号</span>
+            <span style={{ color: '#cbd5e1' }}>|</span>
+            <span>增值电信业务经营许可证: 闽B2-20230811</span>
+            <span style={{ color: '#cbd5e1' }}>|</span>
+            <span>广播电视节目制作经营许可证:（闽）字第00654号</span>
+          </div>
+        </footer>
+      )}
     </div>
   );
 }

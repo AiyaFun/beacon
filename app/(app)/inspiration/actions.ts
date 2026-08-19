@@ -33,6 +33,7 @@ export async function actAddInspiration(input: {
   const r = await ingestInspiration(s.workspaceId, parsed.data, s.accountId);
   if (!r.ok) return { ok: false, error: r.error };
   revalidatePath('/inspiration');
+  revalidatePath('/library');
   return { ok: true };
 }
 
@@ -70,6 +71,7 @@ export async function actMineQuestions(
     if (r.ok && !r.duplicate) created++;
   }
   revalidatePath('/inspiration');
+  revalidatePath('/library');
   return { ok: true, created, found: questions.length };
 }
 
@@ -82,6 +84,7 @@ export async function actArchiveInspiration(id: string): Promise<{ ok: boolean }
     data: { state: 'archived' },
   });
   revalidatePath('/inspiration');
+  revalidatePath('/library');
   return { ok: true };
 }
 
@@ -93,6 +96,7 @@ export async function actRestoreInspiration(id: string): Promise<{ ok: boolean }
     data: { state: 'open', usedAt: null },
   });
   revalidatePath('/inspiration');
+  revalidatePath('/library');
   return { ok: true };
 }
 
@@ -102,5 +106,6 @@ export async function actDeleteInspiration(id: string): Promise<{ ok: boolean }>
   // workspaceId 同时入 where：防止拿到别的工作区的 id 就能删
   await prisma.inspirationItem.deleteMany({ where: { id, workspaceId: s.workspaceId } });
   revalidatePath('/inspiration');
+  revalidatePath('/library');
   return { ok: true };
 }

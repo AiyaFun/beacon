@@ -17,7 +17,18 @@ import { parseJson, type Metrics, type MetricCountKey } from '../json';
 export type CompetitorSnapshotInput = {
   takenAt: Date;
   metrics: string; // JSON
+  /** 这次是从哪种页面采的（见 PostMetricSnapshot.source）。老数据没有这个字段。 */
+  source?: string | null;
 };
+
+/** 来源的中文说法。数据记录里必须写出来——不同页面能给的字段本来就不一样。 */
+export const SOURCE_LABEL: Record<string, string> = {
+  home: '账号主页',
+  detail: '作品详情页',
+  server: '服务端抓取',
+  import: '文件导入',
+};
+export const sourceLabel = (s?: string | null): string => SOURCE_LABEL[s || 'home'] ?? '未知来源';
 
 export type CompetitorTrendPoint = {
   index: number; // 观测序号，0 起
@@ -97,4 +108,70 @@ export function growthSummary(trend: CompetitorTrend, key: MetricCountKey = 'vie
   if (delta <= 0) return null;
   const span = trend.spanDays ?? 0;
   return span > 0 ? `${span} 天内 +${delta}` : `+${delta}`;
+}
+
+
+// ── 数据记录：把每一次采集摊成一行，让用户看得懂「这段时间涨了多少」 ──────────
+//
+// 与趋势图的分工：图回答「大致在涨还是在停」，记录回答「**哪一次**采到了什么、比上次多多少」。
+// 用户问「数据对应时间段的增长」时，要的是后者——一个能逐行核对的账。
+//
+// 【为什么每行必须标来源】不同页面给的字段天差地别（抖音主页只有点赞，详情页才有评论/收藏/转发）。
+// 不标来源的话，一条作品的记录会在「只有点赞」和「四项齐全」之间反复横跳，
+// 用户会以为是平台改了或者数据丢了，其实只是这次换了种采法。
+export type ObservationCell = {
+  key: MetricCountKey;
+  /** 这次采到的值；这次没采到这一项为 null */
+  value: number | null;
+  /** 相对上一次的净增；算不出来为 null，理由见 note */
+  delta: number | null;
+  /** delta 为 null 时的原因，直接显示给用户 */
+  note: string | null;
+};
+
+export type ObservationRow = {
+  takenAt: Date;
+  source: string;
+  sourceText: string;
+  gapDays: number | null;
+  cells: ObservationCell[];
+};
+
+/**
+ * 逐次观测的记录表。**最新的排最前**（用户先看最近发生了什么）。
+ *
+ * 增量只在**两次都采到这一项**时才算。一边缺席就给 null 并写明为什么——
+ * 拿 0 当上次的值会把「上次没采这项」算成「从 0 涨到现在」，那是个凭空造出来的暴涨。
+ */
+export function observationRecords(
+  snapshots: CompetitorSnapshotInput[],
+  keys: readonly MetricCountKey[],
+): ObservationRow[] {
+  const trend = competitorTrend(snapshots);
+  const rows: ObservationRow[] = [];
+  for (let i = trend.points.length - 1; i >= 0; i--) {
+    const cur = trend.points[i];
+    const prev = i > 0 ? trend.points[i - 1] : null;
+    const curSrc = snapshots[cur.index]?.source ?? 'home';
+    const prevSrc = prev ? (snapshots[prev.index]?.source ?? 'home') : null;
+    const cells: ObservationCell[] = keys.map((k) => {
+      const v = (cur.metrics as Record<string, number | undefined>)[k];
+      const pv = prev ? (prev.metrics as Record<string, number | undefined>)[k] : undefined;
+      const has = typeof v === 'number' && Number.isFinite(v);
+      if (!prev) return { key: k, value: has ? v! : null, delta: null, note: '首次观测' };
+      if (!has) return { key: k, value: null, delta: null, note: '这次没采到' };
+      if (typeof pv !== 'number' || !Number.isFinite(pv)) {
+        return { key: k, value: v!, delta: null, note: `上一次从${sourceLabel(prevSrc)}采，没有这一项` };
+      }
+      return { key: k, value: v!, delta: v! - pv, note: null };
+    });
+    rows.push({
+      takenAt: cur.takenAt,
+      source: curSrc,
+      sourceText: sourceLabel(curSrc),
+      gapDays: cur.gapDays,
+      cells,
+    });
+  }
+  return rows;
 }

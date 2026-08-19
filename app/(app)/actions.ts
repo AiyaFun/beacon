@@ -4,7 +4,8 @@ import { revalidatePath } from 'next/cache';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { prisma } from '@/lib/db';
-import { getSession } from '@/lib/session';
+import { getSession, withSession } from '@/lib/session';
+import { accountInventory, mergeAccounts, deleteAccount } from '@/lib/account/merge';
 import { AUTH_COOKIE, destroySession } from '@/lib/auth';
 import { ACCOUNT_COOKIE } from '@/lib/auth-constants';
 import { toJson } from '@/lib/json';
@@ -112,6 +113,58 @@ export async function actRestoreAccount(accountId: string) {
   if (r.count === 0) return { ok: false, error: '账号不存在' };
   revalidatePath('/', 'layout');
   return { ok: true };
+}
+
+// ── 合并与彻底删除（见 lib/account/merge.ts 的长注释）──
+//
+// 合并、删除都是「按用户传进来的 id 查归属 → 改/删」的短事务纯 DB 写，正是 IDOR 的着力点，
+// 因此走 withSession 让数据库的 RLS 再兜一层（口径见 lib/session.ts 的迁移说明）。
+
+/** 合并/删除前的数据清单：让用户先看见「要搬什么 / 要毁什么」，再决定点不点 */
+export async function actAccountInventory(accountId: string) {
+  return withSession(async (s, tx) => {
+    requireRole(s, 'content.view');
+    const acc = await tx.creatorAccount.findFirst({
+      where: { id: accountId, workspaceId: s.workspaceId },
+      select: { id: true },
+    });
+    if (!acc) return { ok: false as const, error: '账号不存在' };
+    return { ok: true as const, rows: await accountInventory(tx, accountId) };
+  });
+}
+
+export async function actMergeAccounts(sourceId: string, targetId: string) {
+  const { outcome, currentAccountId } = await withSession(async (s, tx) => {
+    requireRole(s, 'persona.edit');
+    // 归属校验在 mergeAccounts 里（两个 id 都要查），这里只把 tx 交给它——同一个事务、同一份 RLS 上下文
+    return { outcome: await mergeAccounts(tx, s.workspaceId, sourceId, targetId), currentAccountId: s.accountId };
+  });
+  if (!outcome.ok) return outcome;
+  // 当前正操作的号被并走了：cookie 指向一个已删除的 id，虽然 getMemberByToken 会兜底回退到
+  // 「最早的活跃账号」，但那可能根本不是他刚合并到的这个号。显式切到保留下来的那个。
+  if (currentAccountId === sourceId) {
+    const store = await cookies();
+    store.set(ACCOUNT_COOKIE, targetId, ACCOUNT_COOKIE_OPTS);
+  }
+  revalidatePath('/', 'layout');
+  return outcome;
+}
+
+export async function actDeleteAccount(accountId: string, confirmName: string) {
+  const { outcome, currentAccountId } = await withSession(async (s, tx) => {
+    requireRole(s, 'persona.edit');
+    return {
+      outcome: await deleteAccount(tx, s.workspaceId, accountId, confirmName),
+      currentAccountId: s.accountId,
+    };
+  });
+  if (!outcome.ok) return outcome;
+  if (currentAccountId === accountId) {
+    const store = await cookies();
+    store.delete(ACCOUNT_COOKIE);
+  }
+  revalidatePath('/', 'layout');
+  return outcome;
 }
 
 // 「账号内容 × 实时热点」结合分析

@@ -7,7 +7,7 @@ export default function TermsPage() {
   return (
     <article className="legal-article">
       <h1>服务条款</h1>
-      <p className="small muted">版本 {LEGAL_VERSION} · 生效日期 2026 年 7 月 1 日</p>
+      <p className="small muted">版本 {LEGAL_VERSION} · 生效日期 2026 年 8 月 16 日</p>
 
       <h2>一、服务概述</h2>
       <p>
@@ -48,6 +48,10 @@ export default function TermsPage() {
         <li>通过技术手段恶意干扰平台正常运行或突破使用限制。</li>
         <li>未经授权获取、使用或传播其他用户的数据。</li>
         <li>将 BYOK 接口用于绕过数据合规要求的跨境数据传输。</li>
+        <li>
+          在生成 AI 封面时上传<b>他人</b>的人像照片，除非您已依法取得该人的<b>单独同意</b>；不得上传未成年人的人像照片；
+          不得利用 AI 封面功能生成冒充他人、损害他人肖像权或名誉权的内容。上传即视为您作出上述保证，由此产生的责任由您自行承担。
+        </li>
       </ul>
 
       <h2>五、付费与退款</h2>

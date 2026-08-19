@@ -1,7 +1,14 @@
 // 小红书笔记详情页解析（www.xiaohongshu.com/explore/<id> 或 /discovery/item/<id>）——
 // 采集单条笔记的完整互动指标（点赞/收藏/评论）。
-// ⚠️ 详情页 DOM 未当场实测校准：用已知的 engage-bar 类名 + 多重回退，取不到就少采几项
-//    （合并式入库，不覆盖已有、不报错）。真实失效时按此文件调选择器。
+//
+// 2026-08-08 真机校准（explore modal 形态，用户真实 Chrome）。两个都是**串台**教训：
+//   ① 指标必须限定在 `.engage-bar`（底部操作栏）内取。modal 打开时背景瀑布流还在 DOM 里，
+//      全局 `.like-wrapper .count` 第一个命中的是**背景卡片**的赞数（实测取到 4，真值 159）；
+//      裸 `.interactions` 也不行——评论区每条评论的互动栏同名（实测取到评论的 26 赞）。
+//   ② 作者链接必须限定在 note-detail 容器内。全页 73 条 /user/profile/ 链接的第一条是
+//      **左侧栏「我」= 用户自己的主页** → handle 会解析成用户自己的 ID，
+//      竞对笔记直接挂到用户自己名下。作用域内找不到就放弃（返回 null 不采），绝不全局兜底。
+// 校准值核对：159 赞 / 34 藏 / 122 评，与页面显示逐项一致。
 
 // ⚠️ **必须接力，不能直接覆盖 __beaconParse**——xhs.js（主页）与本文件在 manifest 里是
 // 同一条 content_scripts 规则的第 2、3 个脚本，按序注入，本文件永远后跑。直接覆盖会让
@@ -15,8 +22,10 @@ globalThis.__beaconParse = function () {
   const id = m[1];
   const pc = globalThis.__beaconParseCount;
 
-  // 作者 user_id（归属竞对）
-  const authorLink = document.querySelector('a[href*="/user/profile/"]');
+  // 作者 user_id（归属竞对）。只认 note-detail 容器内的链接——全局第一条是侧栏「我」
+  //（用户自己），拿它当作者是把竞对笔记记到用户自己名下（见文件头 2026-08-08 校准注释）。
+  const detailRoot = document.querySelector('.note-detail-mask, [class*="note-detail"], #noteContainer');
+  const authorLink = detailRoot && detailRoot.querySelector('a[href*="/user/profile/"]');
   const handle = authorLink && (authorLink.href.match(/\/user\/profile\/([0-9a-zA-Z]+)/) || [])[1];
   if (!handle) return null;
 
@@ -26,12 +35,15 @@ globalThis.__beaconParse = function () {
     ''
   ).trim();
 
-  const txt = (sel) => { const e = document.querySelector(sel); return e ? e.textContent.trim() : null; };
+  // 指标只在底部操作栏（.engage-bar）内取；bar 找不到就一项都不采（合并式入库缺项无害），
+  // 绝不退回全局选择器——那正是采到背景卡片/评论区数字的串台通道。
+  const bar = (detailRoot && detailRoot.querySelector('.engage-bar')) || document.querySelector('.engage-bar');
+  const txt = (sel) => { const e = bar && bar.querySelector(sel); return e ? e.textContent.trim() : null; };
   const metrics = {};
   const set = (k, v) => { const n = pc(v); if (n != null && n >= 0) metrics[k] = n; };
-  set('likes', txt('.like-wrapper .count') || txt('.like-active .count') || txt('[class*="like"] .count'));
-  set('collects', txt('.collect-wrapper .count') || txt('[class*="collect"] .count'));
-  set('comments', txt('.chat-wrapper .count') || txt('.comment-wrapper .count') || txt('[class*="comment"] .count'));
+  set('likes', txt('.like-wrapper .count'));
+  set('collects', txt('.collect-wrapper .count'));
+  set('comments', txt('.chat-wrapper .count'));
 
   // 详情页本身的 URL 已含 xsec_token（打得开），保留 token + source；缺 token 的裸链接打不开。
   let url = `https://www.xiaohongshu.com/explore/${id}`;

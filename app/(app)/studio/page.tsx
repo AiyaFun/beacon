@@ -11,15 +11,25 @@ import { CardExport } from './CardExport';
 import { SkillPanel } from './SkillPanel';
 import { CopyText } from '@/components/CopyText';
 import { PublishForm } from './PublishForm';
+import { PublishPlanPanel } from './PublishPlanPanel';
 import { DraftAdvisorCard } from './DraftAdvisorCard';
 import { NewDraftDialog } from './NewDraftDialog';
 import { DraftButton } from './DraftButton';
-import { TitleMatrixCard } from './TitleMatrixCard';
+import { TitleCoverPanel } from './TitleCoverPanel';
+import { IllustrationPanel } from './IllustrationPanel';
+import { CoverJumpButton } from './CoverJumpButton';
+import type { CoverQuota } from './CoverStation';
+import { imageConfigured, imageSource } from '@/lib/llm/image';
+import { listLibrary, listDraftCovers, listDraftIllustrations, coverCountsByDraft } from '@/lib/media/store';
+import { COVER_STYLES } from '@/lib/cover/styles';
+import { getImageQuotaStatus } from '@/lib/quota';
+import { readPersona } from '@/lib/persona';
 import { DeriveCard } from './DeriveCard';
 import { DraftList, type DraftRow } from './DraftList';
 import { StudioTabs, type StudioTab } from './StudioTabs';
 import { VersionCompare } from './VersionCompare';
 import { draftFamily } from '@/lib/studio/family';
+import { shouldHintWechatAiSource } from '@/lib/algorithm/ai-source';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,14 +49,14 @@ function statusOf(status: string) {
 export default async function StudioPage({
   searchParams,
 }: {
-  searchParams: Promise<{ draft?: string; topicId?: string }>;
+  searchParams: Promise<{ draft?: string; topicId?: string; tab?: string }>;
 }) {
   const s = await getSession();
   const sp = await searchParams;
 
   // 技能列表在 server 端算好再传下去：客户端只拿列表，不碰 prisma
   // （导出不再需要「有没有 Claude Key」这个布尔——两种格式都有本地渲染器，永远可点）
-  const [drafts, skills, materials] = await Promise.all([
+  const [drafts, skills, materials, ownedAccounts] = await Promise.all([
     prisma.draft.findMany({
       where: { accountId: s.accountId },
       include: {
@@ -63,6 +73,12 @@ export default async function StudioPage({
       orderBy: { updatedAt: 'desc' },
       take: 12,
       select: { id: true, type: true, content: true },
+    }),
+    // 派生卡那条「你缺一个公众号」提示的判据。按 workspaceId 取（账号是工作区级的，
+    // 不是当前 accountId 级）——判的是「这个人手上有哪些平台的号」，不是「他现在在哪个号下」。
+    prisma.creatorAccount.findMany({
+      where: { workspaceId: s.workspaceId },
+      select: { platform: true },
     }),
   ]);
 
@@ -94,6 +110,46 @@ export default async function StudioPage({
   const selected = drafts.find((d) => d.id === selectedId) ?? null;
   // 同源稿件家族（一稿多平台）：只有选中草稿时才查
   const family = selectedId ? await draftFamily(s.accountId, selectedId) : [];
+
+  // 封面工位要的三样：能不能生图 / 今日还能出几张 / 人设赛道（给风格排序）。
+  // 都在服务端算好传下去——客户端组件不碰 prisma，也别让「今日剩余」靠前端猜。
+  const [coverConfigured, coverSource, coverAccount] = await Promise.all([
+    imageConfigured(s.tenantId),
+    imageSource(s.tenantId),
+    prisma.creatorAccount.findUnique({ where: { id: s.accountId }, select: { personaCard: true } }),
+  ]);
+  const imageQuota = coverConfigured && coverSource ? await getImageQuotaStatus(s.tenantId, coverSource) : null;
+  // 形象库 / 本稿封面 / 家族里每篇出没出过封面：都在服务端算好传下去（客户端组件不碰 prisma）
+  const [coverLibrary, draftCovers, familyCoverCounts, stylePresets, illustrations] = await Promise.all([
+    listLibrary(s.workspaceId, s.accountId),
+    selectedId ? listDraftCovers(s.workspaceId, selectedId) : Promise.resolve([]),
+    coverCountsByDraft(s.workspaceId, family.map((f) => f.draftId)),
+    prisma.coverStylePreset.findMany({
+      where: { workspaceId: s.workspaceId },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+      select: { id: true, name: true, description: true },
+    }),
+    selectedId ? listDraftIllustrations(s.workspaceId, selectedId) : Promise.resolve([]),
+  ]);
+  // 配图卡片只要展示用的几项，meta 里的提示词不往客户端传（那是给模型看的，且很长）
+  const draftIllustrations = illustrations.map((i) => ({
+    id: i.id,
+    url: i.url,
+    scene: typeof i.meta.scene === 'string' ? i.meta.scene : '',
+    anchor: typeof i.meta.anchor === 'string' ? i.meta.anchor : undefined,
+    aigcEmbedded: i.meta.aigcEmbedded !== false,
+  }));
+  const coverQuota: CoverQuota = {
+    configured: coverConfigured,
+    remaining: imageQuota?.remaining ?? 0,
+    cap: imageQuota?.cap ?? 0,
+    source: coverSource,
+  };
+  const coverPersona = readPersona(coverAccount?.personaCard ?? '{}');
+  const personaForCover = [coverPersona.niche, coverPersona.tone, coverPersona.identity, coverPersona.audience]
+    .filter(Boolean)
+    .join(' ');
   const versionsAsc = selected ? [...selected.versions].sort((a, b) => a.seq - b.seq) : [];
   const latest = selected?.versions[0]; // versions 已按 seq desc
   const selectedStatus = selected ? statusOf(selected.status) : null;
@@ -150,18 +206,59 @@ export default async function StudioPage({
       label: '标题与封面',
       hint: (
         <>
-          一次给 6 个<b>角度互不相同</b>的标题（结果前置 / 悬念 / 反常识 / 身份指向 / 数字清单 / 痛点提问），
-          每条附长度与用词诊断；命中合规红线的直接拦下不展示。正文写好了，标题才决定有没有人点开。
+          <b>封面</b>：比例按草稿平台自动定，大字默认用你采纳的标题（留空则从正文提炼），可上传自己的照片「主体保真」，出图即带 AI 生成标识。
+          <b>标题矩阵</b>：一次给 6 个<b>角度互不相同</b>的标题，每条附诊断，命中红线的直接拦下；任一条可一键作封面大字。
         </>
       ),
-      node: <TitleMatrixCard draftId={selected?.id} />,
+      node: (
+        <TitleCoverPanel
+          draftId={selected?.id}
+          platform={selected?.platform}
+          draftTitle={selected?.title}
+          hasContent={!!latest?.content?.trim()}
+          personaText={personaForCover}
+          defaultStyleKey={coverPersona.coverStyle}
+          defaultFontKey={coverPersona.coverFont}
+          quota={coverQuota}
+          library={coverLibrary}
+          covers={draftCovers}
+          coverAssetId={selected?.coverAssetId ?? null}
+          stylePresets={stylePresets}
+        />
+      ),
+    },
+    {
+      key: 'illustration',
+      label: '正文配图',
+      hint: (
+        <>
+          从正文拆出一组画面，风格统一地出图——小红书组图、公众号内页插图都用它。
+          先拆画面给你改，确认后再出图（出图按张计费）。配图<b>不上字</b>，文字排版走「标题与封面」。
+        </>
+      ),
+      node: (
+        <IllustrationPanel
+          draftId={selected?.id}
+          platform={selected?.platform}
+          styles={COVER_STYLES.map((st) => ({ key: st.key, name: st.name, hint: st.hint }))}
+          existing={draftIllustrations}
+        />
+      ),
     },
     {
       key: 'derive',
       label: '一稿多平台',
       badge: family.length > 1 ? family.length : undefined,
       hint: '同一篇内容派生出各平台版本，各自独立发布与回流，之后就能比较谁跑得好。',
-      node: <DeriveCard draftId={selected?.id} currentPlatform={selected?.platform} family={family} />,
+      node: (
+        <DeriveCard
+          draftId={selected?.id}
+          currentPlatform={selected?.platform}
+          family={family}
+          coverCounts={familyCoverCounts}
+          wechatHint={shouldHintWechatAiSource(ownedAccounts.map((a) => a.platform))}
+        />
+      ),
     },
   ];
   if (selected) {
@@ -348,9 +445,11 @@ export default async function StudioPage({
                     <CopyText text={latest.content} label="复制正文" />
                   </>
                 )}
+                <PublishPlanPanel draftId={selected.id} />
                 <PublishForm draftId={selected.id} />
                 <ExportButtons draftId={selected.id} />
                 <CardExport draftId={selected.id} />
+                <CoverJumpButton />
               </div>
             </div>
           ) : (
@@ -385,7 +484,7 @@ export default async function StudioPage({
           </Card>
 
           <Card title="出成品 · 打磨" sub="正文定了之后的四件事，一次做一件">
-            <StudioTabs tabs={tabs} />
+            <StudioTabs tabs={tabs} initialTab={sp.tab} />
           </Card>
         </div>
       </div>

@@ -76,7 +76,7 @@ $$ LANGUAGE sql STABLE;
 DO $$
 DECLARE t text;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['ComplianceFeedback','SkillInstall'] LOOP
+  FOREACH t IN ARRAY ARRAY['ComplianceFeedback','SkillInstall','WorkflowInstall'] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY;', t);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY;', t);
     EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON %I;', t);
@@ -89,7 +89,7 @@ END $$;
 DO $$
 DECLARE t text;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['BotIntegration','BotConversation','InspirationItem','Notification','CollectionRun','IngestToken'] LOOP
+  FOREACH t IN ARRAY ARRAY['BotIntegration','BotConversation','InspirationItem','ReaderComment','MediaAsset','CoverStylePreset','Notification','CollectionRun','IngestToken','AgentRun','PublishPlan','WorkflowRun','ParserIncident'] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY;', t);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY;', t);
     EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON %I;', t);
@@ -104,7 +104,7 @@ DECLARE t text;
 BEGIN
   FOREACH t IN ARRAY ARRAY[
     'AccountDailyStat','AdvisorPersona','AdvisorSession','AudienceProfile','Draft',
-    'Material','OwnPost','PersonaVersion','PublishRecord','ReviewReport','TopicIdea'
+    'Material','OwnPost','PersonaVersion','PublishRecord','PublishCredential','ReviewReport','TopicIdea'
   ] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY;', t);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY;', t);
@@ -168,3 +168,21 @@ CREATE POLICY tenant_isolation ON "AdvisorOpinion" FOR ALL
 -- NULL 放行的安全前提：这些路径都是服务器内部代码，不经用户输入路由。
 --
 -- WxPayNotifyLog 不启用 RLS：它是系统级去重日志，写入方永远是无登录态的回调路由。
+
+-- AgentStep → AgentRun（二级归属，2026-08-18 加）
+DO $$
+BEGIN
+  EXECUTE 'ALTER TABLE "AgentStep" ENABLE ROW LEVEL SECURITY';
+  EXECUTE 'ALTER TABLE "AgentStep" FORCE ROW LEVEL SECURITY';
+  EXECUTE 'DROP POLICY IF EXISTS tenant_isolation ON "AgentStep"';
+  EXECUTE 'CREATE POLICY tenant_isolation ON "AgentStep" FOR ALL USING (app_current_tenant() IS NULL OR "runId" IN (SELECT id FROM "AgentRun" WHERE "workspaceId" IN (SELECT app_tenant_workspaces())))';
+END $$;
+
+-- PublishTask → PublishPlan（二级归属，2026-08-18 加）
+DO $$
+BEGIN
+  EXECUTE 'ALTER TABLE "PublishTask" ENABLE ROW LEVEL SECURITY';
+  EXECUTE 'ALTER TABLE "PublishTask" FORCE ROW LEVEL SECURITY';
+  EXECUTE 'DROP POLICY IF EXISTS tenant_isolation ON "PublishTask"';
+  EXECUTE 'CREATE POLICY tenant_isolation ON "PublishTask" FOR ALL USING (app_current_tenant() IS NULL OR "planId" IN (SELECT id FROM "PublishPlan" WHERE "workspaceId" IN (SELECT app_tenant_workspaces())))';
+END $$;

@@ -8,12 +8,10 @@ import { CopyText } from '@/components/CopyText';
 import { copyRichText, htmlToPlain } from '@/lib/clipboard/rich';
 import type { SkillSummary } from '@/lib/skills';
 import { skillPlatformName } from '@/lib/skills/platform';
-import { COVER_STYLE_OPTIONS, DEFAULT_COVER_STYLE } from '@/lib/cover/styles';
-import { actRunSkill, actSkillSaveVersion, actDownloadCover, type RunSkillActionResult } from './actions';
-
-// 参考图上限：与服务端 runCoverSkill 的 MAX_REFERENCE_IMAGES 对齐（两处同步靠这条注释钉住）。
-const MAX_REF_IMAGES = 3;
-const MAX_REF_BYTES = 8 * 1024 * 1024; // 单张 8MB：再大 base64 进请求体就太重了
+import { jumpToStudioTab } from './StudioTabs';
+import { parseAltTitles } from '@/lib/studio/alt-titles';
+import { actAdoptTitle } from './actions';
+import { actRunSkill, actSkillSaveVersion, actSkillSaveAsSibling, type RunSkillActionResult } from './actions';
 
 // 技能中心（/skills）安装的技能在这里一键运行：正文 → 平台成品（微信排版/小红书图文…）。
 // 列表由服务端（page.tsx → listInstalledSkills）算好传入，本组件只管触发与展示。
@@ -168,19 +166,18 @@ export function SkillPanel({
   const [tone, setTone] = useState<'calm' | 'keep' | 'punchy'>('keep');
   const [picked, setPicked] = useState<string[]>([]);
   const [extra, setExtra] = useState('');
+  const [keywords, setKeywords] = useState('');
   // ⚠️ 所有 hook 必须在下面那个「没装技能就早返回」之前声明——放到 return 之后是条件调用，React 会崩
   const [showOthers, setShowOthers] = useState(false);
 
-  // ── 封面选项（仅 image 技能用）──
-  const [coverStyle, setCoverStyle] = useState<string>(DEFAULT_COVER_STYLE);
-  const [coverTextless, setCoverTextless] = useState(false);
-  const [refImages, setRefImages] = useState<string[]>([]); // 参考图 data:URI（主体保真）
-  const [refErr, setRefErr] = useState('');
-  const [lastSkill, setLastSkill] = useState<SkillMeta | null>(null); // 「换一张」要重跑同一个技能
-  const [downloading, setDownloading] = useState(false);
-  const [coverNote, setCoverNote] = useState('');
+  const [lastSkill, setLastSkill] = useState<SkillMeta | null>(null); // 跨平台判定要知道跑的是哪个技能
 
-  if (skills.length === 0) {
+  // AI 封面（image 技能）不在这里跑：它已经是「标题与封面」tab 里的封面工位，不再要求先装技能。
+  // 这里只把它从列表里滤掉，留一句指路——藏功能 = 用户认为没这功能，滤掉但要说明去哪。
+  const textSkills = skills.filter((s) => s.outputKind !== 'image');
+  const hadImageSkill = skills.length !== textSkills.length;
+
+  if (textSkills.length === 0) {
     return (
       <Empty
         icon="🧩"
@@ -204,13 +201,8 @@ export function SkillPanel({
     setErr('');
     setSaved('');
     setCopied(false);
-    setCoverNote('');
     setLastSkill(skill);
     setRunningId(skill.id);
-    // 封面技能：把风格 / 参考图 / 留白版一并带上；其余技能 cover=undefined，走原文本路径
-    const cover = skill.outputKind === 'image'
-      ? { style: coverStyle, referenceImages: refImages, textless: coverTextless }
-      : undefined;
     start(async () => {
       const r = await actRunSkill(
         draftId,
@@ -221,8 +213,8 @@ export function SkillPanel({
           tone,
           materialIds: picked,
           extra,
+          keywords: keywords.split(/[\s,，、]+/).filter(Boolean),
         },
-        cover,
       );
       setRunningId('');
       if (r.ok) {
@@ -231,57 +223,6 @@ export function SkillPanel({
         setErr(r.error);
         setResult(null);
       }
-    });
-  }
-
-  // 参考图上传：读成 data:URI（不外链，见 lib/llm/image.ts），限张数与单张大小
-  function onPickRefImages(files: FileList | null) {
-    setRefErr('');
-    if (!files || files.length === 0) return;
-    const room = MAX_REF_IMAGES - refImages.length;
-    if (room <= 0) {
-      setRefErr(`最多 ${MAX_REF_IMAGES} 张参考图`);
-      return;
-    }
-    Array.from(files).slice(0, room).forEach((file) => {
-      if (!file.type.startsWith('image/')) {
-        setRefErr('只支持图片文件');
-        return;
-      }
-      if (file.size > MAX_REF_BYTES) {
-        setRefErr(`「${file.name}」超过 8MB，换张小点的`);
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = () => {
-        const uri = typeof reader.result === 'string' ? reader.result : '';
-        if (uri) setRefImages((prev) => (prev.length >= MAX_REF_IMAGES ? prev : [...prev, uri]));
-      };
-      reader.readAsDataURL(file);
-    });
-  }
-
-  // 下载封面：走服务端代理（跨源直链前端 <a download> 下不了，且借这跳注入 PNG 隐式 AIGC 标识）
-  function downloadCover(url: string) {
-    setCoverNote('');
-    setDownloading(true);
-    start(async () => {
-      const r = await actDownloadCover(url);
-      setDownloading(false);
-      if (!r.ok) {
-        setErr(r.error);
-        return;
-      }
-      const bin = atob(r.dataBase64);
-      const arr = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-      const blob = new Blob([arr], { type: r.mime });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = r.filename;
-      a.click();
-      URL.revokeObjectURL(a.href);
-      if (r.warning) setCoverNote(r.warning);
     });
   }
 
@@ -308,16 +249,49 @@ export function SkillPanel({
     });
   }
 
+  // 「备选标题」块：模板本来就要求模型输出三条，此前只是没人解析，等于生成了但用不上。
+  // 采纳 = 改草稿标题（与标题矩阵的「用这条」同一个 action，口径不分叉）。
+  const altTitles = result && result.outputKind !== 'image' ? parseAltTitles(result.output) : [];
+
+  function adoptAltTitle(title: string) {
+    if (!draftId) return;
+    start(async () => {
+      const r = await actAdoptTitle(draftId, title);
+      if (r.ok) {
+        setSaved(`已把草稿标题改为「${title}」`);
+        router.refresh();
+      } else {
+        setErr(r.error ?? '采纳失败');
+      }
+    });
+  }
+
+  function saveAsSibling(r: SkillOutput) {
+    if (!draftId || !lastSkill) return;
+    start(async () => {
+      const res = await actSkillSaveAsSibling(draftId, r.output, r.skillName, lastSkill.platform);
+      if (res.ok) {
+        setSaved(`已另存为${skillPlatformName(res.platform ?? '')}兄弟稿`);
+        router.refresh();
+      } else {
+        setErr(res.error ?? '保存失败');
+      }
+    });
+  }
+
+  // 跑的是别的平台的技能：这份产出不该覆盖当前稿的版本线（那是拿知乎正文盖公众号稿），
+  // 应该另起一条兄弟稿。generic 技能不算——它没有目标平台，产出就是给当前稿用的。
+  const crossPlatform =
+    !!lastSkill && !!draftPlatform && lastSkill.platform !== 'generic' && lastSkill.platform !== draftPlatform;
+
   const risk = result ? RISK_LABEL[result.riskLevel] : null;
 
   // 按平台分组：当前草稿平台（含通用技能）排前面，其余折叠。
   // 全部平铺时用户很容易在抖音稿上点到「知乎长文排版」——列表没有立场，用户就得自己记。
   const matched = draftPlatform
-    ? skills.filter((s) => s.platform === draftPlatform || s.platform === 'generic')
-    : skills;
-  const others = draftPlatform ? skills.filter((s) => !matched.includes(s)) : [];
-  // 装了封面（image）技能才显示封面选项面板，避免对纯文本用户徒增干扰
-  const hasImageSkill = matched.some((s) => s.outputKind === 'image');
+    ? textSkills.filter((s) => s.platform === draftPlatform || s.platform === 'generic')
+    : textSkills;
+  const others = draftPlatform ? textSkills.filter((s) => !matched.includes(s)) : [];
 
   const renderSkillButton = (sk: SkillMeta) => (
     <button
@@ -331,7 +305,8 @@ export function SkillPanel({
     </button>
   );
 
-  const briefTouched = length !== 'keep' || tone !== 'keep' || picked.length > 0 || extra.trim().length > 0;
+  const briefTouched =
+    length !== 'keep' || tone !== 'keep' || picked.length > 0 || extra.trim().length > 0 || keywords.trim().length > 0;
 
   return (
     <div className="stack" style={{ gap: 12 }}>
@@ -344,47 +319,10 @@ export function SkillPanel({
         )}
       </div>
 
-      {/* 封面选项：风格 / 参考图（主体保真）/ 留白版。点「🎨 小红书封面」前先设好，出图就用这些设置 */}
-      {hasImageSkill && (
-        <div className="card" style={{ padding: 12, boxShadow: 'none', background: 'var(--surface-2)' }}>
-          <div className="small muted" style={{ marginBottom: 8 }}>封面选项（点「🎨 小红书封面」时生效）</div>
-          <div className="row wrap" style={{ gap: 10, alignItems: 'center' }}>
-            <label className="small muted">风格</label>
-            <select className="select" style={{ maxWidth: 160 }} value={coverStyle} onChange={(e) => setCoverStyle(e.target.value)}>
-              {COVER_STYLE_OPTIONS.map((o) => (
-                <option key={o.key} value={o.key} title={o.hint}>{o.name}</option>
-              ))}
-            </select>
-            <label className="small muted" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <input type="checkbox" checked={coverTextless} onChange={(e) => setCoverTextless(e.target.checked)} />
-              文字留白版（不上字，自己叠）
-            </label>
-          </div>
-
-          <div className="small muted" style={{ margin: '10px 0 6px' }}>
-            参考图（可选，上传人像/产品照，封面会「主体保真」保留你）
-          </div>
-          <div className="row wrap" style={{ gap: 6, alignItems: 'center' }}>
-            {refImages.map((uri, i) => (
-              <span key={i} style={{ position: 'relative', display: 'inline-block' }}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={uri} alt="参考图" style={{ width: 48, height: 48, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--border)' }} />
-                <button
-                  className="btn btn-xs"
-                  style={{ position: 'absolute', top: -6, right: -6, padding: '0 5px', lineHeight: 1.4 }}
-                  title="移除"
-                  onClick={() => setRefImages((prev) => prev.filter((_, j) => j !== i))}
-                >×</button>
-              </span>
-            ))}
-            {refImages.length < MAX_REF_IMAGES && (
-              <label className="btn btn-sm btn-ghost" style={{ cursor: 'pointer' }}>
-                + 添加参考图
-                <input type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={(e) => { onPickRefImages(e.target.files); e.target.value = ''; }} />
-              </label>
-            )}
-          </div>
-          {refErr && <div className="small" style={{ color: 'var(--red)', marginTop: 6 }}>{refErr}</div>}
+      {hadImageSkill && (
+        <div className="small muted">
+          🎨 AI 封面已经搬到「标题与封面」里，不用再从技能列表点：{' '}
+          <button className="btn btn-xs btn-ghost" onClick={() => jumpToStudioTab('title', 'cover-station')}>去出封面</button>
         </div>
       )}
 
@@ -447,6 +385,20 @@ export function SkillPanel({
             )}
 
             <div className="field" style={{ marginTop: 10 }}>
+              <label className="field-label small muted">想突出的关键词（可选，空格分隔）</label>
+              <input
+                className="input"
+                placeholder="比如：新手 预算 避坑"
+                value={keywords}
+                onChange={(e) => setKeywords(e.target.value)}
+                maxLength={80}
+              />
+              <div className="small muted" style={{ marginTop: 4 }}>
+                搜索流量吃的就是关键词。会要求自然带上，不会硬塞或堆砌。
+              </div>
+            </div>
+
+            <div className="field" style={{ marginTop: 10 }}>
               <label className="field-label small muted">还有什么要求（可选）</label>
               <input
                 className="input"
@@ -481,28 +433,7 @@ export function SkillPanel({
             </div>
           </div>
 
-          {result.outputKind === 'image' && result.images ? (
-            <div className="stack" style={{ gap: 8 }}>
-              {result.coverMeta?.mainTitle && (
-                <div className="small muted">
-                  封面文案：<b>{result.coverMeta.mainTitle}</b>
-                  {result.coverMeta.subTitle ? ` · ${result.coverMeta.subTitle}` : ''}
-                </div>
-              )}
-              <div className="row wrap" style={{ gap: 10 }}>
-                {result.images.map((img, i) => (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    key={i}
-                    src={img.url}
-                    alt="小红书封面"
-                    style={{ width: 240, aspectRatio: '3 / 4', objectFit: 'cover', borderRadius: 10, border: '1px solid var(--border)' }}
-                  />
-                ))}
-              </div>
-              <div className="small muted">图上「AI生成」水印为合规标识；直链约 24 小时有效，请及时下载。</div>
-            </div>
-          ) : result.outputKind === 'html' ? (
+          {result.outputKind === 'html' ? (
             <div
               className="small"
               style={{ lineHeight: 1.7, background: 'var(--surface)', borderRadius: 8, padding: 12, overflowX: 'auto' }}
@@ -511,6 +442,28 @@ export function SkillPanel({
             />
           ) : (
             <div className="small" style={{ whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>{result.output}</div>
+          )}
+
+          {altTitles.length > 0 && (
+            <>
+              <div className="divider" />
+              <div className="small muted" style={{ marginBottom: 6 }}>产出里的备选标题（可直接用）：</div>
+              <div className="stack" style={{ gap: 6 }}>
+                {altTitles.map((t, i) => (
+                  <div key={i} className="row-between wrap" style={{ gap: 8, alignItems: 'center' }}>
+                    <b className="small" style={{ lineHeight: 1.5 }}>{t}</b>
+                    <span className="row wrap" style={{ gap: 6 }}>
+                      <CopyText text={t} label="复制" />
+                      {draftId && (
+                        <button className="btn btn-xs btn-ghost" onClick={() => adoptAltTitle(t)} disabled={pending}>
+                          当草稿标题
+                        </button>
+                      )}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </>
           )}
 
           {result.hits.length > 0 && (
@@ -531,37 +484,33 @@ export function SkillPanel({
 
           <div className="divider" />
           <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
-            {result.outputKind === 'image' && result.images ? (
-              <>
-                {result.images.map((img, i) => (
-                  <button key={i} className="btn btn-sm" onClick={() => downloadCover(img.url)} disabled={pending || downloading}>
-                    {downloading ? '下载中…' : result.images!.length > 1 ? `下载第 ${i + 1} 张` : '下载封面'}
-                  </button>
-                ))}
-                {lastSkill && (
-                  <button className="btn btn-sm btn-ghost" onClick={() => run(lastSkill)} disabled={pending} title="用当前封面选项重新生成一张">
-                    换一张
-                  </button>
-                )}
-                {coverNote && <span className="small muted">{coverNote}</span>}
-              </>
+            {result.outputKind === 'html' ? (
+              <button className="btn btn-sm" onClick={() => copyRich(result)} disabled={pending} title="以富文本复制，可直接粘进公众号等编辑器（自动附带 AI 生成标识）">
+                {copied ? '已复制 ✓' : '复制富文本'}
+              </button>
             ) : (
-              <>
-                {result.outputKind === 'html' ? (
-                  <button className="btn btn-sm" onClick={() => copyRich(result)} disabled={pending} title="以富文本复制，可直接粘进公众号等编辑器（自动附带 AI 生成标识）">
-                    {copied ? '已复制 ✓' : '复制富文本'}
-                  </button>
-                ) : (
-                  <CopyText text={result.output} label="复制成品" />
-                )}
-                {draftId && (
-                  <button className="btn btn-sm btn-ghost" onClick={() => saveVersion(result)} disabled={pending}>
-                    存为新版本
-                  </button>
-                )}
-                {saved && <span className="small" style={{ color: 'var(--green)' }}>{saved}</span>}
-              </>
+              <CopyText text={result.output} label="复制成品" />
             )}
+            {draftId && (
+              <button
+                className="btn btn-sm btn-ghost"
+                onClick={() => saveVersion(result)}
+                disabled={pending || crossPlatform}
+                title={
+                  crossPlatform
+                    ? `这是${skillPlatformName(lastSkill!.platform)}的成品，存进${skillPlatformName(draftPlatform!)}稿的版本线会覆盖原稿——请用「另存为兄弟稿」`
+                    : undefined
+                }
+              >
+                存为新版本
+              </button>
+            )}
+            {draftId && crossPlatform && (
+              <button className="btn btn-sm btn-primary" onClick={() => saveAsSibling(result)} disabled={pending}>
+                另存为{skillPlatformName(lastSkill!.platform)}兄弟稿
+              </button>
+            )}
+            {saved && <span className="small" style={{ color: 'var(--green)' }}>{saved}</span>}
           </div>
         </div>
       )}

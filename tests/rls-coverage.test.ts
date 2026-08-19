@@ -30,7 +30,9 @@ const EXEMPT: Record<string, string> = {
   TopicCluster: '全局广播话题簇',
   SensitiveWord: '系统词库（含租户自定义部分，由应用层过滤）',
   AlgorithmRule: '系统级平台算法规则库',
+  ParserRule: '系统级解析规则库（全平台共用，与 AlgorithmRule 同性质）',
   ContentSkill: '内置技能为全局，租户自建部分由应用层过滤',
+  WorkflowTemplate: '内置工作流模板为全局，租户自建部分由应用层过滤（与 ContentSkill 同口径）',
   // 系统级：由无租户上下文的系统路径写入
   WxPayNotifyLog: '支付回调去重日志，写入方永远无登录态',
   WxPayRefund: '退款流水，由无登录态回调/内部接口写入',

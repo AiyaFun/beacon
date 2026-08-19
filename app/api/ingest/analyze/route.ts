@@ -45,9 +45,21 @@ const payloadSchema = z.object({
    * 有它在，没有视频文件的封面档也能分析口播结构。
    * 服务端取不到（YouTube 的 timedtext 回 200 但 0 字节、B站字幕列表未登录恒空），只有浏览器有。
    */
+  // ⚠️ 先截断再校验，**绝不因为字幕太长就把整趟拆解打回**。
+  //
+  // 2026-08-13 查出的错配：`extension/content/work.js` 那头对 transcript 没有任何 slice
+  // （同文件对 title/text/author 的 300 / 20_000 / 80 都与本 schema 一一对齐，唯独漏了它）。
+  // 于是一条 60 分钟的播客解析出 ~2500 条 event → 400 → 拆解**整个失败**，
+  // 而不是降级成「没有字幕的封面档」——偏偏这条通道是拿到口播文本的唯一路径（服务端取不到）。
+  // 长视频正是最需要字幕的那一类，等于在最该用的场景上必然失败。
+  //
+  // 截断在服务端做，已装的旧版插件当场就好。2000 条之后丢掉的是尾部字幕，
+  // 分析质量略降；打回则是一个字都没有——两害相权很清楚。
   transcript: z
-    .array(z.object({ at: z.number(), text: z.string().max(500) }))
-    .max(2000)
+    .preprocess(
+      (v) => (Array.isArray(v) ? v.slice(0, 2000) : v),
+      z.array(z.object({ at: z.number(), text: z.string().max(500) })).max(2000),
+    )
     .optional()
     .nullable(),
   /** 这是不是用户自己的作品——决定拆解视角（怎么改进 vs 怎么借鉴） */

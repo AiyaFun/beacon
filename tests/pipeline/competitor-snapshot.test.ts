@@ -64,21 +64,24 @@ describe('crawlOneCompetitor · 落竞对作品快照', () => {
     expect(await snapViews()).toEqual([1000]);
   });
 
-  it('指标变化 → 追加一条；指标没变 → 一条都不加', async () => {
+  // 2026-08-10 口径反转（原来是「指标没变就不写」，理由是「否则趋势图是条假的水平线」）。
+  //
+  // 反转的理由：没涨时的水平线**就是真相**，真正假的是「分不清没涨和没采」。
+  // 旧口径下这两件事在序列上完全一样，于是区间增长根本算不出「这几天确实没动」；
+  // 更糟的是它和展示值四舍五入叠在一起——B站「1.0亿」要涨到 1.1亿 才变，
+  // 大号可能几个月一条快照都不写，增长曲线整条是空的。
+  //
+  // 「同一天采十次堆十行」的顾虑由展示层解决：toDailySeries 本来就按逻辑日归并取一条。
+  it('每次采集都留一个时点（同值也留，否则「没涨」和「没采」分不清）', async () => {
     posts.current = [post({ views: 1000 })];
     await crawlOneCompetitor(competitorId);
 
-    // 同样的数再采一轮：不该留下痕迹，否则趋势图是条假的水平线
-    await crawlOneCompetitor(competitorId);
-    expect(await snapCount()).toBe(1);
+    await crawlOneCompetitor(competitorId); // 同样的数再采一轮
+    expect(await snapCount()).toBe(2);
 
     posts.current = [post({ views: 2500 })];
     await crawlOneCompetitor(competitorId);
-    expect(await snapViews()).toEqual([1000, 2500]);
-
-    // 再来一轮同值，仍然不加
-    await crawlOneCompetitor(competitorId);
-    expect(await snapCount()).toBe(2);
+    expect(await snapViews()).toEqual([1000, 1000, 2500]);
   });
 
   it('本通道无指标（RSS 变更监控）→ 不落空快照，也不抹掉已有指标', async () => {

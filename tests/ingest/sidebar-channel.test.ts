@@ -91,6 +91,11 @@ describe('🔒 侧栏 · 自有创作者后台绝不走竞对通道', () => {
   it('🔒 更不许带 autoSubscribe —— 那会把 handle=self 加成一个竞对', async () => {
     const { sent, click } = mount(url, { selfOnly: true, parse: WECHAT_PAYLOAD });
     await click('beacon-collect-btn');
+    // ⚠️ `sent` 里必然有握手消息，所以这个循环**永远不空**——回传消息一条没发时，
+    //    它只是把几条握手消息扫了一遍，同样判绿。先锚住那条真正该检查的回传。
+    //    （对照 sidebar-self.test.ts:142 同样写法，但前面有 toHaveLength(1) 兜住。）
+    const self = sent.filter((m) => m.type === 'beacon-ingest-self');
+    expect(self, '自有回传一条都没发，这条用例就没在检查任何东西').toHaveLength(1);
     for (const m of sent) expect(m.payload?.autoSubscribe).toBeUndefined();
   });
 

@@ -146,6 +146,7 @@ export const MAX_ENABLED_PERSONAS = 16; // 每场会诊 = 每人物一次 LLM �
 export { advisorWeight, dataDeltaFromNotes, DEMOTION_EXEMPT } from './weight';
 export type { LearnedNote } from './weight';
 import type { LearnedNote } from './weight';
+import { beijingDayKey } from '../beijing';
 
 export type AdvisorPersonaRow = {
   id: string;
@@ -241,7 +242,7 @@ export async function recentSessionsBlock(accountId: string, take = 2): Promise<
   const usable = sessions.filter((s) => !(s.summary ?? '').startsWith('⚠')).slice(0, take);
   if (usable.length === 0) return '';
   const lines = usable.map((s) => {
-    const when = s.createdAt.toISOString().slice(0, 10);
+    const when = beijingDayKey(s.createdAt);
     const seed = s.topicSeed?.trim() ? `议题「${s.topicSeed.trim()}」` : '开放式议题';
     const adopted = s.opinions.map((o) => `「${o.suggestion.slice(0, 40)}」`).join('；');
     return `- ${when} ${seed}：${adopted ? `已采纳 ${adopted}` : '当时没有任何提案被采纳'}`;
@@ -544,7 +545,11 @@ export function accountHealth(
   const positioning = clamp(personaCompleteness(persona) * 0.84 + boundaryBonus);
 
   // 2) 内容质量稳定度：自有作品互动率的稳定性 + 完播率均值
-  const engs = posts.map((p) => engagementRate(parseJson<Metrics>(p.metrics, {})));
+  // 只统计算得出互动率的作品。抖音等平台没有播放量，engagementRate 返回 null——
+  // 把 null 当 0 塞进来会让「稳定度」看起来剧烈波动，凭空扣掉内容质量分。
+  const engs = posts
+    .map((p) => engagementRate(parseJson<Metrics>(p.metrics, {})))
+    .filter((e): e is number => e !== null);
   const completions = posts
     .map((p) => parseJson<Metrics>(p.metrics, {}).completion ?? 0)
     .filter((c) => c > 0);
@@ -563,7 +568,7 @@ export function accountHealth(
 
   // 4) 粉丝结构：发布回流的互动率 + 评论占比（评论多=活跃真粉，非路人脉冲）
   const prMetrics = publishRecords.map((r) => parseJson<Metrics>(r.metrics, {}));
-  const prEng = mean(prMetrics.map((m) => engagementRate(m)));
+  const prEng = mean(prMetrics.map((m) => engagementRate(m)).filter((e): e is number => e !== null));
   const commentRatio = mean(
     prMetrics.map((m) => {
       const inter = (m.likes ?? 0) + (m.comments ?? 0) + (m.shares ?? 0) + (m.collects ?? 0);

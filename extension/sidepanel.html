@@ -306,6 +306,12 @@
       <!-- 自有作品回填：与竞对采集是**两条不同的通道**（/api/ingest/self vs /api/ingest/competitor），
            所以是两个按钮而不是一个按钮两种行为。默认隐藏，只在当前标签页确实是
            「你自己的作品页 / 创作者后台」时由 sidepanel.js 显示出来（口径与 popup.js 的 SELF_SUPPORTED 同一份）。 -->
+      <!-- 补齐详情：主页给不了的评论/收藏/转发只有作品详情页才有。
+           默认隐藏，只在支持的竞对平台主页上露出（由 sidepanel.js 判定）。 -->
+      <button id="spCollectDetails" class="btn-action" style="display:none; margin-top:6px; background:linear-gradient(135deg,#0d9488,#0f766e)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg>
+        <span>补齐前 20 条作品详情</span>
+      </button>
       <button id="spCollectSelf" class="btn-action" style="display:none; margin-top:6px; background:linear-gradient(135deg,#2563eb,#1d4ed8)">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg>
         <span>这是我的作品 · 回填数据看板</span>
@@ -336,6 +342,11 @@
         <span>收进灵感箱</span>
       </button>
       <input type="text" id="spInspireNote" class="chat-input" style="width:100%; margin-top:6px; box-sizing:border-box" placeholder="为什么想记它？（选填，这句最有用）" />
+      <!-- 常驻显示，理由同 popup.html：藏起来等于这个功能不存在 -->
+      <button id="spCollectComments" class="btn-action" style="margin-top:6px; background:linear-gradient(135deg,#0891b2,#0e7490)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8M8 13h5"/></svg>
+        <span>读评论提问</span>
+      </button>
       <div id="spResult" style="margin-top:6px; font-size:11.5px; display:none; white-space:pre-wrap; word-break:break-all; max-height:220px; overflow:auto"></div>
     </div>
 

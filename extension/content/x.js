@@ -25,9 +25,20 @@ const X_RESERVED = new Set([
 // 那串是**会被翻译的**：中文 X 上写的是「回复」「转帖」「喜欢」「查看」，一个都匹配不上。
 // 按钮上的 data-testid（reply / retweet / like）不翻译，数字就在按钮里，这才是稳的那一层。
 // 大数字在中文界面是「1.2万」，__beaconParseCount 认得万/亿，不用另做处理。
-function xCountFromButton(el, pc) {
+//
+// ⚠️ 真机 2026-08-10：按钮**可见文本是四舍五入的**（「217万」），而同一颗按钮的
+// aria-label 里是精确值（"2174478 喜欢次数。喜欢"）。此前先读可见文本、aria 只当兜底，
+// 于是点赞入库成 2,170,000 —— 差 4478 还在其次，要命的是这个数**不会动**：
+// 涨到 2,179,999 之前显示都是「217万」，两次采集永远相等，增速/趋势那一套直接废掉。
+// 所以顺序必须是 **aria 优先、可见文本兜底**（aria 缺失或读不出来时才退回去）。
+function xCountFromButton(el, pc, words) {
   if (!el) return undefined;
-  // 数字在按钮内部的计数容器里；容器没了就退回按钮全文（里面除了数字没有别的可读文本）
+  // ① aria-label 里的精确值（按钮自己的标签，比 [role=group] 那条整体标签更贴身）
+  if (words) {
+    const exact = xCountFromLabel(el.getAttribute('aria-label') || '', words, pc);
+    if (exact != null) return exact;
+  }
+  // ② 数字在按钮内部的计数容器里；容器没了就退回按钮全文（里面除了数字没有别的可读文本）
   const text = el.querySelector('[data-testid="app-text-transition-container"]')?.textContent ?? el.textContent;
   return pc(text);
 }
@@ -39,6 +50,10 @@ const X_LABEL_WORDS = {
   shares: ['repost', 'retweet', '转帖', '转推'],
   likes: ['like', '喜欢'],
   views: ['view', '查看', '浏览'],
+  // 书签数：X 现在把它摆在操作栏里且**对所有人可见**（真机 2026-08-10 实测 8249）。
+  // 语义上最接近「收藏」，映射到 collects。此前整项没采。
+  // ⚠️ 'bookmark' 要放在 views 的 'view' 之后无所谓，但两者的词不重叠，不会互相误命中。
+  collects: ['bookmark', '书签', '收藏'],
 };
 function xCountFromLabel(label, words, pc) {
   for (const w of words) {
@@ -59,12 +74,17 @@ function xMetricsFromGroup(group, pc) {
   if (!group) return metrics;
 
   // ① 按钮层（不随语言变）
+  // 每项都把自己的词表传进去 —— 按钮 aria-label 里是精确值，可见文本是「217万」这种缩写
+  const W = X_LABEL_WORDS;
   const found = {
-    comments: xCountFromButton(group.querySelector('[data-testid="reply"]'), pc),
-    shares: xCountFromButton(group.querySelector('[data-testid="retweet"], [data-testid="unretweet"]'), pc),
-    likes: xCountFromButton(group.querySelector('[data-testid="like"], [data-testid="unlike"]'), pc),
-    // 浏览量没有自己的 testid，它是那条指向 /analytics 的链接
-    views: xCountFromButton(group.querySelector('a[href*="/analytics"]'), pc),
+    comments: xCountFromButton(group.querySelector('[data-testid="reply"]'), pc, W.comments),
+    shares: xCountFromButton(group.querySelector('[data-testid="retweet"], [data-testid="unretweet"]'), pc, W.shares),
+    likes: xCountFromButton(group.querySelector('[data-testid="like"], [data-testid="unlike"]'), pc, W.likes),
+    collects: xCountFromButton(group.querySelector('[data-testid="bookmark"], [data-testid="removeBookmark"]'), pc, W.collects),
+    // 浏览量没有自己的 testid，它是那条指向 /analytics 的链接。
+    // ⚠️ 真机 2026-08-10：推文详情页上这条链接**已经不存在**，页脚只有 回复/转帖/喜欢/书签。
+    // 取不到就是取不到，让它保持 undefined —— 下游 hasViews() 会判成「不知道」而不是「零浏览」。
+    views: xCountFromButton(group.querySelector('a[href*="/analytics"]'), pc, W.views),
   };
 
   // ② aria-label 兜底：只补按钮层没给出的那几项
@@ -127,14 +147,37 @@ globalThis.__beaconParse = function () {
   // 主页头部：显示名 + 粉丝数（详情页没有，profile 留空）
   let name;
   let followers;
+  let followersVia = 'none';
   if (!isStatus) {
     name =
       document.querySelector('[data-testid="UserName"] span span')?.textContent?.trim() ||
       document.querySelector('[data-testid="UserName"] span')?.textContent?.trim() ||
       undefined;
-    for (const a of document.querySelectorAll('a[href$="/verified_followers"], a[href$="/followers"]')) {
-      const n = pc(a.textContent);
-      if (n != null && n > 0) { followers = n; break; }
+    // 锚点是**链接地址**（/<user>/followers），不是 class —— X 的 class 是构建期哈希，
+    // 但这个路径是产品语义，比任何埋点都稳。所以 X 这条不受改版影响，via 记 'href'。
+    //
+    // ⚠️ `/followers` 与 `/verified_followers` 必须**分两趟**取，不能写成一个逗号 selector：
+    // querySelectorAll 按**文档序**返回而不是按 selector 顺序，谁在 DOM 里排前面就是谁——
+    // 而「认证粉丝数」比总粉丝数小一个量级（同 xhs.js 那个「容器优先其实没生效」的坑）。
+    for (const sel of ['a[href$="/followers"]', 'a[href$="/verified_followers"]']) {
+      for (const a of document.querySelectorAll(sel)) {
+        const n = pc(a.textContent);
+        if (n != null && n > 0) { followers = n; followersVia = 'href'; break; }
+      }
+      if (followers != null) break;
+    }
+    // 链接都不在了（改版/未登录）才退到文本锚点。X 是数字在前的版式（「1,234 Followers」），
+    // 中英文都列：界面语言跟着账号走（真机 2026-07-27 就因为只列英文，6 条指标全没读到）。
+    if (followers == null) {
+      const s = globalThis.__beaconReadStats?.(
+        [
+          { key: 'following', labels: ['Following', '正在关注', '关注中'] },
+          { key: 'followers', labels: ['Followers', '关注者', '粉丝'] },
+        ],
+        ['[data-testid="primaryColumn"]', 'main'],
+      ) || { values: {}, via: {} };
+      followers = s.values.followers;
+      followersVia = s.via.followers || 'none';
     }
   }
 
@@ -178,7 +221,7 @@ globalThis.__beaconParse = function () {
   return {
     platform: 'x',
     handle,
-    profile: !isStatus && (name || followers != null) ? { name, followers } : undefined,
+    profile: !isStatus && (name || followers != null) ? { name, followers, followersVia } : undefined,
     posts,
     ...(isSelf ? { isSelf } : {}),
   };

@@ -19,14 +19,22 @@ type RewriteResult = {
   compliance: { hits: Hit[]; riskLevel: string; platform: string };
   mocked: boolean;
   degraded?: boolean;
-  // 一键优化附带的前后分数对比（普通改写无此字段）
-  coachBefore?: number;
-  coachAfter?: number;
+  // 一键优化附带的前后分数对比（普通改写无此字段）。
+  // null 与 undefined 含义不同：undefined = 这条不是教练优化路径；
+  // null = 是教练优化，但该平台规则表不全给不出分（此时改渲染 coachNote）。
+  coachBefore?: number | null;
+  coachAfter?: number | null;
+  coachNote?: string | null;
   // 一键去 AI 味附带的人味分对比（其余入口无此字段）
   humanBefore?: number;
   humanAfter?: number;
   humanNote?: string;
-  humanNoteLevel?: 'info' | 'warn';
+  // danger 专给「凭空造了引语/来源」用：那是一整套虚构归因，比「数字对不上」重一档，
+  // 用红色和别的提示拉开距离。仍然只是提示，不拦导出。
+  humanNoteLevel?: 'info' | 'warn' | 'danger';
+  // 改写后冒出来的、原文里没有的链接。这一类是唯一会**拦住采纳**的漂移：
+  // 别的漂移还可能是换了个写法，而一条原文里不存在的 URL 指向具体地址，编的就是编的。
+  driftUrls?: string[];
 };
 
 const RISK_LABEL: Record<string, { text: string; cls: string }> = {
@@ -77,6 +85,8 @@ export function Rewriter({
   const [err, setErr] = useState('');
   const [pending, start] = useTransition();
   const [saved, setSaved] = useState('');
+  // 「我已逐条核对这些链接」。只对 driftUrls 生效，且每出一次新结果就清零（见 deflavor）。
+  const [urlsChecked, setUrlsChecked] = useState(false);
   const router = useRouter();
 
   // ── 专注写作：整屏只剩编辑框 ──
@@ -276,6 +286,7 @@ export function Rewriter({
         degraded: r.degraded,
         coachBefore: r.before.score,
         coachAfter: r.after.score,
+        coachNote: r.after.scoreNote,
       });
     });
   }
@@ -305,8 +316,10 @@ export function Rewriter({
           (r.hasExemplar
             ? undefined
             : '没找到你自己的文风样本，这次只按通用规则去味。到素材库添加「文风样本」，或粘一篇你写过的稿子建草稿，效果会明显不同。'),
-        humanNoteLevel: r.driftWarning ? 'warn' : 'info',
+        humanNoteLevel: r.driftLevel === 'attribution' ? 'danger' : r.driftWarning ? 'warn' : 'info',
+        driftUrls: r.driftUrls,
       });
+      setUrlsChecked(false); // 新结果 = 新的一批链接，上一次的确认不能顺延
     });
   }
 
@@ -388,9 +401,17 @@ export function Rewriter({
                 通用规则（暂无回流数据）
               </span>
             )}
-            <span className="badge" style={{ background: 'var(--surface)', color: scoreColor(coach.score), fontSize: 13.5, fontWeight: 700 }}>
-              {coach.score} 分
-            </span>
+            {/* score 为 null = 该平台规则表不全，给不出可比的分。印「— 分」也不行：
+                用户会读成「0 分」或「坏了」，而真相是「这一项我们没测」。 */}
+            {coach.score === null ? (
+              <span className="badge badge-gray" style={{ fontSize: 13.5 }} title={coach.scoreNote ?? undefined}>
+                本平台不给总分
+              </span>
+            ) : (
+              <span className="badge" style={{ background: 'var(--surface)', color: scoreColor(coach.score), fontSize: 13.5, fontWeight: 700 }}>
+                {coach.score} 分
+              </span>
+            )}
           </div>
         )}
       </div>
@@ -472,6 +493,12 @@ export function Rewriter({
     </div>
   ) : null;
 
+  // 采纳闸：只拦「凭空多出来的链接」这一类，且勾了确认就放行。
+  // 与合规红线那道闸并列（riskLevel==='block'），但语义不同——红线是平台禁词、永远不能发；
+  // 这条是「可能是编的，你核一下」，判断权在用户手上，产品不替他决定链接真假。
+  const urlDrift = result?.driftUrls ?? [];
+  const urlBlocked = urlDrift.length > 0 && !urlsChecked;
+
   const renderResultCard = result ? (
     <div className="card" style={{ padding: 16, boxShadow: 'none', background: 'var(--surface-2)', border: '1px solid var(--border)' }}>
       <div className="row-between" style={{ marginBottom: 10 }}>
@@ -479,9 +506,15 @@ export function Rewriter({
           {result.coachAfter !== undefined ? '教练优化结果' : '改写结果'} · {PLATFORM_LIST.find((p) => p.key === platform)?.name}
         </b>
         <div className="row" style={{ gap: 6 }}>
-          {result.coachBefore !== undefined && result.coachAfter !== undefined && (
+          {/* null（该平台规则表不全）走下面的 coachNote 说明，不能落进这里印成「null → null 分」 */}
+          {typeof result.coachBefore === 'number' && typeof result.coachAfter === 'number' && (
             <span className="badge badge-brand" title="按平台算法要点打的分，优化前 → 优化后">
               {result.coachBefore} → {result.coachAfter} 分
+            </span>
+          )}
+          {result.coachAfter === null && result.coachNote && (
+            <span className="badge badge-gray" title={result.coachNote}>
+              本平台不给总分
             </span>
           )}
           {result.humanBefore !== undefined && result.humanAfter !== undefined && (
@@ -504,10 +537,16 @@ export function Rewriter({
           style={{
             marginBottom: 8,
             lineHeight: 1.6,
-            color: result.humanNoteLevel === 'warn' ? 'var(--amber)' : 'var(--muted)',
+            color:
+              result.humanNoteLevel === 'danger'
+                ? 'var(--red)'
+                : result.humanNoteLevel === 'warn'
+                  ? 'var(--amber)'
+                  : 'var(--muted)',
           }}
         >
-          {result.humanNoteLevel === 'warn' ? '⚠️' : 'ℹ️'} {result.humanNote}
+          {result.humanNoteLevel === 'danger' ? '🚩' : result.humanNoteLevel === 'warn' ? '⚠️' : 'ℹ️'}{' '}
+          {result.humanNote}
         </div>
       )}
 
@@ -541,10 +580,36 @@ export function Rewriter({
         </>
       )}
 
+      {/* 凭空多出来的链接：唯一会拦住采纳的一类漂移。逐条列出来让人能直接点开核，
+          而不是只说一句「有链接对不上」——核不动的告警等于没有告警。 */}
+      {urlDrift.length > 0 && (
+        <>
+          <div className="divider" style={{ margin: '10px 0' }} />
+          <div className="small" style={{ color: 'var(--red)', lineHeight: 1.6, marginBottom: 6 }}>
+            🚩 改写后多出了 {urlDrift.length} 条原文里没有的链接。别的漂移还可能只是换了个写法，
+            链接不会——模型拼出来的地址就是编的。逐条核完再采纳：
+          </div>
+          <div className="stack" style={{ gap: 4, marginBottom: 8 }}>
+            {urlDrift.map((u) => (
+              <code key={u} className="mono small" style={{ wordBreak: 'break-all', color: 'var(--red)' }}>{u}</code>
+            ))}
+          </div>
+          <label className="row small" style={{ gap: 6, alignItems: 'center', cursor: 'pointer' }}>
+            <input type="checkbox" checked={urlsChecked} onChange={(e) => setUrlsChecked(e.target.checked)} />
+            我已逐条核对这些链接，确认它们真实存在且指向我要引的内容
+          </label>
+        </>
+      )}
+
       <div className="divider" style={{ margin: '10px 0' }} />
       <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
         {draftId ? (
-          <button className="btn btn-sm btn-accent" onClick={saveAsHuman} disabled={pending || result.compliance.riskLevel === 'block'}>
+          <button
+            className="btn btn-sm btn-accent"
+            onClick={saveAsHuman}
+            disabled={pending || result.compliance.riskLevel === 'block' || urlBlocked}
+            title={urlBlocked ? '先逐条核对上面那几条链接并勾选确认' : undefined}
+          >
             <Icon.check size={14} /> 采纳为人工终稿
           </button>
         ) : (
@@ -569,7 +634,7 @@ export function Rewriter({
             <span className="badge badge-gray">{PLATFORM_LIST.find((p) => p.key === platform)?.name}</span>
             <span className="small muted">{stats.chars} 字 · {stats.paras} 段</span>
             {coachLoading && <span className="small muted">诊断中…</span>}
-            {coach && (
+            {coach && coach.score !== null && (
               <span className="badge" style={{ background: 'var(--surface-2)', color: scoreColor(coach.score) }}>
                 算法 {coach.score}
               </span>

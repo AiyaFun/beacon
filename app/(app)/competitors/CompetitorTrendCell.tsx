@@ -2,11 +2,11 @@
 
 import { useState } from 'react';
 import type { MetricCountKey } from '@/lib/json';
-import { competitorTrend, growthSummary } from '@/lib/insight/competitor-trend';
+import { competitorTrend, growthSummary, observationRecords, type ObservationRow } from '@/lib/insight/competitor-trend';
 import { TrendChart, type TrendPoint } from '@/components/TrendChart';
-import { fmtNum } from '@/lib/format';
+import { fmtNum, fmtDate } from '@/lib/format';
 
-type RawSnap = { takenAt: string | Date; metrics: string };
+type RawSnap = { takenAt: string | Date; metrics: string; source?: string | null };
 
 const METRICS: { key: MetricCountKey; label: string }[] = [
   { key: 'views', label: '播放' },
@@ -38,6 +38,11 @@ export function CompetitorTrendCell({ snapshots }: { snapshots: RawSnap[] }) {
   }
 
   const summary = growthSummary(trend, 'views');
+  // 数据记录：每次采集摊成一行（含来源与相对上次的增量）。与图同源，不额外查库。
+  const records = observationRecords(
+    snapshots.map((x) => ({ takenAt: new Date(x.takenAt), metrics: x.metrics, source: x.source })),
+    METRICS.map((m) => m.key),
+  );
 
   return (
     <div className="stack" style={{ gap: 4 }}>
@@ -45,17 +50,19 @@ export function CompetitorTrendCell({ snapshots }: { snapshots: RawSnap[] }) {
         {open ? '收起趋势' : `看趋势 · ${trend.sample}次`}
       </button>
       {!open && summary && <span className="small" style={{ color: 'var(--green)' }}>{summary}</span>}
-      {open && <TrendBody trend={trend} metric={metric} setMetric={setMetric} />}
+      {open && <TrendBody trend={trend} records={records} metric={metric} setMetric={setMetric} />}
     </div>
   );
 }
 
 function TrendBody({
   trend,
+  records,
   metric,
   setMetric,
 }: {
   trend: ReturnType<typeof competitorTrend>;
+  records: ObservationRow[];
   metric: MetricCountKey;
   setMetric: (m: MetricCountKey) => void;
 }) {
@@ -94,16 +101,34 @@ function TrendBody({
         {label}净增 <b className="mono">{fmtNum(growth)}</b>。
         {irregular && '采集间隔不均匀，两点之间的落差是这段时间的累计变化，不代表日增。'}
       </div>
-      <div className="stack small muted" style={{ gap: 2, marginTop: 6 }}>
-        {trend.points.map((p) => (
-          <div key={p.index} className="row-between">
-            <span>
-              #{p.index + 1} · {new Date(p.takenAt).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })}
-              {p.gapDays !== null && p.gapDays > 0 && <span> （隔 {p.gapDays} 天）</span>}
-            </span>
-            <span className="mono">{fmtNum(p.metrics[metric] ?? 0)}</span>
-          </div>
-        ))}
+      {/* 数据记录：每次采集一行，标明**从哪采的**、这次多少、比上次多多少。
+          图回答「大致在涨还是在停」，这张表回答「哪一次采到了什么、这段时间涨了多少」。
+          ⚠️ 原来这里是 `p.metrics[metric] ?? 0` —— 把「这次没采到这一项」印成 0，
+          于是抖音主页采的那几次评论数全是 0，看起来像「这条作品没人评论」。 */}
+      <div className="stack" style={{ gap: 3, marginTop: 8 }}>
+        <div className="small muted" style={{ fontWeight: 600 }}>数据记录 · {label}</div>
+        {records.map((r, i) => {
+          const c = r.cells.find((x) => x.key === metric)!;
+          return (
+            <div key={i} className="row-between small" style={{ gap: 8 }}>
+              <span className="muted" style={{ whiteSpace: 'nowrap' }}>
+                {fmtDate(r.takenAt)}
+                <span style={{ opacity: 0.7 }}> · {r.sourceText}</span>
+                {r.gapDays !== null && r.gapDays > 0 && <span style={{ opacity: 0.7 }}>（隔 {r.gapDays} 天）</span>}
+              </span>
+              <span className="row" style={{ gap: 8, whiteSpace: 'nowrap' }}>
+                <b className="mono">{c.value === null ? '—' : fmtNum(c.value)}</b>
+                {c.delta !== null ? (
+                  <span className="mono" style={{ color: c.delta > 0 ? 'var(--green)' : c.delta < 0 ? 'var(--red)' : 'var(--text-3)' }}>
+                    {c.delta > 0 ? '+' : ''}{fmtNum(c.delta)}
+                  </span>
+                ) : (
+                  <span className="muted" title={c.note ?? ''} style={{ fontSize: 11 }}>{c.note}</span>
+                )}
+              </span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

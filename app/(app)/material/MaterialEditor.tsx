@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react';
 import { Icon } from '@/components/icons';
 import { actCreateMaterial, actUpdateMaterial, actDeleteMaterial } from './actions';
 import { MATERIAL_TYPES, type MaterialItem, type MaterialType } from './types';
+import { fmtDateFull } from '@/lib/format';
 
 type Props = { items: MaterialItem[] };
 
@@ -226,7 +227,7 @@ function MaterialCard({
           <span key={i} className="badge badge-gray" style={{ fontSize: 10 }}>{t}</span>
         ))}
         <div style={{ flex: 1 }} />
-        <span className="small muted">{new Date(item.createdAt).toLocaleDateString('zh-CN')}</span>
+        <span className="small muted">{fmtDateFull(item.createdAt)}</span>
       </div>
       <div className="small" style={{ lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
         {item.content.length > 200 ? item.content.slice(0, 200) + '…' : item.content}

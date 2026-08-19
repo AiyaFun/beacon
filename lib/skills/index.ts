@@ -1,8 +1,9 @@
 import crypto from 'node:crypto';
 import { prisma } from '../db';
 import { llmComplete } from '../llm/gateway';
-import { llmImage, imageConfigured, XHS_COVER_SIZE, IMAGE_MODEL_HINT } from '../llm/image';
-import { deriveCoverMeta, onImageText, buildCoverPrompt, type CoverMeta } from '../cover/prompt';
+import { runCover } from '../cover/run';
+import { onImageText, type CoverMeta } from '../cover/prompt';
+import { MAX_SUBJECT_IMAGES, MAX_REFERENCE_IMAGES } from '../cover/rules';
 import { checkText, redlineHits, redlineReason, type WordHit } from '../compliance/engine';
 import { renderSkillTemplate } from './render';
 import { aiFlavorBanBlock } from '../humanize/lexicon';
@@ -12,8 +13,10 @@ export { skillPlatformName } from './platform';
 // 内容技能核心库（域14）：技能 = 提示词模板 + 输出契约，把草稿/终稿一键转成平台成品。
 // 内置技能全租户可见、按租户安装；自定义技能归属租户。文本类技能运行走 llmComplete('generation')：
 // 配额/BYOK/记账与其他生成路径同一套闸门，出口再过合规引擎（红线 = 导出硬闸同语义）。
-// image 类技能（小红书 AI 封面）走 llmImage('image')：先抽封面要素，再拼提示词生图，
-// 配额/记账同一套闸门；红线只检会画到图上的标题文字（见下方图像分支）。
+// image 类技能（AI 封面）走 lib/cover/run.ts 的 runCover：先抽封面要素，再拼提示词生图、出图即打标，
+// 配额/记账同一套闸门；红线只检会画到图上的标题文字（见 run.ts）。封面工位（/studio「标题与封面」）
+// 走 /api/cover/generate 直接调 runCover，不经过这里的「已安装」门槛；这里保留 image 分支是给
+// 仍从技能列表触发的路径与测试用。
 
 // image = AI 生图封面（走 images/generations，非文本）。custom 技能暂不开放 image（见 createCustomSkill）。
 export type SkillOutputKind = 'markdown' | 'html' | 'text' | 'image';
@@ -168,15 +171,28 @@ export type RunSkillResult =
       skillName: string;
       riskLevel: string;
       hits: unknown[];
-      // ↓ 仅 image 技能填：生成的封面图（火山返回的直链，约 24h 有效）+ 抽到的封面要素 + 实际用的提示词。
-      images?: { url: string }[];
+      // ↓ 仅 image 技能填：生成的封面图（已打隐式 AIGC 标识的 data URL）+ 抽到的封面要素 + 实际用的提示词。
+      images?: { url: string; mime: string }[];
       coverMeta?: CoverMeta;
       imagePrompt?: string;
     }
   | { ok: false; error: string };
 
-// image 技能的运行选项（风格 / 参考图 / 留白版）。参考图是 data:URI 或公网直链。
-export type CoverRunOptions = { style?: string; referenceImages?: string[]; textless?: boolean };
+// image 技能的运行选项。`referenceImages` 是旧口径（第一张视为主体、其余视为背景）；
+// 新代码请分开传 subjectImages / backgroundImages。带参考图必须 portraitConsent=true（服务端重算）。
+export type CoverRunOptions = {
+  style?: string;
+  specKey?: string;
+  fontKey?: string;
+  decors?: string[];
+  extra?: string;
+  textless?: boolean;
+  meta?: { mainTitle?: string; subTitle?: string };
+  referenceImages?: string[];
+  subjectImages?: string[];
+  backgroundImages?: string[];
+  portraitConsent?: boolean;
+};
 
 // 技能输出的合规闸（独立成层便于单测）：红线命中 → 拒绝（与导出硬闸同语义、同口径）；
 // 其余命中（warn/suggest）原样返回给 UI 展示，不拦。
@@ -278,12 +294,8 @@ export async function runSkill(opts: {
   };
 }
 
-// 一张封面最多带几张参考图。多了既拖慢又稀释主体保真，且请求体（base64）会撑大。
-const MAX_REFERENCE_IMAGES = 3;
-
-// 封面技能运行管线：读草稿抽封面要素 → 红线检标题 → 拼图像提示词 → 生图。
-// 关键取舍：红线只检**会画到图上、随封面对外发布**的标题文字；图像提示词里的“风格/布局/禁止”
-// 是给模型的指令、不发布，不进红线（否则“禁止二维码”这类词会误伤）。
+// 封面技能运行：委托给 lib/cover/run.ts 的 runCover（同一条管线，Route Handler 也走它）。
+// 这里只做两件事：把旧口径的 referenceImages 拆成主体/背景，和把结果收敛成 RunSkillResult。
 async function runCoverSkill(opts: {
   tenantId: string;
   skillName: string;
@@ -292,45 +304,40 @@ async function runCoverSkill(opts: {
   title: string;
   cover?: CoverRunOptions;
 }): Promise<RunSkillResult> {
-  // 先确认能生图，再花抽标题那次文本调用——没配渠道就别白烧一次 generation。
-  if (!(await imageConfigured(opts.tenantId))) {
-    return { ok: false, error: `封面生成要先在「设置 → 模型渠道」加一个「火山引擎 豆包」渠道。${IMAGE_MODEL_HINT}` };
-  }
-  const { meta, mocked } = await deriveCoverMeta(opts.tenantId, opts.instruction, opts.title);
-  if (!meta.mainTitle) {
-    return { ok: false, error: '没能从正文里提炼出封面标题，把草稿写具体一点再试' };
-  }
-  // 红线闸：命中即拒（与导出 / 文本技能同语义、同口径）。
-  const gate = await gateSkillOutput(onImageText(meta), opts.platform, opts.tenantId);
-  if (!gate.ok) return gate;
+  const c = opts.cover ?? {};
+  const legacy = (c.referenceImages ?? []).slice(0, MAX_REFERENCE_IMAGES);
+  const subjectImages = c.subjectImages ?? legacy.slice(0, MAX_SUBJECT_IMAGES);
+  const backgroundImages = c.backgroundImages ?? legacy.slice(MAX_SUBJECT_IMAGES);
 
-  const referenceImages = (opts.cover?.referenceImages ?? []).slice(0, MAX_REFERENCE_IMAGES);
-  const promptText = buildCoverPrompt({
-    meta,
-    styleKey: opts.cover?.style,
-    hasReference: referenceImages.length > 0,
-    textless: opts.cover?.textless,
+  const r = await runCover({
+    tenantId: opts.tenantId,
+    platform: opts.platform,
+    specKey: c.specKey,
+    styleKey: c.style,
+    fontKey: c.fontKey,
+    decors: c.decors,
+    extra: c.extra,
+    textless: c.textless,
+    meta: c.meta,
+    instruction: opts.instruction,
+    fallbackTitle: opts.title,
+    subjectImages,
+    backgroundImages,
+    portraitConsent: c.portraitConsent,
   });
-
-  const img = await llmImage(opts.tenantId, {
-    prompt: promptText,
-    size: XHS_COVER_SIZE,
-    referenceImages: referenceImages.length ? referenceImages : undefined,
-    watermark: true, // 即梦「AI生成」角标 = 显式 AIGC 标识（《标识办法》第四条），封面对外发布默认不关
-  });
-  if (!img.ok) return { ok: false, error: img.error };
+  if (!r.ok) return { ok: false, error: r.error };
 
   return {
     ok: true,
-    output: onImageText(meta), // “成品文本” = 封面上的标题（存版本 / 复制用）
+    output: onImageText(r.meta), // “成品文本” = 封面上的标题（存版本 / 复制用）
     outputKind: 'image',
-    mocked, // 抽标题那步是否 Mock；图像本身从不 Mock
+    mocked: r.mocked, // 抽标题那步是否 Mock；图像本身从不 Mock
     skillName: opts.skillName,
-    riskLevel: gate.riskLevel,
-    hits: gate.hits,
-    images: img.images,
-    coverMeta: meta,
-    imagePrompt: promptText,
+    riskLevel: r.riskLevel,
+    hits: r.hits,
+    images: r.images.map((i) => ({ url: i.url, mime: i.mime })),
+    coverMeta: r.meta,
+    imagePrompt: r.imagePrompt,
   };
 }
 

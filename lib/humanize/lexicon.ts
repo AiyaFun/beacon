@@ -144,8 +144,51 @@ const DECLARE: AiFlavorEntry[] = [
   { word: '话不多说', category: 'declare', weight: 1, suggestion: '真不多说就直接开始' },
 ];
 
+// 模糊量词：JARGON 里「极大地 / 显著提升 / 大幅提升」的同族补漏。
+// 共同特征是**说了等于没说、也没法核验**——「有所提升」提了多少、「不少用户」到底几个人，
+// 读者读完得不到任何新信息，所以 suggestion 一律是「给个数字」。
+//
+// 这一族没有 weight 3：这些话真人也在写（写周报、写产品更新都会用），
+// 问题出在「不给数字」而不是「只有模型这么说」。按文件开头那条纪律，拿不准就往低了给。
+//
+// 为什么单列一个数组、而且排在展平顺序的最末（不是紧跟 JARGON）：
+// aiFlavorBanBlock 是按数组顺序截前 60 条的，而 weight≥2 的词早就超过 60 了。
+// 把这十几条插进 JARGON 后面，会把后面 CLOSING/OFFICIALESE 那批 weight 3 的词
+// （「希望这篇文章对你有帮助」「未来可期」「扎实推进」…）整体挤出给 LLM 的禁用词表——
+// 那批是「几乎只有模型这么写」，比这批更该禁。排在最末：内联高亮和人味分照常吃到，
+// 禁用词表一个字不变。tests/humanize/lexicon.test.ts 有守卫钉住这件事。
+const VAGUE_QUANTIFIER: AiFlavorEntry[] = [
+  { word: '有所提升', category: 'jargon', weight: 2, suggestion: '给个具体数字（从多少到多少）' },
+  { word: '有所改善', category: 'jargon', weight: 2, suggestion: '给个具体数字（从多少到多少）' },
+  { word: '明显提升', category: 'jargon', weight: 2, suggestion: '给个具体数字' },
+  { word: '明显改善', category: 'jargon', weight: 2, suggestion: '给个具体数字' },
+  { word: '显著改善', category: 'jargon', weight: 2, suggestion: '给个具体数字' },
+  { word: '显著降低', category: 'jargon', weight: 2, suggestion: '给个具体数字（降了多少）' },
+  { word: '大幅下降', category: 'jargon', weight: 1, suggestion: '给个具体数字（降了多少）' },
+  { word: '大大提高', category: 'jargon', weight: 2, suggestion: '给个具体数字' },
+  { word: '大大缩短', category: 'jargon', weight: 2, suggestion: '给个具体数字（从几分钟到几分钟）' },
+  { word: '效果很好', category: 'jargon', weight: 2, suggestion: '说清好在哪、好多少' },
+  { word: '效果显著', category: 'jargon', weight: 2, suggestion: '说清好在哪、好多少' },
+  { word: '好评如潮', category: 'jargon', weight: 2, suggestion: '引一条真实评价，或给个评分和条数' },
+  { word: '相当可观', category: 'jargon', weight: 2, suggestion: '给个具体数字' },
+  { word: '不少用户', category: 'jargon', weight: 2, suggestion: '给个人数或占比；只有一个人就直接说是谁' },
+  { word: '数不胜数', category: 'jargon', weight: 2, suggestion: '给个数量，或干脆只举一个例子' },
+  { word: '层出不穷', category: 'jargon', weight: 2, suggestion: '给个数量或频率（今年出了几个）' },
+  { word: '一定程度上', category: 'jargon', weight: 2, suggestion: '说清是哪一部分，说不清就删掉这个限定' },
+  { word: '某种程度上', category: 'jargon', weight: 2, suggestion: '说清是哪一部分，说不清就删掉这个限定' },
+];
+
+// 空心黑话/模糊量词这一类**必须逐条保持词级**，一条能横跨整句的词条会把同句里别的命中吃掉。
+// 编辑器的内联标注是「按起点贪心、互不重叠」合并的（app/(app)/studio/Rewriter.tsx 的
+// `if (m.start < cursor) continue`）：句级区间先占位，同句的合规命中——包括 tier=block 的
+// 禁用词——就再也画不出来，用户会以为这句没有合规问题。宁可漏掉一个套话，也不能让合规标注消失。
+// 上限取 6 个汉字：短语与半句话的分界，既有的黑话最长也就到这（「一一为你揭晓」）。
+// 开场/结尾套话是整句模板（「你怎么看？欢迎在评论区留言」），本来就长，不受这条约束——
+// 它们出现在句首句尾，跟句中的合规词很少同区间。
+export const JARGON_MAX_WORD_LEN = 6;
+
 export const AI_FLAVOR_LEXICON: AiFlavorEntry[] = [
-  ...OPENER, ...TRANSITION, ...JARGON, ...CLOSING, ...OFFICIALESE, ...DECLARE,
+  ...OPENER, ...TRANSITION, ...JARGON, ...CLOSING, ...OFFICIALESE, ...DECLARE, ...VAGUE_QUANTIFIER,
 ];
 
 export type AiFlavorHit = {

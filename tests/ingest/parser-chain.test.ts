@@ -98,9 +98,23 @@ describe('🔒 同一条 content_scripts 规则里，作品页脚本不许吃掉
   });
 
   it('小红书笔记页：仍然由笔记页解析器接管', () => {
+    // 2026-08-08 起作者链接必须在 note-detail 容器内才认（真实页面全局第一条 /user/profile/
+    // 链接是侧栏「我」= 用户自己，串台见 xhs-note.js 文件头）；fixture 按真实结构包容器。
     const p = parseWithManifestOrder('xiaohongshu.com', 'https://www.xiaohongshu.com/explore/64f1a2b3000000001203abcd', `
-      <a href="/user/profile/5ff0a1b2000000000101abcd">某博主</a>
+      <div class="note-detail-mask">
+        <a href="/user/profile/5ff0a1b2000000000101abcd">某博主</a>
+        <div class="engage-bar"><span class="like-wrapper"><span class="count">159</span></span></div>
+      </div>
       <div id="detail-title">笔记标题</div>`)!;
     expect((p.posts[0] as { platformItemId: string }).platformItemId).toBe('64f1a2b3000000001203abcd');
+    expect((p.posts[0] as { metrics?: { likes?: number } }).metrics?.likes).toBe(159);
+  });
+
+  it('🔒 小红书笔记页：作者链接不在 note-detail 容器内（比如只剩侧栏「我」）→ 放弃不采', () => {
+    // 串台防线：detail 容器缺席时宁可不采，绝不拿全局第一条 /user/profile/（用户自己）当作者。
+    const p = parseWithManifestOrder('xiaohongshu.com', 'https://www.xiaohongshu.com/explore/64f1a2b3000000001203abcd', `
+      <a href="/user/profile/my-own-user-id-1234567890ab">我</a>
+      <div id="detail-title">笔记标题</div>`);
+    expect(p).toBeNull();
   });
 });

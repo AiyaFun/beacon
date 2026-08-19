@@ -67,6 +67,19 @@ describe('POST /api/ingest/self/accounts · 建号', () => {
     expect(await prisma.creatorAccount.count({ where: { workspaceId: wsId } })).toBe(1);
   });
 
+  // 2026-08-07 真机：网页里按昵称建了「Aiya哎呀」(handle=Aiyafun)，插件在 X 作品页按用户名
+  // 又建了「aiyafun」——同一个号躺成两条，数据一分为二，而数据页全按 accountId 过滤，
+  // 用户看到的是「一半数据不见了」。只比 name 挡不住，判据必须 name/handle 交叉比。
+  it('🔒 页面上抓到的用户名 = 已有账号的 handle → 认成同一个号，不建第二条', async () => {
+    const web = await prisma.creatorAccount.create({
+      data: { workspaceId: wsId, name: 'Aiya哎呀', platform: 'x', handle: 'Aiyafun' },
+    });
+    const r = await (await post({ name: 'aiyafun', platform: 'x', handle: 'aiyafun' })).json();
+    expect(r.existed).toBe(true);
+    expect(r.account.id).toBe(web.id);
+    expect(await prisma.creatorAccount.count({ where: { workspaceId: wsId } })).toBe(1);
+  });
+
   it('同名但不同平台是两个号（一人多平台是常态）', async () => {
     await post({ name: '我的号', platform: 'x' });
     await post({ name: '我的号', platform: 'douyin' });

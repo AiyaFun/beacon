@@ -496,7 +496,10 @@
       <div class="brand-title-group">
         <div class="brand-title">
           <span>烽火台 AI 采集助手</span>
-          <span class="brand-badge">v0.5.8</span>
+          <!-- 版本号运行时从 manifest 读（options.js）。写死过一次 v0.5.8，插件都到 0.8.3 了
+               页面顶上还挂着 0.5.8，而同一页「版本与更新」那行读的是真版本——自己跟自己打架，
+               用户没法判断该信哪个，报障时给的版本号也是错的。 -->
+          <span class="brand-badge" id="brandVersion"></span>
         </div>
         <div class="brand-sub">跨平台内容作战室 · 插件全局配置</div>
       </div>
@@ -518,7 +521,7 @@
       </div>
     </div>
     <div class="card-sub">
-      采集令牌在烽火台「设置 → 数据源 → 插件采集令牌」生成。插件只在您点击或定时采集时传输公开数据，不抓取任何私域隐私信息。
+      采集令牌在烽火台「设置 → 数据源 → 插件采集令牌」生成。插件传输的是：竞对的公开数据，以及<b>您自己账号</b>在创作者后台里的作品表现数字。不抓取他人的非公开数据，不上传任何平台登录凭证。
     </div>
 
     <div class="field-group">
@@ -556,7 +559,11 @@
         </button>
       </div>
       <div class="field-help">
-        填好令牌并保存后点「刷新列表」。同一个平台有两个账号时 <strong>必须</strong> 选一个——自动匹配只会挑选同平台最早创建的活跃账号。
+        填好令牌并保存后点「刷新列表」。同一个平台有两个账号时 <strong>必须</strong> 选一个。
+        <br>不选的话会走自动匹配，它<strong>不只是「挑一个已有的号」</strong>，逐级往下兜：
+        同平台活跃号 → 同平台任意号（<strong>含已停用的</strong>）→ 多平台号（multi）活跃 → 多平台号任意；
+        一个都找不到时会<strong>按当前页面上的账号名新建一个创作账号</strong>再把数据记进去。
+        这几步都不会问你，所以两个号的平台请自己指定。
       </div>
     </div>
   </div>
@@ -679,6 +686,44 @@
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
         <span>试跑公众号</span>
       </button>
+    </div>
+
+    <!-- 这条通道全程在后台跑、采完就关标签页，系统通知又可能被系统权限静默丢掉。
+         结果落在这里，用户至少有一处查得到「刚才那一下到底发生了什么」。 -->
+    <div id="selfAutoStatusLog" class="status-box">
+      📥 公众号回填：还没跑过
+    </div>
+
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-title">评论提问采集（自有作品）</div>
+        <!-- ⚠️ 用户的同意是在这个开关上给出的，所以这里的描述**就是**同意的范围。
+             此前只写「挑出提问句」，严重低估了留存范围：除提问外还会逐条留存评论正文
+             （最多 200 条 / 每条 300 字），隐私政策写全了而这里没有。 -->
+        <div class="setting-sub">侧栏显示「读评论提问」按钮，读取你自己作品评论区中<b>当前已显示</b>的评论。
+          读到的内容有两个去处：① <b>评论正文逐条留存</b>（单次最多 200 条、每条最长 300 字），
+          供你在数据页阅读、检索、统计读者反复提到的词，<b>最长保留 90 天后自动删除</b>；
+          ② 其中被<b>两人以上</b>问过的提问短句进入选题参考。
+          只读已显示的评论，不翻页、不展开；<b>不存评论者任何身份信息</b>（昵称/头像/主页链接/用户 ID/IP 属地/评论时间/点赞数/楼层回复关系/@提及对象一概不取）。
+          评论正文不进 AI 生成语料、不导出。</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="commentCollectOwn">
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-title">评论提问采集（竞对作品）</div>
+        <div class="setting-sub">在竞对作品页也启用「读评论提问」。留存范围与上一条完全相同：
+          <b>评论正文逐条留存（最长 90 天）</b> + 两人以上问过的提问短句进入选题参考。
+          同样只读已显示评论、不翻页、不存评论者任何身份信息。</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="commentCollectRival">
+        <span class="slider"></span>
+      </label>
     </div>
 
     <div class="setting-row">

@@ -8,7 +8,7 @@ type ChatTurn = { role: 'user' | 'assistant'; content: string };
 type Msg = { role: 'user' | 'assistant'; content: string; mocked?: boolean; error?: boolean };
 
 // 页面路径到友好名称和功能说明的映射
-const PAGE_INFOS: Record<string, { name: string; desc: string }> = {
+export const PAGE_INFOS: Record<string, { name: string; desc: string }> = {
   '/': {
     name: '今日概览',
     desc: '工作区核心看板，包含全平台总播放量、今日推荐Top3选题、今日运营建议、待办任务清单和快速入口。',
@@ -62,8 +62,16 @@ const PAGE_INFOS: Record<string, { name: string; desc: string }> = {
     desc: '全屏对话窗口，带人设与历史记忆上下文的自由互动创作助手。',
   },
   '/settings': {
-    name: '模型与设置',
-    desc: '大模型 BYOK 接口、IngestToken 采集凭证以及平台默认模型的统一设置中心。',
+    name: '运行设置',
+    desc: '后台定时任务的开关与最近运行结果、热榜数据源健康度、语义向量实况。不含任何密钥——那些在「接入与密钥」。',
+  },
+  '/settings/keys': {
+    name: '接入与密钥',
+    desc: '这个产品里所有要填 Key 的地方：模型渠道（BYOK）与按功能路由、生图渠道、公众号发布凭证、插件采集令牌、机器人凭据，另有「一键检测」逐条探连通性（不发测试消息、不真出图）。',
+  },
+  '/workflows': {
+    name: '工作流模板',
+    desc: '把「选题→初稿→技能改写→封面→配图→发布计划」串成可复用的流水线，内置模板装上即用，自建模板可导出分享。技能是一步，模板是一串。',
   },
   '/billing': {
     name: '套餐与计费',

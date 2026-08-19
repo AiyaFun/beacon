@@ -15,6 +15,9 @@ const scheduledStatusLogEl = document.getElementById('scheduledStatusLog');
 const selfAutoEl = document.getElementById('selfAutoCollect');
 const selfAutoHourEl = document.getElementById('selfAutoHour');
 
+const commentCollectOwnEl = document.getElementById('commentCollectOwn');
+const commentCollectRivalEl = document.getElementById('commentCollectRival');
+
 // Populate hour dropdowns (00:00 - 23:00)
 [scheduledCollectHourEl, selfAutoHourEl].forEach((selectEl) => {
   selectEl.innerHTML = '';
@@ -50,6 +53,22 @@ async function renderScheduledStatusLog() {
   scheduledStatusLogEl.textContent = `⏰ 最近一次定时采集：${dateStr} | ${lastScheduledCollectLog.summary || '已触发'}`;
 }
 
+// 最近一次公众号自动回填的结果。试跑与定时走的是同一条路（runSelfAuto），
+// 所以这里显示的就是定时那一轮也会得到的结论——不给「请查看系统通知」这种查不到的指引。
+async function renderSelfAutoLog() {
+  const el = document.getElementById('selfAutoStatusLog');
+  if (!el) return;
+  const { lastSelfAutoLog } = await chrome.storage.local.get('lastSelfAutoLog');
+  if (!lastSelfAutoLog || !lastSelfAutoLog.timestamp) {
+    el.textContent = '📥 公众号回填：还没跑过';
+    return;
+  }
+  const dateStr = new Date(lastSelfAutoLog.timestamp).toLocaleString('zh-CN', {
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  });
+  el.textContent = `📥 最近一次公众号回填：${dateStr} | ${lastSelfAutoLog.summary || '已触发'}`;
+}
+
 // Read settings
 chrome.storage.sync
   .get([
@@ -62,6 +81,8 @@ chrome.storage.sync
     'scheduledCollectHour',
     'selfAutoCollect',
     'selfAutoHour',
+    'commentCollectOwn',
+    'commentCollectRival',
   ])
   .then((s) => {
     hostEl.value = s.host || DEFAULT_HOST;
@@ -77,7 +98,11 @@ chrome.storage.sync
     selfAutoEl.checked = s.selfAutoCollect === true;
     selfAutoHourEl.value = String(Number.isInteger(s.selfAutoHour) ? s.selfAutoHour : 9);
 
+    commentCollectOwnEl.checked = s.commentCollectOwn === true;
+    commentCollectRivalEl.checked = s.commentCollectRival === true;
+
     renderScheduledStatusLog();
+    renderSelfAutoLog();
   });
 
 // ── 回填归属：绑定一个创作账号 ──
@@ -160,6 +185,15 @@ selfAutoHourEl.addEventListener('change', () => {
   if (selfAutoEl.checked) show(`已改为每天 ${String(selfAutoHourEl.value).padStart(2, '0')}:00 执行公众号回填`, true);
 });
 
+commentCollectOwnEl.addEventListener('change', () => {
+  chrome.storage.sync.set({ commentCollectOwn: commentCollectOwnEl.checked });
+  show(commentCollectOwnEl.checked ? '已开启自有作品评论提问采集' : '已关闭自有作品评论提问采集', true);
+});
+commentCollectRivalEl.addEventListener('change', () => {
+  chrome.storage.sync.set({ commentCollectRival: commentCollectRivalEl.checked });
+  show(commentCollectRivalEl.checked ? '已开启竞对作品评论提问采集' : '已关闭竞对作品评论提问采集', true);
+});
+
 // Test Scheduled Collect Trial
 document.getElementById('runScheduledNow').addEventListener('click', async () => {
   show('正在触发每日定时采集试跑… 正在后台轮询更新竞对并生成概览通知', true);
@@ -173,8 +207,14 @@ document.getElementById('selfAutoRunNow').addEventListener('click', async () => 
     show('请先开启上面的「每天自动回填我的公众号数据」开关', false);
     return;
   }
-  show('已开始试跑：将在后台标签页打开公众号后台并自动处理，请查看系统通知', true);
+  show('已开始试跑：将在后台标签页打开公众号后台并自动处理，结果会显示在下面这行', true);
   await chrome.runtime.sendMessage({ type: 'beacon-self-auto-run-now' }).catch(() => {});
+  // 一轮最长 90 秒（SELF_AUTO_TIMEOUT_MS），中途每 3 秒刷一次；结果落盘后这行就会变。
+  const started = Date.now();
+  const poll = setInterval(async () => {
+    await renderSelfAutoLog();
+    if (Date.now() - started > 95000) clearInterval(poll);
+  }, 3000);
 });
 
 document.getElementById('jumpHome').addEventListener('click', () => {
@@ -221,6 +261,13 @@ document.getElementById('test').addEventListener('click', async () => {
     show(`连接失败：${e && e.message ? e.message : e}`, false);
   }
 });
+
+// 顶部徽标的版本号：只有 manifest 是唯一事实来源。任何写死的副本都会在下一次发版时变成谎言。
+(() => {
+  const el = document.getElementById('brandVersion');
+  if (!el) return;
+  try { el.textContent = `v${chrome.runtime.getManifest().version}`; } catch { el.remove(); }
+})();
 
 // ── 版本与更新 ──
 // 商店版和 zip 版是两条通道、天然不同步（商店随审核走）。这里把「你装的是哪一种」也说出来，

@@ -127,6 +127,9 @@ async function processAndReply(
     integrationId,
     chatId: fromUser,
     senderId: fromUser,
+    // 企微自建应用的消息回调**只有**一对一会话，没有群消息这条路径 ——
+    // 显式写 false 而不是留空，是为了让「登录链接能不能发」这件事在这里一眼可见。
+    isGroup: false,
   });
   await prisma.botIntegration
     .updateMany({ where: { id: integrationId }, data: { lastInboundAt: new Date(), lastError: null } })

@@ -32,6 +32,10 @@
   // 间隔取随机而不是固定值：固定 3 秒是一条太整齐的机器指纹，随机更像人在点。
   const gap = () => RULES.minGapMs + Math.floor(Math.random() * (RULES.maxGapMs - RULES.minGapMs + 1));
 
+  // fakeid 长得像不像 fakeid（base64 串）。sw.js 递进来的是本机缓存里的东西，不校验就往
+  // 请求里拼，等于把任何脏数据当参数发给微信。
+  const isFakeid = (v) => typeof v === 'string' && /^[A-Za-z0-9+/=_-]{4,64}$/.test(v);
+
   // token 的三个来源，按可靠性递降。
   //
   // ⚠️ 真机 2026-07-29：用户明明登着后台，却报「当前页面没有登录态」——因为只读了地址栏。
@@ -60,13 +64,19 @@
     return '';
   }
 
+  // 这一页是不是公众号后台的登录页。**只认页面自己的事实**（路由 + 登录组件），
+  // 不拿「取不到 token」倒推——那两件事的处置完全不同：停在登录页要把页面交给用户去扫码，
+  // 而登着但这一页没 token 只需要换一个后台页面。
+  function onLoginPage() {
+    return /\/cgi-bin\/(loginpage|bizlogin)/.test(location.pathname)
+      || !!document.querySelector('.login__type__container, .login_container, #headimg_qrcode');
+  }
+
   // 拿不到 token 时，「没登录」和「登录了但这页取不到」要说成两件事——
   // 前者要用户去扫码，后者要用户换一个后台页面再点，指错方向就是让人白折腾。
   function noTokenReason() {
-    const onLoginPage = /\/cgi-bin\/(loginpage|bizlogin)/.test(location.pathname)
-      || !!document.querySelector('.login__type__container, .login_container, #headimg_qrcode');
-    return onLoginPage
-      ? '公众号后台未登录（当前停在登录页），请先扫码登录后再采集'
+    return onLoginPage()
+      ? '公众号后台未登录（当前停在登录页）——已把这个页面切到前台，请扫码登录，登录完成后会自动继续采集'
       : '这个页面上取不到后台 token——请打开公众号后台首页（左侧菜单可见的任意页面）后，在那个页面上再点一次采集';
   }
 
@@ -184,38 +194,89 @@
   }
 
   // 一次完整采集：搜号 → 等 → 拉列表。返回给 sw.js 直接回传 /api/ingest/competitor 的 payload。
-  async function collect(name) {
+  //
+  // knownFakeid 是 sw.js 从本机缓存里递进来的（见 sw.js 的 cachedWechatFakeid）。命中就整个
+  // 跳过 searchbiz——「搜索公众号」是这条通道里配额最紧的一个口，2026-08-13 用户撞的那次频控
+  // 就是它，而每次采集都拿名字去重问一个早就知道的答案，本来就没有必要。
+  async function collect(name, knownFakeid) {
     const token = readToken();
-    if (!token) return { ok: false, code: 'no_token', error: noTokenReason() };
+    // needLogin 只在**真的停在登录页**时为 true：sw.js 据它决定要不要把标签页切到前台
+    // 等用户扫码（见 sw.js 的 waitForWechatLogin）。「登着但这页没 token」不是登录问题，
+    // 把用户支去重新登录只会白折腾一轮。
+    if (!token) return { ok: false, code: 'no_token', needLogin: onLoginPage(), error: noTokenReason() };
 
-    const found = await resolveFakeid(name, token);
-    if (found.code) return { ok: false, ...found };
+    let fakeid = isFakeid(knownFakeid) ? knownFakeid : '';
+    let nickname = '';
+    const usedCache = !!fakeid;
 
-    await sleep(gap());
-    const got = await fetchArticles(found.fakeid, token);
-    if (got.code && got.posts.length === 0) return { ok: false, code: got.code, error: got.error };
+    if (!fakeid) {
+      const found = await resolveFakeid(name, token);
+      if (found.code) return { ok: false, ...found };
+      fakeid = found.fakeid;
+      nickname = found.nickname;
+      await sleep(gap());
+    }
+
+    let got = await fetchArticles(fakeid, token);
+
+    // 缓存的 fakeid 可能已经不作数（存错了、号迁移了）。只有在**微信自己报了错、且一条都没拿到**
+    // 时才回退重搜一次：
+    //   · 频控 / 登录态过期一律不回退——那正是最不该再多发一个请求的时候；
+    //   · 空列表也不回退——号本来就可能 7 天没发文，那不是 fakeid 的问题。
+    let staleFakeid = false;
+    if (usedCache && got.code === 'mp_error' && got.posts.length === 0) {
+      staleFakeid = true;
+      await sleep(gap());
+      const found = await resolveFakeid(name, token);
+      if (found.code) return { ok: false, ...found, staleFakeid };
+      fakeid = found.fakeid;
+      nickname = found.nickname;
+      await sleep(gap());
+      got = await fetchArticles(fakeid, token);
+    }
+
+    if (got.code && got.posts.length === 0) {
+      return { ok: false, code: got.code, error: got.error, staleFakeid, fakeid };
+    }
 
     return {
       ok: true,
       // 中途撞频控但已拿到部分文章：入库已拿到的，同时把原因带上去如实展示
       partial: got.code ? got.error : undefined,
       code: got.code,
+      staleFakeid,
+      fakeid, // sw.js 据此写回缓存，下次直接跳过搜号
       payload: {
         platform: 'wechat',
         handle: name,
         autoSubscribe: false, // 竞对必须已在库并已订阅——这条通道不建档
-        profile: { name: found.nickname },
+        // 缓存命中时没有重新搜号，也就没有**这一次**的 nickname。宁可不带 profile，也不要把
+        // 缓存里的旧名字写回档案：handle 存的就是这个准确名字，少写一次 name 不会让档案变错。
+        ...(nickname ? { profile: { name: nickname } } : {}),
         posts: got.posts.slice(0, 50), // 与 ingestPayloadSchema 的单批上限对齐
       },
     };
   }
 
+  // 只读的登录态探针。sw.js 在「等用户扫码」期间每几秒问一次的就是这个——
+  // 它**只看页面**（readToken / 登录组件），一个请求都不发：等待期间反复打微信接口，
+  // 正是最容易把用户账号撞进频控的做法。
+  function loginState() {
+    return { ok: !!readToken(), onLoginPage: onLoginPage() };
+  }
+
   // 供单测用（tests/ingest/wechat-competitor-parse.test.ts 用 node:vm 跑本文件后取这里）
-  globalThis.__beaconWechatCompetitor = { RULES, mapArticle, resolveFakeid, fetchArticles, collect, readToken };
+  globalThis.__beaconWechatCompetitor = {
+    RULES, mapArticle, resolveFakeid, fetchArticles, collect, readToken, isFakeid, onLoginPage, loginState,
+  };
 
   chrome?.runtime?.onMessage?.addListener?.((msg, _sender, sendResponse) => {
+    if (msg?.type === 'beacon-wechat-login-state') {
+      sendResponse(loginState());
+      return undefined;
+    }
     if (msg?.type !== 'beacon-wechat-collect') return undefined;
-    collect(String(msg.name || ''))
+    collect(String(msg.name || ''), msg.fakeid)
       .then(sendResponse)
       .catch((e) => sendResponse({ ok: false, code: 'exception', error: String(e?.message || e) }));
     return true;

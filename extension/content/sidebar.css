@@ -110,6 +110,16 @@
   opacity: 1 !important;
   padding: 8px 5px !important;
 }
+/* 🔴 展开动画结束后必须放开裁剪，否则**提示气泡永远看不见**。
+   上面那条 overflow:hidden 是给 max-height 折叠动画用的，但气泡是贴在按钮左外侧的
+   （right: calc(100% + 10px)），整个盒子落在这个 50px 宽容器的外面 → 被裁得一干二净。
+   真机量过：气泡盒 855–1036，容器盒 1040–1090，没有一个像素重叠。
+   这个 bug 从竖条上线（0.8.1）起就在，表现是「鼠标移上去什么都不出现」，
+   而 CSS 里那句「#beacon-rail 是 fixed 不受祖先 overflow 影响」只挡住了宿主页面的祖先，
+   没防住自己这一层。
+   spread 由 JS 在动画跑完后加上（收起时立刻摘掉）——直接写 overflow:visible 会让
+   展开动画的第一帧就把整列图标漏出来，那条折叠动画就白做了。 */
+#beacon-rail-items.spread { overflow: visible !important; }
 
 .beacon-rail-sep {
   width: 22px !important; height: 1px !important;
@@ -140,6 +150,20 @@
 .beacon-rail-btn.off:hover { background: transparent !important; color: #c6cad1 !important; }
 .beacon-rail-btn.busy { animation: beacon-ripple 1.1s ease-out infinite !important; color: #e8552d !important; }
 
+/* 锁定态 = 功能没开（不是「这一页用不了」）。跟 .off 要长得不一样：
+   .off 是死灰、不可点；.locked 只是淡一层、仍然可点，点了会把用户送去设置页。
+   右上角那颗小点是「这里有话要说」的提示——纯淡色用户会以为只是失效。 */
+.beacon-rail-btn.locked { color: #a8aeb8 !important; }
+.beacon-rail-btn.locked:hover { background: #fff5f2 !important; color: #e8552d !important; }
+.beacon-rail-btn.locked::after {
+  content: '' !important;
+  position: absolute !important;
+  top: 7px !important; right: 7px !important;
+  width: 5px !important; height: 5px !important;
+  border-radius: 50% !important;
+  background: #f0a500 !important;
+}
+
 /* 提示气泡：贴在左侧，鼠标移上去才出现。宿主页面可能有 overflow:hidden 的祖先，
    但 #beacon-rail 是 position:fixed 且挂在 body 下，不受影响。 */
 .beacon-rail-tip {
@@ -161,7 +185,22 @@
   gap: 2px !important;
   max-width: 260px !important;
 }
-.beacon-rail-tip b { font-size: 12.5px !important; font-weight: 650 !important; color: #fff !important; }
+/* 标题行：功能名靠左、快捷键靠右，中间撑开（截图里那种「总结此页面   Opt + 2」的排法） */
+.beacon-rail-tip b {
+  font-size: 12.5px !important; font-weight: 650 !important; color: #fff !important;
+  display: flex !important; align-items: center !important;
+  gap: 14px !important; justify-content: space-between !important;
+}
+.beacon-rail-tip kbd {
+  font-family: inherit !important;
+  font-size: 11px !important; font-weight: 500 !important;
+  color: #9aa1ac !important;
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  white-space: nowrap !important;
+  flex: none !important;
+}
 .beacon-rail-tip i {
   font-style: normal !important; font-size: 11px !important; color: #b9bec7 !important;
   white-space: normal !important; line-height: 1.45 !important;

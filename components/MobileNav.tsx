@@ -5,10 +5,11 @@ import { usePathname } from 'next/navigation';
 import Image from 'next/image';
 import { Icon } from './icons';
 import { NavList } from './Sidebar';
+import type { NavGroup } from '@/lib/nav';
 
 // 720px 以下的抽屉式导航：汉堡按钮 + 遮罩 + 左滑入侧栏。
 // 桌面端三个元素都被 CSS 默认隐藏（.nav-burger/.drawer/.drawer-overlay），不参与布局。
-export function MobileNav() {
+export function MobileNav({ nav }: { nav: NavGroup[] }) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
 
@@ -75,7 +76,7 @@ export function MobileNav() {
             <div className="brand-sub">跨平台内容作战室</div>
           </div>
         </div>
-        <NavList />
+        <NavList nav={nav} />
       </aside>
     </>
   );

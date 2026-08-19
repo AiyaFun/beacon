@@ -47,7 +47,7 @@ const COMMANDS: [string, string][] = [
 
 const OVERVIEW: [string, string, string][] = [
   ['装插件采公开数据', '工具 → 下载采集助手', '/extension'],
-  ['生成采集令牌', '工具 → 模型与设置 → 数据源', '/settings'],
+  ['生成采集令牌', '工具 → 接入与密钥', '/settings/keys'],
   ['配飞书机器人', '工具 → 机器人与通知', '/notifications'],
   ['看今天该做什么选题', '选题 → 选题引擎', '/topics'],
   ['存下刷到的灵感 / 从评论挖问题', '选题 → 灵感收集箱', '/inspiration'],
@@ -102,9 +102,9 @@ export default function HelpPage() {
       >
         <div className="stack" style={{ gap: 10 }}>
           <Step n={1}>选你的浏览器下载安装（Chrome / Edge / 360 / Brave 通用；Safari 即将支持）。</Step>
-          <Step n={2}>到「模型与设置 → 数据源 → 插件采集令牌」点生成，把令牌复制进插件设置页。</Step>
+          <Step n={2}>到「接入与密钥 → 插件采集令牌」点生成，把令牌复制进插件设置页。</Step>
           <Step n={3}>到「竞对监控」订阅竞对，打开对方公开主页即自动采集；自己作品页可一键回填数据。</Step>
-          <p className="small muted">只采你亲眼可见的公开数据，不后台抓取。</p>
+          <p className="small muted">只采你在页面上亲眼可见的公开数据；每日定时采集默认开启（后台开页采你已订阅的竞对，采完即关，可在插件设置关闭）。</p>
         </div>
       </Card>
 

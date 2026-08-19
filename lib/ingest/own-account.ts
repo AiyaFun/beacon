@@ -3,6 +3,7 @@ import { prisma } from '../db';
 import { toJson, parseJson } from '../json';
 import { PLATFORMS } from '../constants';
 import { recordCollectionRun } from './collection-run';
+import { FOLLOWERS_VIA, checkFollowers } from './parser-health';
 
 // 账号级自有数据回填（粉丝曲线 + 受众画像）。
 //
@@ -67,6 +68,9 @@ export const ownAccountIngestSchema = z.object({
   accountId: z.string().max(64).optional(),
   dailyStats: z.array(dailyStatSchema).max(90).optional(), // 后台通常给近 7/30/90 天
   audience: audienceSchema.optional(),
+  // 粉丝数是**怎么**读到的。自有主页回填时由 sw.js 一起带上（后台回填不带——那儿读的是表格不是埋点）。
+  // 老版本插件不发，optional。见 lib/ingest/parser-health.ts。
+  followersVia: z.enum(FOLLOWERS_VIA).optional(),
 });
 
 export type OwnAccountPayload = z.infer<typeof ownAccountIngestSchema>;
@@ -85,11 +89,31 @@ export async function ingestOwnAccountData(
   payload: OwnAccountPayload,
 ): Promise<OwnAccountResult> {
   let statCount = 0;
+  // 量级闸的基准 = 库里最近一条有粉丝数的快照。**只对主页那条瞬时数设闸**：
+  // 后台「粉丝分析」页给的是一整段日序列，那里的每一天都是平台自己算好的，没有解析歧义。
+  const prevSnap = await prisma.accountDailyStat.findFirst({
+    where: { accountId, platform: payload.platform, followers: { not: null } },
+    orderBy: { date: 'desc' },
+    select: { followers: true },
+  });
+  const acc0 = await prisma.creatorAccount.findUnique({ where: { id: accountId }, select: { name: true } });
+  const incoming = payload.dailyStats?.find((s) => s.followers != null)?.followers ?? null;
+  const health = await checkFollowers({
+    platform: payload.platform,
+    scope: 'self',
+    targetName: acc0?.name ?? '（本账号）',
+    via: payload.followersVia ?? null,
+    prev: prevSnap?.followers ?? null,
+    next: incoming,
+  });
+
   for (const st of payload.dailyStats ?? []) {
+    // 量级突变时把粉丝数**摘掉**而不是丢掉整条：净增/播放/互动都是好的，没必要陪葬
+    const stFollowers = health.accept ? st.followers : undefined;
     // 一个数都没有的日期不建行（后台某些天没数据时会渲染空行）
-    if (st.followers == null && st.followerDelta == null && st.views == null && st.interactions == null) continue;
+    if (stFollowers == null && st.followerDelta == null && st.views == null && st.interactions == null) continue;
     const data = {
-      followers: st.followers ?? null,
+      followers: stFollowers ?? null,
       followerDelta: st.followerDelta ?? null,
       views: st.views ?? null,
       interactions: st.interactions ?? null,
@@ -153,7 +177,10 @@ export async function ingestOwnAccountData(
         dates,
         items: statCount,
         created: statCount,
-        note: audienceWritten ? (statCount > 0 ? '含受众画像' : '仅受众画像（无时间区间）') : null,
+        note: [
+          audienceWritten ? (statCount > 0 ? '含受众画像' : '仅受众画像（无时间区间）') : null,
+          health.note, // 解析降级/量级异常留痕，与竞对通道同一个位置
+        ].filter(Boolean).join('；') || null,
       });
     }
   }

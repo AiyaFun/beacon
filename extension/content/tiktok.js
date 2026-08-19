@@ -174,9 +174,32 @@ globalThis.__beaconParse = function () {
     document.querySelector('meta[property="og:title"]')?.getAttribute('content')?.split('(')[0]?.trim() ||
     undefined;
 
+  // 粉丝数三级：页面自带的 JSON 状态 > 埋点 > 文本锚点。
+  //
+  // 第一级是**全平台最稳的一种来源**——读页面自己渲染用的那份数据（`__UNIVERSAL_DATA` /
+  // SIGI_STATE 里的 `stats.followerCount`），是精确整数，且完全不受 DOM/埋点改版影响。
+  // 别的平台没有等价物才要靠 DOM 抠字符串；TikTok 有，就先用它。
+  let followersVia = 'none';
   let followers = Number(uStats?.followerCount);
-  if (!Number.isFinite(followers) || followers <= 0) followers = pc(document.querySelector('[data-e2e="followers-count"]')?.textContent);
-  if (!Number.isFinite(followers) || followers <= 0) followers = undefined;
+  if (Number.isFinite(followers) && followers > 0) followersVia = 'json';
+  if (followersVia === 'none') {
+    followers = pc(document.querySelector('[data-e2e="followers-count"]')?.textContent);
+    if (Number.isFinite(followers) && followers > 0) followersVia = 'e2e';
+  }
+  if (followersVia === 'none') {
+    // JSON 与埋点都没了才扫文本。TikTok 是数字在前的版式（「1.2M Followers」）。
+    const s = globalThis.__beaconReadStats?.(
+      [
+        { key: 'following', labels: ['Following', '正在关注'] },
+        { key: 'followers', labels: ['Followers', '粉丝'] },
+        { key: 'likes', labels: ['Likes', '获赞'] },
+      ],
+      ['[data-e2e="user-page"]', '#main-content-others_homepage', 'main'],
+    ) || { values: {}, via: {} };
+    followers = s.values.followers;
+    followersVia = s.via.followers || 'none';
+  }
+  if (!Number.isFinite(followers) || followers <= 0) { followers = undefined; followersVia = 'none'; }
 
   const seen = new Set();
   const posts = [];
@@ -220,7 +243,7 @@ globalThis.__beaconParse = function () {
   return {
     platform: 'tiktok',
     handle,
-    profile: name || followers != null ? { name, followers } : undefined,
+    profile: name || followers != null ? { name, followers, followersVia } : undefined,
     posts,
     ...(isSelf ? { isSelf: true } : {}),
   };

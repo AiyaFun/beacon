@@ -125,6 +125,14 @@ export async function buildAccountExport(opts: { tenantId: string; memberId: str
       orderBy: { createdAt: 'asc' },
     }),
     prisma.inspirationItem.findMany({ where: byWorkspace, orderBy: { createdAt: 'asc' } }),
+    // ⚠️ MediaAsset（参考图 / 生成的封面）**故意不导**，别顺手加上：导出包是可离线传播的副本，
+    //    把人像照塞进去等于凭空多一份不受控的肖像拷贝；而且几十 MB 的 base64 会让 JSON 大到打不开。
+    //    用户要图片可以在封面工位逐张下载。inventory 里如实列出它的条数。
+    // ⚠️ ReaderComment（读者原声 / 评论正文）**故意不导**，别顺手加上。
+    // 可携带权给的是「把**你的**个人信息带走」，而评论正文是**第三方个人**写下的内容——
+    // 把它打进导出包，等于用一条用户权利把别人的话搬到我们控制不到的地方去。
+    // 隐私政策里对这条有明文承诺（「不会被导出」），tests/legal/privacy-promises.test.ts 守着。
+    // 用户想知道存了多少条，数据清单（lib/account/inventory.ts）里有。
     prisma.watchlistItem.findMany({ where: byWorkspace, include: { competitor: true } }),
     prisma.taskItem.findMany({ where: byWorkspace, orderBy: { createdAt: 'asc' } }),
     prisma.notification.findMany({ where: byWorkspace, orderBy: { createdAt: 'asc' } }),

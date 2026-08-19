@@ -29,7 +29,9 @@ describe('relativeAge · 给模型可引用的时间说法', () => {
 
 describe('memoryLine · 注入行格式', () => {
   it('带类型名与时间', () => {
-    const line = memoryLine('preference', '偏好清单体', ago(20), 1);
+    // 时间说法要相对**真实的现在**去造，不能拿固定 NOW 造日期再让 memoryLine 用真实时钟去读：
+    // 那样这条用例只在 2026-07-22 前后能过，日历一走就变成「1个月前」（本条真踩到过）。
+    const line = memoryLine('preference', '偏好清单体', new Date(Date.now() - 20 * 86_400_000), 1);
     expect(line).toContain('偏好记忆');
     expect(line).toContain('上月');
     expect(line).toContain('偏好清单体');

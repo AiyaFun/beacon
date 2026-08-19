@@ -230,12 +230,14 @@ function renderList(competitors) {
 
 function filterAndRenderList() {
   const q = (document.getElementById('searchComp')?.value || '').toLowerCase().trim();
-  // 公众号没有公开主页（url 为 null），但它是可采的——走后台接口那条路。
-  // 只按 url 过滤会让它在列表里消失，而下面的「待刷新 N」又把它算进去，用户看到的就是
-  // 「说有 3 个待刷新，列表里只有 2 个」——先前那种对不上的计数正是排查噩梦。
+  // 可采性**只看 collectable**，别再掺 url：公众号没有公开主页（url 恒为 null）却是可采的
+  //（走用户自己后台那条路）。按 url 过滤会让它从列表里消失，而下面的「待刷新 N」又把它算进去
+  // ——「说有 3 个待刷新，列表里只有 2 个」正是那种最难查的对不上。
+  // 早先的补丁是 `c.url || c.platform === 'wechat'`，那只是把这一个平台写死进条件里；
+  // 下一个「可采但没有公开主页」的平台（视频号）进来时会原样再消失一次。
+  // 现在两处用同一个判据，采不采得动交给按钮去表达（没有入口就置灰说明，不是把整行藏起来）。
   const list = allCompetitors.filter(
-    (c) => c.collectable && (c.url || c.platform === 'wechat')
-      && (!q || c.name.toLowerCase().includes(q) || c.handle.toLowerCase().includes(q)),
+    (c) => c.collectable && (!q || c.name.toLowerCase().includes(q) || c.handle.toLowerCase().includes(q)),
   );
 
   clistEl.innerHTML = '';
@@ -260,10 +262,17 @@ function filterAndRenderList() {
       `<div class="csub"><span class="dot ${done ? 'fresh' : 'stale'}"></span>${done ? '今日已刷新' : '待刷新'} · <span class="badge">${PLATFORM_NAME[c.platform] || escHtml(c.platform)}</span></div>`;
     const go = document.createElement('button');
     go.className = 'go';
+    // 后台通道（公众号）/ 打开主页 / 两样都没有。第三种**置灰并说明**，不隐藏——
+    // 藏起来用户会以为这个号没订阅上，置灰他至少知道「订阅了，但这个平台还采不动」。
     const isWechat = c.platform === 'wechat';
-    go.textContent = isWechat ? '后台采集' : done ? '再采' : '打开采集';
+    const canOpen = !!c.url;
+    go.textContent = isWechat ? '后台采集' : canOpen ? (done ? '再采' : '打开采集') : '暂无入口';
+    if (!isWechat && !canOpen) {
+      go.disabled = true;
+      go.title = '这个平台还没有可直接打开的采集入口，也没有后台通道——先在网页端看它的说明';
+    }
     go.addEventListener('click', async () => {
-      if (!isWechat) { chrome.tabs.create({ url: c.url }); return; }
+      if (!isWechat) { if (canOpen) chrome.tabs.create({ url: c.url }); return; }
       // 公众号：后台开自己的公众号后台采，全程不跳走当前页面。结果与被节流拦下的理由
       // 都要说出来——静默失败会让用户以为坏了然后猛点。
       go.disabled = true;
@@ -318,14 +327,22 @@ chrome.runtime.onMessage.addListener((msg) => {
       : `准备采集中 0/${msg.total}…`;
   } else if (msg?.type === 'batch-done') {
     batchBtn.disabled = false;
-    batchMsg.textContent = `✓ 同步成功 (${msg.collected}/${msg.total})`;
+    // notes = 被节流/每轮上限拦下、或「开了页却没采到」的原因。SidePanel 一直在显示它，
+    // 这里此前直接丢掉：用户看到「成功 6/10」，另外 4 个为什么没采，一个字都没有。
+    const notes = Array.isArray(msg.notes) ? msg.notes : [];
+    batchMsg.textContent = `✓ 同步成功 (${msg.collected}/${msg.total})`
+      + (notes.length ? `；${notes.join('；')}` : '');
     loadList(true);
-    setTimeout(() => { batchMsg.textContent = ''; }, 6000);
+    // 有话要说时不自动清掉——6 秒读不完，清掉就等于没说
+    if (!notes.length) setTimeout(() => { batchMsg.textContent = ''; }, 6000);
   } else if (msg?.type === 'batch-self-progress') {
     const el = document.getElementById('selfmsg');
-    if (el) el.textContent = msg.busy
-      ? '已有一批采集在跑，等它结束再点'
-      : `采集中 ${msg.done}/${msg.total}${msg.current ? ` · ${msg.current}` : ''}`;
+    if (el) {
+      el.style.color = 'var(--text-3)'; // 复位：上一轮那条「上次回填」可能是绿色的
+      el.textContent = msg.busy
+        ? '已有一批采集在跑，等它结束再点'
+        : `采集中 ${msg.done}/${msg.total}${msg.current ? ` · ${msg.current}` : ''}`;
+    }
   } else if (msg?.type === 'batch-self-done') {
     const el = document.getElementById('selfmsg');
     if (el) el.textContent = `✓ ${msg.total} 个账号采集完成，回填 ${msg.posts} 条作品`
@@ -347,12 +364,12 @@ btn.addEventListener('click', async () => {
     const url = tab.url || '';
 
     if (url.includes('localhost') || url.includes('beacon.iyunci.cn') || url.includes('127.0.0.1')) {
-      show('当前页面是「烽火台控制台」。请在 B站/抖音/小红书/YouTube/X 竞对主页或作品页上使用采集。', false);
+      show('当前页面是「烽火台控制台」。请在 B站/抖音/小红书/YouTube/X/TikTok 竞对主页或作品页上使用采集。', false);
       return;
     }
 
     if (url && !SUPPORTED.some((re) => re.test(url))) {
-      show('请在支持的公开主页或视频详情页上使用（B站/抖音/小红书/YouTube/X）', false);
+      show('请在支持的公开主页或视频详情页上使用（B站/抖音/小红书/YouTube/X/TikTok）', false);
       return;
     }
     let collected;
@@ -421,7 +438,7 @@ selfBtn.addEventListener('click', async () => {
     if (!tab?.id) { show('无法获取当前标签页', false); return; }
     const url = tab.url || '';
     if (!SELF_SUPPORTED.some((re) => re.test(url))) {
-      show('请在你自己的作品页（B站/抖音/小红书/X），或创作者后台的「数据中心 · 作品数据」页使用（视频号/公众号/抖音/小红书/B站）', false);
+      show('请在你自己的作品页（B站/抖音/小红书/X/YouTube/TikTok），或创作者后台的「数据中心 · 作品数据」页使用（视频号/公众号/抖音/小红书/B站）', false);
       return;
     }
     let collected;
@@ -584,7 +601,7 @@ async function loadSelfList() {
 
 document.getElementById('batchself')?.addEventListener('click', () => {
   const msg = document.getElementById('selfmsg');
-  if (msg) msg.textContent = '正在后台逐个打开并采集…';
+  if (msg) { msg.style.color = 'var(--text-3)'; msg.textContent = '正在后台逐个打开并采集…'; }
   chrome.runtime.sendMessage({ type: 'batch-collect-self' });
 });
 
@@ -656,6 +673,36 @@ document.getElementById('inspire')?.addEventListener('click', async () => {
     }
   } finally {
     inspireBtn.disabled = false;
+  }
+});
+
+// ── 读评论提问 ──
+document.getElementById('collectComments')?.addEventListener('click', async () => {
+  const ccBtn = document.getElementById('collectComments');
+  // 没开就直接送去设置页。发起采集再让后台回一句「未开启」是最没用的反馈：
+  // 用户看完还是不知道去哪开。
+  if (ccBtn.dataset.locked === '1') {
+    show('评论提问采集默认关闭，正在打开设置页…', true);
+    try { chrome.runtime.openOptionsPage(); } catch { /* 打不开就只剩上面那句提示 */ }
+    return;
+  }
+  ccBtn.disabled = true;
+  show('正在读取评论区提问…', true);
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id) { show('无法获取当前标签页', false); return; }
+    const r = await ask({ type: 'beacon-collect-comments', tabId: tab.id });
+    if (r?.ok) {
+      // 与 sidepanel/右键菜单同一份写法：`r.created + r.updated` 在任一字段缺席时是 NaN，
+      // 用户看到的是「提取了 NaN 条提问」——一个成功的采集被展示成故障。
+      const n = (r.created || 0) + (r.updated || 0);
+      const c = r.comments || 0;
+      show(`✓ 读了 ${r.read ?? '?'} 条评论：${n} 条提问${r.created ? `（${r.created} 条新增）` : ''}、${c} 条读者原声`, true);
+    } else {
+      show(r?.error || '评论采集失败', false);
+    }
+  } finally {
+    ccBtn.disabled = false;
   }
 });
 
@@ -748,6 +795,25 @@ document.querySelectorAll('.chip').forEach((chip) => {
     }
   } catch { /* ignore */ }
 
+  // 评论提问按钮：开关没开时**不再整个藏起来**，而是显示成「未开启」并直通设置页。
+  // 藏起来的代价是用户根本不知道有这个功能（真机上用户来问「有没有评论一键采集按钮」，
+  // 就是被这个藏法坑的）。与侧栏竖条的锁定态同一套口径。
+  try {
+    const cs = await chrome.storage.sync.get(['commentCollectOwn', 'commentCollectRival']);
+    const ccBtn = document.getElementById('collectComments');
+    if (ccBtn) {
+      ccBtn.style.display = '';
+      const on = cs.commentCollectOwn === true || cs.commentCollectRival === true;
+      ccBtn.dataset.locked = on ? '' : '1';
+      if (!on) {
+        ccBtn.title = '出于合规考虑默认关闭，点击去设置里打开';
+        const span = ccBtn.querySelector('span');
+        if (span) span.textContent = '读评论提问（未开启）';
+        ccBtn.style.opacity = '0.68';
+      }
+    }
+  } catch { /* ignore */ }
+
   loadList(false);
   loadSelfList();
 
@@ -777,6 +843,22 @@ document.querySelectorAll('.chip').forEach((chip) => {
       });
     }
   } catch { /* 检查更新失败不该影响面板其余功能 */ }
+
+  // 上一轮公众号自动回填的结果。
+  // ⚠️ 这条通道跑在后台、采完就关标签页，唯一的输出是一条系统通知——而通知在 macOS 上
+  // 没给权限就被静默丢弃。用户点完只看到「公众号标签页开了又关」，面板里一个字都没有。
+  // 结果落盘后（sw.js finishSelfAuto），这里在面板打开时把它读出来。
+  try {
+    const { lastSelfAutoLog } = await chrome.storage.local.get('lastSelfAutoLog');
+    const el = document.getElementById('selfmsg');
+    if (el && lastSelfAutoLog?.timestamp && !el.textContent.trim()) {
+      const t = new Date(lastSelfAutoLog.timestamp).toLocaleString('zh-CN', {
+        month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+      });
+      el.textContent = `上次公众号回填（${t}）：${lastSelfAutoLog.summary || '已触发'}`;
+      el.style.color = lastSelfAutoLog.ok ? 'var(--green)' : 'var(--text-3)';
+    }
+  } catch { /* 读不到就当没有，不影响面板其余功能 */ }
 
   // Render Schedule Badge Pill
   try {

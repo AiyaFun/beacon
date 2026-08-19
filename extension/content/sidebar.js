@@ -178,18 +178,34 @@
   // 分组 = 「在这一页你想干什么」。sep 前后是不同意图，别混。
   // need: 什么页面上才有意义；不满足时**置灰而不是隐藏**——按钮消失会让下面的图标位置跳动，
   // 用户刚建立的肌肉记忆当场作废，而且他不知道为什么少了一个。
+  //
+  // key: Alt/Opt + 这个数字直达该动作，气泡右上角会把它显示出来。
+  // ⚠️ 判键必须用 e.code（'Digit3'）不能用 e.key —— macOS 上 Opt+3 打出来的是「‹」这类符号，
+  //    按 e.key 匹配等于快捷键在 Mac 上整条失灵（而本产品用户主力就在 Mac 上）。
   const RAIL_ACTIONS = [
-    { id: 'analyze', icon: 'scissors', label: '拆解这条作品', hint: '读封面 + 文案 + 字幕轨，出钩子/爆点/对你的用处', need: 'content' },
-    { id: 'clip', icon: 'doc', label: '存进资讯库', hint: '把这一页正文抓下来，出摘要和要点', need: 'content' },
-    { id: 'comments', icon: 'chat2', label: '读评论提问', hint: '读当前页已显示的评论，挑出提问句，归并后入库参与选题', need: 'content' },
-    { id: 'inspire', icon: 'bulb', label: '收进灵感箱', hint: '记一笔，回头能转成选题' },
+    { id: 'analyze', icon: 'scissors', label: '拆解这条作品', hint: '读封面 + 文案 + 字幕轨，出钩子/爆点/对你的用处', need: 'content', key: '1' },
+    { id: 'clip', icon: 'doc', label: '存进资讯库', hint: '把这一页正文抓下来，出摘要和要点', need: 'content', key: '2' },
+    { id: 'comments', icon: 'chat2', label: '读评论提问', hint: '读当前页已显示的评论，挑出提问句，归并后入库参与选题', need: 'content', key: '3' },
+    { id: 'inspire', icon: 'bulb', label: '收进灵感箱', hint: '记一笔，回头能转成选题', key: '4' },
     { sep: true },
-    { id: 'rival', icon: 'plus', label: '加为竞对并采集', hint: '仅在支持的平台主页/作品页可用', need: 'competitor' },
-    { id: 'self', icon: 'down', label: '这是我的作品', hint: '回填到数据看板；仅在你自己的作品页可用', need: 'self' },
+    { id: 'rival', icon: 'plus', label: '加为竞对并采集', hint: '仅在支持的平台主页/作品页可用', need: 'competitor', key: '5' },
+    { id: 'self', icon: 'down', label: '这是我的作品', hint: '回填到数据看板；仅在你自己的作品页可用', need: 'self', key: '6' },
     { sep: true },
-    { id: 'ai', icon: 'chat', label: 'AI 运营助手', hint: '针对这一页提问、要选题' },
-    { id: 'home', icon: 'home', label: '打开烽火台', hint: '回到工作台' },
+    { id: 'ai', icon: 'chat', label: 'AI 运营助手', hint: '针对这一页提问、要选题', key: '7' },
+    { id: 'home', icon: 'home', label: '打开烽火台', hint: '回到工作台', key: '8' },
   ];
+
+  // Mac 上这颗键印的是 ⌥/Opt，写成 Alt 用户对不上自己的键盘。
+  // ⚠️ 必须走 globalThis.navigator?. —— 这是**顶层**语句，裸写 navigator 一旦取不到就抛
+  //    ReferenceError，而顶层抛异常会让整份侧栏脚本停在这里（后面所有按钮一个都不绑定）。
+  //    「气泡上那颗键叫 Opt 还是 Alt」这种纯文案的事，不配有搞死整个侧栏的权力。
+  const ALT_LABEL = /mac|iphone|ipad/i.test(globalThis.navigator?.userAgent || '') ? 'Opt' : 'Alt';
+
+  /** 气泡内容。锁定态要换一套说法——只写功能名等于让用户对着一颗点不动的按钮猜。 */
+  function tipHtml(label, hint, key) {
+    const kbd = key ? `<kbd>${ALT_LABEL} + ${esc(key)}</kbd>` : '';
+    return `<b>${esc(label)}${kbd}</b>${hint ? `<i>${esc(hint)}</i>` : ''}`;
+  }
 
   const itemsBox = rail.querySelector('#beacon-rail-items');
   for (const a of RAIL_ACTIONS) {
@@ -203,7 +219,8 @@
     b.className = 'beacon-rail-btn';
     b.dataset.act = a.id;
     if (a.need) b.dataset.need = a.need;
-    b.innerHTML = `${railIcon(svgIcons[a.icon])}<span class="beacon-rail-tip"><b>${esc(a.label)}</b>${a.hint ? `<i>${esc(a.hint)}</i>` : ''}</span>`;
+    if (a.key) b.dataset.key = a.key;
+    b.innerHTML = `${railIcon(svgIcons[a.icon])}<span class="beacon-rail-tip">${tipHtml(a.label, a.hint, a.key)}</span>`;
     itemsBox.appendChild(b);
   }
 
@@ -362,13 +379,48 @@
     root.style.display = show !== false ? 'block' : 'none';
   };
 
-  chrome.storage.sync.get('showInPageAi', (res) => {
+  // 评论提问采集默认关闭（合规决策，用户得自己开）。这里控制的是**开关没开时按钮长什么样**。
+  //
+  // 🔴 这段曾经有两个叠在一起的毛病，一起修掉：
+  //   ① 选择器写的是 `[data-action="comments"]`，而按钮上挂的是 `data-act`（见上面 dataset.act）
+  //      —— 差一个词，querySelector 永远返回 null，于是这个开关**从来没生效过**。
+  //   ② 就算命中了，原来的做法是 `display:none` 整个藏起来。功能被藏死的结果是用户根本
+  //      不知道它存在（真机上用户就是来问「有没有评论一键采集按钮」的），而且按钮凭空消失
+  //      会让它下面所有图标往上跳一格 —— RAIL_ACTIONS 上方那段注释早就立过
+  //      「不可用是置灰而不是隐藏」的规矩，这里是自己破了自己的规矩。
+  //
+  // 现在改成**锁定态**：位置留着、图标暗着、气泡直说「没开 + 点我去开」，点一下直达设置页。
+  const commentsBtn = () => itemsBox?.querySelector('[data-act="comments"]');
+  const COMMENTS = RAIL_ACTIONS.find((a) => a.id === 'comments');
+
+  function applyCommentsLock(unlocked) {
+    const b = commentsBtn();
+    if (!b) return;
+    b.classList.toggle('locked', !unlocked);
+    const tip = b.querySelector('.beacon-rail-tip');
+    if (!tip) return;
+    tip.innerHTML = unlocked
+      ? tipHtml(COMMENTS.label, COMMENTS.hint, COMMENTS.key)
+      : tipHtml('读评论提问 · 未开启', '出于合规考虑默认关闭。点我打开设置页，勾上「评论提问采集」即可使用', COMMENTS.key);
+  }
+
+  const commentsUnlocked = (s) => s?.commentCollectOwn === true || s?.commentCollectRival === true;
+
+  chrome.storage.sync.get(['showInPageAi', 'commentCollectOwn', 'commentCollectRival'], (res) => {
     applyVisibility(res?.showInPageAi);
+    applyCommentsLock(commentsUnlocked(res));
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === 'sync' && changes.showInPageAi) {
+    if (area !== 'sync') return;
+    if (changes.showInPageAi) {
       applyVisibility(changes.showInPageAi.newValue);
+    }
+    // 用户在设置页刚勾上，本页竖条要当场解锁——让他回来还得刷新一遍页面是最气人的那种交互
+    if (changes.commentCollectOwn || changes.commentCollectRival) {
+      chrome.storage.sync.get(['commentCollectOwn', 'commentCollectRival'], (res) => {
+        applyCommentsLock(commentsUnlocked(res));
+      });
     }
   });
 
@@ -419,7 +471,11 @@
     moved = false;
     startY = e.clientY;
     startTop = rail.getBoundingClientRect().top;
-    railLogo.setPointerCapture(e.pointerId);
+    // ⚠️ 抓指针失败不能让整个处理器炸掉：一旦在这里抛出，下面的 dragging 状态就再也没人
+    // 复位（pointerup 都不会来），而 pointerleave 里有 `if (dragging) return`——
+    // 结果是竖条从此不会自动收起，且拖动没有任何视觉反馈。
+    // 同一个函数里的 releasePointerCapture 早就包了 try/catch，这边漏了，属实是不对称。
+    try { railLogo.setPointerCapture(e.pointerId); } catch { /* 抓不住就退化成普通拖动 */ }
     rail.classList.add('dragging');
   });
   railLogo.addEventListener('pointermove', (e) => {
@@ -438,8 +494,56 @@
       try { chrome.storage?.local?.set?.({ railTop: readRailTop() }); } catch { /* 同上 */ }
       return; // 拖完不触发展开，否则每次挪位置都会弹出图标条
     }
-    rail.classList.toggle('open');
-    if (rail.classList.contains('open')) refreshRailState();
+    // 点击 = 固定/取消固定。固定住之后鼠标移开也不收，方便连着点好几个动作。
+    // 三态：没开→开并固定；悬停开着但没固定→固定住；已固定→取消固定并收起。
+    clearHover();
+    if (!rail.classList.contains('open')) { pinned = true; setOpen(true); }
+    else if (!pinned) { pinned = true; }
+    else { pinned = false; setOpen(false); }
+  });
+
+  // ── 悬停即展开 ────────────────────────────────
+  // 【为什么加这个】原来只能「点 logo 才展开」，想干一件事至少两次点击（展开 + 点动作）。
+  // 悬停展开把常用动作压回一次点击。两个延时都是防手抖的：
+  //   · 进入 140ms 才展开 —— 鼠标从旁边扫过去不该弹出来
+  //   · 离开 420ms 才收起 —— 从 logo 移到图标上要穿过几像素空隙，收太快就够不着
+  const HOVER_IN = 140;
+  const HOVER_OUT = 420;
+  let pinned = false;
+  let hoverTimer = null;
+
+  // 展开动画（max-height 0.26s）跑完才放开容器裁剪 —— 见 sidebar.css 里 .spread 那段：
+  // 不放开的话提示气泡会被 #beacon-rail-items 的 overflow:hidden 整个裁掉，
+  // 表现就是「鼠标移上去什么提示都没有」。收起时要**立刻**摘掉，让折叠动画照旧有裁剪。
+  const SPREAD_DELAY = 280;
+  let spreadTimer = null;
+
+  function setOpen(open) {
+    rail.classList.toggle('open', open);
+    if (spreadTimer) { clearTimeout(spreadTimer); spreadTimer = null; }
+    if (open) {
+      refreshRailState();
+      spreadTimer = setTimeout(() => itemsBox.classList.add('spread'), SPREAD_DELAY);
+    } else {
+      itemsBox.classList.remove('spread');
+    }
+  }
+  const clearHover = () => { if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; } };
+
+  rail.addEventListener('pointerenter', () => {
+    clearHover();
+    if (rail.classList.contains('open')) return;
+    hoverTimer = setTimeout(() => setOpen(true), HOVER_IN);
+  });
+  railLogo.addEventListener('pointerenter', () => {
+    clearHover();
+    if (rail.classList.contains('open')) return;
+    hoverTimer = setTimeout(() => setOpen(true), HOVER_IN);
+  });
+  rail.addEventListener('pointerleave', () => {
+    clearHover();
+    if (pinned || dragging) return; // 固定住的、以及正在拖的，都不许自动收
+    hoverTimer = setTimeout(() => setOpen(false), HOVER_OUT);
   });
 
   // ── 竖条动作 ────────────────────────────────
@@ -450,6 +554,14 @@
     const btn = e.target.closest('.beacon-rail-btn');
     if (!btn || btn.disabled) return;
     const act = btn.dataset.act;
+
+    // 锁定态（功能没开）不是「点了没反应」，而是把用户直接送到能开它的地方。
+    // 发起采集再让后台回一句「未开启」是最没用的一种反馈：他还是不知道去哪开。
+    if (btn.classList.contains('locked')) {
+      showToast('评论提问采集默认关闭，正在打开设置页…', true);
+      await ask({ type: 'beacon-open-options' });
+      return;
+    }
 
     if (act === 'home') return void window.open(hostUrl, '_blank');
 
@@ -500,12 +612,45 @@
     }
   });
 
+  // ── 快捷键：Alt/Opt + 数字 ────────────────────────────────
+  //
+  // 侧栏注入在 <all_urls> 上，**抢了键就是抢了整个互联网的键**，所以三道闸缺一不可：
+  //   ① 光标在输入框/文本域/富文本里 → 一律放行（用户在微博发帖时按 Opt+3 是在打字，不是要采集）
+  //   ② 同时按了 Ctrl/Cmd → 放行（那多半是宿主页面或系统的组合键）
+  //   ③ 侧栏被用户在设置里关掉（root 隐藏）→ 放行（功能都关了还占着键说不过去）
+  // 判键用 e.code：macOS 上 Opt+3 的 e.key 是「‹」，按 e.key 匹配等于 Mac 上整条失灵。
+  document.addEventListener('keydown', (e) => {
+    if (!e.altKey || e.ctrlKey || e.metaKey) return;
+    if (root.style.display === 'none') return;
+    const t = e.target;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || ''))) return;
+    const m = /^Digit([1-9])$/.exec(e.code || '');
+    if (!m) return;
+    const btn = itemsBox.querySelector(`.beacon-rail-btn[data-key="${m[1]}"]`);
+    if (!btn) return;
+    refreshRailState();          // 先按当前页面刷新可用性，免得对着一颗其实不可用的按钮触发
+    if (btn.disabled) {
+      showToast(`这一页用不了「${btn.querySelector('.beacon-rail-tip b')?.textContent || ''}」`, false);
+      return;
+    }
+    e.preventDefault();
+    setOpen(true);               // 展开一下让用户看见自己按中了哪颗，纯键盘操作否则没有任何反馈
+    btn.click();
+  });
+
   /** 按当前页面刷新竖条上各按钮可不可用（不可用是置灰 + 说明，不是消失）。 */
   function refreshRailState() {
-    const info = getPageInfo();
     const can = {
       content: true, // 任意网页都能读正文/封面
-      competitor: !!(info.platform && info.platform !== '社交网页') || isCompetitorPage(),
+      // ⚠️ 判据必须与**点击时那道闸**（下面「公开竞对页」分支的 isCompetitorPage()）完全一致。
+      //
+      // 此前是 `!!(info.platform && info.platform !== '社交网页') || isCompetitorPage()`，
+      // 而 info 来自 getPageInfo() 的兜底解析——它对**任何**未知域名都返回 platform='bilibili'
+      //（common.js 的默认值）+ 按 pathname 凑的 handle。于是第一个条件在知乎、任意新闻站上
+      // 恒为真：按钮不置灰，点下去才弹「这个站点不在竞对采集范围内」。
+      // 这与本文件自己立的规矩（「不满足时置灰而不是隐藏」）以及气泡上写的
+      //「仅在支持的平台主页/作品页可用」都对不上——用户被引着点了一次无效操作。
+      competitor: isCompetitorPage(),
       self: isSelfPage() || isSelfBackend(),
     };
     for (const btn of itemsBox.querySelectorAll('.beacon-rail-btn')) {
@@ -536,7 +681,10 @@
     if (!isSelfBackend() && (!payload || !payload.handle || !payload.posts || payload.posts.length === 0)) {
       try {
         if (typeof globalThis.beaconFallbackParse === 'function') {
-          payload = globalThis.beaconFallbackParse();
+          // 合并而不是替换：兜底给不出粉丝数，站点解析器往往已经读到了（见 common.js
+          // beaconMergeFallback）。整包换掉 = 竞对档案的 followers 永远停在建档时的 0。
+          const fb = globalThis.beaconFallbackParse();
+          payload = globalThis.__beaconMergeFallback ? globalThis.__beaconMergeFallback(payload, fb) : fb;
         }
       } catch { /* ignore */ }
     }
@@ -554,11 +702,27 @@
     document.getElementById('beacon-page-platform').textContent = info.platform;
     document.getElementById('beacon-page-title').textContent = (info.author ? `【${info.author}】` : '') + info.title;
 
+    // ── 把「这一页我读到了什么」当场摆出来 ──
+    //
+    // 唯一知道正确答案的人正盯着这个页面看。采之前就把读到的数字给他看一眼，
+    // 对不上他立刻会说；不给看，就只能等他哪天翻到竞对清单发现粉丝数是空的——
+    // 抖音那次埋点改名就是这么拖了十几天（解析其实早就悄悄退到兜底了）。
+    // 「没读到」要显式写成「粉丝 —」而不是省略：**空着看起来像「这项本来就没有」**。
+    const bits = [];
+    const prof = info.payload?.profile;
+    // 只在**主页**上报粉丝数：作品页本来就没有这个数字，写「粉丝 —（没读到）」是误导。
+    // 判据用 followersVia 在不在 —— 只有主页解析器会去读粉丝数，它一定会表态（哪怕是 'none'）。
+    if (!isSelfBackend() && prof && prof.followersVia) {
+      bits.push(typeof prof.followers === 'number' ? `粉丝 ${fmtCount(prof.followers)}` : '粉丝 —（没读到）');
+      bits.push(`作品 ${info.payload?.posts?.length || 0} 条`);
+    }
     // 只展示标量指标：sources 是个对象（{推荐:0.62,…}），直接拼进模板会变成 [object Object]
-    const shown = Object.keys(info.metrics).filter((k) => typeof info.metrics[k] === 'number');
+    for (const k of Object.keys(info.metrics)) {
+      if (typeof info.metrics[k] === 'number') bits.push(`${k}: ${info.metrics[k]}`);
+    }
     const meta = document.getElementById('beacon-page-meta');
-    if (shown.length > 0) {
-      meta.textContent = shown.map((k) => `${k}: ${info.metrics[k]}`).join(' · ');
+    if (bits.length > 0) {
+      meta.textContent = bits.join(' · ');
     } else {
       meta.textContent = isSelfBackend()
         ? '这是你自己的后台，可一键回填数据看板'
@@ -566,6 +730,15 @@
           ? '页面已识别 · 是竞对就采回档案，是你自己的作品就回填数据看板'
           : '页面已识别，可一键采回竞对档案';
     }
+  }
+
+  // 侧栏上显示用：与页面上的写法对齐（页面写「24.1万」，这里就别显示 241000，
+  // 否则用户没法一眼对上，这一栏就白显示了）。
+  function fmtCount(n) {
+    if (!Number.isFinite(n)) return '—';
+    if (n >= 100000000) return `${(n / 100000000).toFixed(1)}亿`;
+    if (n >= 10000) return `${(n / 10000).toFixed(1)}万`;
+    return String(n);
   }
 
   // 收进灵感箱：与「加为竞对」是两件不同的事——竞对是持续监控一个账号，
@@ -655,7 +828,7 @@
     if (!isCompetitorPage()) {
       // 认不出平台时兜底解析会默认 platform='bilibili' 并按路径瞎凑 handle，
       // 在竞对库里建出一个不存在的账号。这种页面用灵感箱记一笔就够了。
-      showToast('这个站点不在竞对采集范围内（B站/抖音/小红书/YouTube/X），可以用下面的「收进灵感箱」', false);
+      showToast('这个站点不在竞对采集范围内（B站/抖音/小红书/YouTube/X/TikTok），可以用下面的「收进灵感箱」', false);
       restore();
       return;
     }
@@ -747,7 +920,17 @@
     chatMsgs.removeChild(chatMsgs.lastChild);
 
     if (resp?.ok) {
-      appendChatBubble('assistant', resp.answer);
+      // ⚠️ `mocked` 必须标出来。令牌缺失/接口失败时 sw.js 的 generateFallbackAiResponse 会返回
+      // 一段**本地模板**（「留存率极高」「精准切中目标受众的关键痛点」之类），它长得和真分析
+      // 一模一样，用户会拿它当对自己这条作品的真实判断。
+      // popup.js:719 与 sidepanel.js:199 一直都标了，**只有页内侧栏这个入口漏了**——
+      // 而它恰恰是用户最常用的那个。文案与另两处保持逐字一致，免得三处各说各话。
+      appendChatBubble(
+        'assistant',
+        resp.mocked
+          ? '⚠️ **[示例回复]** 以下内容由本地引擎生成，非真实 AI 分析。绑定有效采集令牌后可解锁深度模型服务。\n\n' + resp.answer
+          : resp.answer,
+      );
     } else {
       appendChatBubble('assistant', `⚠️ 响应未成功: ${resp?.error || '请检查采集令牌与连接'}`);
     }

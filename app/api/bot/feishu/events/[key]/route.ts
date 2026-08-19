@@ -195,6 +195,8 @@ async function processAndReply(p: {
     integrationId: p.integrationId,
     chatId: p.chatId,
     senderId: p.senderId,
+    // 🔒 必须传：登录/绑定指令靠它拒绝在群里响应（链接发进群 = 谁点谁登进来）
+    isGroup: p.isGroup,
   });
   // updateMany：集成若在处理期间被删（并发/测试），0 行静默返回，不抛「record not found」
   await prisma.botIntegration

@@ -5,6 +5,25 @@
 // handle 与 parseCompetitorUrl 对齐：@handle（如 @MrBeast）或频道ID（UC…）。建议按 @handle 添加竞对，
 // 因为频道页 URL 就是 /@handle，采到的 handle 才对得上（用频道ID添加、但页面是 @handle 时会对不上）。
 
+// 从内联 <script> 的**文本**里抠精确计数（页面正文印的是「18亿次观看」这种四舍五入值）。
+//
+// 读的是 document.scripts 的 textContent，属于 DOM 访问，内容脚本在隔离世界里照样能读；
+// 不是去碰 window.ytInitialPlayerResponse 那个页面变量（那个读不到，见 sidebar 那边的同类教训）。
+// 抠不出来就返回空对象，由调用方退回页面展示值——宁可粗一点，不能整项丢。
+function ytExactCounts() {
+  try {
+    const src = [...document.scripts].map((s) => s.textContent || '').join('');
+    const pick = (re) => { const m = src.match(re); return m ? Number(m[1]) : null; };
+    const num = (v) => (v != null && Number.isFinite(v) && v >= 0 ? v : null);
+    return {
+      views: num(pick(/"viewCount"\s*:\s*"(\d+)"/)),
+      likes: num(pick(/"likeCount"\s*:\s*"(\d+)"/)),
+    };
+  } catch {
+    return { views: null, likes: null }; // 脚本读取出问题不该把整条解析带崩
+  }
+}
+
 globalThis.__beaconParse = function () {
   const pc = globalThis.__beaconParseCount;
   const isWatch = location.pathname === '/watch' && /[?&]v=/.test(location.search);
@@ -51,11 +70,36 @@ globalThis.__beaconParse = function () {
       const likes = nums.length ? Math.max(...nums) : pc(likeBtn.textContent);
       if (likes != null) metrics.likes = likes;
     }
-    // 播放量 best-effort：watch-metadata 里含"次观看/views"的叶子节点（排除播放器覆盖层 ytp-*）
-    const vEl = [...document.querySelectorAll('ytd-watch-metadata span, ytd-watch-info-text span, #info span')].find(
-      (e) => e.children.length === 0 && /次观看|views/i.test(e.textContent || '') && !String(e.className).includes('ytp'),
-    );
-    if (vEl) { const v = pc(vEl.textContent); if (v != null) metrics.views = v; }
+    // 播放量。**先从内联脚本里取精确值，取不到才退回页面上那个数**。
+    //
+    // ⚠️ 真机 2026-08-10（dQw4w9WgXcQ）：页面正文印的是「18亿次观看」，
+    // 按它入库就是 1,800,000,000，而真值是 1,802,557,814。差 255 万还在其次，
+    // 要命的是这个数**不会动** —— 涨到 19亿之前每次采集都是同一个 1,800,000,000，
+    // 增速/趋势整套失效。小号更狠：「1.2万次观看」的真值在 12000~12999 之间，天生 8% 误差。
+    //
+    // ytInitialPlayerResponse 里的 "viewCount":"1802557814" 是精确的，且就在 <script> 标签的
+    // **文本**里 —— 内容脚本读 document.scripts 是读 DOM，不碰页面 JS 变量，
+    // 因此不受隔离世界限制（对比 B站：它的精确值只在 window.__INITIAL_STATE__ 这个页面变量里，
+    // 内联脚本正则不出来，那边就只能拿展示值，见 bili-video.js 的说明）。
+    const exact = ytExactCounts();
+    if (exact.views != null) metrics.views = exact.views;
+    else {
+      const vEl = [...document.querySelectorAll('ytd-watch-metadata span, ytd-watch-info-text span, #info span')].find(
+        (e) => e.children.length === 0 && /次观看|views/i.test(e.textContent || '') && !String(e.className).includes('ytp'),
+      );
+      if (vEl) { const v = pc(vEl.textContent); if (v != null) metrics.views = v; }
+    }
+    // 点赞：aria-label 本来就是精确的，脚本值只在 aria 读不到时补位
+    if (metrics.likes == null && exact.likes != null) metrics.likes = exact.likes;
+
+    // 评论数 best-effort：YouTube 的评论区是懒加载的，用户没滚到就没有这个节点
+    // （2026-08-11 真机：自动化环境里始终停在「评论」二字、加载不出计数，无法确认上限）。
+    // 与 B站 同一条纪律：取到算赚到，取不到就不写这一项 —— 绝不写 0 冒充「零评论」。
+    try {
+      const cEl = document.querySelector('ytd-comments-header-renderer #count, #comments #count');
+      const c = cEl ? pc(cEl.textContent) : null;
+      if (c != null && c >= 0) metrics.comments = c;
+    } catch { /* 读不到就算了，不影响其余指标 */ }
 
     return {
       platform: 'youtube',
@@ -88,11 +132,22 @@ globalThis.__beaconParse = function () {
     document.querySelector('meta[property="og:title"]')?.getAttribute('content')?.trim() ||
     document.title.replace(/\s*-\s*YouTube.*$/i, '').trim() ||
     undefined;
-  let followers;
-  const subEl = [...document.querySelectorAll('span, yt-formatted-string')].find(
-    (e) => /subscriber|订阅/i.test(e.textContent || '') && (e.textContent || '').length < 30,
-  );
-  if (subEl) { const f = pc(subEl.textContent); if (f != null && f > 0) followers = f; }
+  // 订阅数。走 common.js 的共用内核。
+  //
+  // YouTube 是**数字在前**的版式（「1.2万位订阅者」/「1.2M subscribers」），内核两端都试。
+  // 频道头部常把三样拼在一行——「@handle · 1.2M subscribers · 500 videos」，
+  // 老代码对整段取 `pc()`（第一个数字），这一行里第一个数字是什么全看平台怎么排。
+  // ⚠️ 中英文都要列：界面语言跟着账号走，只列英文在中文界面下一个都匹配不上
+  //（X 真机 2026-07-27 因此 6 条指标全没读到，同一个教训）。长的排前面——
+  // 'subscriber' 是 'subscribers' 的子串，'订阅' 是 '订阅者' 的子串，顺序反了会截错位置。
+  const ytStats = globalThis.__beaconReadStats?.(
+    [
+      { key: 'followers', labels: ['位订阅者', '订阅者', 'subscribers', 'subscriber', '订阅'] },
+      { key: 'videos', labels: ['个视频', 'videos', 'video'] },
+    ],
+    ['#page-header', 'ytd-channel-header-renderer', 'yt-page-header-renderer', '#channel-header', 'ytd-browse'],
+  ) || { values: {}, via: {} };
+  const followers = ytStats.values.followers;
 
   const seen = new Set();
   const posts = [];
@@ -134,7 +189,7 @@ globalThis.__beaconParse = function () {
   return {
     platform: 'youtube',
     handle,
-    profile: name || followers != null ? { name, followers } : undefined,
+    profile: name || followers != null ? { name, followers, followersVia: ytStats.via.followers || 'none' } : undefined,
     posts,
     ...(isSelf ? { isSelf: true } : {}),
   };

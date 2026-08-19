@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { PLATFORM_LIST, platformName } from '@/lib/constants';
 import { Icon } from '@/components/icons';
 import { actDeriveToPlatform } from './actions';
+import { WECHAT_DERIVE_HINT } from '@/lib/algorithm/ai-source';
 import type { FamilyMember } from '@/lib/studio/family';
 
 // 一稿多平台：派生入口 + 同源稿件的跨平台表现对比。
@@ -20,10 +21,18 @@ export function DeriveCard({
   draftId,
   currentPlatform,
   family,
+  coverCounts,
+  wechatHint,
 }: {
   draftId?: string;
   currentPlatform?: string;
   family: FamilyMember[];
+  /** 每篇兄弟稿出过几张封面（服务端算好；没出过的**不出现在这个表里**——「未出」是缺席不是 0） */
+  coverCounts?: Record<string, number>;
+  // 「这个工作区有别的平台号、偏偏没有公众号」——服务端算好再传（判据见
+  // lib/algorithm/ai-source.ts 的 shouldHintWechatAiSource）。理由文案挂在这里而不是人设页：
+  // 人设页是低频设置页，看完即死；这里是他正要决定「这篇还发到哪儿」的那一刻。
+  wechatHint?: boolean;
 }) {
   const [picked, setPicked] = useState<string[]>([]);
   const [err, setErr] = useState('');
@@ -90,6 +99,12 @@ export function DeriveCard({
               ))
             )}
           </div>
+          {wechatHint && options.some((p) => p.key === 'wechat') && (
+            <div className="row" style={{ gap: 6, alignItems: 'flex-start' }}>
+              <Icon.info size={14} className="" />
+              <span className="small muted" style={{ lineHeight: 1.6 }}>{WECHAT_DERIVE_HINT}</span>
+            </div>
+          )}
           <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
             <button className="btn btn-sm btn-primary" onClick={submit} disabled={pending || picked.length === 0}>
               <Icon.sparkles size={14} /> {pending ? '生成中…' : `派生 ${picked.length || ''} 个版本`}
@@ -108,7 +123,7 @@ export function DeriveCard({
             {family.map((m) => (
               <Link
                 key={m.draftId}
-                href={`/studio?draft=${m.draftId}`}
+                href={`/studio?draft=${m.draftId}&tab=title`}
                 className="row-between"
                 style={{ gap: 8, padding: '6px 8px', borderRadius: 6, background: 'var(--surface-2)' }}
               >
@@ -116,12 +131,19 @@ export function DeriveCard({
                   {platformName(m.platform)}
                   {m.isRoot && <span className="badge badge-gray" style={{ marginLeft: 6, fontSize: 10 }}>原稿</span>}
                 </span>
-                <span className="small muted">
-                  {m.published
-                    ? m.metrics
-                      ? `已发布 · 播放/阅读 ${m.metrics.views}`
-                      : '已发布 · 数据还没回流'
-                    : '未发布'}
+                <span className="row wrap small muted" style={{ gap: 8, justifyContent: 'flex-end' }}>
+                  {/* 封面各自在自己的草稿页出（按自己平台的比例）——这里只标状态，不在这里批量生成：
+                      派生之后正文还会改，那时封面大字早过时了。 */}
+                  <span className={coverCounts?.[m.draftId] ? '' : 'muted'}>
+                    {coverCounts?.[m.draftId] ? `封面 ${coverCounts[m.draftId]} 张` : '封面：未出'}
+                  </span>
+                  <span>
+                    {m.published
+                      ? m.metrics
+                        ? `已发布 · 播放/阅读 ${m.metrics.views}`
+                        : '已发布 · 数据还没回流'
+                      : '未发布'}
+                  </span>
                 </span>
               </Link>
             ))}

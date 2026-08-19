@@ -1,20 +1,15 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import Image from 'next/image';
 import { Card } from '@/components/ui';
+import { Overlay } from '@/components/Overlay';
 import { Icon } from '@/components/icons';
 
 export function FeedbackCard() {
   const [copied, setCopied] = useState(false);
+  // Esc 关闭 / 点遮罩关闭 / 锁背景滚动 三件事都由 Overlay 统一做了，这里不再自己挂 keydown
   const [showModal, setShowModal] = useState(false);
-
-  useEffect(() => {
-    if (!showModal) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowModal(false); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [showModal]);
 
   const groupName = '烽火台交流群';
   const groupOrg = '大脑壳网络';
@@ -163,26 +158,12 @@ export function FeedbackCard() {
         </div>
       </Card>
 
-      {/* 点击放大 Modal */}
+      {/* 点击放大 Modal。走 Overlay（portal 到 body）而不是就地渲染：
+          这张卡片今天恰好没被别的 .card 套住，但「谁把它挪进另一张卡片」是随时会发生的事，
+          而那一刻二维码会缩进卡片里、且只在指针悬停时复现。见 components/Overlay.tsx。 */}
       {showModal && (
-        <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 9999,
-            background: 'rgba(0,0,0,0.7)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            backdropFilter: 'blur(4px)',
-            padding: 20,
-          }}
-          onClick={() => setShowModal(false)}
-        >
+        <Overlay onClose={() => setShowModal(false)} label="烽火台交流群二维码">
           <div
-            role="dialog"
-            aria-modal="true"
-            aria-label="烽火台交流群二维码"
             style={{
               background: 'var(--surface)',
               borderRadius: 16,
@@ -193,7 +174,6 @@ export function FeedbackCard() {
               position: 'relative',
               textAlign: 'center',
             }}
-            onClick={(e) => e.stopPropagation()}
           >
             <button
               onClick={() => setShowModal(false)}
@@ -251,7 +231,7 @@ export function FeedbackCard() {
               </button>
             </div>
           </div>
-        </div>
+        </Overlay>
       )}
     </>
   );

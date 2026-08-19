@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { revalidatePath } from 'next/cache';
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
-import { requireRole, ASSIGNABLE_ROLES, ROLE_LABEL, isRole } from '@/lib/rbac';
+import { requireRole, assignableRoles, ROLE_LABEL, isRole } from '@/lib/rbac';
 
 // 成员与权限：邀请 / 撤销 / 改角色 / 停用 / 移除。
 // 权限类校验用 requireRole 直接 throw（越权是异常，不是可展示的业务分支）；
@@ -20,7 +20,7 @@ export async function actCreateInvite(
   requireRole(s, 'member.invite');
 
   const role = data.role;
-  if (!isRole(role) || !ASSIGNABLE_ROLES.includes(role)) {
+  if (!isRole(role) || !assignableRoles().includes(role)) {
     return { ok: false, error: '不支持的角色：所有权只能通过转让流转，不能靠邀请授予' };
   }
   const phone = data.phone?.trim() || null;
@@ -69,7 +69,7 @@ export async function actRevokeInvite(id: string) {
 export async function actChangeRole(memberId: string, role: string) {
   const s = await getSession();
   requireRole(s, 'member.role');
-  if (!isRole(role) || !ASSIGNABLE_ROLES.includes(role)) {
+  if (!isRole(role) || !assignableRoles().includes(role)) {
     return { ok: false, error: '不支持的角色：所有权只能通过转让流转' };
   }
   const target = await prisma.member.findFirst({ where: { id: memberId, tenantId: s.tenantId } });

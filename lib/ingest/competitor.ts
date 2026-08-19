@@ -6,6 +6,8 @@ import { PLATFORMS } from '../constants';
 import { competitorHomeUrl } from '../competitor-url';
 import { isRemovalRequested } from '../legal/removal';
 import { recordCollectionRun, type CollectionChannel } from './collection-run';
+import { recordCompetitorDaily } from '../insight/growth-store';
+import { FOLLOWERS_VIA, checkFollowers } from './parser-health';
 import { resolveIngestToken } from './token';
 
 export const INGEST_TOKEN_HEADER = 'x-beacon-ingest-token';
@@ -91,11 +93,22 @@ export const ingestPayloadSchema = z.object({
     .object({
       name: z.string().max(100).optional(),
       followers: z.number().int().min(0).max(2_000_000_000).optional(),
+      // 这个数是**怎么**读到的（埋点 / 链接语义 / 页面 JSON / 文本兜底 / 没读到）。
+      // 插件降级时唯一的上行信号，见 lib/ingest/parser-health.ts。
+      // 老版本插件不发这个字段 —— optional，不能因为它缺席就打回整批。
+      followersVia: z.enum(FOLLOWERS_VIA).optional(),
       avatar: z.string().url().max(500).optional(),
       bio: z.string().max(300).optional(),
     })
     .optional(),
   posts: z.array(postSchema).max(50).default([]),
+  // 这一批是从哪种页面采来的（见 PostMetricSnapshot.source 的说明）。
+  // ⚠️ 老版本插件不发这个字段 —— 必须 optional 且有默认值，
+  //    不然旧插件的每一批都会被整包打回（zod 打回是静默的，用户只会看到「采不到」）。
+  // ⚠️ 只写 optional、**不给 default**：加了 default 之后 z.infer 会把它算成必填，
+  //    所有构造 payload 的地方（含大量测试 fixture）都得写一个它们不关心的字段。
+  //    默认值在用的那一行兜（`payload.source ?? 'home'`），语义一样、牵连面小得多。
+  source: z.enum(['home', 'detail', 'server', 'import']).optional(),
 });
 
 export type IngestPayload = z.infer<typeof ingestPayloadSchema>;
@@ -185,7 +198,18 @@ export async function ingestCompetitorData(
   const p = payload.profile;
   const profileData: Record<string, unknown> = {};
   if (p?.name) profileData.name = p.name;
-  if (p?.followers != null) profileData.followers = p.followers;
+  // 粉丝数过两道闸再写：① 这次是不是靠兜底读出来的（埋点失效告警）
+  // ② 量级是不是突变（「关注数当粉丝数」这类取错的典型形状，一律不覆盖）。
+  // 建档那次 followers 是 `?? 0`，所以 prev=0 时不设闸——否则新档永远停在 0。
+  const health = await checkFollowers({
+    platform: payload.platform,
+    scope: 'rival',
+    targetName: competitor.name,
+    via: p?.followersVia ?? null,
+    prev: competitor.followers,
+    next: p?.followers ?? null,
+  });
+  if (p?.followers != null && health.accept) profileData.followers = p.followers;
   if (p?.avatar) profileData.avatar = p.avatar;
   if (p?.bio) profileData.bio = p.bio;
   const profileUpdated = Object.keys(profileData).length > 0;
@@ -209,14 +233,30 @@ export async function ingestCompetitorData(
     if (existing) {
       if (metrics) {
         const prev = parseJson<Record<string, number>>(existing.metrics, {});
-        if (toJson(prev) !== toJson(metrics)) {
-          await prisma.postMetricSnapshot.create({ data: { postId: existing.id, metrics: toJson(metrics) } });
-        }
-        await prisma.crawledPost.update({ where: { id: existing.id }, data: { metrics: toJson(metrics), hotScore } });
+        // 每次采集都留一个时点 —— 这条序列就是「增长」页的原料。
+        //
+        // 🔴 原来只在「指标和上次不一样」时才写，两个后果：
+        //   ① 数字没变和没采集在序列上长得一模一样，区间增长算不出「这几天是真的没涨」；
+        //   ② 更要命的是它和展示值四舍五入撞在一起——B站「1.0亿」要涨到 1.1亿 才会变，
+        //      于是大号的快照**几个月一条都不写**，增长曲线整条是空的。
+        // 存储代价：一条作品一次采集一行，和台账 CollectionRun 同数量级，可接受。
+        // ⚠️ 快照写的是 metrics（**这次真的观测到什么**），不是下面那个 merged。
+        // 把上次的值抄进这次的快照 = 声称我们这次看到了其实没看的东西，
+        // 增长会因此把「没去看」算成「没涨」。作品行记「目前已知的全部」，快照记「这次看到的」，
+        // 两者刻意不同：缺口由 growth.ts 判成「这项算不出来」，而不是编一个 0。
+        await prisma.postMetricSnapshot.create({
+          data: { postId: existing.id, metrics: toJson(metrics), source: payload.source ?? 'home' },
+        });
+        // **合并而不是覆盖**。不同页面给的字段不一样：抖音主页只有点赞，详情页才有
+        // 评论/收藏/转发。整包替换的话，好不容易在详情页采到的三项，会被下一次主页采集
+        // 抹回只剩点赞——「补齐详情」这件事等于白做。
+        // 规则：新包里有的键以新值为准（数字会涨），新包里没有的键保留旧值。
+        const merged = { ...prev, ...metrics };
+        await prisma.crawledPost.update({ where: { id: existing.id }, data: { metrics: toJson(merged), hotScore } });
       }
       updated++;
     } else {
-      await prisma.crawledPost.create({
+      const createdPost = await prisma.crawledPost.create({
         data: {
           competitorId: competitor.id,
           platform: payload.platform,
@@ -229,6 +269,11 @@ export async function ingestCompetitorData(
           hotScore,
         },
       });
+      // 首次入库也要留起点：没有它，这条作品的增长序列要等到**第二次**采集才开始，
+      // 第一段增长（往往是最猛的那段）永远丢失。
+      if (metrics) {
+        await prisma.postMetricSnapshot.create({ data: { postId: createdPost.id, metrics: toJson(metrics) } });
+      }
       created++;
     }
     posts++;
@@ -248,8 +293,15 @@ export async function ingestCompetitorData(
     items: posts,
     created,
     updated,
-    note: posts === 0 ? '本次没有回传任何作品' : null,
+    // 台账的 note 就是「降级/异常留痕」位（见 schema 注释），解析健康度直接挂这儿——
+    // 不用为「粉丝数这次是怎么读到的」另开一张表。
+    note: [posts === 0 ? '本次没有回传任何作品' : null, health.note].filter(Boolean).join('；') || null,
   });
+
+  // 账号级当日快照（粉丝/在库作品数/指标合计）。作品级有 PostMetricSnapshot，
+  // 这条补的是「这个竞对整体涨了多少」——CompetitorAccount.followers 是覆盖写的，
+  // 不单独留痕就永远只看得到此刻。函数自吞异常，失败不影响这批采集。
+  await recordCompetitorDaily(competitor.id);
 
   return {
     ok: true,

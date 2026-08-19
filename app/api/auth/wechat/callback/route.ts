@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { AUTH_COOKIE, bindWechatToMember, getMemberByToken, loginByWechat } from '@/lib/auth';
-import { AUTH_COOKIE_MAX_AGE_S } from '@/lib/auth-constants';
+import { AUTH_COOKIE_MAX_AGE_S, authCookieSecure } from '@/lib/auth-constants';
 import { isDemoTenant } from '@/lib/demo/guard';
 import { exchangeCodeForToken, getWechatUserInfo } from '@/lib/wechat-auth';
 import { log } from '@/lib/logger';
@@ -55,7 +55,7 @@ export async function GET(req: NextRequest) {
     res.cookies.set(AUTH_COOKIE, result.token, {
       httpOnly: true,
       sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
+      secure: authCookieSecure(),
       path: '/',
       maxAge: AUTH_COOKIE_MAX_AGE_S,
     });

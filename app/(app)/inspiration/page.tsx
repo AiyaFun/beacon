@@ -33,9 +33,10 @@ export default async function InspirationPage() {
     summary: r.summary,
     points: parseJson<string[]>(r.points, []),
     analysis: r.analysis,
-    // 只下发字数，不把正文塞进页面 payload：一页 300 条 × 两万字会把首屏拖垮，
-    // 而列表上真正要回答的问题只是「这条存没存全文」。要读原文点「看原内容」。
     contentChars: r.content?.length ?? 0,
+    askedCount: r.askedCount,
+    askedWorks: r.askedWorks,
+    lastAskedAt: r.lastAskedAt?.toISOString() ?? null,
   }));
 
   const count = (state: string) => items.filter((i) => i.state === state).length;

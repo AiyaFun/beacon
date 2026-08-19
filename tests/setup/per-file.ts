@@ -6,7 +6,11 @@ import { afterAll, beforeEach } from 'vitest';
 
 // 每个测试文件跑一次，且**在被测模块被 import 之前**——这点是关键：
 // lib/db.ts 在模块加载时就 new PrismaClient()，DATABASE_URL 必须此刻已经就位。
-const dir = path.join(os.tmpdir(), 'beacon-vitest-db');
+//
+// 目录由 globalSetup 定、经环境变量传进来：**每次运行一个独立目录**。
+// 写死成公共路径的话，机器上第二个 vitest 进程一启动就会把这一个正在用的库删掉
+// （见 tests/setup/global-setup.ts 的长注释）。兜底值只在有人单独跑 per-file 时才会用到。
+const dir = process.env.BEACON_TEST_DB_DIR || path.join(os.tmpdir(), 'beacon-vitest-db');
 const dbFile = path.join(dir, `t-${process.pid}-${crypto.randomUUID()}.db`);
 
 fs.copyFileSync(path.join(dir, 'template.db'), dbFile);
@@ -53,6 +57,19 @@ const PAID_ENV = [
   'BEACON_YOUTUBE_API_KEY',
   'BEACON_TWITTERAPI_KEY',
   'BEACON_ANTHROPIC_API_KEY',
+  // ⚠️ 2026-08-13 补：这两条通道**此前不在擦除范围内**。
+  // 它们各自有独立 key（取不到才回落 BEACON_DEFAULT_LLM_API_KEY），所以只擦 DEFAULT 挡不住。
+  // 现在恰好没人配它们，一旦按 xhs-ai-cover 那套给即梦/豆包单独配上，
+  // tests/llm/image.test.ts、tests/cover/prompt.test.ts、tests/video/analyze.test.ts
+  // 就会开始打真实付费接口——烧钱 + 断言 mock 产物全红 + 全量耗时从秒级跳到分钟级。
+  'BEACON_IMAGE_LLM_API_KEY',   // lib/llm/image.ts:91（即梦生图，按次计费）
+  'BEACON_IMAGE_LLM_BASE_URL',
+  'BEACON_VISION_LLM_API_KEY',  // lib/llm/gateway.ts:38（视频/封面分析）
+  'BEACON_VISION_LLM_BASE_URL',
+  // ⚠️ 短信比上面几条更要紧：打到真接口不只是烧钱，是**真的给真实手机号发出去**，
+  //    而且撤不回来。之前一直不在这份清单里。
+  'BEACON_VOLC_SMS_AK',
+  'BEACON_VOLC_SMS_SK',
 ] as const;
 
 // 直接读 .env 文件拿到「会被灌回来的那些值」。文件不存在（CI）时就没什么可擦的。

@@ -9,6 +9,7 @@ import { fmtNum } from '@/lib/format';
 import { PageHead, Card, Meter, ConfidenceBadge, Empty } from '@/components/ui';
 import { Icon } from '@/components/icons';
 import { diagnose, buildBaseline } from '@/lib/algorithm/coach';
+import { AI_SOURCE_UNKNOWN_NOTE, AI_SOURCE_VERSION, aiSourceOf } from '@/lib/algorithm/ai-source';
 import { isDemoTenant } from '@/lib/demo/guard';
 
 export const dynamic = 'force-dynamic';
@@ -75,11 +76,19 @@ export default async function AlgorithmCoachPage({
   // 只要「自有回流」或「竞对基准」任一有数据就出诊断——你自己没发过作品时，也能靠竞对基准 + 算法信号给方向。
   const account = await prisma.creatorAccount.findUnique({ where: { id: s.accountId } });
   const persona = readPersona(account?.personaCard ?? '{}');
-  const fmtBaseline = (b: typeof baseline) =>
-    `平均播放 ${fmtNum(b.avgViews)}，` +
-    `完播/完读率 ${b.avgCompletion === null ? '无' : (b.avgCompletion * 100).toFixed(1) + '%'}，` +
-    `点赞率 ${(b.likeRate * 100).toFixed(1)}%，评论率 ${(b.commentRate * 100).toFixed(1)}%，` +
-    `收藏率 ${(b.collectRate * 100).toFixed(1)}%，转发率 ${(b.shareRate * 100).toFixed(1)}%`;
+  // 这段会进 LLM 提示词。算不出来的率**整项不写**——写成 0.0% 模型会当真实观测，
+  // 然后给出「你的点赞率过低」这类基于虚构数字的诊断（抖音公开页没有播放量做分母）。
+  const fmtBaseline = (b: typeof baseline) => {
+    const bits: string[] = [];
+    if (b.avgViews !== null) bits.push(`平均播放 ${fmtNum(b.avgViews)}`);
+    bits.push(`完播/完读率 ${b.avgCompletion === null ? '无' : (b.avgCompletion * 100).toFixed(1) + '%'}`);
+    if (b.likeRate !== null) bits.push(`点赞率 ${(b.likeRate * 100).toFixed(1)}%`);
+    if (b.commentRate !== null) bits.push(`评论率 ${(b.commentRate * 100).toFixed(1)}%`);
+    if (b.collectRate !== null) bits.push(`收藏率 ${(b.collectRate * 100).toFixed(1)}%`);
+    if (b.shareRate !== null) bits.push(`转发率 ${(b.shareRate * 100).toFixed(1)}%`);
+    if (b.avgViews === null) bits.push('（该平台公开页面不提供播放量，率类指标不可得；点赞/评论/收藏/转发的绝对数是真实的）');
+    return bits.join('，');
+  };
   let llmText = '';
   // 演示租户禁止 LLM 生成（assertNotDemo 会抛错）——原逻辑靠 sample>0 恰好避开，
   // 现在加了竞对基准触发条件，必须显式跳过 demo，否则演示模式访问本页直接报错。
@@ -130,6 +139,16 @@ export default async function AlgorithmCoachPage({
           { label: '转发率', own: baseline.shareRate, comp: compBaseline.shareRate, fmt: pctFmt },
         ]
       : [];
+
+  // AI 引擎信源口径（纯常量，不查库）。
+  //
+  // ⚠️ 它**只用于渲染下面那张只读小卡**，不许再往别处接：
+  //   ① 不进上面的 trusted / checklist —— 那是「发布前逐条勾」的清单，八个平台里只有三格有实证，
+  //      把「没统计过」变成一个可勾选项，比不写更误导；
+  //   ② 不进 llmComplete 的提示词 —— 六格 unknown 喂给模型，它会自动把「没数据」讲成
+  //      「这个平台对 AI 不可见」，那是凭空造结论（本库在 hotScore 上刚为「缺席当 0」栽过一次）。
+  // tests/algorithm/ai-source.test.ts 有源码级守卫盯着这两条。
+  const aiSource = aiSourceOf(platform);
 
   return (
     <>
@@ -210,6 +229,51 @@ export default async function AlgorithmCoachPage({
         )}
       </Card>
 
+      {/* AI 引擎信源：这个平台的内容会不会被 AI 抠走当答案。
+          只读参考栏——刻意长在「算法信号」之后、「竞对基准」之前：它回答的是另一个问题
+          （不是「平台推不推你」而是「机器引不引你」），但证据强度够不上进结论区。 */}
+      {aiSource && (
+        <Card
+          title={`${platformName(platform)} · 会不会被 AI 引擎抠走当答案`}
+          sub={`第三方统计口径 · ${aiSource.asOf} 年数据 · 只读参考`}
+          style={{ marginBottom: 16 }}
+        >
+          <div className="stack" style={{ gap: 10 }}>
+            <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
+              {aiSource.coverage === 'yes' ? (
+                <>
+                  <span className="badge badge-brand">{aiSource.engine} 的信源</span>
+                  <ConfidenceBadge level={aiSource.confidence ?? ''} />
+                </>
+              ) : (
+                // 「未核实」不是「不覆盖」。这个 badge 的文案与 title 都要顶得住这句反问：
+                // 用户看完会不会以为「这个平台发了也白发」？会的话就是写错了。
+                <span className="badge badge-gray" title={AI_SOURCE_UNKNOWN_NOTE}>
+                  未核实
+                </span>
+              )}
+            </div>
+            <div className="small" style={{ lineHeight: 1.6 }}>{aiSource.note}</div>
+            {aiSource.caveat && (
+              <div className="row" style={{ gap: 6, alignItems: 'flex-start' }}>
+                <Icon.info size={14} className="" />
+                <span className="small">{aiSource.caveat}</span>
+              </div>
+            )}
+            {aiSource.coverage === 'unknown' && (
+              <div className="small muted" style={{ lineHeight: 1.6 }}>{AI_SOURCE_UNKNOWN_NOTE}</div>
+            )}
+            <div className="small muted">
+              来源：{aiSource.source} · 口径 {aiSource.asOf} 年 · 表版本 {AI_SOURCE_VERSION}
+            </div>
+            <div className="small muted" style={{ lineHeight: 1.6 }}>
+              为什么它只是参考、不出现在下面的发布前 Checklist 与教练诊断里：证据是第三方统计口径（行业共识级，非平台官方披露），
+              而且八个平台里只有三格有实证。把「还没人统计过」当成结论去勾，比不写更容易误导。
+            </div>
+          </div>
+        </Card>
+      )}
+
       {/* 竞对基准对比（三者结合：你的回流 × 竞对真实表现 × 平台算法信号） */}
       <Card
         title="竞对基准对比"
@@ -235,12 +299,17 @@ export default async function AlgorithmCoachPage({
                 </thead>
                 <tbody>
                   {bench.map((r) => {
-                    const gap = baseline.sample === 0 || r.comp === 0 ? null : (r.own - r.comp) / r.comp;
+                    // 任一侧算不出来（该平台不给播放量）就不出对比结论。
+                    // 拿 0 去比会得出「↓100%」这种看着很确凿、实则纯属虚构的差距。
+                    const gap =
+                      baseline.sample === 0 || r.own === null || r.comp === null || r.comp === 0
+                        ? null
+                        : (r.own - r.comp) / r.comp;
                     return (
                       <tr key={r.label}>
                         <td className="small">{r.label}</td>
-                        <td className="small mono">{baseline.sample > 0 ? r.fmt(r.own) : '—'}</td>
-                        <td className="small mono">{r.fmt(r.comp)}</td>
+                        <td className="small mono">{baseline.sample > 0 && r.own !== null ? r.fmt(r.own) : '—'}</td>
+                        <td className="small mono">{r.comp === null ? '—' : r.fmt(r.comp)}</td>
                         <td className="small mono">
                           {gap === null ? (
                             <span className="muted">—</span>

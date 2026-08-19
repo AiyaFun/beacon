@@ -158,6 +158,20 @@ export const CONFIDENCE_LEVELS = {
 // image = 文生图/图生图（小红书 AI 封面）。走 images/generations 端点而非 chat/completions，
 // 执行层是 lib/llm/image.ts 而非通用 provider；配额与记账仍与其它功能同一套（见 llmImage）。
 export const LLM_FUNCTIONS = ['scoring', 'generation', 'advisor', 'compliance', 'chat', 'diagnosis', 'video', 'image'] as const;
+
+// 连通性测试的两个判据（渠道设置用）。放这里而不是 settings/actions.ts：
+// 'use server' 文件只能导出 async 函数，同步判据放不进去；这里本来就是端点白名单的家。
+//
+// looksNonChatModel：这个模型名一看就不是对话模型（即梦生图 / 视频生成…）。对它发 chat ping
+// 必然报错，但那说明的是「不是对话模型」，不是「Key 不能用」——不能据此判 failed，
+// 否则 lib/llm/image.ts 与 gateway.ts 的解析会把这条渠道排除掉（两处都过滤 status not:'failed'），
+// 用户就会遇到「明明配了却说没有可用渠道」。
+export function looksNonChatModel(model: string): boolean {
+  return /seedream|seededit|seedance|image|vision-?gen|即梦|-i2v|-t2v/i.test(model ?? '');
+}
+
+/** 认证类错误：只有这一类才说明 Key 本身有问题。 */
+export const AUTH_ERROR_RE = /\b(401|403)\b|invalid[_ ]?api[_ ]?key|unauthorized|authentication|api key|鉴权|未授权|无效的?\s*key/i;
 export type LlmFunction = (typeof LLM_FUNCTIONS)[number];
 
 // ───────────── F12-1 BYOK 供应商白名单 + 端点锁定 ─────────────

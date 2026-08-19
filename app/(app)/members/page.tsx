@@ -1,7 +1,7 @@
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { fmtDate } from '@/lib/format';
-import { can, ROLE_LABEL, ROLE_DESC, ROLES, type Role } from '@/lib/rbac';
+import { can, ROLE_LABEL, ROLE_DESC, ROLES, assignableRoles, type Role } from '@/lib/rbac';
 import { PageHead, Card, Stat, Empty } from '@/components/ui';
 import { Icon } from '@/components/icons';
 import { InviteForm } from './InviteForm';
@@ -25,6 +25,7 @@ export default async function MembersPage() {
   const s = await getSession();
 
   if (!can(s.role, 'member.view')) {
+
     return (
       <>
         <PageHead title="成员与权限" desc="团队协作与角色管理" />
@@ -59,6 +60,8 @@ export default async function MembersPage() {
   const activeCount = members.filter((m) => m.status === 'active').length;
   const canManage = can(s.role, 'member.role');
 
+  // 可授予角色按形态算：企业版只留管理员/编辑两档（lib/rbac.ts 的 assignableRoles）
+  const roles = assignableRoles();
   return (
     <>
       <PageHead
@@ -113,6 +116,7 @@ export default async function MembersPage() {
                     <td>
                       {canManage ? (
                         <MemberRow
+                          roles={roles}
                           id={m.id}
                           name={m.name}
                           role={m.role}
@@ -134,7 +138,7 @@ export default async function MembersPage() {
 
       <div className="grid grid-2" style={{ marginBottom: 16 }}>
         <Card title="邀请成员" sub="生成链接 · 7 天有效">
-          <InviteForm />
+          <InviteForm roles={roles} />
         </Card>
 
         <Card title="待处理邀请" sub="未接受的邀请可随时撤销">

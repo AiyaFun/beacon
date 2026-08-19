@@ -7,6 +7,9 @@ import { isDemoTenant } from '@/lib/demo/guard';
 import { AccountSecurityCard } from '../AccountSecurityCard';
 import { AccountDataCard } from '../AccountDataCard';
 import { PrivacyCard } from '../PrivacyCard';
+import { OaBindCard } from '../OaBindCard';
+import { can as canEdition } from '@/lib/edition';
+import { botProviderName } from '@/lib/bot/types';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,12 +26,33 @@ export default async function AccountSecurityPage(props: { searchParams: Promise
 
   const maskedPhone = me?.phone ? me.phone.replace(/^(\d{3})\d{4}(\d{4})$/, '$1****$2') : null;
 
+  // 企业版专属：绑定企业应用账号（SaaS 上 can('oaLogin') 恒为 false，整块不渲染）
+
+  const oaLogin = canEdition('oaLogin');
+
+  const oaBot = oaLogin
+
+    ? await prisma.botIntegration.findFirst({ where: { enabled: true }, orderBy: { createdAt: 'asc' }, select: { provider: true } })
+
+    : null;
+
+  const oaProviderName = oaBot ? botProviderName(oaBot.provider) : null;
+
+  const oaBound = oaLogin
+
+    ? Boolean((await prisma.member.findUnique({ where: { id: s.memberId }, select: { oaIdentity: true } }))?.oaIdentity)
+
+    : false;
+
+
   return (
     <>
       <PageHead
         title="账号与安全"
         desc="登录方式绑定与换绑 · 隐私与数据安全声明 · 数据导出与账号注销"
       />
+
+      {oaLogin ? <OaBindCard providerName={oaProviderName} bound={oaBound} /> : null}
 
       <AccountSecurityCard
         maskedPhone={maskedPhone}

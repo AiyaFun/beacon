@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import { log } from '@/lib/logger';
 import { createRefund } from '@/lib/pay/order';
+import { can } from '@/lib/edition';
 
 // 内部受控退款接口（v1 不开放用户自助退款）。
 //
@@ -25,6 +26,10 @@ function tokenOk(provided: string, expected: string): boolean {
 }
 
 export async function POST(req: Request) {
+  // 形态闸：企业版（appliance/private）不收钱，支付回调端点不该存在。
+  // 回 404 而不是 403 —— 客户机器上这个端点在语义上就是「没有这个东西」，
+  // 403 反而是在告诉扫描器「这里有支付入口，只是被关了」。
+  if (!can('payment')) return new Response('Not Found', { status: 404 });
   const expected = process.env.BEACON_ADMIN_TOKEN?.trim() ?? '';
   if (!expected) {
     return NextResponse.json({ ok: false, error: '退款通道未启用（未配置 BEACON_ADMIN_TOKEN）' }, { status: 503 });

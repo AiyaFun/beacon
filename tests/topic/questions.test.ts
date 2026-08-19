@@ -28,6 +28,14 @@ describe('isQuestion 提问判定', () => {
     expect(isQuestion('我看嘛这条挺好的确实不错')).toBe(false);
   });
 
+  it('诉求型评论（催更/求教程）也算——不是疑问句但对选题同样有效', () => {
+    expect(isQuestion('求一期系统教程吧')).toBe(true);
+    expect(isQuestion('能出个详细讲解吗')).toBe(true);
+    expect(isQuestion('催更催更，什么时候出下一期')).toBe(true);
+    expect(isQuestion('蹲一个实战讲一下的视频')).toBe(true);
+    expect(isQuestion('想看你做一期面试相关的')).toBe(true);
+  });
+
   it('纯陈述句一律不算，哪怕很长很有观点', () => {
     expect(isQuestion('讲得真好，我已经三连了支持一下')).toBe(false);
     expect(isQuestion('我按你说的做了效果确实不错')).toBe(false);

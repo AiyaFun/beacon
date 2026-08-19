@@ -6,6 +6,7 @@ import { toJson } from '@/lib/json';
 import { emptyPersona } from '@/lib/persona';
 import { PLATFORMS } from '@/lib/constants';
 import { INGEST_TOKEN_HEADER, workspaceByIngestToken } from '@/lib/ingest/competitor';
+import { looksLikeSameAccount } from '@/lib/account/duplicate';
 
 // 自有账号清单 · 插件读取「本工作区有哪些创作账号」（authorized 通道，只读）。
 //
@@ -62,7 +63,8 @@ export async function GET(req: Request) {
 //      也就是说拿到令牌的 viewer 可以经此建号。这是已知且被接受的权限扩大。
 //    · 因此口子只开到「建一个空账号」：不能改名、不能删、不能动别人的号，
 //      人设卡与风格指纹都种成空白模板（与 app/(app)/actions.ts actCreateAccount 同一份种子）。
-//    · 同名同平台**不重复建**，返回既有的那个——插件里点两下不该出现两个一样的号。
+//    · 同一个号**不重复建**，返回既有的那个——插件里点两下、或页面昵称与已填 handle 是同一个人时，
+//      都不该出现两个一样的号（判据见下方 looksLikeSameAccount）。
 //    · 总数封顶，防脚本跑飞把工作区刷满。
 //    · 每次建号都记日志，事后查得到。
 const MAX_ACCOUNTS = 30;
@@ -89,11 +91,20 @@ export async function POST(req: Request) {
   }
   const { name, platform, handle } = parsed.data;
 
-  // 同名同平台已存在 → 直接返回它（幂等）。用户在插件里连点两下不该建出两个一样的号。
-  const existing = await prisma.creatorAccount.findFirst({
-    where: { workspaceId: ws.id, platform, name },
+  // 已经有同一个号 → 直接返回它（幂等），不再建第二条。
+  //
+  // ⚠️ 判据不能只是「同平台同名」。两条产生路径给出的名字天然对不上：
+  // 网页里用户填的是昵称（「Aiya哎呀」，handle 填 Aiyafun），插件在作品页抓到的是用户名（「aiyafun」）。
+  // 只比 name 的话这两条都建得出来，同一个 X 号在库里躺成两条，数据从此一分为二——
+  // 而每个数据页都按 accountId 过滤，用户看到的是「一半数据不见了」（2026-08-07 真机）。
+  // 所以按 name/handle 交叉规范化比对，见 lib/account/duplicate.ts。
+  // 已经建重的历史数据在网页「我的账号」里合并，不在这里替用户动已有的号。
+  const samePlatform = await prisma.creatorAccount.findMany({
+    where: { workspaceId: ws.id, platform },
+    orderBy: [{ status: 'asc' }, { createdAt: 'asc' }],
     select: { id: true, name: true, platform: true, handle: true, status: true },
   });
+  const existing = samePlatform.find((a) => looksLikeSameAccount(a, { name, platform, handle: handle || null }));
   if (existing) return json({ ok: true, account: existing, existed: true });
 
   const total = await prisma.creatorAccount.count({ where: { workspaceId: ws.id } });

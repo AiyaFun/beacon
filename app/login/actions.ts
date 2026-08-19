@@ -2,7 +2,7 @@
 
 import { cookies, headers } from 'next/headers';
 import { AUTH_COOKIE, createSession, requestLoginCode, verifyLoginCode } from '@/lib/auth';
-import { AUTH_COOKIE_MAX_AGE_S } from '@/lib/auth-constants';
+import { AUTH_COOKIE_MAX_AGE_S, authCookieSecure } from '@/lib/auth-constants';
 import { checkRateLimit, getClientIp, ipKey, retryHint } from '@/lib/ratelimit';
 import { getSmsProvider } from '@/lib/sms/provider';
 import { isProd } from '@/lib/env';
@@ -57,7 +57,7 @@ export async function actVerifyCode(phone: string, code: string, inviteToken?: s
     store.set(AUTH_COOKIE, r.token, {
       httpOnly: true,
       sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
+      secure: authCookieSecure(),
       path: '/',
       maxAge: AUTH_COOKIE_MAX_AGE_S,
     });
@@ -79,7 +79,7 @@ export async function actGuestLogin() {
   store.set(AUTH_COOKIE, token, {
     httpOnly: true,
     sameSite: 'lax',
-    secure: process.env.NODE_ENV === 'production',
+    secure: authCookieSecure(),
     path: '/',
     maxAge: GUEST_TTL_MS / 1000,
   });

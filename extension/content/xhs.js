@@ -30,18 +30,24 @@ globalThis.__beaconParse = function () {
     document.querySelector('.name-detail')?.textContent?.trim() ||
     undefined;
 
-  // 粉丝数：互动统计区「关注 / 粉丝 / 获赞与收藏」，找含「粉丝」的项取数字
-  let followers;
-  for (const el of document.querySelectorAll('.user-interactions div, .user-interactions span, div, span')) {
-    const t = el.textContent ?? '';
-    if (t.length < 16 && t.includes('粉丝')) {
-      const n = parseCount(t.replace('粉丝', ''));
-      if (n != null && n > 0) {
-        followers = n;
-        break;
-      }
-    }
-  }
+  // 粉丝数：互动统计区「关注 / 粉丝 / 获赞与收藏」。走 common.js 的共用内核。
+  //
+  // ⚠️ 老代码有两个坑，都是「采错」而不是「少采」：
+  //   ① `parseCount(t.replace('粉丝',''))` —— **replace 不是截断**。三项挨着时
+  //      「关注 12 粉丝 3.4万」被抠成「关注 12  3.4万」，parseCount 取第一个数字 →
+  //      **关注数当粉丝数**（抖音 07-29 修过同一个坑，这里一直活着）。
+  //   ② selector 写成 `.user-interactions div, …, div, span` 看着是「容器优先」，
+  //      但 querySelectorAll **按文档序返回**、不按 selector 顺序——容器根本没起到优先作用，
+  //      页面顶部登录态里自己的「粉丝 N」照样能排在前面。容器约束要靠内核的 scopes 参数。
+  const xhsStats = globalThis.__beaconReadStats?.(
+    [
+      { key: 'following', labels: ['关注'] },
+      { key: 'followers', labels: ['粉丝'] },
+      { key: 'likes', labels: ['获赞与收藏', '获赞'] },
+    ],
+    ['.user-interactions', '.user-info', '.user-page', '#userPageContainer'],
+  ) || { values: {}, via: {} };
+  const followers = xhsStats.values.followers;
 
   // 笔记：note-item 卡片 → /explore/<id> 锚点 + 标题 + 点赞数
   const seen = new Set();
@@ -72,7 +78,7 @@ globalThis.__beaconParse = function () {
   return {
     platform: 'xiaohongshu',
     handle,
-    profile: { name, followers },
+    profile: { name, followers, followersVia: xhsStats.via.followers || 'none' },
     posts,
     ...(isSelf ? { isSelf: true } : {}),
   };

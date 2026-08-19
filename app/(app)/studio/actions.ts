@@ -11,21 +11,21 @@ import { QuotaExceededError } from '@/lib/quota';
 import { AIGC_LABEL, checkText, ensureAigcLabel, redlineHits, redlineReason, type WordHit } from '@/lib/compliance/engine';
 import { writeMemory } from '@/lib/memory/core';
 import { platformName, type PlatformKey } from '@/lib/constants';
+import { skillPlatformName, SKILL_PLATFORM_OPTIONS } from '@/lib/skills/platform';
 import { exportDeliverable, downloadSkillFile, verifyAigcLabelInFile, injectAigcDocProps } from '@/lib/llm/skills';
 import { renderLocalDeliverable, renderCards } from '@/lib/deliverable/registry';
 import { CARD_THEME_LIST, DEFAULT_CARD_THEME, type Card, type CardThemeKey } from '@/lib/deliverable/card';
 import { aigcMetadataJson } from '@/lib/compliance/aigc';
 import { runSkill, type CoverRunOptions } from '@/lib/skills';
-import { injectPngAigcMetadata } from '@/lib/deliverable/png-meta';
 import { recordDiffPreference } from '@/lib/memory/diff';
 import { resolveExportClaudeKey } from './export-key';
 import { requireRole, RbacError } from '@/lib/rbac';
-import { resolvePlatformItemId } from '@/lib/publish/parse-url';
+import { recordPublished } from '@/lib/publish/record';
 import { buildBaseline, type MetricBaseline } from '@/lib/algorithm/coach';
 import { analyzeContent, type ContentFinding } from '@/lib/algorithm/content-optimizer';
 import { humanizeReport, humanizeProblemBlock, type HumanizeReport } from '@/lib/humanize/score';
 import { aiFlavorBanBlock } from '@/lib/humanize/lexicon';
-import { checkFactDrift } from '@/lib/humanize/factcheck';
+import { checkFactDrift, type FactDriftLevel } from '@/lib/humanize/factcheck';
 import {
   buildTitlePrompt,
   parseTitleMatrix,
@@ -76,71 +76,24 @@ export async function actRegisterPublish(
   });
   if (!draft) return { ok: false, error: '草稿不存在' };
   const content = draft.versions[0]?.content ?? '';
-  const fromRecommend = !!draft.topicId && ['hot', 'competitor', 'advisor'].includes(draft.topic?.sourceType ?? '');
 
-  // 链接解析失败不阻断登记（用户可能就是想先记一笔），但必须如实告知后果
-  const warnings: string[] = [];
-  let platformItemId: string | null = null;
-  if (input.url && input.url.trim()) {
-    const r = resolvePlatformItemId(input.url, draft.platform);
-    platformItemId = r.platformItemId;
-    if (r.warning) warnings.push(r.warning);
-  } else {
-    warnings.push('未填发布链接，未解析出作品 ID，这条记录的数据自动回流将不可用（需手动回填）。');
-  }
+  // 落库口径统一收在 lib/publish/record.ts：手动登记与一键发布回执必须是同一段逻辑，
+  // 各写一份早晚漂移（needsBackfill 与 upsert 键是重灾区）。
+  const { platformItemId, warnings } = await recordPublished({
+    workspaceId: s.workspaceId,
+    accountId: s.accountId,
+    draft: {
+      id: draft.id,
+      title: draft.title,
+      platform: draft.platform,
+      topicId: draft.topicId,
+      topicAngle: draft.topic?.angle ?? null,
+      topicSourceType: draft.topic?.sourceType ?? null,
+    },
+    content,
+    url: input.url ?? null,
+  });
 
-  // 有作品ID → upsert 到 (accountId, platformItemId) 唯一键：若用户先在数据看板填过这条，
-  // 就合并到同一条而不是各建一条（否则 learn 基线把同一篇算两次、/data 篇数翻倍）。
-  // 无作品ID → 建独立记录并打 needsBackfill：自动回流缺入口，/data 顶部据此提醒补链接。
-  const needsBackfill = platformItemId === null;
-  if (platformItemId !== null) {
-    await prisma.publishRecord.upsert({
-      where: { accountId_platformItemId: { accountId: s.accountId, platformItemId } },
-      create: {
-        accountId: s.accountId,
-        topicId: draft.topicId,
-        draftId: draft.id,
-        platform: draft.platform,
-        title: draft.title,
-        contentText: content,
-        platformItemId,
-        needsBackfill: false,
-        fromRecommend,
-      },
-      // 补上登记侧才有的正文/标题/选题归因并解除缺链接标记；不动已回填的 metrics。
-      update: {
-        topicId: draft.topicId,
-        draftId: draft.id,
-        title: draft.title,
-        contentText: content,
-        needsBackfill: false,
-        fromRecommend,
-      },
-    });
-  } else {
-    await prisma.publishRecord.create({
-      data: {
-        accountId: s.accountId,
-        topicId: draft.topicId,
-        draftId: draft.id,
-        platform: draft.platform,
-        title: draft.title,
-        contentText: content,
-        platformItemId: null,
-        needsBackfill: true,
-        fromRecommend,
-      },
-    });
-  }
-  await prisma.draft.update({ where: { id: draft.id }, data: { status: 'published' } });
-  if (draft.topicId) {
-    await prisma.topicIdea.update({ where: { id: draft.topicId }, data: { state: 'published' } }).catch(() => {});
-  }
-  // 记忆学习：发布即形成偏好/绩效信号，反哺后续推荐与语义召回
-  if (draft.topic?.angle) {
-    await writeMemory({ workspaceId: s.workspaceId, accountId: s.accountId, type: 'preference', content: `采用并发布了切入角：${draft.topic.angle}`, confidence: 0.4 });
-  }
-  await writeMemory({ workspaceId: s.workspaceId, accountId: s.accountId, type: 'performance', content: `发布《${draft.title}》到${platformName(draft.platform)}`, confidence: 0.3 });
   revalidatePath('/studio');
   revalidatePath('/data');
   return {
@@ -343,7 +296,14 @@ async function platformSignals(platform: string, take = 5) {
 
 export type CoachDiagnoseResult = {
   findings: ContentFinding[];
-  score: number;
+  /**
+   * null = 这个平台的规则表不全，给不出可比的分（见 content-optimizer 的 scoreCovered）。
+   * **不是 0 分、也不是满分**：扣分制下「没检查」和「检查通过」都表现为不扣分，
+   * 印一个数字出去就是把缺席当成了满分通过。UI 必须改渲染 scoreNote。
+   */
+  score: number | null;
+  /** score 为 null 时的原因文案（唯一来源，前端不许另写一份）；有分时为 null。 */
+  scoreNote: string | null;
   personalized: boolean;
   sample: number;
   signals: { signal: string; advice: string; confidence: string }[];
@@ -385,6 +345,7 @@ export async function actCoachDiagnose(
   return {
     findings: diag.findings,
     score: diag.score,
+    scoreNote: diag.scoreNote,
     personalized: diag.personalized,
     sample: baseline.sample,
     signals: rules.map((r) => ({ signal: r.signal, advice: r.advice, confidence: r.confidence })),
@@ -401,8 +362,9 @@ export async function actCoachOptimize(
 ): Promise<
   | {
       optimized: string;
-      before: { score: number };
-      after: { score: number; findings: ContentFinding[] };
+      // score 可空：该平台规则表不全时给不出可比的分（见 CoachDiagnoseResult.score 的说明）。
+      before: { score: number | null };
+      after: { score: number | null; findings: ContentFinding[]; scoreNote: string | null };
       compliance: { hits: WordHit[]; riskLevel: string; platform: string };
       mocked: boolean;
       degraded?: boolean;
@@ -432,12 +394,23 @@ export async function actCoachOptimize(
     memoryQuery: body.slice(0, 100),
   });
 
-  const baselineLine =
-    baseline.sample > 0
-      ? `账号在该平台近 ${baseline.sample} 条真实数据：完播/完读率 ${
-          baseline.avgCompletion === null ? '无' : (baseline.avgCompletion * 100).toFixed(1) + '%'
-        }，点赞率 ${(baseline.likeRate * 100).toFixed(1)}%，评论率 ${(baseline.commentRate * 100).toFixed(1)}%，收藏率 ${(baseline.collectRate * 100).toFixed(1)}%`
-      : '账号暂无该平台回流数据（按通用规则优化）';
+  // 喂给模型的真实数据行。**算不出来的率整项不写**——写成 0.0% 模型会当真实观测，
+  // 反过来给出「点赞率过低」这类基于虚构数字的诊断（抖音公开页根本没有播放量做分母）。
+  const rate = (x: number | null) => (x === null ? null : `${(x * 100).toFixed(1)}%`);
+  const baselineLine = (() => {
+    if (baseline.sample === 0) return '账号暂无该平台回流数据（按通用规则优化）';
+    const bits: string[] = [];
+    const comp = rate(baseline.avgCompletion);
+    if (comp) bits.push(`完播/完读率 ${comp}`);
+    const like = rate(baseline.likeRate);
+    if (like) bits.push(`点赞率 ${like}`);
+    const cmt = rate(baseline.commentRate);
+    if (cmt) bits.push(`评论率 ${cmt}`);
+    const col = rate(baseline.collectRate);
+    if (col) bits.push(`收藏率 ${col}`);
+    if (baseline.likeRate === null) bits.push('该平台公开页不提供播放量，率类指标不可得（点赞/评论/收藏/转发的绝对数是真实的）');
+    return `账号在该平台近 ${baseline.sample} 条真实数据：${bits.join('，')}`;
+  })();
 
   try {
     const res = await llmComplete(
@@ -467,8 +440,10 @@ export async function actCoachOptimize(
     const compliance = await checkText(optimized, platform, s.tenantId);
     return {
       optimized,
+      // 前后分都可能是 null（该平台规则表不全）。**不许在这里兜成 0 或不显示前后对比**：
+      // 优化前后都拿不到分时，能说的只有「这个平台不给分」，不是「优化后 0 分」。
       before: { score: before.score },
-      after: { score: after.score, findings: after.findings },
+      after: { score: after.score, findings: after.findings, scoreNote: after.scoreNote },
       compliance,
       mocked: res.mocked,
       degraded: res.degraded,
@@ -726,8 +701,8 @@ export type RunSkillActionResult =
       hits: WordHit[];
       /** 本次技能吃的是第几版正文——UI 必须显示，取错版是不会报错的那种错 */
       sourceSeq: number;
-      /** 仅 image 技能填：生成的封面图（火山直链，约 24h 有效）+ 抽到的封面标题/副标题 */
-      images?: { url: string }[];
+      /** 仅 image 技能填：生成的封面图（已打隐式 AIGC 标识的 data URL）+ 抽到的封面标题/副标题 */
+      images?: { url: string; mime: string }[];
       coverMeta?: { mainTitle: string; subTitle?: string };
     }
   | { ok: false; error: string };
@@ -802,62 +777,63 @@ export async function actRunSkill(
   };
 }
 
-// 下载封面：服务端把火山直链的图片字节取回来交给浏览器下载。
+// 把跨平台技能的产出**另起一条兄弟稿**，而不是塞进当前草稿的版本线。
 //
-// 为什么走服务端代理而不是前端直接 <a download>：① 火山直链跨源，浏览器 <a download> 对跨源
-// 多半只会导航打开而不是下载；② 借这一跳给 PNG 注入 **AIGC 隐式标识**（iTXt，见 png-meta.ts），
-// 与图文卡 PNG 同一套《标识办法》第五条落地。显式标识已由即梦「AI生成」水印承担（第四条）。
+// 【修的是什么】在公众号稿上跑「知乎长文排版」，再点「存为新版本」，会把知乎正文写进
+// 公众号稿的版本线：既污染了原稿（版本线是拿去学偏好的，脏一条就一直脏着），
+// 又让这份知乎正文永远进不了 draftFamily——「同一篇在哪个平台跑赢」那个对比里看不到它。
 //
-// ⚠️ 隐式标识只对 PNG 有效：即梦返回的多为 JPEG，此时无法字节级注入隐式标识——如实用 warning 告知，
-// 不假装做了（与 PDF 导出“无法校验就不假装”同一姿态）。显式水印仍在图上，合规主线不塌。
-export async function actDownloadCover(
-  imageUrl: string,
-): Promise<
-  | { ok: true; dataBase64: string; mime: string; filename: string; aigcEmbedded: boolean; warning?: string }
-  | { ok: false; error: string }
-> {
+// 【为什么不复用 actDeriveToPlatform】那条路要再调一次 LLM 重新改写，而这里内容已经生成完了，
+// 再烧一次额度纯属浪费。所以只借它的落库形状（parentDraftId 认亲、子稿 seq 从 1 开始），
+// 不借它的生成逻辑，也不占 MAX_DERIVE_PLATFORMS 的名额。
+export async function actSkillSaveAsSibling(
+  draftId: string,
+  content: string,
+  skillName: string,
+  skillPlatform: string,
+): Promise<{ ok: boolean; draftId?: string; platform?: string; error?: string }> {
   const s = await getSession();
   requireRole(s, 'content.create');
-  // SSRF 闸：这个 URL 是前端回传的，若不限制，一个已登录用户就能借服务端去拉任意内网地址并拿回
-  // base64。只放行 https + 火山对象存储/CDN 的图片域名（即梦生图的产物就落在这些域）。
-  // ⚠️ 待真机校准：拿到 ARK Key 后确认即梦返回的真实图片域名，不在名单里就补进 ALLOWED_IMAGE_HOSTS。
-  const ALLOWED_IMAGE_HOSTS = ['.volces.com', '.volccdn.com', '.byteimg.com', '.bytedance.com'];
-  let host = '';
-  try {
-    const u = new URL(imageUrl);
-    if (u.protocol !== 'https:') return { ok: false, error: '无效的图片地址' };
-    host = u.hostname.toLowerCase();
-  } catch {
-    return { ok: false, error: '无效的图片地址' };
+  const body = content.trim();
+  if (!body) return { ok: false, error: '内容为空' };
+  // 校验走**技能自己的平台集合**，不是 PLATFORMS。两者不是一回事：知乎在 SKILL_PLATFORM_OPTIONS
+  // 里（有「知乎长文排版」这个内置技能），却不在 PLATFORMS 里（beacon 建不了知乎号、采不到数）。
+  // 拿 PLATFORMS 校验会把最典型的用例——公众号稿跑知乎排版——直接挡在门外。
+  const known = SKILL_PLATFORM_OPTIONS.some((p) => p.key === skillPlatform);
+  if (!known || skillPlatform === 'generic') {
+    return { ok: false, error: '这个技能没有明确的目标平台，直接存为新版本即可' };
   }
-  if (!ALLOWED_IMAGE_HOSTS.some((suffix) => host === suffix.slice(1) || host.endsWith(suffix))) {
-    return { ok: false, error: '只支持下载本站生成的封面图' };
+  const draft = await prisma.draft.findFirst({ where: { id: draftId, accountId: s.accountId } });
+  if (!draft) return { ok: false, error: '未找到草稿' };
+  if (draft.platform === skillPlatform) {
+    return { ok: false, error: '技能目标平台与当前草稿相同，直接存为新版本即可' };
   }
-  try {
-    const res = await fetch(imageUrl, { signal: AbortSignal.timeout(30_000) });
-    if (!res.ok) return { ok: false, error: `取图失败 ${res.status}` };
-    const mime = (res.headers.get('content-type') || 'image/jpeg').split(';')[0].trim();
-    let bytes = new Uint8Array(await res.arrayBuffer());
-    let aigcEmbedded = false;
-    let warning: string | undefined;
-    if (mime === 'image/png') {
-      bytes = injectPngAigcMetadata(bytes, aigcMetadataJson(`${s.tenantId}-cover`));
-      aigcEmbedded = true;
-    } else {
-      warning = '本图为 JPEG，隐式 AIGC 标识无法写入；图上已有「AI生成」水印作为显式标识。';
-    }
-    const ext = mime === 'image/png' ? 'png' : 'jpg';
-    return {
-      ok: true,
-      dataBase64: Buffer.from(bytes).toString('base64'),
-      mime,
-      filename: `小红书封面.${ext}`,
-      aigcEmbedded,
-      warning,
-    };
-  } catch (e) {
-    return { ok: false, error: (e as Error).message.slice(0, 140) };
-  }
+  // 认亲认到**根**：在子稿上再跑技能时，新稿要挂到同一个根下，而不是变成孙子。
+  // draftFamily 只按 parentDraftId 一层聚合，挂错了这一版就从家族对比里消失。
+  const rootId = draft.parentDraftId ?? draft.id;
+  const child = await prisma.draft.create({
+    data: {
+      accountId: s.accountId,
+      topicId: draft.topicId,
+      parentDraftId: rootId,
+      title: draft.title,
+      platform: skillPlatform,
+      status: 'editing',
+    },
+  });
+  await prisma.draftVersion.create({
+    data: {
+      draftId: child.id,
+      seq: 1,
+      authorType: 'ai',
+      content: body,
+      // 平台名走 skillPlatformName：platformName 查不到知乎会原样吐英文 key，
+      // 这行字是写进版本说明长期留着的，吐个 zhihu 出去很难看。
+      diffFromPrev: `由《${draft.title}》（${skillPlatformName(draft.platform)}）跑技能「${skillName}」生成的${skillPlatformName(skillPlatform)}版本`,
+    },
+  });
+  revalidatePath('/studio');
+  return { ok: true, draftId: child.id, platform: skillPlatform };
 }
 
 // 把技能产出存成该草稿的一个新版本（AI 作者、seq 顺延），方便直接走登记发布/导出流程
@@ -1134,8 +1110,20 @@ export type DeflavorResult =
       degraded?: boolean;
       /** 有没有拿到他自己的原句样本——没有的话效果会打折，必须如实说 */
       hasExemplar: boolean;
-      /** 事实漂移告警：改写后冒出原文没有的数字（真机上抓到过，见 lib/humanize/factcheck.ts） */
+      /** 事实漂移告警：改写后冒出原文没有的数字/引语/来源（真机上抓到过，见 lib/humanize/factcheck.ts） */
       driftWarning?: string;
+      /**
+       * 漂移的严重程度。number（数字对不上，可能只是换了写法）与 attribution（凭空造出一个
+       * 说话人或信源）是两件事，前端据此决定用什么力度提示。
+       */
+      driftLevel?: FactDriftLevel;
+      /**
+       * 改写后冒出来的、原文里没有的链接。前端拿它做**采纳前的阻断确认**：
+       * 其余漂移都只是提示，唯独这一类没有「换了个写法」的解释空间——一条原文里不存在的
+       * URL 指向一个具体地址，模型拼出来的就是编的，让它无声地进终稿的代价太大。
+       * 仍然不是「永远不能采纳」：勾一下「已逐条核对」就放行，用户为此负责。
+       */
+      driftUrls?: string[];
     }
   | { error: string };
 
@@ -1191,7 +1179,13 @@ export async function actDeflavor(text: string, platform: string): Promise<Defla
     const after = humanizeReport(rewritten, platform);
     const compliance = await checkText(rewritten, platform, s.tenantId);
     const drift = checkFactDrift(body, rewritten);
-    return { rewritten, before, after, compliance, mocked: res.mocked, degraded: res.degraded, hasExemplar, driftWarning: drift.warning || undefined };
+    return {
+      rewritten, before, after, compliance,
+      mocked: res.mocked, degraded: res.degraded, hasExemplar,
+      driftWarning: drift.warning || undefined,
+      driftLevel: drift.level,
+      driftUrls: drift.addedUrls.length ? drift.addedUrls : undefined,
+    };
   } catch (e) {
     if (isDesignedRejection(e)) return { error: e.message };
     throw e;
@@ -1262,7 +1256,7 @@ export async function actTitleMatrix(draftId: string): Promise<TitleMatrixResult
       return {
         ok: false,
         error: res.mocked
-          ? '当前是演示模式（未接入真实模型），标题矩阵需要真实模型才能生成——到「模型与设置」配置后重试。'
+          ? '当前是演示模式（未接入真实模型），标题矩阵需要真实模型才能生成——到「接入与密钥」配置后重试。'
           : '模型这次没返回可用的标题，请重试。',
       };
     }

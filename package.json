@@ -20,12 +20,14 @@
     "seed:demo": "tsx scripts/seed-demo.ts",
     "pack:ext": "tsx scripts/pack-extension.ts",
     "db:reset": "rm -f prisma/dev.db && prisma db push --skip-generate && tsx prisma/seed.ts",
-    "setup": "prisma generate && prisma db push --skip-generate && tsx prisma/seed.ts"
+    "setup": "prisma generate && prisma db push --skip-generate && tsx prisma/seed.ts",
+    "connector": "tsx connector.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.73.0",
     "@prisma/client": "5.22.0",
     "bullmq": "^5.34.0",
     "ioredis": "^5.4.2",

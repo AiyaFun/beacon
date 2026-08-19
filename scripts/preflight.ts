@@ -13,6 +13,7 @@
  * 退出码：有任何 FAIL → 1（可挂 CI / 部署门禁）；只有 WARN → 0。
  */
 import { isProd } from '../lib/env';
+import { edition, can } from '../lib/edition';
 import { prisma } from '../lib/db';
 import { hotSourceMode } from '../lib/adapters/registry';
 import { assertMasterKey } from '../lib/crypto';
@@ -24,10 +25,14 @@ const results: { name: string; level: Level; detail: string }[] = [];
 const add = (name: string, level: Level, detail: string) => results.push({ name, level, detail });
 
 const PROD = isProd();
+// 形态：企业版（appliance/private）交付出去后没有平台主体，
+// 下面几条 SaaS 专属检查对它们不成立，硬套会让装机体检满屏红。
+const ED = edition();
 
 async function run() {
   // 0. 运行口径
   add('运行环境', 'PASS', `isProd=${PROD}（NODE_ENV=${process.env.NODE_ENV ?? '-'} / BEACON_ENV=${process.env.BEACON_ENV ?? '-'}）`);
+  add('部署形态', 'PASS', `${ED}${ED === 'saas' ? '' : '（企业版：无支付/无短信/AI 全 BYOK）'}`);
 
   // 1. 主密钥（BYOK 加解密的根）——prod 缺失/占位即拒绝启动
   try {
@@ -73,6 +78,15 @@ async function run() {
 
   // 4. 可信反代层数——prod 的头号「配了也不可用」陷阱
   const hops = process.env.BEACON_TRUSTED_PROXY_HOPS?.trim();
+  // 【企业整机是例外】appliance 直接由 Next 监听 localhost，**前面没有反代**，
+  // 也就不存在「XFF 可被伪造」这个威胁（请求根本不经过任何会追加转发头的东西）。
+  // 但代价是真的：getClientIp 在 prod+hops=0 时一律返回 'unknown'，
+  // 于是全公司共用一个限流桶。对十来人的内部机器可以接受，所以降为 WARN 而不是放行 ——
+  // 放行会让这行从报告里消失，装机的人就不知道有这回事了。
+  if (edition() === 'appliance') {
+    add('反代层数 HOPS', 'WARN',
+      '整机直连无反代：IP 限流退化为全公司共用一个桶（十来人内部使用可接受；若要按人限流，请在前面加一层反代并设为其层数）');
+  } else {
   if (PROD) {
     if (!hops || hops === '0') {
       add('反代层数 HOPS', 'FAIL', 'prod 下 hops=0/未设 → 全站 IP 判 unknown → 共用一个限流桶（约 30 请求瘫痪全站登录，fail-close 型 DoS）。必须精确设为实际反代层数');
@@ -84,9 +98,15 @@ async function run() {
   } else {
     add('反代层数 HOPS', 'PASS', `dev 无需（当前 ${hops ?? '未设'}）`);
   }
+  }
 
   // 5. 短信通道——prod 未配真实 vendor 会在此抛错（安全不变式：prod 绝不回退 Mock）
-  try {
+  //    企业版没有短信登录（lib/auth.ts 的 requestLoginCode 已在形态闸上直接返回），
+  //    getSmsProvider() 在生产态会因为没配 vendor 而抛 —— 那个抛对 SaaS 是对的，
+  //    对客户机器却是「体检因为一个不存在的功能而失败」。
+  if (!can('smsLogin')) {
+    add('短信通道', 'PASS', '企业版无短信登录（登录走企业应用），无需短信凭证');
+  } else try {
     const sms = getSmsProvider();
     if (PROD && sms.mocked) add('短信通道', 'FAIL', '生产态竟是 Mock 通道（= 认证旁路）——不应发生');
     else add('短信通道', 'PASS', PROD ? `真实通道 ${sms.name}（提醒：过审+真手机号收码仍需人工验一次）` : `dev Mock（${sms.name}）`);
@@ -95,7 +115,12 @@ async function run() {
   }
 
   // 6. 平台默认 LLM——prod 未配则全站生成走 Mock 假数据
-  if (process.env.BEACON_DEFAULT_LLM_API_KEY?.trim()) {
+  //    企业版没有"平台垫付"这回事：AI 走客户在装机向导里填的 BYOK 渠道（存在 ModelProvider 表），
+  //    env 里配不配都不是问题，所以这条整段跳过而不是降级成 WARN（降级仍会在报告里占一行红字，
+  //    让装机的人以为漏了东西）。
+  if (!can('platformLlmChannel')) {
+    add('模型渠道', 'PASS', '企业版：AI 由客户自带 Key（装机向导写入），不使用平台垫付渠道');
+  } else if (process.env.BEACON_DEFAULT_LLM_API_KEY?.trim()) {
     add('平台默认 LLM', 'PASS', `已配 key（base=${process.env.BEACON_DEFAULT_LLM_BASE_URL ?? '默认'}；仅查存在，真实可用性建议实际发一次生成确认）`);
   } else {
     add('平台默认 LLM', PROD ? 'WARN' : 'PASS', PROD
@@ -105,7 +130,12 @@ async function run() {
 
   // 7. 微信支付——启用了就必须配齐且格式正确（未启用不算硬阻塞，可先上免费档）
   const wxpayOn = process.env.BEACON_PAY_VENDOR?.trim() === 'wxpay' || !!process.env.BEACON_WXPAY_MCHID?.trim();
-  if (wxpayOn) {
+  if (!can('payment')) {
+    // 企业版不收钱。这里顺手当一道**反向**闸：客户机器上要是真配了支付凭证，那是配错了文件，
+    // 该在装机时就喊出来，而不是等到某天有人发现机器上躺着一副商户密钥。
+    add('微信支付配置', wxpayOn ? 'FAIL' : 'PASS',
+      wxpayOn ? '企业版不应配置微信支付凭证：请从 .env 里删掉 BEACON_WXPAY_* / BEACON_PAY_VENDOR' : '企业版无支付面（正常）');
+  } else if (wxpayOn) {
     try {
       const env = readWxPayEnv();
       add('微信支付配置', 'PASS', `商户号 ${env.mchid} 配置齐全且格式校验通过（提醒：真商户号走一笔真单+退款仍需人工验）`);
@@ -132,7 +162,11 @@ async function run() {
   // 口径与 docs/凭证清单.md 一一对应（改这里记得同步那份）。
   const has = (k: string) => Boolean(process.env[k]?.trim());
   // 客服渠道：不配会在 billing 页展示「（待配置客服微信号）」——等于给用户假联系方式
-  if (!has('BEACON_CS_WECHAT') && !has('BEACON_CS_EMAIL')) {
+  if (!can('payment')) {
+    // 客服渠道是 billing 页（付费/发票/退款）上的联系方式。企业版没有那一页，
+    // 缺它不会让任何用户看到占位符。
+    add('客服渠道', 'PASS', '企业版无计费页，不需要对外客服渠道');
+  } else if (!has('BEACON_CS_WECHAT') && !has('BEACON_CS_EMAIL')) {
     add('客服渠道', PROD ? 'FAIL' : 'WARN', 'BEACON_CS_WECHAT / BEACON_CS_EMAIL 都没配 → billing 页会展示占位符，等于给用户假联系方式');
   } else {
     add('客服渠道', 'PASS', '已配置至少一个联系方式');

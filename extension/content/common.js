@@ -27,6 +27,233 @@ globalThis.__beaconParseCount = beaconParseCount;
 const BEACON_POST_CAP = 50;
 globalThis.__beaconPostCap = BEACON_POST_CAP;
 
+// ── 带标签的统计数字（粉丝 / 关注 / 获赞 / Followers …）─────────────────────────
+//
+// 【为什么锚点是文字而不是埋点】平台的 data-e2e / class 是改版重灾区——抖音 2026-08-07
+// 就把 `user-fans` 改成了 `user-info-fans`、`user-name` 直接删掉。而「粉丝」这两个字
+// 多年没变过。所以这一层的铁律是：**标签文字是锚点，埋点只是加速器**（命中就少走一段扫描）。
+// 埋点整批失效时照样出数，代价只是慢一点——但必须由下面三道闸挡住串台，
+// 否则「自修复」修出来的是一个看着完全正常的错数字，比取不到更毒。
+//
+// 【为什么必须共用一份】此前五个站点各写各的，B站与小红书都写成
+// `parseCount(t.replace('粉丝',''))` —— replace 只抠掉那两个字，
+// 「关注 178 粉丝 328.3万」变成「关注 178  328.3万」，parseCount 取第一个数字，
+// 于是**关注数被当成粉丝数**（178 vs 328万，差三个数量级）。
+// 同一个坑抖音 07-29 踩过一次修掉了，这两家一直活着——各写各的就会各踩各的。
+//
+// 【三道闸】
+//   ① **截断，不是替换**：只看标签**之后**（或数字在前版式下：标签**之前**）的那一段；
+//   ② **到下一个标签为止**：统计栏是「关注 178 粉丝 328.3万 获赞 3023.8万」三个数挨着，
+//      不设边界的话「粉丝」后面那三个数字都够得着；数字离标签超过 8 个字符也判为不相干；
+//   ③ **同位判串台**：两个统计项若落在同一段文本的**同一个下标**上，说明截断根本没生效，
+//      两个一起作废。按**位置**判而不是按数值相等判——「关注 100 粉丝 100」是可能的巧合，
+//      位置撞了才是真串台，这个判据不会误伤。
+const BEACON_STAT_MAX_LEN = 40; // 超过这个长度的节点文本基本是简介/正文，不是统计项
+const BEACON_STAT_MAX_GAP = 8; // 数字与标签之间最多隔这么多字符（「粉丝：  24.1万」够用）
+const BEACON_STAT_MAX_NODES = 5000; // 兜底扫描的硬上限，别在超大 DOM 上空转
+const BEACON_STAT_NUM = /([\d][\d.,]*)\s*(万|亿|w|W|k|K|m|M|b|B)?/;
+
+// 「标签在前」：粉丝24.1万
+function beaconStatAfterLabel(text, label, otherLabels) {
+  const i = text.indexOf(label);
+  if (i < 0) return null;
+  let tail = text.slice(i + label.length);
+  let cut = tail.length;
+  for (const other of otherLabels) {
+    if (!other || other === label) continue;
+    const j = tail.indexOf(other);
+    if (j >= 0 && j < cut) cut = j;
+  }
+  tail = tail.slice(0, cut);
+  const m = tail.match(BEACON_STAT_NUM);
+  if (!m || m.index > BEACON_STAT_MAX_GAP) return null;
+  // 时长（00:38）与占比（12%）都不是计数
+  if (/^\s*[:：%]/.test(tail.slice(m.index + m[0].length))) return null;
+  // ⚠️ 判时长要求冒号**前面是数字**（00:38），不能只看冒号——
+  // 「粉丝：  24.1万」的冒号是分隔符，把它当时长会让整类带冒号的写法一个都读不到。
+  if (/\d\s*[:：]\s*$/.test(tail.slice(0, m.index))) return null;
+  const value = beaconParseCount(m[0]);
+  // gap = 数字与标签之间隔了多远。两端都能取到时按它决定谁更可信（见 beaconStatIn）。
+  return value != null && value > 0 ? { value, at: i + label.length + m.index, gap: m.index } : null;
+}
+
+// 「数字在前」：24.1万粉丝。中文站现在都是标签在前，但公众号后台的指标卡就是数字在上标签在下
+// （self-backend.js 早为此做过两端法），改版翻转版式并不罕见——两端都试，标签在前优先。
+function beaconStatBeforeLabel(text, label, otherLabels) {
+  const i = text.indexOf(label);
+  if (i < 0) return null;
+  const head = text.slice(0, i);
+  let start = 0;
+  for (const other of otherLabels) {
+    if (!other || other === label) continue;
+    const j = head.lastIndexOf(other);
+    if (j >= 0 && j + other.length > start) start = j + other.length;
+  }
+  const seg = head.slice(start);
+  let last = null;
+  const re = new RegExp(BEACON_STAT_NUM.source, 'g');
+  for (let m = re.exec(seg); m; m = re.exec(seg)) last = m;
+  if (!last) return null;
+  // ⚠️ 匹配式尾部有 `\s*`（为了吃「328.3 万」这种数字与单位之间的空格），它会把**尾随空格
+  // 一起吞掉**。拿 last[0].length 算距离，「关注 178 粉丝」里的 178 到「粉丝」的距离就成了 0，
+  // 于是"数字在前"这一端永远以 0 分获胜——粉丝数被读成关注数。算距离必须先把尾随空白去掉。
+  const end = last.index + last[0].replace(/\s+$/, '').length;
+  const gap = seg.length - end;
+  if (gap > BEACON_STAT_MAX_GAP) return null;
+  if (/[:：%]/.test(seg.slice(end))) return null;
+  const value = beaconParseCount(last[0]);
+  return value != null && value > 0 ? { value, at: start + last.index, gap } : null;
+}
+
+// 两端都试，**取离标签更近的那个**。
+//
+// ⚠️ 不能简单地「标签在前优先」：一行里拼了多项时（YouTube 频道头
+// 「@handle · 1.2M subscribers · 500 videos」），`subscribers` 后面跟着的是**下一项**的
+// 500，标签在前的取法会一声不吭地把视频数当成订阅数。而 1.2M 就贴在标签左边——
+// 谁离标签近谁才是它的数字，这是唯一不依赖版式假设的判据。
+// 一样近时给「标签在前」（中文站的主流版式，「关注 178 粉丝 328.3万」两边都是 1 格）。
+function beaconStatIn(text, labels, otherLabels) {
+  for (const l of labels) {
+    const a = beaconStatAfterLabel(text, l, otherLabels);
+    const b = beaconStatBeforeLabel(text, l, otherLabels);
+    if (a && b) return b.gap < a.gap ? b : a;
+    if (a || b) return a || b;
+  }
+  return null;
+}
+
+/**
+ * 在当前页面上读一组统计项。
+ *
+ * @param specs  [{ key, labels, e2e? }] —— key 是输出字段名，labels 按优先级排（先中先用），
+ *               e2e 是**加速用**的选择器（可写多个，逗号分隔），失效不影响出数。
+ * @param scopes 统计栏所在容器的选择器（按优先级）。**兜底扫描必须先限定在容器里**：
+ *               登录态下页面别处（头像面板、侧边「我的」）同样写着「粉丝 N」，
+ *               那是**你自己的**数字，按文档序取第一个就会写进竞对档案。
+ *               容器一个都认不出来才退回全页——宁可退化，不要空手。
+ * @returns { values: {key:number}, via: {key:'e2e'|'text'|null} }
+ *          via 是**降级留痕**：全站的 e2e 突然集体变成 text，就是平台改版了。
+ *          这条信号会随回传上行（见 lib/ingest/competitor.ts 的埋点失效告警）——
+ *          没有它，"自修复"成功与否没有任何人知道，只能等用户对着页面核数字。
+ */
+function beaconReadStats(specs, scopes = []) {
+  const allLabels = specs.flatMap((s) => s.labels);
+  const values = {};
+  const via = {};
+  for (const s of specs) via[s.key] = null;
+
+  // 一、埋点直取（加速器）。埋点可能挂在带标签的块上，也可能挂在纯数字上。
+  for (const s of specs) {
+    if (!s.e2e) continue;
+    let el = null;
+    try { el = document.querySelector(s.e2e); } catch { el = null; }
+    if (!el) continue;
+    const txt = (el.textContent || '').trim();
+    let hit = beaconStatIn(txt, s.labels, allLabels);
+    if (!hit && txt.length <= 12 && !allLabels.some((l) => txt.includes(l))) {
+      const v = beaconParseCount(txt);
+      if (v != null && v > 0) hit = { value: v, at: 0 };
+    }
+    if (hit) { values[s.key] = hit.value; via[s.key] = 'e2e'; }
+  }
+
+  // 二、文本扫描（真正的锚点）
+  const claimed = new Map(); // "节点序号:下标" -> key（或 CONTESTED），闸③用
+  // 判过串台的位置要**永久作废**，不能只是把认领撤掉。撤掉的话这个位置就空了出来，
+  // 排在后面的第三项会一声不吭地把它认领走：
+  //   「粉丝关注获赞 328.3万」→ 关注与粉丝互撞、双双作废，然后**获赞**捡走 328.3万。
+  // 标签挤在一个节点、数值单独渲染的版式（左标签列 + 右数值列）就是这个形状。
+  // 闸③的意义是「这个数字归属不明」，归属不明对第三项同样成立。
+  const CONTESTED = Symbol('contested');
+  let idx = 0;
+  let scanned = 0;
+  const scan = (roots) => {
+    for (const root of roots) {
+      if (!root) continue;
+      for (const node of [root, ...root.querySelectorAll('div, span, p, a, strong, h1, h2')]) {
+        if (++scanned > BEACON_STAT_MAX_NODES) return;
+        idx++;
+        const txt = (node.textContent || '').trim();
+        if (!txt || txt.length > BEACON_STAT_MAX_LEN) continue;
+        for (const s of specs) {
+          if (values[s.key] != null) continue; // 埋点或更早的节点已经给出了
+          const hit = beaconStatIn(txt, s.labels, allLabels);
+          if (!hit) continue;
+          const pos = `${idx}:${hit.at}`;
+          const owner = claimed.get(pos);
+          if (owner === CONTESTED) continue; // 这个位置已判定归属不明，后面谁都不许再捡
+          if (owner && owner !== s.key) {
+            // 闸③：同一段文本的同一个下标被两项认领 = 截断没生效，两项一起作废
+            delete values[owner];
+            via[owner] = null;
+            claimed.set(pos, CONTESTED);
+            continue;
+          }
+          claimed.set(pos, s.key);
+          values[s.key] = hit.value;
+          via[s.key] = 'text';
+        }
+      }
+    }
+  };
+
+  const roots = scopes
+    .map((sel) => { try { return document.querySelector(sel); } catch { return null; } })
+    .filter(Boolean);
+  scan(roots.length ? roots : [document.body || document.documentElement]);
+
+  // ⚠️ 容器选中了、里面却一项都没有 → **全页无歧义兜底**。
+  //
+  // 这一条是给「scopes 写错了」兜底的。容器选择器是各平台各写一套的猜测，写错时最坏的形态
+  // 不是「没 narrow 住」，而是**选中了一个不含统计栏的元素** → 扫出空 → 粉丝数变空，
+  // 那正是这轮要修的那个 bug，绝不能由防串台的措施自己再造一个出来。
+  //
+  // 但直接退回全页扫会捞到页面顶部**你自己的**「粉丝 N」（容器约束本来就是为挡它而加的）。
+  // 所以只认**整页上取值唯一**的那一项：页面上同时出现两个不同的「粉丝 N」时一律不给。
+  // 猜错的代价不对称——空值下游还有侧栏的「粉丝 —（没读到）」和 via 降级告警接着，
+  // 错值会被直接写进全局共享的竞对档案，还会喂给基线和同行对比，且没有一键撤销。
+  //
+  // ⚠️ 判据是「**一项都没取到**」而不是「有项没取到」：容器只要给出了任何一项就说明它是对的，
+  // 那时某一项缺失是页面本来就没展示它，再去全页找纯属自找麻烦。
+  if (roots.length && Object.keys(values).length === 0) {
+    const cand = new Map(); // key -> Set(取值)
+    const seenAt = new Map(); // "节点序号:下标" -> key，闸③在兜底路径上同样要生效
+    let n = 0;
+    const all = document.body || document.documentElement;
+    for (const node of all ? [all, ...all.querySelectorAll('div, span, p, a, strong, h1, h2')] : []) {
+      if (++n > BEACON_STAT_MAX_NODES) break;
+      const txt = (node.textContent || '').trim();
+      if (!txt || txt.length > BEACON_STAT_MAX_LEN) continue;
+      for (const s of specs) {
+        const hit = beaconStatIn(txt, s.labels, allLabels);
+        if (!hit) continue;
+        // 同一段文本的同一个下标被两项认领 = 截断没生效，两项在本轮一起弃权。
+        // 兜底路径不能因为"只收集不判定"就把闸③漏掉——串台在这条路上照样会发生。
+        const pos = `${n}:${hit.at}`;
+        const owner = seenAt.get(pos);
+        if (owner && owner !== s.key) {
+          cand.set(owner, null);
+          cand.set(s.key, null);
+          continue;
+        }
+        seenAt.set(pos, s.key);
+        if (cand.get(s.key) === null) continue; // 已经被判过串台，不再收
+        if (!cand.has(s.key)) cand.set(s.key, new Set());
+        cand.get(s.key).add(hit.value);
+      }
+    }
+    for (const s of specs) {
+      const set = cand.get(s.key);
+      if (set && set.size === 1) {
+        values[s.key] = [...set][0];
+        via[s.key] = 'text';
+      }
+    }
+  }
+  return { values, via };
+}
+globalThis.__beaconReadStats = beaconReadStats;
+
 // ── 「这一页是我自己的号吗？」──
 //
 // 每个平台的**我的主页与竞对主页都是同一种页面**（同域名、同 DOM、同结构），页面本身分不出是谁的。
@@ -155,6 +382,34 @@ function beaconFallbackParse() {
 }
 globalThis.beaconFallbackParse = beaconFallbackParse;
 
+// ── 兜底不许把站点解析器已经采到的东西一起扔掉 ──
+//
+// 兜底解析器只认得出「平台 + handle + 当前这一页」，**它从不看统计栏，给不出 followers**。
+// 而触发兜底的条件是「posts 为空」——作品栅格没渲染出来（虚拟列表回收、未登录、改版）时，
+// 顶部的粉丝数往往好好地摆在那儿、站点解析器也确实读到了。整包替换 = 连粉丝数一起丢。
+//
+// 丢了的后果是**永久的**：lib/ingest/competitor.ts 只在 `followers != null` 时才更新档案，
+// 建档那次给的是 `?? 0`，于是这个竞对的粉丝数会一直停在 0；而竞对清单是
+// `followers > 0 ? 显示 : 不显示`（CompetitorRoster.tsx），用户看到的现象就是「粉丝数没有」。
+// 所以按字段补，不整包换：站点解析器给得出的字段一律它说了算（它比按 og:title 猜的准）。
+// ⚠️ followersVia 必须一起搬。它是「这个粉丝数是怎么读到的」，服务端靠它判断插件有没有降级
+// （lib/ingest/parser-health.ts）。而触发兜底的条件恰恰是「作品栅格没解析出来」——
+// **页面刚改版**时最先落空的就是它。也就是说：漏搬这个字段，降级告警会在最该响的那一次静默，
+// 而这正是整套告警要抓的那个场景。via='none'（明确没读到）同理，漏搬就成了「没表态」。
+// 这与 2026-08-07「字段在回传链路上蒸发」是同一类错误，只是换了一段路。
+const BEACON_PROFILE_KEYS = ['name', 'followers', 'followersVia', 'avatar', 'bio'];
+
+function beaconMergeFallback(site, fallback) {
+  if (!fallback) return site || null;
+  if (!site || !site.profile) return fallback;
+  const profile = { ...fallback.profile };
+  for (const k of BEACON_PROFILE_KEYS) {
+    if (site.profile[k] != null && site.profile[k] !== '') profile[k] = site.profile[k];
+  }
+  return { ...fallback, profile };
+}
+globalThis.__beaconMergeFallback = beaconMergeFallback;
+
 // ── 当前页面正文（只喂给 AI 助手）──
 // AI 助手此前拿到的「上下文」只有标题 + 几个数字，于是「爆款要点拆解」拆的其实是**一个标题**：
 // 用户满屏正文摆在眼前，助手却在猜内容。这里把可见正文取一段带上去。
@@ -253,11 +508,19 @@ async function beaconRunCollect(deep) {
     }
 
     if (!payload || !payload.handle || !payload.posts || payload.posts.length === 0) {
-      payload = beaconFallbackParse();
+      payload = beaconMergeFallback(payload, beaconFallbackParse());
     }
 
     if (!payload || !payload.handle) {
+      // 认不出账号 = 这个平台的解析多半失效了（改版）。留一份**脱敏结构骨架**给服务端，
+      // 让运维台那边能让模型推断新锚点，而不是等下一次有人来报「采不到」。
+      beaconReportParseMiss(beaconPlatformOf(), 'rival', 'handle');
       return { ok: false, error: '未能解析出有效的账号/作品信息，请刷新页面后重试' };
+    }
+    // 采到了作品却没读到粉丝数：这正是「主页统计栏改版」的典型形状（作品栅格没动、统计栏动了）。
+    // 不打断本次回传（作品数据照常入库），只顺手留一份样本。
+    if (payload.posts && payload.posts.length > 0 && (payload.profile == null || payload.profile.followers == null)) {
+      beaconReportParseMiss(payload.platform || beaconPlatformOf(), 'rival', 'followers');
     }
     return { ok: true, payload };
   } catch (e) {
@@ -417,3 +680,120 @@ async function beaconAutoCollect() {
 }
 
 beaconAutoCollect();
+
+
+// ── 采集自学习：脱敏结构骨架 ────────────────────────────────────────────────
+//
+// 采不到字段时，把**页面结构的形状**上传给服务端，让模型推断新锚点（平台改版后不必等发版）。
+//
+// 🔒 这里是隐私的第一道闸，规矩只有一条：**只上传形状，不上传内容**。
+//    · 标签名、类名、data-*/aria-* 的**属性名**（不含值——值里可能是用户 ID）；
+//    · 文本一律过 shape()：数字→NUM、长中文→CJK，只保留「粉丝」「获赞」这类两字以内的标签词
+//      （它们正是文本锚点本身，不带个人信息）；
+//    · 不含 href / src / alt / 图片 / 正文 / 昵称。
+//    服务端收到后**还会再脱敏一次**（lib/ingest/parser-learn.ts）——两道闸，谁也不信谁。
+
+function beaconTextShape(raw) {
+  const t = String(raw || '').trim();
+  if (!t) return '';
+  // 一次扫描替换，不能链式：链式会把上一步产出的 'NUM'/'CJK' 再替换成 'EN'
+  //（与服务端 lib/ingest/parser-learn.ts 的 textShape 同一口径，两边要一起改）
+  return t
+    .replace(/(\d+(?:\.\d+)?)|([一-龥]+)|([A-Za-z]{3,})/g, (m, num, cjk, en) => {
+      if (num) return 'NUM';
+      if (cjk) return cjk.length <= 2 ? cjk : 'CJK';
+      if (en) return 'EN';
+      return m;
+    })
+    .slice(0, 24);
+}
+
+const BEACON_SKELETON_ATTR = /^(data-[\w-]+|aria-[\w-]+|role|type|id)$/;
+
+/** 从一个根节点抽结构骨架。深度与广度都封顶——整页 DOM 既喂不进模型，也不该上传。 */
+function beaconSkeleton(root, depth) {
+  const el = root || document.body;
+  const d = depth == null ? 0 : depth;
+  if (!el || !el.tagName || d > 6) return null;
+  const node = { tag: el.tagName.toLowerCase() };
+  if (el.classList && el.classList.length) node.cls = Array.from(el.classList).slice(0, 6);
+  const attrs = [];
+  for (const a of Array.from(el.attributes || [])) {
+    if (BEACON_SKELETON_ATTR.test(a.name)) attrs.push(a.name);
+  }
+  if (attrs.length) node.attrs = attrs.slice(0, 8);
+
+  // 只取**直接**文本子节点的形状：整棵子树的 innerText 会把正文也带上
+  const own = Array.from(el.childNodes)
+    .filter((n) => n.nodeType === 3)
+    .map((n) => n.textContent)
+    .join(' ')
+    .trim();
+  if (own) node.shape = beaconTextShape(own);
+
+  const kids = Array.from(el.children || []).slice(0, 12);
+  const children = [];
+  for (const k of kids) {
+    const c = beaconSkeleton(k, d + 1);
+    if (c) children.push(c);
+  }
+  if (children.length) node.children = children;
+  return node;
+}
+globalThis.__beaconSkeleton = beaconSkeleton;
+globalThis.__beaconTextShape = beaconTextShape;
+
+/**
+ * 上报「这个字段采不到」。**静默失败**：这是旁路，自学习自己出问题不能连累正在跑的采集。
+ * 同一页面同一字段一次会话只报一次——重复上报只会把同一件事刷成几百条。
+ */
+const beaconReported = new Set();
+async function beaconReportParseMiss(platform, scope, field, rootSelector) {
+  try {
+    const key = platform + ':' + scope + ':' + field;
+    if (beaconReported.has(key)) return;
+    beaconReported.add(key);
+    const root = rootSelector ? document.querySelector(rootSelector) : document.body;
+    const skeleton = beaconSkeleton(root);
+    if (!skeleton) return;
+    chrome.runtime.sendMessage({ type: 'parser:miss', platform, scope, field, skeleton }, () => {
+      // 回调里读 lastError 是为了不让「后台没响应」变成一条 unchecked runtime.lastError 警告
+      void chrome.runtime.lastError;
+    });
+  } catch {
+    /* 旁路，出错就算了 */
+  }
+}
+globalThis.__beaconReportParseMiss = beaconReportParseMiss;
+
+/** 当前页面大致属于哪个平台（只给上报用；真正的平台判定仍在各站点解析器里）。 */
+function beaconPlatformOf() {
+  const h = location.hostname;
+  if (h.includes('douyin')) return 'douyin';
+  if (h.includes('xiaohongshu')) return 'xiaohongshu';
+  if (h.includes('bilibili')) return 'bilibili';
+  if (h.includes('youtube')) return 'youtube';
+  if (h.includes('tiktok')) return 'tiktok';
+  if (h.includes('x.com') || h.includes('twitter')) return 'x';
+  if (h.includes('weixin')) return 'wechat';
+  return 'unknown';
+}
+globalThis.__beaconPlatformOf = beaconPlatformOf;
+
+/**
+ * 服务端下发的解析规则（平台改版后的兜底锚点）。
+ * 主解析器先跑；主解析器没读到时才用这里的候选选择器试一遍——
+ * **顺序不能反**：下发规则是应急补丁，不该盖过已经在真机上校准过的主解析器。
+ */
+async function beaconRuleSelectors(platform, field) {
+  try {
+    const { parserRules } = await chrome.storage.local.get('parserRules');
+    const pack = parserRules && parserRules.rules;
+    if (!Array.isArray(pack)) return [];
+    const hit = pack.find((r) => r.platform === platform && r.field === field);
+    return hit ? (hit.selectors || []) : [];
+  } catch {
+    return [];
+  }
+}
+globalThis.__beaconRuleSelectors = beaconRuleSelectors;

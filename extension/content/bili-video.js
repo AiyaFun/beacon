@@ -40,11 +40,25 @@ globalThis.__beaconParse = function () {
   set('coins', txt('.video-coin-info'));
   set('collects', txt('.video-fav-info'));
   set('shares', txt('.video-share-info-text'));
-  // 评论数 best-effort：<bili-comments> shadow DOM，懒加载常为空，取不到就算了
+  // 评论数 best-effort：<bili-comments> shadow DOM，懒加载常为空，取不到就算了。
+  //
+  // ⚠️ 真机 2026-08-10：`bili-comments-header-renderer` 这个元素**已经不存在了**——
+  // 现在 shadowRoot 第一层是 #spinner-container / #title / bili-comments-spinner / #continuations。
+  // 只认那一条路径 = 评论数恒取不到（表现为「这项一直没有」，不报错，所以一直没被发现）。
+  // 改成挨个试：直接 #count → #title 里的 #count → 旧的 header-renderer（还在的话）。
+  // 多路径只会多拿到，不会拿错：命中的都是评论区自己的计数节点。
   try {
     const bc = document.querySelector('bili-comments');
-    const hdr = bc && bc.shadowRoot && bc.shadowRoot.querySelector('bili-comments-header-renderer');
-    const cnt = hdr && hdr.shadowRoot && hdr.shadowRoot.querySelector('.count, #count, .total');
+    const sr = bc && bc.shadowRoot;
+    let cnt = null;
+    if (sr) {
+      cnt = sr.querySelector('#count')
+        || sr.querySelector('#title #count, #title .count')
+        || (() => {
+          const hdr = sr.querySelector('bili-comments-header-renderer');
+          return hdr && hdr.shadowRoot ? hdr.shadowRoot.querySelector('.count, #count, .total') : null;
+        })();
+    }
     if (cnt) set('comments', cnt.textContent);
   } catch { /* shadow DOM 不可达则忽略 */ }
 

@@ -99,3 +99,34 @@ export function maskKey(plain: string): string {
   if (plain.length <= 8) return '****';
   return `${plain.slice(0, 4)}····${plain.slice(-4)}`;
 }
+
+// ── 二进制加密（AES-256-GCM，字节进字节出）──
+//
+// encryptKey/decryptKey 是给 API Key 那种短字符串用的：结果是 base64 拼串，图片走它会白白胀 33%。
+// 人像照属敏感个人信息，落库前要加密（见 lib/media/store.ts），所以这里给一份字节版：
+// 布局 = iv(12) | tag(16) | 密文，前 28 字节固定，解密只要切两刀。
+// 刻意与 encryptKey 共用同一主密钥派生：换主密钥时两边一起失效，语义一致。
+
+const BIN_IV_LEN = 12;
+const BIN_TAG_LEN = 16;
+
+export function encryptBytes(plain: Uint8Array): Uint8Array {
+  const key = masterKey();
+  const iv = crypto.randomBytes(BIN_IV_LEN);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const enc = Buffer.concat([cipher.update(Buffer.from(plain)), cipher.final()]);
+  return new Uint8Array(Buffer.concat([iv, cipher.getAuthTag(), enc]));
+}
+
+/** 解密失败（密文损坏 / 换过主密钥）抛错——图片解不开就是取不到，不能静默返回空图。 */
+export function decryptBytes(enc: Uint8Array): Uint8Array {
+  const key = masterKey();
+  const buf = Buffer.from(enc);
+  if (buf.length <= BIN_IV_LEN + BIN_TAG_LEN) throw new Error('密文长度不合法');
+  const iv = buf.subarray(0, BIN_IV_LEN);
+  const tag = buf.subarray(BIN_IV_LEN, BIN_IV_LEN + BIN_TAG_LEN);
+  const data = buf.subarray(BIN_IV_LEN + BIN_TAG_LEN);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  return new Uint8Array(Buffer.concat([decipher.update(data), decipher.final()]));
+}

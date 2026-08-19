@@ -4,12 +4,14 @@ import { can } from '@/lib/rbac';
 import { PageHead, Card, Stat, Empty, Meter } from '@/components/ui';
 import { Icon } from '@/components/icons';
 import { tierFor, getUsageBill } from '@/lib/quota';
+import { beijingStartOfMonth } from '@/lib/beijing';
 import { effectivePlan, isPlanExpired } from '@/lib/pay/plan';
 import { PRICING, TRIAL_DAYS, BYOK_LIFETIME_FEN, LIFETIME_MONTHS } from '@/lib/pay/pricing';
 import { invoiceContact } from '@/lib/constants';
 import { payVendorConfigured } from '@/lib/pay/provider';
 import { Checkout } from './Checkout';
 import { RefundButton } from './RefundButton';
+import { fmtDateFull, fmtDateTime } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
 
@@ -42,6 +44,8 @@ const FN_LABEL: Record<string, string> = {
   compliance: '合规检测',
   chat: '对话助手',
   embed: '向量化',
+  image: 'AI 封面出图（按张）',
+  video: '视频拆解',
 };
 
 // 订单时长文案：1188=永久买断，12=年付，其余月付
@@ -51,10 +55,9 @@ function periodText(periodMonths: number): string {
 
 export default async function BillingPage() {
   const s = await getSession();
-  // 本月产出账本口径：只统计「本自然月内新产生」的东西（本地服务器时区，与 lib/quota.ts 一致），
+  // 本月产出账本口径：只统计「本自然月内新产生」的东西（**北京时间**的自然月，与 lib/quota.ts 同口径），
   // 全部为 count/关系过滤，零 LLM 成本。诚实原则：全为真实库记录，无一处写死数字。
-  const now = new Date();
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const monthStart = beijingStartOfMonth();
   const [tenant, orders, usage, valueReceipt] = await Promise.all([
     prisma.tenant.findUnique({ where: { id: s.tenantId }, select: { plan: true, planExpiresAt: true } }),
     prisma.paymentOrder.findMany({
@@ -103,7 +106,7 @@ export default async function BillingPage() {
         />
         <Stat
           label="有效期至"
-          value={expiresAt ? expiresAt.toLocaleDateString('zh-CN') : '—'}
+          value={expiresAt ? fmtDateFull(expiresAt) : '—'}
           foot={
             expiresAt
               ? expired
@@ -124,7 +127,7 @@ export default async function BillingPage() {
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 650, fontSize: 13.5, color: 'var(--brand)', marginBottom: 2 }}>
-                {rawPlan === 'trial' ? `${TRIAL_DAYS} 天试用已到期` : `${PLAN_LABEL[rawPlan]}已于 ${expiresAt?.toLocaleDateString('zh-CN')} 到期`}
+                {rawPlan === 'trial' ? `${TRIAL_DAYS} 天试用已到期` : `${PLAN_LABEL[rawPlan]}已于 ${fmtDateFull(expiresAt)} 到期`}
               </div>
               <div className="small" style={{ lineHeight: 1.6, opacity: 0.9 }}>
                 {rawPlan === 'trial'
@@ -479,7 +482,7 @@ export default async function BillingPage() {
                   <span className="row wrap small muted" style={{ gap: 12, alignItems: 'center' }}>
                     {o.grantedDays !== null && <span>发放 {o.grantedDays} 天</span>}
                     <span>¥{(o.amountFen / 100).toFixed(2)}</span>
-                    <span>{o.createdAt.toLocaleString('zh-CN')}</span>
+                    <span>{fmtDateTime(o.createdAt)}</span>
                   </span>
                   {/* 自助退款：仅已支付订单 + owner。金额/是否可退在弹窗内服务端算。
                       按钮单独拎出这一层，不能裹在 small muted 里 —— 那会让它继承灰色小字、

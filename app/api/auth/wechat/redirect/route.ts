@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { buildAuthUrl, generateState, getWechatConfig } from '@/lib/wechat-auth';
+import { authCookieSecure } from '@/lib/auth-constants';
 
 const STATE_COOKIE = 'beacon_wx_state';
 const MODE_COOKIE = 'beacon_wx_mode';
@@ -25,7 +26,7 @@ export async function GET(req: NextRequest) {
   const cookieOpts = {
     httpOnly: true,
     sameSite: 'lax' as const,
-    secure: process.env.NODE_ENV === 'production',
+    secure: authCookieSecure(),
     path: '/',
     maxAge: 300,
   };

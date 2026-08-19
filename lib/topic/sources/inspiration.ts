@@ -31,15 +31,26 @@ const MAX_STANDALONE = 3;
 // 上限刻意压在强热点之下：读者提问是**确定有人要**，不是**确定有流量**。
 export const COMMENT_HEAT_BASE = 0.30;
 export const COMMENT_HEAT_CAP = 0.55;
-export function commentHeat(askedCount: number, askedWorks: number): number {
+
+// 背书流量：这条提问所在作品里播放量最高的那条。爆款作品下的提问 ≠ 扑街作品下的提问——
+// 前者的需求已经被流量验证过一次。加成只让有背书的提问**更快够到** CAP，
+// CAP 本身不动：「确定有人要 ≠ 确定有流量」的原则不因背书而松。
+export function endorsementBoost(views: number): number {
+  if (views >= 100_000) return 0.08;
+  if (views >= 10_000) return 0.05;
+  if (views >= 1_000) return 0.02;
+  return 0;
+}
+
+export function commentHeat(askedCount: number, askedWorks: number, endorseViews = 0): number {
   const n = Math.min(askedCount, 8) / 8;
   const w = Math.min(askedWorks - 1, 3) / 3;
-  return Math.min(COMMENT_HEAT_CAP, COMMENT_HEAT_BASE + n * 0.15 + w * 0.10);
+  return Math.min(COMMENT_HEAT_CAP, COMMENT_HEAT_BASE + n * 0.15 + w * 0.10 + endorsementBoost(endorseViews));
 }
 export const MIN_ASKED_FOR_STANDALONE = 2;
 const MAX_STANDALONE_COMMENT = 2;
 
-const COMMENT_SOURCES = new Set(['comment', 'rival-comment']);
+export const COMMENT_SOURCES = new Set(['comment', 'rival-comment']);
 
 export type InspirationRow = {
   id: string;
@@ -54,6 +65,10 @@ export type InspirationRow = {
   askedCount: number;
   askedWorks: number;
   lastAskedAt: Date | null;
+  // 评论提问专用：askedBreak 原文（{workId: count}）与背书流量（所在作品的最高播放）。
+  // askedBreak 只在取数层用来 join 作品指标，纯函数侧只看算好的 endorseViews。
+  askedBreak?: string;
+  endorseViews?: number;
 };
 
 function daysAgo(d: Date, now: Date): number {
@@ -89,6 +104,13 @@ function related(aGrams: Set<string>, b: string): boolean {
 function sourceLine(item: InspirationRow): string {
   const parts = [item.platform ? platformName(item.platform) : '', item.author ?? ''].filter(Boolean);
   return parts.length ? `（来自${parts.join(' · ')}）` : '';
+}
+
+// 背书流量的展示格式：进 evidence 的数字要一眼能读（"12.3万"而不是 123456）
+function fmtViews(v: number): string {
+  if (v >= 100_000_000) return `${(v / 100_000_000).toFixed(1)} 亿`;
+  if (v >= 10_000) return `${(v / 10_000).toFixed(1)} 万`;
+  return String(v);
 }
 
 export type InspirationResult = { candidates: Candidate[]; wokeUp: number; standalone: number };
@@ -156,14 +178,21 @@ export function applyInspiration(
     ...commentItems.map((it) => {
       const worksText = it.askedWorks > 1 ? `（分布在 ${it.askedWorks} 条作品下）` : '';
       const variantsText = it.note ? `，${it.note}` : '';
+      // 背书流量进证据：爆款下的提问是被流量验证过的需求，这句话精排和用户都该看见。
+      // 竞对作品下的提问措辞不同——那是「对方读者的需求缺口」，不是「你的读者在等」。
+      const endorse = (it.endorseViews ?? 0) >= 1_000
+        ? it.source === 'rival-comment'
+          ? `提问出现在竞对一条 ${fmtViews(it.endorseViews!)} 播放的作品下——被流量验证过、而对方未必接住的需求。`
+          : `其中一条所在作品有 ${fmtViews(it.endorseViews!)} 播放——这个需求被你自己的流量验证过。`
+        : '';
       return {
         // 评论条目的 note 是元信息（「被问到 N 次；其它问法：…」），绝不能当标题
         title: it.title.slice(0, 120),
-        heat: commentHeat(it.askedCount, it.askedWorks),
+        heat: commentHeat(it.askedCount, it.askedWorks, it.endorseViews ?? 0),
         sourceType: it.source as 'comment' | 'rival-comment',
         sourceRef: it.id,
         queue: 'week' as const,
-        evidence: `这是你的读者直接问的问题，被问到 ${it.askedCount} 次${worksText}${variantsText}。回答自己读者的问题不需要蹭热点。`,
+        evidence: `这是你的读者直接问的问题，被问到 ${it.askedCount} 次${worksText}${variantsText}。${endorse}回答自己读者的问题不需要蹭热点。`,
         windowHint: it.url ? `原内容：${it.url}` : undefined,
       };
     }),
@@ -181,6 +210,7 @@ export async function loadInspirations(workspaceId: string, accountId: string): 
     id: true, title: true, note: true, url: true,
     platform: true, author: true, tags: true, source: true,
     createdAt: true, askedCount: true, askedWorks: true, lastAskedAt: true,
+    askedBreak: true,
   };
   const [inspirations, comments] = await Promise.all([
     prisma.inspirationItem.findMany({
@@ -196,7 +226,68 @@ export async function loadInspirations(workspaceId: string, accountId: string): 
       select,
     }),
   ]);
-  return [...inspirations, ...comments];
+  return [...inspirations, ...(await attachEndorsement(comments, accountId))];
+}
+
+// 给评论提问挂背书流量：askedBreak 的 workId 就是 platformItemId，join 作品指标取最高播放。
+//   rival-comment → CrawledPost.metrics（全局竞对库，(platform, platformItemId) 唯一）
+//   comment       → 本账号的 PublishRecord + 快照，走 authoritativeMetrics 统一口径——
+//                   PublishRecord.metrics 是「谁最后写谁说了算」，直接读会把手填的约数
+//                   当背书证据展示出去（口径统一的原因见 app/(app)/data/page.tsx:147）。
+// join 不上（老提问、作品没入库）就没有 endorseViews——加成为 0，证据里不提，绝不编。
+async function attachEndorsement(comments: InspirationRow[], accountId: string): Promise<InspirationRow[]> {
+  const wanted = new Map<string, { platform: string; workIds: Set<string> }>();
+  for (const it of comments) {
+    if (!it.platform || !it.askedBreak) continue;
+    const brk = parseJson<Record<string, number>>(it.askedBreak, {});
+    for (const workId of Object.keys(brk)) {
+      if (workId === 'unknown' || workId.startsWith('sha:')) continue;
+      const slot = wanted.get(it.platform) ?? { platform: it.platform, workIds: new Set<string>() };
+      slot.workIds.add(workId);
+      wanted.set(it.platform, slot);
+    }
+  }
+  if (wanted.size === 0) return comments;
+
+  const viewsOf = new Map<string, number>(); // `${platform}:${workId}` → views
+  for (const { platform, workIds } of wanted.values()) {
+    const ids = [...workIds];
+    const [crawled, published] = await Promise.all([
+      prisma.crawledPost.findMany({
+        where: { platform, platformItemId: { in: ids } },
+        select: { platformItemId: true, metrics: true },
+      }),
+      prisma.publishRecord.findMany({
+        where: { accountId, platform, platformItemId: { in: ids } },
+        include: { snapshots: { orderBy: { takenAt: 'desc' as const } } },
+      }),
+    ]);
+    for (const p of crawled) {
+      const v = parseJson<{ views?: number }>(p.metrics, {}).views ?? 0;
+      const key = `${platform}:${p.platformItemId}`;
+      if (v > (viewsOf.get(key) ?? 0)) viewsOf.set(key, v);
+    }
+    if (published.length) {
+      const { authoritativeMetrics } = await import('../../insight/source-priority');
+      for (const r of published) {
+        if (!r.platformItemId) continue;
+        const v = authoritativeMetrics(r.metrics, r.snapshots, r.publishedAt).views ?? 0;
+        const key = `${platform}:${r.platformItemId}`;
+        if (v > (viewsOf.get(key) ?? 0)) viewsOf.set(key, v);
+      }
+    }
+  }
+
+  return comments.map((it) => {
+    if (!it.platform || !it.askedBreak) return it;
+    const brk = parseJson<Record<string, number>>(it.askedBreak, {});
+    let best = 0;
+    for (const workId of Object.keys(brk)) {
+      const v = viewsOf.get(`${it.platform}:${workId}`) ?? 0;
+      if (v > best) best = v;
+    }
+    return best > 0 ? { ...it, endorseViews: best } : it;
+  });
 }
 
 export async function applyInspirationForAccount(

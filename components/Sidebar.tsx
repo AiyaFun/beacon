@@ -3,15 +3,15 @@
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import Image from 'next/image';
-import { NAV } from '@/lib/nav';
+import type { NavGroup } from '@/lib/nav';
 import { Icon } from './icons';
 
 // 导航列表本体：桌面侧栏与移动端抽屉（MobileNav）共用，保证两端条目完全一致
-export function NavList() {
+export function NavList({ nav }: { nav: NavGroup[] }) {
   const pathname = usePathname();
   return (
     <nav>
-      {NAV.map((group) => (
+      {nav.map((group) => (
         <div className="nav-group" key={group.title}>
           <div className="nav-group-title">{group.title}</div>
           {group.items.map((item) => {
@@ -31,7 +31,7 @@ export function NavList() {
   );
 }
 
-export function Sidebar() {
+export function Sidebar({ nav }: { nav: NavGroup[] }) {
   return (
     <aside className="sidebar">
       <div className="brand">
@@ -41,7 +41,7 @@ export function Sidebar() {
           <div className="brand-sub">跨平台内容作战室</div>
         </div>
       </div>
-      <NavList />
+      <NavList nav={nav} />
     </aside>
   );
 }

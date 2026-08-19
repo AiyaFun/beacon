@@ -18,7 +18,10 @@ const SRC = readFileSync(resolve(process.cwd(), 'extension/sidepanel.js'), 'utf8
 
 type Sent = { type: string; payload?: Record<string, unknown> };
 
-function mount(tabUrl: string, opts: { collect?: unknown; ingestSelf?: Record<string, unknown> } = {}) {
+function mount(
+  tabUrl: string,
+  opts: { collect?: unknown; ingestSelf?: Record<string, unknown>; settings?: Record<string, unknown> } = {},
+) {
   const dom = new JSDOM(HTML, { url: 'chrome-extension://test/sidepanel.html' });
   const sent: Sent[] = [];
   const toTab: Sent[] = [];
@@ -48,6 +51,16 @@ function mount(tabUrl: string, opts: { collect?: unknown; ingestSelf?: Record<st
       create: () => {},
       onActivated: { addListener: () => {} },
       onUpdated: { addListener: () => {} },
+    },
+    // sidepanel.js 顶层会读设置（评论按钮显隐、绑定的账号）。少了它整份脚本会停在第一处
+    // chrome.storage 上——表现是「侧栏一片死」，而用例只会看到一句 reading 'sync' of undefined。
+    storage: {
+      sync: {
+        get: () => Promise.resolve(opts.settings ?? {}),
+        set: () => Promise.resolve(),
+      },
+      local: { get: () => Promise.resolve({}), set: () => Promise.resolve() },
+      onChanged: { addListener: () => {} },
     },
   };
 

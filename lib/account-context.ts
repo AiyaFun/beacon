@@ -5,6 +5,7 @@ import { readFingerprint, fingerprintPromptBlock, type StyleFingerprint } from '
 import { materialContextForAccount, catchphrasePromptBlock, loadMaterials } from './material';
 import { buildMemoryContext } from './memory/core';
 import { buildBaseline, type MetricBaseline } from './algorithm/coach';
+import { heatForSort } from './insight/heat';
 import { accountPlatformProfiles } from './insight/learn';
 import { platformName } from './constants';
 import { topBuckets } from './ingest/own-account';
@@ -182,9 +183,17 @@ export async function accountBaselineBlock(accountId: string, platform?: string)
   if (platform) {
     const b = await loadPlatformBaseline(accountId, platform);
     if (b.sample === 0) return '';
-    const line = `${platformName(platform)}：近 ${b.sample} 条均播放 ${b.avgViews}，完播/完读 ${
-      b.avgCompletion === null ? '无' : pct(b.avgCompletion)
-    }，点赞率 ${pct(b.likeRate)}，评论率 ${pct(b.commentRate)}，收藏率 ${pct(b.collectRate)}`;
+    // ⚠️ 这段是**喂给模型**的事实块。抖音这类平台公开页没有播放量，率类指标全是 null——
+    // 那就**整项不写**，绝不写成「点赞率 0.0%」：模型会拿它当真实观测，
+    // 然后一本正经地建议你「点赞率过低要改开头」，而你的号根本没有这个数据。
+    const parts = [`近 ${b.sample} 条`];
+    if (b.avgViews !== null) parts.push(`均播放 ${b.avgViews}`);
+    if (b.avgCompletion !== null) parts.push(`完播/完读 ${pct(b.avgCompletion)}`);
+    if (b.likeRate !== null) parts.push(`点赞率 ${pct(b.likeRate)}`);
+    if (b.commentRate !== null) parts.push(`评论率 ${pct(b.commentRate)}`);
+    if (b.collectRate !== null) parts.push(`收藏率 ${pct(b.collectRate)}`);
+    if (b.avgViews === null) parts.push('（该平台公开页不提供播放量，率类指标不可得；点赞/评论/收藏/转发的绝对数是真实的）');
+    const line = `${platformName(platform)}：${parts.join('，')}`;
     return `【账号真实数据基线】\n${line}`;
   }
   const profiles = await accountPlatformProfiles(accountId);
@@ -194,7 +203,7 @@ export async function accountBaselineBlock(accountId: string, platform?: string)
       (p) =>
         `${platformName(p.platform)}：近 ${p.sample} 条均播放 ${p.avgViews}，完播/完读 ${
           p.avgCompletion === null ? '无' : pct(p.avgCompletion)
-        }，互动率 ${pct(p.engagement)}`,
+        }${p.engagement === null ? '' : `，互动率 ${pct(p.engagement)}`}`,
     );
   return lines.length ? `【账号真实数据基线（各平台历史表现）】\n${lines.join('\n')}` : '';
 }
@@ -210,11 +219,25 @@ export async function competitorContextBlock(workspaceId: string, limit = 8): Pr
   if (watch.length === 0) return '';
   const posts = await prisma.crawledPost.findMany({
     where: { competitorId: { in: watch.map((w) => w.competitorId) } },
-    orderBy: { hotScore: 'desc' },
-    take: limit,
+    orderBy: { publishedAt: 'desc' },
+    take: Math.max(limit * 6, 60),
   });
   if (posts.length === 0) return '';
-  const lines = posts.map((p) => `- 【${platformName(p.platform)}】${p.title}（热度 ${p.hotScore}）`);
+  // ⚠️ 此前这里按 hotScore 排、并对模型说「热度 N」。hotScore 是 `views / 20000`，
+  // 没有播放量的平台恒为 0 —— 模型收到的是「这些作品热度 0」，那是编的。
+  // 改成按互动量排，并把**真实的数**告诉它（点赞/评论这些是真采到的）。
+  const ranked = [...posts]
+    .sort((a, b) => heatForSort(parseJson<Metrics>(b.metrics, {})) - heatForSort(parseJson<Metrics>(a.metrics, {})))
+    .slice(0, limit);
+  const lines = ranked.map((p) => {
+    const m = parseJson<Metrics>(p.metrics, {});
+    const bits = [
+      m.views ? `播放 ${m.views}` : '',
+      m.likes ? `点赞 ${m.likes}` : '',
+      m.comments ? `评论 ${m.comments}` : '',
+    ].filter(Boolean);
+    return `- 【${platformName(p.platform)}】${p.title}${bits.length ? `（${bits.join('，')}）` : ''}`;
+  });
   return `【订阅竞对近期高热作品】\n${lines.join('\n')}`;
 }
 

@@ -18,6 +18,9 @@ import { accountPlatformProfiles } from '@/lib/insight/learn';
 import { checkDataHealth, type HealthIssue } from '@/lib/insight/health-check';
 import { analyzePublishTiming } from '@/lib/insight/timing';
 import { sourceTier, SOURCE_TIER_LABEL } from '@/lib/insight/csv';
+import { GrowthBoard } from '@/components/GrowthBoard';
+import { loadSelfGrowth, WINDOW_KEYS } from '@/lib/insight/growth-rows';
+import type { WindowKey } from '@/lib/insight/growth';
 import { parseRange, filterRecordsByRange, filterByPlatform, prevPeriodRecords } from '@/lib/insight/dashboard-filter';
 import { decisionQuality } from '@/lib/insight/decision-quality';
 import { topicClashRate, complianceFalsePositiveRate, type GuardrailValue } from '@/lib/insight/guardrails';
@@ -31,6 +34,10 @@ import { DataIllumination, type IlluminationSignal } from './DataIllumination';
 import { CollectionRuns } from '@/components/CollectionRuns';
 import { listCollectionRuns } from '@/lib/ingest/collection-run';
 import { publicItemUrl } from '@/lib/publish/parse-url';
+import { readerQuestionsByWork } from '@/lib/insight/reader-questions';
+import { readerVoice, readerCommentsByWork } from '@/lib/insight/reader-voice';
+import { COMMENT_TEXT_PURGE_DAYS } from '@/lib/comment-collect-rules';
+import { ReaderVoice } from '@/components/ReaderVoice';
 
 export const dynamic = 'force-dynamic';
 
@@ -46,6 +53,10 @@ export default async function DataPage({
   const range = parseRange(typeof sp.range === 'string' ? sp.range : undefined);
   const platformFilter = typeof sp.platform === 'string' ? sp.platform : 'all';
   const page = Math.max(1, parseInt(typeof sp.page === 'string' ? sp.page : '1', 10) || 1);
+  // 增长区块的时间窗。与本页既有的 range/platform/page 共用 query string，互不干扰
+  const windowKey: WindowKey = (WINDOW_KEYS as string[]).includes(typeof sp.window === 'string' ? sp.window : '')
+    ? (sp.window as WindowKey)
+    : '7d';
 
   const [records, ownPosts, activeAccounts, profiles, learnedMemories, account] = await Promise.all([
     prisma.publishRecord.findMany({
@@ -67,6 +78,31 @@ export default async function DataPage({
   // 采集台账（自有）：每次回填覆盖了哪几天。按工作区取而不是按当前账号——
   // 「数据记到别的号名下了」正是这页最常见的困惑，台账里把账号名摆出来才答得了它。
   const collectionRuns = await listCollectionRuns(s.workspaceId, { scope: 'self', take: 30 });
+
+  // 每条作品下「读者在问什么」（评论采集的提问，按 platformItemId 挂回作品行）。
+  // 指标 × 提问并排看才有诊断价值：完读率低+评论区在问概念 = 没讲清；
+  // 点赞高+催更 = 系列化信号。取数与口径见 lib/insight/reader-questions.ts。
+  const readerQs = await readerQuestionsByWork(s.workspaceId, s.accountId);
+
+  // 读者原声（评论正文，与上面的提问是两条链路）。提问回答「他们卡在哪」，
+  // 原声回答「他们原话是怎么说的」——后者是任何聚合都会压缩掉的东西。
+  const [voice, commentsByWork] = await Promise.all([
+    readerVoice(s.workspaceId, { scope: 'own', accountId: s.accountId }),
+    readerCommentsByWork(s.workspaceId, s.accountId),
+  ]);
+
+  // 自有增长（账号涨粉 + 单条作品）。竞对增长在竞对监控页。
+  const { rows: growthRows, hasAny: hasGrowth } = await loadSelfGrowth(s.accountId, windowKey);
+  // 切时间窗时要带上本页既有的筛选，否则一点就把用户的时间段/平台筛选清掉了
+  const qsBase = [
+    typeof sp.range === 'string' ? `range=${encodeURIComponent(sp.range)}` : '',
+    platformFilter !== 'all' ? `platform=${encodeURIComponent(platformFilter)}` : '',
+  ].filter(Boolean).join('&');
+  // 在服务端算好三条链接再传下去。GrowthBoard 是客户端组件，**不能收函数**
+  // （Next 会在渲染时抛 "Functions cannot be passed directly to Client Components"）。
+  const windowHrefs = Object.fromEntries(
+    WINDOW_KEYS.map((k) => [k, `/data?${qsBase ? qsBase + '&' : ''}window=${k}#growth`]),
+  );
 
   const dq = await decisionQuality(s.accountId, s.workspaceId);
   // 最近一份周报（周任务生成，此前在 app 里没有任何入口——通知点进来找不到本体）
@@ -229,7 +265,7 @@ export default async function DataPage({
         signals={[
           { key: 'posts', label: '作品表现数据', lit: records.length > 0, how: '装插件在作品页一键回填，或用下方「手动回填」登记第一条' },
           { key: 'history', label: '历史作品基线', lit: ownPosts.length > 0, how: '用下方「导入历史作品」上传 CSV，建立你的历史水位' },
-          { key: 'followers', label: '粉丝增长数据', lit: followerPoints.length > 0, how: '在创作者后台「粉丝分析」页用插件回填' },
+          { key: 'followers', label: '粉丝增长数据', lit: followerPoints.length > 0, how: '在创作者后台「粉丝分析」页用插件回填；在自己的主页上点回填也能记下当天的粉丝数' },
           { key: 'audience', label: '受众画像', lit: audienceBuckets != null, how: '同上，创作者后台「粉丝/受众分析」页用插件回填' },
         ] satisfies IlluminationSignal[]}
       />
@@ -353,121 +389,17 @@ export default async function DataPage({
         </Card>
       </div>
 
-      {/* 账号级数据：粉丝曲线 + 受众画像（只有创作者后台给得到） */}
-      <AudienceCard platform={audiencePlatform} series={followerPoints} audience={audienceBuckets} />
-
-      {/* 周度运营复盘 + R7「记住了你的 N 件事」 */}
-      <WeeklyReviewCard review={weekly} />
-
-      {/* 决策质量：AI 的推荐/会诊到底准不准 */}
-      <Card title="🎯 决策质量" sub="AI 的推荐与智囊团会诊到底准不准 · 让决策本身可复盘" style={{ marginBottom: 16 }}>
-        <div className="grid grid-4">
-          <Stat
-            label="推荐采纳率"
-            value={dq.adoptRatePct === null ? '—' : `${dq.adoptRatePct}%`}
-            foot={dq.adoptRatePct === null ? '暂无采纳/拒绝样本' : `采纳 ${dq.recommendAdopted} · 拒绝 ${dq.recommendRejected}`}
-          />
-          <Stat
-            label="智囊团命中率"
-            value={dq.advisorHitRatePct === null ? '—' : `${dq.advisorHitRatePct}%`}
-            foot={dq.advisorHitRatePct === null ? '暂无会诊裁决' : `采纳 ${dq.advisorAdopted} · 否决 ${dq.advisorRejected}`}
-          />
-          <Stat
-            label="被验证切入角"
-            value={dq.angleProven}
-            foot={<span style={{ color: dq.angleFailed > 0 ? 'var(--red)' : undefined }}>{dq.angleFailed > 0 ? `另有 ${dq.angleFailed} 个已证伪` : '数据验证有效'}</span>}
-          />
-          <Stat label="已复盘选题" value={dq.reviewed} foot="发布后回写 reviewed" />
-        </div>
-        <div className="small muted" style={{ marginTop: 10, lineHeight: 1.6 }}>
-          这些数字来自你自己的采纳/拒绝与发布后真实数据——AI 建议准不准，用你的行为和结果说话，而不是我们自说自话。
-        </div>
-      </Card>
-
-      {/* 发布时段分析 */}
-      <Card title="⏰ 发布时段分析" sub="哪个时段发的内容平均播放更高 · 满 3 条/时段才下结论" style={{ marginBottom: 16 }}>
-        {!timing.conclusive ? (
-          <Empty icon="⏳" text="样本积累中——同一时段满 3 条发布后，这里给出「几点发效果好」的结论" />
-        ) : (
-          <div className="stack" style={{ gap: 10 }}>
-            <div className="small">
-              最佳发布时段：<b style={{ color: 'var(--brand)' }}>{timing.best!.label}</b>
-              <span className="muted">（{timing.best!.sample} 条 · 均播 {fmtNum(timing.best!.avgViews)}，整体均播 {fmtNum(timing.overallAvg)}）</span>
-            </div>
-            <div className="stack" style={{ gap: 8 }}>
-              {timing.hourSlots.map((slot) => (
-                <div key={slot.key}>
-                  <div className="row-between" style={{ marginBottom: 4 }}>
-                    <span className="small">{slot.label} <span className="muted">· {slot.sample} 条</span></span>
-                    <span className="small mono">{fmtNum(slot.avgViews)}</span>
-                  </div>
-                  <Meter value={(slot.avgViews / maxSlotViews) * 100} color={slot.key === timing.best!.key ? 'var(--brand)' : 'var(--text-3)'} />
-                </div>
-              ))}
-            </div>
+      {/* 📊 发布效果：向前移至核心展现位置 */}
+      <Card
+        title={
+          <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+            <Icon.chart size={20} style={{ color: 'var(--brand)' }} />
+            <span>发布效果与表现明细</span>
           </div>
-        )}
-      </Card>
-
-      {/* 账号属性画像 */}
-      <Card title="账号属性画像 · 持续学习" sub="每次回填流量，系统都会与账号自身基线对比并沉淀结论" style={{ marginBottom: 16 }}>
-        {profiles.length === 0 && learnedMemories.length === 0 ? (
-          <Empty icon="🧭" text="还没有可学习的数据——发布后回来回填数据，账号画像会自动长出来" />
-        ) : (
-          <div className="grid-asym-left grid-align-start">
-            <div className="stack" style={{ gap: 10 }}>
-              <div className="small muted">平台算法适配（按你的真实数据）</div>
-              {profiles.map((p) => (
-                <div key={p.platform} className="card" style={{ padding: 10, boxShadow: 'none', background: 'var(--surface-2)' }}>
-                  <div className="row-between">
-                    <span className="badge" style={{ background: 'var(--surface)', color: platformColor(p.platform) }}>
-                      {platformName(p.platform)}
-                    </span>
-                    <span className="small muted">{p.sample} 条样本</span>
-                  </div>
-                  <div className="row wrap small" style={{ gap: 12, marginTop: 6 }}>
-                    <span>均播 <b className="mono">{fmtNum(p.avgViews)}</b></span>
-                    <span>互动率 <b className="mono">{(p.engagement * 100).toFixed(1)}%</b></span>
-                    {p.avgCompletion !== null && <span>完播 <b className="mono">{(p.avgCompletion * 100).toFixed(0)}%</b></span>}
-                  </div>
-                </div>
-              ))}
-              {profiles.length === 0 && <span className="small muted">暂无平台样本</span>}
-            </div>
-            <div className="stack" style={{ gap: 10 }}>
-              <div className="small muted">学到的账号结论（重复被数据验证会转为「生效」并注入 AI）</div>
-              {learnedMemories.length === 0 ? (
-                <span className="small muted">暂无——更新几条发布数据后出现</span>
-              ) : (
-                <div className="stack" style={{ gap: 6 }}>
-                  {learnedMemories.map((m) => (
-                    <div key={m.id} className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
-                      <span className={`dot ${m.active ? 'dot-green' : 'dot-amber'}`} style={{ marginTop: 5, flexShrink: 0 }} />
-                      <span className="small" style={{ opacity: m.active ? 1 : 0.7 }}>
-                        {m.content}
-                        <span className="muted">（命中 {m.hitCount} 次{m.active ? '，已生效' : '，观察中'}）</span>
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {verifiedAngles.length > 0 && (
-                <>
-                  <div className="divider" style={{ margin: '4px 0' }} />
-                  <div className="small muted">被数据验证的切入角（已进风格指纹，生成时优先）</div>
-                  <div className="row wrap" style={{ gap: 6 }}>
-                    {verifiedAngles.map((a, i) => (
-                      <span key={i} className="badge badge-brand">{a}</span>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        )}
-      </Card>
-
-      <Card title="发布效果" sub="每条已登记内容的真实表现 · 展开看逐日趋势 · 更新数据即触发学习" style={{ marginBottom: 16 }}>
+        }
+        sub="每条已登记内容的真实表现 · 展开看逐日趋势 · 更新数据即触发学习"
+        style={{ marginBottom: 16 }}
+      >
         {publishCount === 0 ? (
           <Empty icon="📥" text="当前筛选下没有发布记录，用下方「手动回填」登记第一条" />
         ) : (
@@ -477,7 +409,7 @@ export default async function DataPage({
                 <thead>
                   <tr>
                     <th>平台</th>
-                    <th>发布时间</th>
+                    <th>发布时间 / 标题</th>
                     <th style={{ textAlign: 'right' }}>播放</th>
                     <th style={{ textAlign: 'right' }}>点赞</th>
                     <th style={{ textAlign: 'right' }}>评论</th>
@@ -512,7 +444,7 @@ export default async function DataPage({
                         </td>
                         <td className="small muted">
                           {r.title ? (
-                            <div className="small" style={{ fontWeight: 600, color: 'var(--text)' }}>
+                            <div className="small" style={{ fontWeight: 600, color: 'var(--text)', marginBottom: 2 }}>
                               {itemUrl ? (
                                 <a href={itemUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--text)' }} title={itemUrl}>
                                   {r.title} ↗
@@ -523,7 +455,7 @@ export default async function DataPage({
                             </div>
                           ) : itemUrl ? (
                             // 标题没采到时链接更要给：它是这条记录唯一能被人工核对的抓手
-                            <div className="small" style={{ fontWeight: 600 }}>
+                            <div className="small" style={{ fontWeight: 600, marginBottom: 2 }}>
                               <a href={itemUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--brand)' }} title={itemUrl}>
                                 查看原文 ↗
                               </a>
@@ -535,8 +467,48 @@ export default async function DataPage({
                               <span className="badge badge-amber" title="缺发布链接，数据不会自动回流">缺链接</span>
                             </div>
                           )}
+                          {(() => {
+                            // 这条作品下的读者提问（评论采集）。与右侧指标并排是刻意的：
+                            // 数字说效果，提问说读者卡在哪/还想要什么。
+                            const workKey = r.platformItemId ? `${r.platform}:${r.platformItemId}` : null;
+                            const qs = workKey ? readerQs.get(workKey) : undefined;
+                            // 这条作品下采到的评论条数。提问可能一条都没归并出来（整页都是夸奖），
+                            // 但评论是有的——只看 qs 会让这行显示成「什么都没采到」。
+                            const cs = workKey ? commentsByWork.get(workKey) : undefined;
+                            if (!qs?.length && !cs?.length) return null;
+                            return (
+                              <div style={{ marginTop: 6 }}>
+                                {cs?.length ? (
+                                  <a
+                                    href="#voice"
+                                    className="small"
+                                    style={{ color: 'var(--text-2)', display: 'block', marginTop: 2 }}
+                                    title="这条作品下采到的读者评论，在本页「读者原声」里可以逐条读"
+                                  >
+                                    🗣 {cs.length} 条读者原声
+                                  </a>
+                                ) : null}
+                                {(qs ?? []).slice(0, 2).map((q) => (
+                                  <div
+                                    key={q.text}
+                                    className="small"
+                                    style={{ color: 'var(--brand)', marginTop: 2 }}
+                                    title={`读者在这条作品的评论区问到 ${q.count} 次（来自评论采集，已按隐私规则聚合）`}
+                                  >
+                                    💬 {q.text}
+                                    {q.count > 1 ? <span className="muted"> ×{q.count}</span> : null}
+                                  </div>
+                                ))}
+                                {(qs?.length ?? 0) > 2 && (
+                                  <div className="small muted" style={{ marginTop: 2 }}>
+                                    还有 {(qs?.length ?? 0) - 2} 条读者提问，见灵感箱
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </td>
-                        <td style={{ textAlign: 'right' }} className="mono">{fmtNum(m.views)}</td>
+                        <td style={{ textAlign: 'right', fontWeight: 600 }} className="mono">{fmtNum(m.views)}</td>
                         <td style={{ textAlign: 'right' }} className="mono">{fmtNum(m.likes)}</td>
                         <td style={{ textAlign: 'right' }} className="mono">{fmtNum(m.comments)}</td>
                         <td style={{ textAlign: 'right' }} className="mono">{fmtNum(m.shares)}</td>
@@ -602,6 +574,170 @@ export default async function DataPage({
               </div>
             )}
           </>
+        )}
+      </Card>
+
+      {/* 账号级数据：粉丝曲线 + 受众画像（只有创作者后台给得到） */}
+      <AudienceCard platform={audiencePlatform} series={followerPoints} audience={audienceBuckets} />
+
+      {/* 读者原声：粉丝画像说「他们是谁」，这里说「他们在关心什么、原话怎么说」 */}
+      {/* 锚点用兄弟节点，不是 Card 的 prop——Card 不收 id（同 #growth 的写法） */}
+      <div id="voice" />
+      <Card
+        title="💬 读者原声"
+        sub={`评论区里粉丝在了解什么、关心什么 · 最近 ${voice.total} 条`}
+        style={{ marginBottom: 16 }}
+      >
+        <ReaderVoice
+          comments={voice.recent.map((c) => ({
+            id: c.id,
+            text: c.text,
+            kind: c.kind,
+            platform: c.platform,
+            workTitle: c.workTitle,
+            // Date 传不进客户端组件的边界要先序列化
+            collectedAt: c.collectedAt.toISOString(),
+          }))}
+          topics={voice.concerns}
+          kinds={voice.kinds}
+          retentionDays={COMMENT_TEXT_PURGE_DAYS}
+          emptyHint="还没采到评论。在插件设置里打开「评论提问采集」，然后到自己的作品详情页点侧栏的「读评论提问」——插件只读当前屏幕上已经显示的评论，不翻页。"
+        />
+      </Card>
+
+      {/* 周度运营复盘 + R7「记住了你的 N 件事」 */}
+      <WeeklyReviewCard review={weekly} />
+
+      {/* 决策质量：AI 的推荐/会诊到底准不准 */}
+      <Card title="🎯 决策质量" sub="AI 的推荐与智囊团会诊到底准不准 · 让决策本身可复盘" style={{ marginBottom: 16 }}>
+        <div className="grid grid-4">
+          <Stat
+            label="推荐采纳率"
+            value={dq.adoptRatePct === null ? '—' : `${dq.adoptRatePct}%`}
+            foot={dq.adoptRatePct === null ? '暂无采纳/拒绝样本' : `采纳 ${dq.recommendAdopted} · 拒绝 ${dq.recommendRejected}`}
+          />
+          <Stat
+            label="智囊团命中率"
+            value={dq.advisorHitRatePct === null ? '—' : `${dq.advisorHitRatePct}%`}
+            foot={dq.advisorHitRatePct === null ? '暂无会诊裁决' : `采纳 ${dq.advisorAdopted} · 否决 ${dq.advisorRejected}`}
+          />
+          <Stat
+            label="被验证切入角"
+            value={dq.angleProven}
+            foot={<span style={{ color: dq.angleFailed > 0 ? 'var(--red)' : undefined }}>{dq.angleFailed > 0 ? `另有 ${dq.angleFailed} 个已证伪` : '数据验证有效'}</span>}
+          />
+          <Stat label="已复盘选题" value={dq.reviewed} foot="发布后回写 reviewed" />
+        </div>
+        <div className="small muted" style={{ marginTop: 10, lineHeight: 1.6 }}>
+          这些数字来自你自己的采纳/拒绝与发布后真实数据——AI 建议准不准，用你的行为和结果说话，而不是我们自说自话。
+        </div>
+      </Card>
+
+      {/* 发布时段分析 */}
+      {/* 自有增长。竞对增长在竞对监控页那边（用户 2026-08-10 定的分工：各页只管自己的域）。
+          与本页其它卡的分工：它们答「现在是多少」，这里答「这段时间涨了多少、什么时候涨的」。 */}
+      <div id="growth" />
+      <Card title="📈 我的增长" sub="账号涨粉与单条作品在同一时间窗下的净增，以及每次采集的时点曲线" style={{ marginBottom: 16 }}>
+        {growthRows.length === 0 ? (
+          <Empty text="还没有可用于算增长的数据——增长需要至少两次采集。用插件在你的作品页点两次「这是我的作品」（或等定时回填跑过两轮）后，这里就会出现曲线。" />
+        ) : (
+          <>
+            {!hasGrowth && (
+              <div className="small muted" style={{ marginBottom: 10 }}>
+                这个时间窗内还没有回流记录。换一个更长的时间窗，或者去回填一次。
+              </div>
+            )}
+            <GrowthBoard
+              windowKey={windowKey}
+              rows={growthRows}
+              windowHrefs={windowHrefs}
+              empty="这个时间窗内没有自有数据回流。"
+            />
+          </>
+        )}
+      </Card>
+
+      <Card title="⏰ 发布时段分析" sub="哪个时段发的内容平均播放更高 · 满 3 条/时段才下结论" style={{ marginBottom: 16 }}>
+        {!timing.conclusive ? (
+          <Empty icon="⏳" text="样本积累中——同一时段满 3 条发布后，这里给出「几点发效果好」的结论" />
+        ) : (
+          <div className="stack" style={{ gap: 10 }}>
+            <div className="small">
+              最佳发布时段：<b style={{ color: 'var(--brand)' }}>{timing.best!.label}</b>
+              <span className="muted">（{timing.best!.sample} 条 · 均播 {fmtNum(timing.best!.avgViews)}，整体均播 {fmtNum(timing.overallAvg)}）</span>
+            </div>
+            <div className="stack" style={{ gap: 8 }}>
+              {timing.hourSlots.map((slot) => (
+                <div key={slot.key}>
+                  <div className="row-between" style={{ marginBottom: 4 }}>
+                    <span className="small">{slot.label} <span className="muted">· {slot.sample} 条</span></span>
+                    <span className="small mono">{fmtNum(slot.avgViews)}</span>
+                  </div>
+                  <Meter value={(slot.avgViews / maxSlotViews) * 100} color={slot.key === timing.best!.key ? 'var(--brand)' : 'var(--text-3)'} />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </Card>
+
+      {/* 账号属性画像 */}
+      <Card title="账号属性画像 · 持续学习" sub="每次回填流量，系统都会与账号自身基线对比并沉淀结论" style={{ marginBottom: 16 }}>
+        {profiles.length === 0 && learnedMemories.length === 0 ? (
+          <Empty icon="🧭" text="还没有可学习的数据——发布后回来回填数据，账号画像会自动长出来" />
+        ) : (
+          <div className="grid-asym-left grid-align-start">
+            <div className="stack" style={{ gap: 10 }}>
+              <div className="small muted">平台算法适配（按你的真实数据）</div>
+              {profiles.map((p) => (
+                <div key={p.platform} className="card" style={{ padding: 10, boxShadow: 'none', background: 'var(--surface-2)' }}>
+                  <div className="row-between">
+                    <span className="badge" style={{ background: 'var(--surface)', color: platformColor(p.platform) }}>
+                      {platformName(p.platform)}
+                    </span>
+                    <span className="small muted">{p.sample} 条样本</span>
+                  </div>
+                  <div className="row wrap small" style={{ gap: 12, marginTop: 6 }}>
+                    <span>均播 <b className="mono">{fmtNum(p.avgViews)}</b></span>
+                    {p.engagement !== null && (
+                      <span>互动率 <b className="mono">{(p.engagement * 100).toFixed(1)}%</b></span>
+                    )}
+                    {p.avgCompletion !== null && <span>完播 <b className="mono">{(p.avgCompletion * 100).toFixed(0)}%</b></span>}
+                  </div>
+                </div>
+              ))}
+              {profiles.length === 0 && <span className="small muted">暂无平台样本</span>}
+            </div>
+            <div className="stack" style={{ gap: 10 }}>
+              <div className="small muted">学到的账号结论（重复被数据验证会转为「生效」并注入 AI）</div>
+              {learnedMemories.length === 0 ? (
+                <span className="small muted">暂无——更新几条发布数据后出现</span>
+              ) : (
+                <div className="stack" style={{ gap: 6 }}>
+                  {learnedMemories.map((m) => (
+                    <div key={m.id} className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
+                      <span className={`dot ${m.active ? 'dot-green' : 'dot-amber'}`} style={{ marginTop: 5, flexShrink: 0 }} />
+                      <span className="small" style={{ opacity: m.active ? 1 : 0.7 }}>
+                        {m.content}
+                        <span className="muted">（命中 {m.hitCount} 次{m.active ? '，已生效' : '，观察中'}）</span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {verifiedAngles.length > 0 && (
+                <>
+                  <div className="divider" style={{ margin: '4px 0' }} />
+                  <div className="small muted">被数据验证的切入角（已进风格指纹，生成时优先）</div>
+                  <div className="row wrap" style={{ gap: 6 }}>
+                    {verifiedAngles.map((a, i) => (
+                      <span key={i} className="badge badge-brand">{a}</span>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
         )}
       </Card>
 

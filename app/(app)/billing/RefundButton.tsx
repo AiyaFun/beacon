@@ -3,6 +3,7 @@
 import { useCallback, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { actRefundOrder, actRefundPreview } from './actions';
+import { Overlay } from '@/components/Overlay';
 
 // 自助退款：点「申请退款」→ 弹窗先拉预览（能退多少、已用几天）→ 确认后发起。
 // 金额一律服务端算（actRefundPreview/actRefundOrder），前端只传单号。仅 owner 可见此按钮。
@@ -83,24 +84,13 @@ export function RefundButton({ outTradeNo, amountFen }: { outTradeNo: string; am
         ↩ 申请退款
       </button>
 
+      {/* ⚠️ 同 Checkout：这个按钮长在订单卡片里，`.card:hover` 的 transform 会成为
+          `position: fixed` 的包含块，就地渲染的话退款层会缩成订单卡那么大。
+          必须 portal 到 body，见 components/Overlay.tsx。
+          提交中（pending）不允许关闭：退款是一次性动作，中途关掉会让用户以为没发出去。 */}
       {open && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="申请退款"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,.45)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 50,
-            padding: 16,
-          }}
-          onClick={close}
-        >
-          <div className="card" style={{ maxWidth: 420, width: '100%' }} onClick={(e) => e.stopPropagation()}>
+        <Overlay onClose={close} label="申请退款" closable={!pending}>
+          <div className="card" style={{ maxWidth: 420, width: '100%' }}>
             <div className="row-between" style={{ marginBottom: 12 }}>
               <div className="card-title">
                 申请退款 <span className="card-sub mono">{outTradeNo}</span>
@@ -176,7 +166,7 @@ export function RefundButton({ outTradeNo, amountFen }: { outTradeNo: string; am
               </div>
             ) : null}
           </div>
-        </div>
+        </Overlay>
       )}
     </>
   );

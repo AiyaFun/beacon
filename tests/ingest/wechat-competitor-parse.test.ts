@@ -23,7 +23,7 @@ const SRC = readFileSync(resolve(process.cwd(), 'extension/content/wechat-compet
 type Wc = {
   RULES: { maxPages: number; pageSize: number; recentDays: number; minGapMs: number; maxGapMs: number };
   mapArticle: (m: Record<string, unknown>) => Record<string, unknown> | null;
-  collect: (name: string) => Promise<Record<string, unknown>>;
+  collect: (name: string, knownFakeid?: unknown) => Promise<Record<string, unknown>>;
   readToken: () => string;
 };
 
@@ -222,6 +222,65 @@ describe('wechat-competitor · 采集流程与刹车', () => {
     const r = await runScript(impl, { href: 'https://mp.weixin.qq.com/cgi-bin/home' }).collect('央视新闻');
     expect(r.code).toBe('no_token');
     expect(calls).toHaveLength(0);
+  });
+
+  it('传了已知 fakeid：整个跳过搜号，直接拉列表', async () => {
+    const { impl, calls } = mkFetch({ pages: [[[article()]], []] });
+    const r = await runScript(impl).collect('央视新闻', 'MTI0MDU3NDYwMQ==');
+    expect(r.ok).toBe(true);
+    expect(calls.some((u) => u.includes('searchbiz'))).toBe(false); // 配额最紧的那个口一次都没碰
+    expect(calls[0]).toContain('fakeid=MTI0MDU3NDYwMQ%3D%3D');
+    expect(r.fakeid).toBe('MTI0MDU3NDYwMQ=='); // 回给 sw.js 写回缓存
+  });
+
+  it('缓存命中时不带 profile：不拿缓存里的旧名字覆盖档案名', async () => {
+    const { impl } = mkFetch({ pages: [[[article()]], []] });
+    const cached = await runScript(impl).collect('央视新闻', 'MTI0MDU3NDYwMQ==');
+    expect((cached.payload as { profile?: unknown }).profile).toBeUndefined();
+    // 搜过号的那一次照旧带上当次的 nickname
+    const fresh = await runScript(mkFetch({ pages: [[[article()]], []] }).impl).collect('央视新闻');
+    expect((fresh.payload as { profile?: { name?: string } }).profile?.name).toBe('央视新闻');
+  });
+
+  it('形状不对的 fakeid 当没有：不拼进请求，照常搜号', async () => {
+    for (const junk of ['', '   ', 'a b', '<script>', null, 42]) {
+      const { impl, calls } = mkFetch({ pages: [[[article()]], []] });
+      await runScript(impl).collect('央视新闻', junk);
+      expect(calls.some((u) => u.includes('searchbiz'))).toBe(true);
+      expect(calls.join()).not.toContain('fakeid=%3Cscript%3E');
+    }
+  });
+
+  it('缓存的 fakeid 失效（接口报错且一条没拿到）→ 回退重搜一次，并标 staleFakeid 让 sw 扔掉它', async () => {
+    let listCalls = 0;
+    const impl = (url: string) => {
+      if (url.includes('searchbiz')) return { base_resp: { ret: 0 }, list: [{ nickname: '央视新闻', fakeid: 'NEW==' }] };
+      listCalls++;
+      if (listCalls === 1) return { base_resp: { ret: 200002, err_msg: 'invalid args' } }; // 拿旧 fakeid 去问，微信不认
+      // 重搜之后重来一遍：第一页有文章，第二页空（翻页到此为止）
+      return { base_resp: { ret: 0 }, publish_page: publishPage(listCalls === 2 ? [[article()]] : []) };
+    };
+    const r = await runScript(impl).collect('央视新闻', 'OLD==');
+    expect(r.ok).toBe(true);
+    expect(r.staleFakeid).toBe(true);
+    expect(r.fakeid).toBe('NEW==');
+    expect((r.payload as { posts: unknown[] }).posts).toHaveLength(1);
+  });
+
+  it('🔒 缓存命中时撞频控：绝不回退重搜——那正是最不该再发一个请求的时候', async () => {
+    const { impl, calls } = mkFetch({ articlesResp: { base_resp: { ret: 200013, err_msg: 'freq control' } } });
+    const r = await runScript(impl).collect('央视新闻', 'MTI0MDU3NDYwMQ==');
+    expect(r.code).toBe('rate_limited');
+    expect(calls.some((u) => u.includes('searchbiz'))).toBe(false);
+    expect(calls).toHaveLength(1); // 一次列表请求，然后立刻停手
+  });
+
+  it('🔒 缓存命中但这个号 7 天没发文（空列表）→ 不回退重搜，空不是 fakeid 的错', async () => {
+    const { impl, calls } = mkFetch({ pages: [[]] });
+    const r = await runScript(impl).collect('央视新闻', 'MTI0MDU3NDYwMQ==');
+    expect(r.ok).toBe(true);
+    expect((r.payload as { posts: unknown[] }).posts).toHaveLength(0);
+    expect(calls.some((u) => u.includes('searchbiz'))).toBe(false);
   });
 
   it('第二页撞频控：已拿到的照常入库，但把原因带上去', async () => {

@@ -2,7 +2,7 @@
 // 依据 research-10 各平台第一权重信号 + 账号真实 ownPost.metrics 做「你的数据 vs 建议」对比。
 // 纯确定性规则（零 LLM 成本）；页面另可叠加 LLM 渲染的个性化文案。
 
-import { clickThroughRate, sourceShare, type Metrics } from '@/lib/json';
+import { clickThroughRate, hasViews, sourceShare, type Metrics } from '@/lib/json';
 
 export type Diagnosis = {
   signal: string; // 对应的算法信号中文名
@@ -12,40 +12,50 @@ export type Diagnosis = {
 };
 
 // 账号在该平台的聚合基线（供页面展示 + 诊断共用）
+//
+// ⚠️ 所有「以播放量为分母」的字段都是 `number | null`：**抖音这类平台的公开页面
+//    根本没有播放量**，算不出来时必须是 null。给 0 的后果不是少一个数，
+//    是页面上冒出「点赞率 0.0%」、诊断里冒出「收藏率偏低」这种凭空捏造的结论。
 export type MetricBaseline = {
   sample: number;
-  avgViews: number;
+  avgViews: number | null; // 均播；一条有播放量的样本都没有时为 null
   avgCompletion: number | null; // 完播/完读率 0-1，无则 null
-  likeRate: number; // 点赞/播放
-  commentRate: number; // 评论/播放
-  shareRate: number; // 转发/播放
-  collectRate: number; // 收藏/播放
+  likeRate: number | null; // 点赞/播放
+  commentRate: number | null; // 评论/播放
+  shareRate: number | null; // 转发/播放
+  collectRate: number | null; // 收藏/播放
   // ── 以下两项只有创作者后台数据才算得出来（公开作品页没有曝光量与来源分布）；无数据为 null ──
   avgCtr: number | null; // 曝光点击率 = 播放/曝光
   avgSearchShare: number | null; // 搜索流量占比 0-1
 };
 
-function safeRate(part: number | undefined, base: number): number {
-  if (!base || base <= 0) return 0;
-  return (part ?? 0) / base;
-}
-
 export function buildBaseline(list: Metrics[]): MetricBaseline {
   const n = list.length;
-  if (n === 0) {
-    return { sample: 0, avgViews: 0, avgCompletion: null, likeRate: 0, commentRate: 0, shareRate: 0, collectRate: 0, avgCtr: null, avgSearchShare: null };
-  }
-  let views = 0, like = 0, comment = 0, share = 0, collect = 0;
+  const empty: MetricBaseline = {
+    sample: n, avgViews: null, avgCompletion: null,
+    likeRate: null, commentRate: null, shareRate: null, collectRate: null,
+    avgCtr: null, avgSearchShare: null,
+  };
+  if (n === 0) return empty;
+
+  let views = 0, viewCount = 0;
+  let like = 0, comment = 0, share = 0, collect = 0;
   let compSum = 0, compCount = 0;
   let ctrSum = 0, ctrCount = 0;
   let searchSum = 0, searchCount = 0;
   for (const m of list) {
-    const v = m.views ?? 0;
-    views += v;
-    like += safeRate(m.likes, v);
-    comment += safeRate(m.comments, v);
-    share += safeRate(m.shares, v);
-    collect += safeRate(m.collects, v);
+    // 只对**真的有播放量**的样本累计率。原来是不管有没有都除一遍（拿不到就当 0），
+    // 于是混了几条抖音作品进来就能把点赞率整体腰斩，看起来像「这个号互动变差了」。
+    // 这条纪律下面的 CTR/搜索占比早就在守，率这一组此前是漏网的。
+    if (hasViews(m)) {
+      const v = m.views as number;
+      views += v;
+      viewCount += 1;
+      like += (m.likes ?? 0) / v;
+      comment += (m.comments ?? 0) / v;
+      share += (m.shares ?? 0) / v;
+      collect += (m.collects ?? 0) / v;
+    }
     if (typeof m.completion === 'number') {
       compSum += m.completion;
       compCount += 1;
@@ -58,13 +68,13 @@ export function buildBaseline(list: Metrics[]): MetricBaseline {
     if (search !== null) { searchSum += search; searchCount += 1; }
   }
   return {
-    sample: n,
-    avgViews: Math.round(views / n),
+    sample: n, // 样本数照实说：用户问的是「看了几条」，不是「几条算得出率」
+    avgViews: viewCount > 0 ? Math.round(views / viewCount) : null,
     avgCompletion: compCount > 0 ? compSum / compCount : null,
-    likeRate: like / n,
-    commentRate: comment / n,
-    shareRate: share / n,
-    collectRate: collect / n,
+    likeRate: viewCount > 0 ? like / viewCount : null,
+    commentRate: viewCount > 0 ? comment / viewCount : null,
+    shareRate: viewCount > 0 ? share / viewCount : null,
+    collectRate: viewCount > 0 ? collect / viewCount : null,
     avgCtr: ctrCount > 0 ? ctrSum / ctrCount : null,
     avgSearchShare: searchCount > 0 ? searchSum / searchCount : null,
   };
@@ -72,11 +82,36 @@ export function buildBaseline(list: Metrics[]): MetricBaseline {
 
 const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
 
+// 「以播放量为分母」的那一组率。抖音这类平台的公开页面没有播放量，四个率全是 null。
+//
+// 这时**一条以率为依据的诊断都不许出**：算不出来不等于「表现差」。
+// 此前小红书分支就踩了这个——collectRate=0、likeRate=0 让 `0 < 0` 为假，
+// 直接走 else 报了一句「收藏率 0.0%，工具价值被认可」，对着零数据发了张好人卡。
+type ViewRates = { likeRate: number; commentRate: number; shareRate: number; collectRate: number };
+function viewRates(b: MetricBaseline): ViewRates | null {
+  const { likeRate, commentRate, shareRate, collectRate } = b;
+  if (likeRate === null || commentRate === null || shareRate === null || collectRate === null) return null;
+  return { likeRate, commentRate, shareRate, collectRate };
+}
+
+// 没有播放量时给一条**说人话的替代诊断**：说明哪些看不出来、哪些照样准。
+// 直接沉默会让用户以为「诊断坏了」，而报个 0.0% 又是撒谎。
+const NO_VIEWS_DIAGNOSIS: Diagnosis = {
+  signal: '播放量不可得',
+  severity: 'warn',
+  finding: '这个平台的公开页面不提供播放量（抖音等只在创作者后台可见），所以互动率、点赞率、收藏率这类「除以播放」的指标都算不出来。',
+  advice: '点赞 / 评论 / 收藏 / 转发的绝对数是真实采到的，可以直接横向比作品。想要率类指标，在插件设置里接上创作者后台回填，播放量与曝光量就会补齐。',
+};
+
 // 平台第一权重信号 → 目标阈值（方向性，非官方承诺；来自 research-10 的定性结论）
 // 说明：阈值是行业共识层面的「健康线」，仅用于给出方向，不代表平台真实晋级参数。
 export function diagnose(platform: string, list: Metrics[]): Diagnosis[] {
   const b = buildBaseline(list);
   const out: Diagnosis[] = [];
+  // r === null 表示这批样本一条播放量都没有（抖音等平台的公开页面就是这样）。
+  // 下面每条以率为依据的诊断都必须 `r &&` 守住：算不出来时**一句都不说**，
+  // 而不是拿 0 当观测值去比阈值——那会稳定地产出「xx 率 0.0%」这类假结论。
+  const r = viewRates(b);
 
   if (b.sample === 0) {
     return [{
@@ -108,11 +143,11 @@ export function diagnose(platform: string, list: Metrics[]): Diagnosis[] {
         }
       }
       // 第二信号：评论互动（2025 官方口径更看重主动互动）
-      if (b.commentRate < b.likeRate * 0.05) {
+      if (r && r.commentRate < r.likeRate * 0.05) {
         out.push({
           signal: '评论互动率',
           severity: 'warn',
-          finding: `评论/播放 ${pct(b.commentRate)}，明显低于点赞率（${pct(b.likeRate)}）。`,
+          finding: `评论/播放 ${pct(r.commentRate)}，明显低于点赞率（${pct(r.likeRate)}）。`,
           advice: '内容被认可但缺对话性。结尾加争议性提问或「你会选哪个」二选一，发布后 30–60 分钟内作者下场回评，拉评论深度。',
         });
       }
@@ -120,18 +155,18 @@ export function diagnose(platform: string, list: Metrics[]): Diagnosis[] {
     }
     case 'xiaohongshu': {
       // 第一信号：CES 互动分，收藏是干货类核心加权项
-      if (b.collectRate < b.likeRate * 0.3) {
+      if (r && r.collectRate < r.likeRate * 0.3) {
         out.push({
           signal: '收藏率 (CES)',
           severity: 'bad',
-          finding: `收藏/播放 ${pct(b.collectRate)}，相对点赞率（${pct(b.likeRate)}）偏低。`,
+          finding: `收藏/播放 ${pct(r.collectRate)}，相对点赞率（${pct(r.likeRate)}）偏低。`,
           advice: '内容有情绪价值但缺「留着有用」的工具价值，CES 结构偏弱还损失搜索长尾。正文改清单/步骤/表格结构，结尾加「收藏备用」提示，补 2-3 个长尾关键词。',
         });
-      } else {
+      } else if (r) {
         out.push({
           signal: '收藏率 (CES)',
           severity: 'good',
-          finding: `收藏率 ${pct(b.collectRate)}，工具价值被认可。`,
+          finding: `收藏率 ${pct(r.collectRate)}，工具价值被认可。`,
           advice: '收藏结构健康，继续用清单体承接搜索长尾，爆文后 48h 内跟同选题系列。',
         });
       }
@@ -167,11 +202,11 @@ export function diagnose(platform: string, list: Metrics[]): Diagnosis[] {
           advice: '完读率是推荐流核心信号。首屏 3 行内给出「读完能得到什么」，小标题+短段落+图表降低跳出。',
         });
       }
-      if (b.shareRate < 0.01) {
+      if (r && r.shareRate < 0.01) {
         out.push({
           signal: '在看/社交推荐',
           severity: 'warn',
-          finding: `转发/在看比例约 ${pct(b.shareRate)}，社交推荐入口偏弱。`,
+          finding: `转发/在看比例约 ${pct(r.shareRate)}，社交推荐入口偏弱。`,
           advice: '「在看」直接进入朋友♡社交推荐池——2025 年这是最大增量入口。增加观点性段落、给一句可转发的金句、文末直接请求「点在看/星标」。',
         });
       }
@@ -187,8 +222,10 @@ export function diagnose(platform: string, list: Metrics[]): Diagnosis[] {
           advice: '前 30 秒给「本片承诺」+目录锚点，避免长片头；用后台留存曲线找流失拐点，中段删注水，必要时把 15 分钟剪到 8–10 分钟。',
         });
       }
-      const sanlian = b.likeRate + b.collectRate;
-      if (sanlian < 0.05) {
+      // 三连率同样是「除以播放」，没播放量就算不出来——不能让 0+0 < 0.05 成立后
+      // 报一句「三连信号偏弱」，那是拿没有的数据给用户定罪。
+      const sanlian = r ? r.likeRate + r.collectRate : null;
+      if (sanlian !== null && sanlian < 0.05) {
         out.push({
           signal: '三连率',
           severity: 'warn',
@@ -219,18 +256,18 @@ export function diagnose(platform: string, list: Metrics[]): Diagnosis[] {
         }
       }
       // 第二信号：转发裂变（转发率是视频号区别于抖音的核心分野）
-      if (b.shareRate < b.likeRate * 0.5) {
+      if (r && r.shareRate < r.likeRate * 0.5) {
         out.push({
           signal: '转发裂变率',
           severity: 'bad',
-          finding: `转发/播放 ${pct(b.shareRate)}，相对点赞率（${pct(b.likeRate)}）偏低。`,
+          finding: `转发/播放 ${pct(r.shareRate)}，相对点赞率（${pct(r.likeRate)}）偏低。`,
           advice: '视频号靠熟人关系链推开：点赞只是自己认可，转发才把内容送进别人的推荐池。内容要给出「转给谁有用」的明确对象（转给爸妈/转给同事），观点写成可被复述的一句话，避免只有圈内人懂的梗。',
         });
-      } else {
+      } else if (r) {
         out.push({
           signal: '转发裂变率',
           severity: 'good',
-          finding: `转发率 ${pct(b.shareRate)}，社交裂变结构健康。`,
+          finding: `转发率 ${pct(r.shareRate)}，社交裂变结构健康。`,
           advice: '裂变盘子已经跑通，保持「值得转给朋友」的选题密度，别为了流量转做纯情绪内容稀释它。',
         });
       }
@@ -238,18 +275,18 @@ export function diagnose(platform: string, list: Metrics[]): Diagnosis[] {
     }
     case 'x': {
       // 第一信号：回复对话深度（开源权重：作者回复≈150×赞）
-      if (b.commentRate < b.likeRate * 0.5) {
+      if (r && r.commentRate < r.likeRate * 0.5) {
         out.push({
           signal: '回复率',
           severity: 'bad',
-          finding: `回复/曝光 ${pct(b.commentRate)}，相对点赞率（${pct(b.likeRate)}）偏低。`,
+          finding: `回复/曝光 ${pct(r.commentRate)}，相对点赞率（${pct(r.likeRate)}）偏低。`,
           advice: '开源算法里 reply≈27×like、作者回复≈150×like。内容是「陈述句」而非「对话开启器」就吃亏：结尾改开放式提问，发帖后 30 分钟内回复每一条评论。',
         });
-      } else {
+      } else if (r) {
         out.push({
           signal: '回复率',
           severity: 'good',
-          finding: `回复率 ${pct(b.commentRate)}，对话性良好。`,
+          finding: `回复率 ${pct(r.commentRate)}，对话性良好。`,
           advice: '对话链是 X 最大杠杆，保持发帖后黄金 30 分钟下场回评养对话。',
         });
       }
@@ -284,18 +321,18 @@ export function diagnose(platform: string, list: Metrics[]): Diagnosis[] {
           advice: '第 1 秒给视觉钩子、全片压到 21–34 秒、结尾做无缝循环。想看真实完播率，去 TikTok Studio 的 Analytics 里核对（烽火台目前从公开页只采得到播放/点赞/评论/分享/收藏）。',
         });
       }
-      if (b.shareRate < b.likeRate * 0.1) {
+      if (r && r.shareRate < r.likeRate * 0.1) {
         out.push({
           signal: '分享率',
           severity: 'bad',
-          finding: `分享/播放 ${pct(b.shareRate)}，相对点赞率（${pct(b.likeRate)}）偏低。`,
+          finding: `分享/播放 ${pct(r.shareRate)}，相对点赞率（${pct(r.likeRate)}）偏低。`,
           advice: '点赞只说明「我看了还行」，分享才把内容送进新的兴趣圈层。给一个明确的「转给谁」的对象，或做成可被二创的模板/挑战——TikTok 的破圈几乎都走这两条。',
         });
-      } else {
+      } else if (r) {
         out.push({
           signal: '分享率',
           severity: 'good',
-          finding: `分享率 ${pct(b.shareRate)}，破圈结构健康。`,
+          finding: `分享率 ${pct(r.shareRate)}，破圈结构健康。`,
           advice: '保持可被二创/可被转述的形态，别为了追热点稀释掉这条。',
         });
       }
@@ -336,7 +373,11 @@ export function diagnose(platform: string, list: Metrics[]): Diagnosis[] {
       break;
   }
 
-  if (out.length === 0) {
+  if (r === null) {
+    // 率类信号一条都没出，是因为**根本没有播放量这个分母**，不是「没有短板」。
+    // 排在最前面：用户得先知道「为什么这里比别的平台少几项」，否则会以为功能坏了。
+    out.unshift(NO_VIEWS_DIAGNOSIS);
+  } else if (out.length === 0) {
     out.push({
       signal: '综合',
       severity: 'good',

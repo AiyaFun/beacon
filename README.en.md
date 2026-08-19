@@ -51,6 +51,42 @@ Beacon brings all three into one platform so you don't have to juggle a dozen ap
 | **Browser Extension** | One-click inspiration clipping, self-account data sync, competitor content collection |
 | **Bot Integration** | Feishu (Lark) group bot for trending alerts and natural language queries |
 | **Analytics Dashboard** | Unified multi-account dashboard with trend analysis and weekly reports |
+| **One-Click Publishing** | WeChat Official Accounts go through the official API (drafts only by default); for Douyin / Xiaohongshu / Bilibili / WeChat Channels the extension fills the back-office form and **stops before the publish button** — you press it |
+| **AI Assistant & Agent** | An assistant reachable from every page; switch on "execute" and it can create drafts, add competitors and so on — **every write and every paid call is confirmed step by step** |
+| **Workflow Templates** | Chain multi-step routines (topic → draft → rewrite → compliance) into a template; install one, run it, and every step reports its own result |
+| **AI Covers & Illustrations** | Covers at each platform's aspect ratio (16 structured styles plus your own portrait library); in-article illustrations never carry text. Both explicit and embedded AIGC markers |
+| **Reader Voice** | Collects comments on your own posts and on competitors', feeding them back as topic evidence and gap analysis |
+| **Growth Tracking** | Daily follower/engagement snapshots and trends for your accounts and for competitors — a metric a platform does not expose stays blank instead of being recorded as 0 |
+
+## What's New (August 2026)
+
+This round fills in everything that happens *after* the draft is written. The system used to hand
+you a finished piece and stop; pasting, publishing and collecting the results were all on you.
+
+- **One-click publishing**: builds a cross-platform publishing plan. WeChat Official Accounts go
+  through the official API into the draft box (mass-send is a separate, explicit opt-in — we don't
+  make irreversible calls for you); for Douyin / Xiaohongshu / Bilibili / WeChat Channels the
+  extension fills title, body and hashtags into the creator back office and **stops before the
+  publish button**; YouTube / X / TikTok are labelled "manual" with the actual reason (needs the
+  video file / needs a paid API tier / needs a business entity) rather than pretending to support
+  them. "Filled into the back office" and "published" stay two different words.
+- **AI agent**: the assistant can now call registered tools on your behalf. Every write and every
+  paid call is confirmed step by step, and a run aborts outright when no real model is configured —
+  a mock would happily answer "done, I've taken care of it," which is worse than doing nothing.
+- **Workflow templates**: installable multi-step routines; each step reports its own result, and
+  the ones that cost money say so up front.
+- **AI cover studio and in-article illustrations**: covers at each platform's ratio, with a
+  reusable portrait and style library. Covers carry a visible watermark plus embedded provenance
+  metadata; in-article illustrations never render text.
+- **Self-healing parsers**: when a platform redesign breaks collection, the extension uploads only
+  a **redacted structural skeleton** (numbers become NUM, long CJK runs become CJK, attribute names
+  only). Selectors proposed by the model are candidates — a human has to adopt them before they
+  take effect.
+- **Platform ops console**: cross-tenant plans and status, platform AI providers and budgets,
+  parser rule adoption — every action audited.
+- **One page for keys**: model providers, image generation, publishing credentials, collection
+  tokens and bot secrets in one place, with a **side-effect-free** connectivity check (no test
+  messages sent, no images actually generated; webhook-only bots are honestly marked "can't test").
 
 ## Who Is It For
 

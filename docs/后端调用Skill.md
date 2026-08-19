@@ -141,6 +141,7 @@ Anthropic 把两者焊死在它的容器里，所以只能整包用、且只能�
 图片的**显式**标识画在像素上，从字节里验不了（要 OCR），所以：
 - 显式标识靠「`card.ts` 每张卡强制画一行」保证，客户端没有能删掉它的路径；
 - 可字节校验的只有**隐式**标识——PNG 的 iTXt 分块（`png-meta.ts`，用 iTXt 不用 tEXt，因为服务提供者名是中文）；
+  JPEG 的对应物是 XMP APP1 段（`jpeg-meta.ts`，AI 封面用：即梦只出 JPEG），`image-meta.ts` 按 mime 分发；
 - 因此 `LOCAL_SKILLS.card.labelVerifiable = false`，如实标注，不假装做了校验回环。
 
 zip / OOXML 原语在 `lib/deliverable/zip.ts`（`buildZip` / `readZipEntries` / `crc32`，Node 内置 zlib，无第三方依赖）。

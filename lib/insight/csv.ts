@@ -3,6 +3,7 @@ import { platformName } from '../constants';
 import { logicalDay } from './timeseries';
 import { sourceTier, SOURCE_TIER_LABEL } from './source-tier';
 import { pickAuthoritativeSnapshot } from './source-priority';
+import { beijingDayKey } from '../beijing';
 
 // 数据导出（纯函数）。CSV 带 UTF-8 BOM 供 Excel 直接双开不乱码；字段做转义。
 // 两种粒度：发布明细（每篇一行）、逐日快照（每篇×每逻辑日一行，含来源）。
@@ -31,8 +32,11 @@ export type CsvRecord = {
   snapshots: { takenAt: Date; metrics: string; source: string | null; milestone: string | null }[];
 };
 
+// 导出的日期与页面上看到的必须是同一天：一律北京时间的逻辑日（见 lib/beijing.ts）。
+// 用 toISOString() 切出来的是 UTC 日，早上八点前发的作品会被导成前一天，
+// 用户拿这份 CSV 跟平台后台对账时对不上，而且只在早上对不上。
 function fmtDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
+  return beijingDayKey(d);
 }
 
 const M = (m: Metrics) => [m.views ?? 0, m.likes ?? 0, m.comments ?? 0, m.shares ?? 0, m.collects ?? 0, m.completion ?? ''];

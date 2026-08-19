@@ -58,6 +58,17 @@ function loadSw(status: number | number[]) {
     lastScheduledCollectLog: { summary: '每日定时采集完成' },
     wechatThrottle: { at: 1 },
   };
+  // 上面那几个是「有真实形状」的样本，方便出错时看懂。但**判据是 CACHE_KEYS（从 sw.js 读的真值）**：
+  // 没在上面列出的键一律补一个哨兵值——否则 `toBeUndefined()` 对一个从来没塞进去的键
+  // 恒真，覆盖面看着涨了，实际一个字节都没验。
+  //
+  // `authFail` 例外：它不是缓存，是 401 计数器本身（sw.js:105 读它做 `|| 0` 再 +1），
+  // 塞个对象进去会让计数从 NaN 起步，三次 401 永远到不了阈值——这条用例反而先自己坏掉。
+  // 它照样要被清（所以留在 CACHE_KEYS 里断言），只是初值必须是它真实的形状。
+  for (const k of CACHE_KEYS) if (!(k in local)) local[k] = k === 'authFail' ? 0 : { __sentinel: k };
+  // sync 那半边同理——2026-08-13 mutation 验出来的：往 SYNC_KEYS_ON_UNLINK 加个新键，
+  // 断言 `t.sync[新键]` 为 undefined **恒真**（它从来没被塞进去过），照样全绿。
+  for (const k of SYNC_KEYS) if (!(k in sync)) sync[k] = { __sentinel: k };
 
   const alarmsCleared: string[] = [];
   const notified: { title?: string; message?: string }[] = [];
@@ -134,11 +145,26 @@ function loadSw(status: number | number[]) {
   };
 }
 
-const CACHE_KEYS = [
-  'competitors', 'competitorsAt', 'workspace',
-  'selfAccounts', 'selfAccountsAt',
-  'lastScheduledCollectLog', 'wechatThrottle',
-];
+// ⚠️ **从 sw.js 里读真值，绝不手抄**。
+//
+// 这里原本是一份手抄副本，2026-08-13 发现它已经和 `LOCAL_KEYS_ON_UNLINK` 脱钩两项
+// （`authFail`、`wechatFakeids`）。手抄的失效方式很隐蔽：新加一个缓存键、忘了同步到这里，
+// 测试**照样全绿**——它只断言副本里那几个键被清掉了，新键有没有被清根本没人验。
+// 而这条用例的全部意义就是「注销之后设备上不许留下任何工作区数据」，覆盖面漏一项，
+// 结论就从「都清了」退化成「我抄下来的那几个清了」。
+function keysFrom(constName: string, min: number): string[] {
+  const m = new RegExp(`${constName} = \\[([\\s\\S]*?)\\]`).exec(SW_SRC);
+  if (!m) throw new Error(`sw.js 里找不到 ${constName} —— 改了名字就要改这里`);
+  const keys = Array.from(m[1].matchAll(/'([^']+)'/g), (x) => x[1]);
+  if (keys.length < min) throw new Error(`${constName} 只解析出 ${keys.length} 项，正则大概率已失效`);
+  return keys;
+}
+
+const CACHE_KEYS = keysFrom('LOCAL_KEYS_ON_UNLINK', 5);
+// sync 那半边同样不许手抄，而且它**比 local 更要紧**：chrome.storage.sync 会同步到用户
+// 登录过的**每一台** Chrome，漏清一个键就是在所有设备上都留着。
+// （2026-08-13：这半边此前是写死的两行断言，加第三个键时不会有任何提示。）
+const SYNC_KEYS = keysFrom('SYNC_KEYS_ON_UNLINK', 2);
 
 describe('🔒 sw.js · 令牌作废后插件必须自己停手并清干净', () => {
   it('连续 3 次 401 → 清令牌、清全部工作区缓存、停三只闹钟、弹一条说明', async () => {
@@ -151,8 +177,9 @@ describe('🔒 sw.js · 令牌作废后插件必须自己停手并清干净', ()
 
     await t.ctx.refreshCompetitors();
 
-    expect(t.sync.token).toBeUndefined();
-    expect(t.sync.selfAccountId).toBeUndefined();
+    for (const k of SYNC_KEYS) {
+      expect(t.sync[k], `sync.${k} 没被清掉——sync 会同步到用户登录过的每一台 Chrome`).toBeUndefined();
+    }
     for (const k of CACHE_KEYS) {
       expect(t.local[k], `${k} 没被清掉——它会在用户注销之后继续留在设备上`).toBeUndefined();
     }
@@ -200,7 +227,9 @@ describe('🔒 sw.js · 令牌作废后插件必须自己停手并清干净', ()
 
     await new Promise((done) => handler!({ type: 'beacon-unlink', reason: '账号已注销，采集令牌随工作区一并作废。' }, {}, done));
 
-    expect(t.sync.token).toBeUndefined();
+    // ⚠️ 这条通道此前只断言了 token，selfAccountId 在这里从没被验证清除过——
+    //    两条防线（401 自愈 / 网页 clear-token）在测试覆盖上必须等价。
+    for (const k of SYNC_KEYS) expect(t.sync[k], `sync.${k} 没清`).toBeUndefined();
     for (const k of CACHE_KEYS) expect(t.local[k]).toBeUndefined();
     expect(t.notified[0]?.message ?? '').toContain('账号已注销');
   });

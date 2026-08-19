@@ -60,6 +60,7 @@ function runScript(html: string, url: string, prepare?: (doc: Document) => void)
       evidence?: { idish: string[] };
     },
     autoRoutes: context.__beaconAutoRoutes as (href?: string) => string[] | null,
+    noRoutesInfo: context.__beaconAutoNoRoutesInfo as () => { needLogin: boolean; reason: string } | null,
     selfOnly: context.__beaconSelfOnly as boolean,
     backend: context.__beaconSelfBackend as string | null,
   };
@@ -398,7 +399,9 @@ describe('🔒 自有后台禁用竞对兜底解析', () => {
   it('守卫在源码里必须排在兜底调用之前（顺序反了就等于没守卫）', () => {
     const body = COMMON.slice(COMMON.indexOf('async function beaconRunCollect'));
     const guardAt = body.indexOf('__beaconSelfOnly');
-    const fallbackAt = body.indexOf('payload = beaconFallbackParse()');
+    // 兜底的结果如今要与站点解析器的 profile 合并（否则粉丝数会连同解析结果一起被扔掉，
+    // 见 tests/ingest/self-followers.test.ts）——这里只关心它在源码里的**位置**
+    const fallbackAt = body.indexOf('beaconFallbackParse()');
     expect(guardAt).toBeGreaterThan(-1);
     expect(fallbackAt).toBeGreaterThan(-1);
     expect(guardAt).toBeLessThan(fallbackAt);
@@ -771,7 +774,11 @@ describe('🔒 公众号发表记录页 · 条目类名不含 row/item', () => {
         <span>阅读原文人数 9</span><span>在看 3</span>
       </div></body></html>`;
     const r = runScript(html, url).parse();
-    const m = r ? (r.posts[0] as { metrics: Record<string, number> } | undefined)?.metrics : undefined;
+    // ⚠️ 先锚「确实解析出了这一条」。没有这个锚的话，parse() 返回 null、posts 为空、
+    //    或这条根本没有 metrics —— 三种「解析器整个坏了」的情况全都会让下面那句判绿。
+    //    同文件其它同类用例（:765、:1119）都有这个锚，这条此前漏了。
+    expect(r?.posts, '解析器没产出这一条，下面那句断言就失去意义了').toHaveLength(1);
+    const m = (r!.posts[0] as { metrics?: Record<string, number> }).metrics;
     expect(m?.views).toBeUndefined(); // 9 是点原文的人数，不是阅读量
   });
 });
@@ -1354,9 +1361,76 @@ describe('🔒 每日自动回填 · 路线与 token 处理', () => {
     }
   });
 
-  it('🔒 没有 token（登录态过期）→ 返回 null，绝不猜地址硬闯', () => {
+  it('🔒 页面上哪儿都没有 token → 返回 null，绝不猜地址硬闯', () => {
     const routes = runScript('<html><body></body></html>', 'https://mp.weixin.qq.com/cgi-bin/home').autoRoutes();
     expect(routes).toBeNull();
+  });
+
+  // ⚠️ 下面四条是 2026-08-18「点采集→公众号标签页秒退→什么都没采到」那次的现场。
+  // 插件自己开的 /cgi-bin/home **地址里没有 token**，而当时 autoRoutes 只读地址栏 →
+  // 返回 null → 执行端 abort → sw.js 立刻关掉标签页，通知还说「登录态已过期」。
+  // 同一个页面上，竞对通道（content/wechat-competitor.js）却能从 DOM 里把 token 读出来并采到数据
+  //（真机 2026-07-29 已验证）——两条通道判据不一致，才是那次的根。
+  const noTokenHome = 'https://mp.weixin.qq.com/cgi-bin/home';
+
+  it('🔒 地址栏没有 token，但左侧菜单链接里有 → 照样算得出路线（秒退那次的现场）', () => {
+    const html = `<html><body>
+      <a href="/cgi-bin/home?t=home/index&token=987654&lang=zh_CN">首页</a>
+      <a href="/cgi-bin/appmsg?t=media/appmsg_edit&token=987654">素材管理</a>
+    </body></html>`;
+    const routes = runScript(html, noTokenHome).autoRoutes()!;
+    expect(routes).toHaveLength(2);
+    for (const r of routes) expect(r).toContain('token=987654');
+  });
+
+  it('🔒 token 只在首页「已发表」那个 iframe 的 src 上 → 也认', () => {
+    const html = '<html><body><iframe src="/cgi-bin/appmsgpublish?sub=list&token=987654&lang=zh_CN"></iframe></body></html>';
+    const routes = runScript(html, noTokenHome).autoRoutes()!;
+    expect(routes?.[0]).toContain('token=987654');
+  });
+
+  it('🔒 token 只写在内联 script 里（cgiData）→ 也认', () => {
+    // 隔离世界读不到页面的 JS 变量，但读得到 <script> 的文本——同一份数据的可达形态
+    const html = '<html><body><script>window.wx = {data: {token: "987654", nick_name: "x"}};</script></body></html>';
+    const routes = runScript(html, noTokenHome).autoRoutes()!;
+    expect(routes?.[1]).toContain('token=987654');
+  });
+
+  it('🔒 停手理由要分清「没登录」和「登着但这页取不到」——两句不同的话', () => {
+    const onLogin = runScript(
+      '<html><body></body></html>',
+      'https://mp.weixin.qq.com/cgi-bin/loginpage?t=wxm2-login&lang=zh_CN',
+    ).noRoutesInfo()!;
+    expect(onLogin.reason).toContain('未登录');
+
+    const loggedIn = runScript('<html><body></body></html>', noTokenHome).noRoutesInfo()!;
+    expect(loggedIn.reason).not.toContain('未登录');
+    expect(loggedIn.reason).not.toContain('过期'); // 登着的人被指去重新扫码，正是那次通知犯的错
+    expect(loggedIn.reason).toContain('token');
+  });
+
+  // needLogin 决定 sw.js 会不会把这一页切到前台等用户扫码（2026-08-18 用户要求的行为）。
+  // 判错一边就白弹一个页面给他，判错另一边就又变回「秒退」。
+  it('🔒 needLogin 只在真的停在登录页时为 true', () => {
+    const onLogin = runScript(
+      '<html><body></body></html>',
+      'https://mp.weixin.qq.com/cgi-bin/loginpage?t=wxm2-login&lang=zh_CN',
+    ).noRoutesInfo()!;
+    expect(onLogin.needLogin).toBe(true);
+
+    // 登着、只是这一页没有 token —— 不是登录问题，不该把人支去重新登录
+    expect(runScript('<html><body></body></html>', noTokenHome).noRoutesInfo()!.needLogin).toBe(false);
+  });
+
+  it('🔒 登录页判据也认页面上的登录组件（有些登录页路由看不出来）', () => {
+    const html = '<html><body><div class="login__type__container"><img id="headimg_qrcode"></div></body></html>';
+    expect(runScript(html, noTokenHome).noRoutesInfo()!.needLogin).toBe(true);
+  });
+
+  it('🔒 停手理由里不带 token（它等同于登录态，不许出现在任何对外文本里）', () => {
+    const html = '<html><body><a href="/cgi-bin/home?token=987654">首页</a></body></html>';
+    const r = runScript(html, 'https://mp.weixin.qq.com/cgi-bin/loginpage').noRoutesInfo()!;
+    expect(r.reason).not.toContain('987654');
   });
 
   it('🔒 自检信息里的 token 仍然是脱敏的（自动回填不能把凭证带进可粘贴文本）', () => {

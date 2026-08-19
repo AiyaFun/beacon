@@ -8,6 +8,9 @@ import { assertNotDemo } from '@/lib/demo/guard';
 import { checkRateLimit, getClientIp, ipKey, retryHint } from '@/lib/ratelimit';
 import { DELETE_CONFIRM_TEXT, executeAccountDeletion, planAccountDeletion } from '@/lib/account/delete';
 import type { InventoryRow } from '@/lib/account/inventory';
+import { beijingDayKey } from '@/lib/beijing';
+import { issueBindCode } from '@/lib/auth/oa';
+import { can as canUse } from '@/lib/edition';
 
 // 账号注销（F9-8）。导出走 GET 路由（app/api/account/export），不在这里——
 // 几 MB 的 JSON 从 server action 走 RSC 流回来要先 base64 再在浏览器里解，纯属绕远路。
@@ -34,7 +37,7 @@ export async function actDeletionPreview(): Promise<DeletionPreview> {
     otherMembers: plan.otherMembers,
     blocked: plan.blocked,
     plan: plan.plan,
-    paidUntil: plan.paidUntil ? plan.paidUntil.toISOString().slice(0, 10) : null,
+    paidUntil: plan.paidUntil ? beijingDayKey(plan.paidUntil) : null,
   };
 }
 
@@ -63,4 +66,24 @@ export async function actDeleteAccount(confirmText: string): Promise<{ ok: false
   // 在 middleware（只看 cookie 在不在）与 getSession（查库）之间来回弹。
   (await cookies()).delete(AUTH_COOKIE);
   redirect(`/login?bye=${r.scope}`);
+}
+
+// ── 绑定企业应用账号 ─────────────────────────────────────────────────────
+//
+// 装机管理员是从 /setup 进来的，Member 上还没有 oaIdentity —— 会话过期之后他自己也登不回来。
+// 这个动作发一个 6 位码，他私聊机器人发「绑定 <码>」即可把两边接上。
+//
+// 【为什么是「网页出码、聊天里对码」而不是网页扫码】整机版跑在 http://localhost:<端口>，
+// 企业应用的网页授权要登记 redirect_uri，局域网里的同事根本跳不回来（见 lib/auth/oa.ts 文件头）。
+export async function actIssueOaBindCode(): Promise<{ ok: boolean; code?: string; message?: string }> {
+  const s = await getSession();
+  assertNotDemo(s.tenantId);
+  if (!canUse('oaLogin')) return { ok: false, message: '本版本不使用企业应用登录。' };
+
+  const h = await headers();
+  const rl = await checkRateLimit(ipKey('oa:bind', getClientIp(h)), { limit: 10, windowMs: 600_000 });
+  if (!rl.ok) return { ok: false, message: `操作过于频繁，请${retryHint(rl.resetAt)}再试` };
+
+  const code = await issueBindCode(s.memberId);
+  return { ok: true, code };
 }

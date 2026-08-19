@@ -202,6 +202,9 @@ describe('X 解析 · 认出「这是我自己的号」', () => {
          </article>
        </div>`,
     );
+    // ⚠️ 先锚非空：x.js 的 __beaconParse 认不出路径时会 return null，
+    //    那时 `p?.isSelf` 也是 undefined —— 断言恒真。同 describe 的 :191 有这个锚，这条没有。
+    expect(p?.posts, '解析器整个没认出这一页，isSelf 的断言就失去意义了').toHaveLength(1);
     expect(p?.isSelf).toBeUndefined();
   });
 
@@ -297,6 +300,12 @@ function mountSp(tabUrl: string, collect: unknown) {
       create: () => {},
       onActivated: { addListener: () => {} },
       onUpdated: { addListener: () => {} },
+    },
+    // sidepanel.js 顶层要读设置；缺了它整份脚本停在第一处 chrome.storage 上（见 sidepanel-channel.test.ts 同处注释）
+    storage: {
+      sync: { get: () => Promise.resolve({}), set: () => Promise.resolve() },
+      local: { get: () => Promise.resolve({}), set: () => Promise.resolve() },
+      onChanged: { addListener: () => {} },
     },
   };
   const context = vm.createContext({ document: dom.window.document, window: dom.window, chrome, console, setTimeout, Date });

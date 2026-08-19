@@ -274,6 +274,43 @@ describe('竞对内容：怎么拿到、怎么拆', () => {
     expect(reply).toContain('已存入收集箱');
     expect(reply).not.toContain('竞对作品拆解');
   });
+
+  // 评论采集 × 竞对拆解的结合点：这个竞对名下聚合的读者提问要作为「读者反馈缺口」证据
+  // 进拆解 prompt。它是唯一不来自正文的证据，注入时必须标注来源，没有就一个字不提。
+  it('库里有该竞对的读者提问 → 拆解 prompt 带上「它的读者在评论区问什么」', async () => {
+    await withRival();
+    await prisma.inspirationItem.create({
+      data: {
+        workspaceId: 'w1', source: 'rival-comment', title: '课程什么时候上线',
+        platform: 'wechat', author: 'rival01', askedBreak: '{"p1":4}', askedCount: 4, askedWorks: 2,
+      },
+    });
+    const spy = await mockLlm({ summary: 's', points: ['p'], takeaway: 't' });
+    const web = await import('@/lib/web/fetch');
+    vi.spyOn(web, 'safeFetch').mockResolvedValue({ finalUrl: new URL('https://example.com/rival-post'), contentType: 'text/html', text: ARTICLE_HTML });
+
+    await handleInbound('w1', 'https://example.com/rival-post', CTX);
+    const msgs = spy.mock.calls.at(-1)![2] as { role: string; content: string }[];
+    const user = String(msgs.find((m) => m.role === 'user')?.content);
+    expect(user).toContain('它的读者在评论区问什么');
+    expect(user).toContain('课程什么时候上线');
+    expect(user).toContain('被问 4 次');
+    expect(user).toContain('出现在 2 条作品下');
+    // system 侧要求「指出它没接住的读者需求」的指令也在
+    expect(String(msgs[0].content)).toContain('没接住的读者需求');
+  });
+
+  it('🔒 没有该竞对的提问 → prompt 一个字不提读者反馈（不许 LLM 对着空气编缺口）', async () => {
+    await withRival();
+    const spy = await mockLlm({ summary: 's', points: ['p'], takeaway: 't' });
+    const web = await import('@/lib/web/fetch');
+    vi.spyOn(web, 'safeFetch').mockResolvedValue({ finalUrl: new URL('https://example.com/rival-post'), contentType: 'text/html', text: ARTICLE_HTML });
+
+    await handleInbound('w1', 'https://example.com/rival-post', CTX);
+    const msgs = spy.mock.calls.at(-1)![2] as { role: string; content: string }[];
+    const user = String(msgs.find((m) => m.role === 'user')?.content);
+    expect(user).not.toContain('它的读者在评论区问什么');
+  });
 });
 
 describe('资讯库 · 插件抓到的正文回传（跨平台的唯一可行入口）', () => {

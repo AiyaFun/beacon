@@ -54,7 +54,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ key: string }>
   if (!text) return NextResponse.json({});
 
   // 快速响应；处理与回复走后台
-  void processAndReply(integration.id, integration.workspaceId, text, sessionWebhook, chatId).catch((e) =>
+  // 身份：senderStaffId 是这个人在企业里的稳定 userid（senderId 是会话级的，换个群就变）。
+  // conversationType：'1'=单聊，'2'=群聊。**只有显式的 '1' 才算私聊** ——
+  // 字段缺失时按群聊处理是刻意的 fail-closed：判错方向的代价是把一次性登录链接发进群，
+  // 群里任何人点开都能拿到这个人的会话。
+  const senderId = String(payload?.senderStaffId ?? payload?.senderId ?? '') || undefined;
+  const senderName = String(payload?.senderNick ?? '') || undefined;
+  const isGroup = String(payload?.conversationType ?? '') !== '1';
+  void processAndReply(integration.id, integration.workspaceId, text, sessionWebhook, chatId, senderId, senderName, isGroup).catch((e) =>
     log.error('钉钉入站处理失败', { key, err: e }),
   );
   return NextResponse.json({});
@@ -66,11 +73,17 @@ async function processAndReply(
   text: string,
   sessionWebhook: string,
   chatId: string,
+  senderId: string | undefined,
+  senderName: string | undefined,
+  isGroup: boolean,
 ) {
   const reply = await handleInbound(workspaceId, text, {
     provider: 'dingtalk',
     integrationId,
     chatId: chatId || undefined,
+    senderId,
+    senderName,
+    isGroup,
   });
   await prisma.botIntegration
     .updateMany({ where: { id: integrationId }, data: { lastInboundAt: new Date(), lastError: null } })

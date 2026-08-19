@@ -112,33 +112,29 @@ function dyCardTitle(card) {
 // 去 parseCount —— 那个 parent 很可能就是整条统计栏，而 parseCount 取的是**第一个**数字，
 // 于是「关注数」被当成粉丝数写进库（178 vs 328 万，差三个数量级，基线与同行对比全废）。
 // 一律先按「粉丝」这两个字截断，再从后面取数字：截不出来就不给，绝不拿旁边那个数字凑。
-function dyFollowers(pc) {
-  const afterFans = (t) => {
-    const i = (t || '').indexOf('粉丝');
-    return i < 0 ? null : t.slice(i + 2);
-  };
-  const el = document.querySelector('[data-e2e="user-fans"]');
-  if (el) {
-    const own = (el.textContent || '').trim();
-    const tail = afterFans(own);
-    // 埋点挂在带标签的块上 → 按标签截；挂在纯数字上（不含「粉丝」二字）→ 直接读
-    const n = tail != null ? pc(tail) : (own.includes('关注') || own.includes('获赞') ? null : pc(own));
-    if (n != null && n > 0) return n;
-    const pt = afterFans(el.parentElement?.textContent || '');
-    if (pt != null) {
-      const pn = pc(pt);
-      if (pn != null && pn > 0) return pn;
-    }
-  }
-  for (const node of document.querySelectorAll('div, span, p')) {
-    const t = (node.textContent || '').trim();
-    if (t.length > 24) continue; // 太长说明是整块文案/简介，不是统计项
-    const tail = afterFans(t);
-    if (tail == null) continue;
-    const n = pc(tail);
-    if (n != null && n > 0) return n;
-  }
-  return undefined;
+//
+// ⚠️ 埋点名 2026-08-07 真机重新核对（www.douyin.com/user/<sec_uid>）：现在叫
+// **`user-info-fans`**，`user-fans` 已经不存在了（同批还有 `user-info-follow` /
+// `user-info-like`；`user-name` 也没了，昵称是靠下面的 h1 兜底才拿到的）。
+// 埋点认不出时这个函数**并不会报错**——它会悄悄退到「全页扫含『粉丝』的短文本」，
+// 于是失效是隐形的：直到有人对着页面核数字才发现。所以两个名字都留着。
+// 统计栏所在的账号信息容器。**兜底扫描必须先限定在它里面**：登录态下页面别处
+// （右上角头像的个人面板、侧边「我的」入口）同样写着「粉丝 N」，而那是**你自己的**粉丝数。
+// 按文档序取第一个命中，就会把自己的粉丝数写进竞对档案——和「关注数当粉丝数」同一类错，
+// 而且更难发现（数字本身完全正常）。容器认不出来才退回全页，宁可退化不要空手。
+const DY_PROFILE_SCOPES = ['[data-e2e="user-info"]', '[data-e2e="user-detail"]'];
+
+// **三个统计项一起读**，而不是只读粉丝那一个。多读两个不是为了入库（关注/获赞暂时不落库），
+// 是为了让 common.js 的闸③（同位判串台）有东西可比：三项要是落在同一段文本的同一个下标上，
+// 说明截断没生效，三项一起作废。只读一项就没有任何办法发现自己读错了。
+const DY_STAT_SPECS = [
+  { key: 'following', labels: ['关注'], e2e: '[data-e2e="user-info-follow"]' },
+  { key: 'followers', labels: ['粉丝'], e2e: '[data-e2e="user-info-fans"], [data-e2e="user-fans"]' },
+  { key: 'likes', labels: ['获赞'], e2e: '[data-e2e="user-info-like"]' },
+];
+
+function dyStats() {
+  return globalThis.__beaconReadStats?.(DY_STAT_SPECS, DY_PROFILE_SCOPES) || { values: {}, via: {} };
 }
 
 globalThis.__beaconParse = function () {
@@ -147,12 +143,16 @@ globalThis.__beaconParse = function () {
   const handle = m[1];
   const parseCount = globalThis.__beaconParseCount;
 
+  // ⚠️ `user-name` 2026-08-07 真机核对已经不存在了——昵称一直是靠 h1 兜底才拿到的。
+  // 埋点留着不删（改回来就还能用），但别指望它。
   const name =
     document.querySelector('[data-e2e="user-name"]')?.textContent?.trim() ||
+    document.querySelector('[data-e2e="user-info"] h1')?.textContent?.trim() ||
     document.querySelector('h1')?.textContent?.trim() ||
     undefined;
 
-  const followers = dyFollowers(parseCount);
+  const stats = dyStats();
+  const followers = stats.values.followers;
 
   // 作品：作品栅格里的 /video/<数字id> 锚点。
   //
@@ -188,7 +188,10 @@ globalThis.__beaconParse = function () {
   return {
     platform: 'douyin',
     handle,
-    profile: { name, followers },
+    // followersVia = 这个数是**怎么**读到的（埋点命中 / 文本兜底 / 没读到）。
+    // 它随回传上行，服务端据此在埋点集体失效时告警——没有它，"靠文本兜底自修复"
+    // 成功与否没有任何人知道，只能等用户对着页面核数字（这次就是这么拖了十几天）。
+    profile: { name, followers, followersVia: stats.via.followers || 'none' },
     posts,
     ...(isSelf ? { isSelf: true } : {}),
   };

@@ -485,6 +485,12 @@
         <span>收进灵感箱</span>
       </button>
       <input type="text" id="inspireNote" class="search-box" style="width:100%; margin-top:6px; box-sizing:border-box" placeholder="为什么想记它？（选填，这句最有用）" />
+      <!-- 常驻显示：开关没开时由 popup.js 改成「未开启」并直通设置页。
+           曾经默认 display:none，等于把整个功能藏死，用户找不到 -->
+      <button id="collectComments" class="btn-secondary" style="margin-top:6px">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8M8 13h5"/></svg>
+        <span>读评论提问</span>
+      </button>
       <div id="result"></div>
     </div>
 

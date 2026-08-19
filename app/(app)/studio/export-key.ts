@@ -6,7 +6,7 @@ import { decryptKey } from '@/lib/crypto';
 // 取不到就走本地，不再有「功能点不亮」这回事（原先的 EXPORT_KEY_HINT 指引文案已随之删除）。
 // 三级解析：
 // ① 平台级环境变量 BEACON_ANTHROPIC_API_KEY（自部署 / 企业版统一配置）；
-// ② 该租户 BYOK（设置 → 模型接入）里 vendor=claude 的渠道——连通性测试通过的优先，
+// ② 该租户 BYOK（接入与密钥）里 vendor=claude 的渠道——连通性测试通过的优先，
 //    没测过的也用（宁可调用时报错，也不把功能锁死在「永远点不亮」）；
 //    但连通性测试**已失败**的（status=failed，多半 key 被吊销）绝不取——否则会拿死 key
 //    点亮按钮、点了才在运行时鉴权报错。此不变量与 lib/llm/gateway.ts 一致。

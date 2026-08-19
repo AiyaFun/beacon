@@ -4,6 +4,7 @@ import { log } from '@/lib/logger';
 import { decryptResource, verifySignature } from '@/lib/pay/sign';
 import { readWxPayEnv } from '@/lib/pay/provider';
 import { fulfillOrder } from '@/lib/pay/order';
+import { can } from '@/lib/edition';
 
 // 微信支付结果回调。**整个支付里最容易被攻击的一个入口** —— 不验签 = 任何人 POST 一下就免费升档。
 //
@@ -36,6 +37,10 @@ function fail(status: number, message: string) {
 }
 
 export async function POST(req: Request) {
+  // 形态闸：企业版（appliance/private）不收钱，支付回调端点不该存在。
+  // 回 404 而不是 403 —— 客户机器上这个端点在语义上就是「没有这个东西」，
+  // 403 反而是在告诉扫描器「这里有支付入口，只是被关了」。
+  if (!can('payment')) return new Response('Not Found', { status: 404 });
   // ── 1. 拿原始报文 ─────────────────────────────────────
   // 🔒 必须是**未经改动的原始字节**：验签对 body 逐字节敏感，
   // 先 req.json() 再拿去验签 = JSON.parse→stringify 往返 = 空白被重排 = 永远验不过。

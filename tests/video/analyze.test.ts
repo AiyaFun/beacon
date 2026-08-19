@@ -1,6 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { prisma } from '@/lib/db';
-import { analyzeVideo, checkVideoUrl, pickChannel, CHANNEL_BASIS, basisOf, normalizeTranscript } from '@/lib/video/analyze';
+import {
+  analyzeVideo,
+  checkVideoUrl,
+  pickChannel,
+  CHANNEL_BASIS,
+  basisOf,
+  normalizeTranscript,
+  textCarrierState,
+  textCarrierLines,
+  TEXT_CARRIER_HEADING,
+  TRANSCRIPT_SOURCE_PLATFORMS,
+} from '@/lib/video/analyze';
 import { inlineSource, clampFps, videoPart, looksVideoCapable, MAX_INLINE_VIDEO_BYTES } from '@/lib/llm/ark';
 import { loadExemplars } from '@/lib/account-context';
 
@@ -232,6 +243,84 @@ describe('字幕轨：补上模型听不见的那一半', () => {
     if (!r.ok) return;
     expect(r.channel).toBe('text');
     expect(r.report).toContain('三千块买的露营装备');
+  });
+});
+
+describe('文本载体体检：口播没有文本载体 → 检索读不到', () => {
+  // 确定性判断（字幕轨有没有），不过模型、不烧配额。
+  // 这套用例守两件事：真缺时必须出声；**取不到字幕的平台不许出声**（unknown 不许冒充 no）。
+  const YT = 'https://www.youtube.com/watch?v=abc123';
+  const COVER = 'data:image/jpeg;base64,x';
+  const TR = [{ at: 0, text: '开场先甩结论' }, { at: 6, text: '第一件事' }];
+
+  async function report(over: Partial<Parameters<typeof analyzeVideo>[0]>) {
+    await mockVision();
+    const r = await analyzeVideo({ source: null, coverDataUri: COVER, ...over, workspaceId: 'w1' });
+    expect(r.ok).toBe(true);
+    return r.ok ? r.report : '';
+  }
+
+  it('YouTube 视频 + 插件去要过字幕但是空的 → 报告里出提示，并说清「检索读不到」和该怎么补', async () => {
+    const rep = await report({ originUrl: YT, transcript: [] });
+    expect(rep).toContain(TEXT_CARRIER_HEADING);
+    expect(rep).toContain('没有文本载体');
+    expect(rep).toContain('AI 检索');
+    expect(rep).toMatch(/标题|简介/);
+    expect(rep).toMatch(/评论区置顶/);
+  });
+
+  it('🔒 取不到字幕的平台（抖音）就算 transcript 是空数组，也不许报「你没上字幕」', async () => {
+    // 抖音的字幕轨插件根本没去要过（extension/content/work.js 只处理 youtube/bilibili）。
+    // 报缺失＝把「我们取不到」说成「用户没上」，正是 unknown 冒充 no。
+    const rep = await report({ originUrl: 'https://www.douyin.com/video/7123', transcript: [] });
+    expect(rep).not.toContain(TEXT_CARRIER_HEADING);
+    expect(rep).not.toContain('没有文本载体');
+  });
+
+  it('🔒 上传档根本没查过字幕轨（不传 transcript 字段）→ 也不许报缺失', async () => {
+    // /api/video/analyze 的上传通道从不传 transcript。清洗后的数组分不出这一档
+    // （normalizeTranscript(null) 也是 []），所以判据必须看原始入参在不在。
+    await mockVideo();
+    const r = await analyzeVideo({ workspaceId: 'w1', source: FILE, originUrl: YT });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.report).not.toContain(TEXT_CARRIER_HEADING);
+  });
+
+  it('有字幕轨时不出任何提示（不说「你有字幕，很好」这种废话）', async () => {
+    const rep = await report({ originUrl: YT, transcript: TR });
+    expect(rep).toContain('## 口播时间线（平台字幕轨原文）'); // 字幕确实用上了
+    expect(rep).not.toContain(TEXT_CARRIER_HEADING);
+  });
+
+  it('B站视频页判 missing，B站专栏（不是视频、没有口播）判 unknown', () => {
+    const arg = { checked: true, hasTranscript: false };
+    expect(textCarrierState({ ...arg, originUrl: 'https://www.bilibili.com/video/BV1xx' })).toEqual({
+      state: 'missing',
+      platform: 'B站',
+    });
+    expect(textCarrierState({ ...arg, originUrl: 'https://www.bilibili.com/read/cv12345' }).state).toBe('unknown');
+    expect(textCarrierState({ ...arg, originUrl: 'https://www.youtube.com/@somechannel' }).state).toBe('unknown');
+    expect(textCarrierState({ ...arg, originUrl: 'https://youtu.be/abc123' }).state).toBe('missing');
+  });
+
+  it('三档：有字幕=ok、没查过=unknown、没链接=unknown', () => {
+    expect(textCarrierState({ originUrl: YT, checked: true, hasTranscript: true }).state).toBe('ok');
+    expect(textCarrierState({ originUrl: YT, checked: false, hasTranscript: false }).state).toBe('unknown');
+    expect(textCarrierState({ originUrl: null, checked: true, hasTranscript: false }).state).toBe('unknown');
+  });
+
+  it('🔒 白名单只有插件真去要过字幕的两家——多一家就是在替别的平台下结论', () => {
+    expect(Object.keys(TRANSCRIPT_SOURCE_PLATFORMS).sort()).toEqual(['bilibili', 'youtube']);
+  });
+
+  it('🔒 提示措辞：不许暗示我们听到了音轨，也不许承诺补了字幕就会被引用', () => {
+    const text = textCarrierLines('YouTube').join('\n');
+    expect(text).toContain('听不见声音'); // 与 CHANNEL_BASIS.video 同一口径：我们只看画面
+    expect(text).not.toMatch(/听到|听得到|音频转写|识别出的语音/);
+    // 断言里不许跟着「引用」写死：改成「就会被 AI 检索引用」这种插了字的承诺，
+    // 收窄的正则会漏掉（第一版就漏了）。这里只认承诺句式本身。
+    expect(text).not.toMatch(/就会被|就能被|一定(会|能)|必(然|定)|保证/);
   });
 });
 

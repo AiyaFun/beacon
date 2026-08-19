@@ -56,6 +56,9 @@ type Common = {
   mode?: ClipMode;
   /** 竞对拆解时带上是谁的作品，让分析能说「他这条 vs 你的基线」 */
   rivalName?: string | null;
+  /** 竞对的 handle+platform：按它查该竞对名下的读者提问（rival-comment 的 author 是 handle 不是昵称） */
+  rivalHandle?: string | null;
+  rivalPlatform?: string | null;
 };
 
 /** 链接 → 剪藏。fetchPage 可注入，单测不碰网络。 */
@@ -211,6 +214,22 @@ async function summarizeAndStore(
   const mode: ClipMode = params.mode ?? 'note';
   const rival = params.rivalName;
 
+  // 读者反馈缺口（评论采集 × 竞对拆解的结合点）：这个竞对名下聚合的读者提问。
+  // 「评论区反复在问、正文没回答」= 已被验证的未满足需求，是拆解报告里唯一
+  // 不来自正文本身的证据，所以单独标注来源。查不到就一个字不提（zero-context 不硬造）。
+  let rivalQsText = '';
+  if (mode === 'rival' && params.rivalHandle && params.rivalPlatform) {
+    const { rivalReaderQuestions } = await import('../insight/reader-questions');
+    const qs = await rivalReaderQuestions(workspaceId, params.rivalPlatform, params.rivalHandle).catch(() => []);
+    if (qs.length) {
+      rivalQsText = [
+        '',
+        '【它的读者在评论区问什么】（来自评论采集的聚合提问，按被问次数排序；这是正文之外唯一的补充证据）',
+        ...qs.map((q, i) => `${i + 1}. 「${q.text}」— 被问 ${q.count} 次${q.works > 1 ? `，出现在 ${q.works} 条作品下` : ''}`),
+      ].join('\n');
+    }
+  }
+
   try {
     const res = await llmComplete(ws.tenantId, 'generation', [
       {
@@ -225,6 +244,8 @@ async function summarizeAndStore(
               '   情绪或利益点在哪。每条 30 字以内，要指出**具体做法**，不要「内容优质」这种废话。',
               '4. takeaway：结合下面这个账号，说「这一层他能不能借鉴、怎么借鉴」。',
               '   **只借鉴方法，不搬文字**——照抄原文是洗稿，明确不要建议那么做。80 字以内。',
+              '5. 若给了「它的读者在评论区问什么」：points 里加一条指出**它没接住的读者需求**',
+              '   ——评论区反复在问、这篇正文却没回答的。那是对方验证过的需求缺口。没给这段就不提。',
             ]
           : [
               '你在帮一位内容创作者读一篇文章。基于**给定正文**输出结构化笔记。',
@@ -242,7 +263,7 @@ async function summarizeAndStore(
       },
       {
         role: 'user',
-        content: `标题：${article.title || '(无标题)'}\n${article.author ? `作者：${article.author}\n` : ''}正文：\n${article.text.slice(0, MAX_LLM_CHARS)}`,
+        content: `标题：${article.title || '(无标题)'}\n${article.author ? `作者：${article.author}\n` : ''}正文：\n${article.text.slice(0, MAX_LLM_CHARS)}${rivalQsText}`,
       },
     ], { json: true, temperature: 0.3 });
 

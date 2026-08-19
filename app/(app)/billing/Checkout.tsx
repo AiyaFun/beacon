@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { actCreateOrder, actMockPay, actPollOrder } from './actions';
+import { Overlay } from '@/components/Overlay';
 import { PRICING, type PaidPlan, type PeriodMonths } from '@/lib/pay/pricing';
+import { fmtDateFull, fmtTime } from '@/lib/format';
 
 // 购买时长文案：1=月付，12=年付，1188=永久买断。
 function periodLabel(periodMonths: PeriodMonths): string {
@@ -114,24 +116,16 @@ export function Checkout({
       </button>
       {error && !order && <div className="small" style={{ color: 'var(--red)', marginTop: 8 }}>{error}</div>}
 
+      {/* ⚠️ 必须走 Overlay（portal 到 body），不能就地渲染。
+          这个按钮永远长在套餐卡片里，而 globals.css 的 `.card:hover` 会给卡片加
+          `transform: translateY(-2px)`；「当前生效套餐」那张还带 `.card-selected-gradient`，
+          transform 是**常驻**的。带 transform 的元素是后代 `position: fixed` 的包含块——
+          于是这个 `inset: 0` 的「全屏」支付层会缩成套餐卡那么大，二维码被挤到框外。
+          用户是从卡片里的按钮点进来的，指针必然停在卡片上，所以这条路必现。
+          见 components/Overlay.tsx 的长注释（工坊那一处已经踩过同一个坑）。 */}
       {order && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="微信扫码支付"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(0,0,0,.45)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 50,
-            padding: 16,
-          }}
-          onClick={close}
-        >
-          <div className="card" style={{ maxWidth: 380, width: '100%' }} onClick={(e) => e.stopPropagation()}>
+        <Overlay onClose={close} label="微信扫码支付">
+          <div className="card" style={{ maxWidth: 380, width: '100%' }}>
             <div className="row-between" style={{ marginBottom: 12 }}>
               <div className="card-title">
                 微信扫码支付 <span className="card-sub">{PRICING[plan].name} · {periodLabel(periodMonths)}</span>
@@ -147,7 +141,7 @@ export function Checkout({
                     不是「延长多少天」（升档可能让到期日提前，措辞不能撒谎） */}
                 {paid.grantedDays !== null && <div className="small muted">本单发放 {paid.grantedDays} 天</div>}
                 {paid.newPlanExpiresAt && (
-                  <div className="small muted">有效期至 {new Date(paid.newPlanExpiresAt).toLocaleDateString('zh-CN')}</div>
+                  <div className="small muted">有效期至 {fmtDateFull(paid.newPlanExpiresAt)}</div>
                 )}
                 <button className="btn btn-primary btn-sm" onClick={close}>完成</button>
               </div>
@@ -175,7 +169,7 @@ export function Checkout({
                 <div className="small muted" style={{ textAlign: 'center' }}>
                   用微信「扫一扫」完成支付，支付后本页自动跳转
                   <br />
-                  二维码 {new Date(order.codeExpiresAt).toLocaleTimeString('zh-CN')} 前有效
+                  二维码 {fmtTime(order.codeExpiresAt)} 前有效
                 </div>
 
                 {order.mocked && (
@@ -189,7 +183,7 @@ export function Checkout({
               </div>
             )}
           </div>
-        </div>
+        </Overlay>
       )}
     </>
   );

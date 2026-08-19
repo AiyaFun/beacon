@@ -14,17 +14,28 @@ globalThis.__beaconParse = function () {
     document.querySelector('.nickname')?.textContent?.trim() ||
     undefined;
 
-  // 粉丝数：找文案含「粉丝」的统计项，取其中的数字（老版 .n-fs 有 title，新版是相邻文本）
-  let followers;
-  for (const el of document.querySelectorAll('a, div, p, span')) {
-    const t = el.textContent ?? '';
-    if (t.length < 20 && t.includes('粉丝')) {
-      const n = parseCount(el.getAttribute('title') ?? t.replace('粉丝', ''));
-      if (n != null && n > 0) {
-        followers = n;
-        break;
-      }
-    }
+  // 粉丝数。走 common.js 的共用内核（beaconReadStats）。
+  //
+  // ⚠️ 老代码是 `parseCount(t.replace('粉丝',''))` —— **replace 不是截断**：
+  // B站空间页顶部同样是「关注数 N 粉丝数 M 获赞 K」几个数挨着，replace 只抠掉那两个字，
+  // 「关注数 178 粉丝数 328.3万」变成「关注数 178  328.3万」，parseCount 取的是**第一个**数字，
+  // 于是**关注数被当成粉丝数**（差三个数量级，基线与同行对比全废）。抖音 07-29 修过同一个坑，
+  // 这里一直活着——各站点各写各的取数逻辑就会各踩各的，所以统一挪到内核里。
+  // 三项一起读是为了让内核的「同位判串台」有东西可比（只读一项发现不了自己读错）。
+  const biliStats = globalThis.__beaconReadStats?.(
+    [
+      { key: 'following', labels: ['关注数', '关注'] },
+      { key: 'followers', labels: ['粉丝数', '粉丝'] },
+      { key: 'likes', labels: ['获赞数', '获赞'] },
+    ],
+    ['#h-name ~ *', '.upinfo', '.upinfo-detail', '.h-info', '#i_cecream .upinfo', '.nav-bar'],
+  ) || { values: {}, via: {} };
+  let followers = biliStats.values.followers;
+  // 老版 `.n-fs` 把精确值放在 title 属性里（页面上显示的是「32.8万」这种缩写），
+  // 有就用它——同一个数字，精度更高。
+  const exact = parseCount(document.querySelector('.n-fs[title], .n-data-v[title]')?.getAttribute('title'));
+  if (exact != null && exact > 0 && followers != null && Math.abs(exact - followers) / followers < 0.05) {
+    followers = exact;
   }
 
   // 作品：按视频卡片 .bili-video-card 遍历（实测校准 2026-07，space.bilibili.com 新版 DOM）。
@@ -75,7 +86,7 @@ globalThis.__beaconParse = function () {
   return {
     platform: 'bilibili',
     handle,
-    profile: { name, followers },
+    profile: { name, followers, followersVia: biliStats.via.followers || 'none' },
     posts,
     // 本人空间才有「编辑资料」/「投稿管理」；别人的空间是「关注」（见 common.js beaconLooksLikeSelf）
     ...(globalThis.beaconLooksLikeSelf?.(['编辑资料', '投稿管理', '个人中心'], '.h-inner, #h-name, .space-header, #app')

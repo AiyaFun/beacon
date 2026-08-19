@@ -30,7 +30,7 @@ describe('公众号采集节流规则 · 三处数字必须一致', () => {
     },
   );
 
-  it.each(['perAccountCooldownHours', 'maxAccountsPerRun', 'betweenAccountsMs', 'rateLimitCooldownMinutes'] as const)(
+  it.each(['perAccountCooldownHours', 'maxAccountsPerRun', 'betweenAccountsMs', 'rateLimitCooldownMinutes', 'fakeidCacheDays'] as const)(
     'service worker 的 %s 与 lib/wechat-collect-rules.ts 相同',
     (key) => {
       expect(num(SW, key)).toBe(WECHAT_COLLECT_RULES[key]);
@@ -53,6 +53,7 @@ describe('公众号采集节流规则 · 三处数字必须一致', () => {
       WECHAT_COLLECT_RULES.perAccountCooldownHours,
       WECHAT_COLLECT_RULES.maxAccountsPerRun,
       WECHAT_COLLECT_RULES.rateLimitCooldownMinutes,
+      WECHAT_COLLECT_RULES.fakeidCacheDays,
     ]) {
       expect(text).toContain(String(n));
     }
@@ -108,14 +109,28 @@ describe('节流是真在代码里执行的，不只是写在页面上', () => {
     expect(SW).toMatch(/F5/);
   });
 
-  it('补注入需要 scripting 权限，且不能因此加 host 权限（activeTab 就够）', () => {
+  // 0.8.2 起 manifest 里有了 host_permissions（为「读评论提问」在页内侧栏可用而加，
+  // 那个入口拿不到 activeTab）。但**公众号后台补注入这条路仍然一个 host 权限都不许用**——
+  // 后台是登录态的非公开页面，给它常驻主机权限与「只在你点的时候读一次」的承诺是两回事。
+  // 所以这条用例从「host_permissions 必须为空」改成「里面不许出现任何创作者后台域名」。
+  it('补注入需要 scripting 权限；host 权限里不许出现任何创作者后台域名', () => {
     const manifest = JSON.parse(EXT('extension/manifest.json')) as {
       permissions: string[];
       host_permissions?: string[];
     };
     expect(manifest.permissions).toContain('scripting');
     expect(manifest.permissions).toContain('activeTab');
-    expect(manifest.host_permissions ?? []).toEqual([]);
+
+    const hosts = manifest.host_permissions ?? [];
+    const BACKENDS = ['mp.weixin.qq.com', 'channels.weixin.qq.com', 'creator.douyin.com', 'creator.xiaohongshu.com', 'member.bilibili.com'];
+    for (const b of BACKENDS) {
+      expect(hosts.some((h) => h.includes(b))).toBe(false);
+    }
+    // 且只覆盖公开作品页所在的那几个站点，不许悄悄扩到 <all_urls>
+    const ALLOWED = ['www.bilibili.com', 'www.douyin.com', 'www.xiaohongshu.com', 'x.com', 'twitter.com', 'www.youtube.com', 'www.tiktok.com'];
+    for (const h of hosts) {
+      expect(ALLOWED.some((a) => h.includes(a))).toBe(true);
+    }
   });
 
   it('内容脚本防重复注入（补注入时不能挂上第二个监听器抢同一个 sendResponse）', () => {

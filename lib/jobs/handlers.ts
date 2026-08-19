@@ -14,6 +14,7 @@ import { evaluateAndAlert } from '../insight/alert';
 import { DEMO_TENANT_ID, DEMO_WORKSPACE_ID } from '../demo/guard';
 import { DAY_MS } from '../pay/plan';
 import { expiryNoticeFor, sentStagesFrom, EXPIRED_GRACE_DAYS } from '../pay/expiry';
+import { sweepRetention } from '../legal/retention';
 import { automationAllows } from './automation';
 import { JOB_TRACK, type JobHandler, type JobName } from './types';
 
@@ -484,5 +485,22 @@ export const HANDLERS: Record<JobName, JobHandler> = {
         }
       }
       return { detail: `扫描 ${tenants.length} 个到期窗口内租户 / 提醒 ${notified} 个${failed ? ` / 失败 ${failed}` : ''}` };
+    }),
+
+  // 广播型：保留期兑现闸。清单与理由都在 lib/legal/retention.ts，这里只负责把它跑起来。
+  //
+  // 【为什么不吞错误】sweepRetention 内部按步骤隔离（一张表失败不连坐其余），但会把失败原样带出来。
+  // 这里必须把它抛成任务失败：一次静默失败的合规清理，和没有这个任务是一回事——而 JobRun 里
+  // 一条绿色记录反而会让人以为「删过了」。宁可任务红着，也不要一份骗人的执行记录。
+  purge_retention: async () =>
+    withRun('purge_retention', undefined, async () => {
+      const r = await sweepRetention();
+      const detail =
+        `评论正文 ${r.readerComments} 条 / 提问归档 ${r.commentQuestions.archived} 删除 ${r.commentQuestions.deleted}` +
+        ` / 孤儿日志 ${r.orphanedLlmLogs} / 移除申请重扫 ${r.removals.swept} 条`;
+      if (r.errors.length > 0) {
+        throw new Error(`${detail}；失败步骤：${r.errors.map((e) => `${e.step}(${e.message})`).join('，')}`);
+      }
+      return { detail };
     }),
 };

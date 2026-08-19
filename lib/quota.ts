@@ -2,6 +2,16 @@ import { prisma } from './db';
 import { log } from './logger';
 import { reserveQuota, releaseQuota } from './ratelimit';
 import { effectivePlan } from './pay/plan';
+import {
+  beijingParts,
+  beijingDayKey,
+  beijingMonthKey,
+  beijingStartOfDay,
+  beijingEndOfDay,
+  beijingStartOfMonth,
+  beijingEndOfMonth,
+} from './beijing';
+import { can } from './edition';
 
 // 按租户的 LLM 调用配额（日/月），按 Tenant.plan 分档。
 // 只统计 mocked=false 的真实调用 —— Mock 不花钱，dev 无 key 时天然不受限。
@@ -48,11 +58,18 @@ export function tierFor(plan: string, source: QuotaSource): QuotaTier {
   return PLATFORM_TIERS[plan] ?? PLATFORM_FALLBACK;
 }
 
-// 开关：显式配置优先，否则生产默认开、开发默认关（保持零配置开发不被打断）
+// 开关：显式配置优先，其次看部署形态，最后才是生产默认开、开发默认关（保持零配置开发不被打断）。
+//
+// 【为什么形态要插在中间】
+// 配额是**按套餐计费**的产物：档位表 PLATFORM_TIERS 对应的是 SaaS 的付费套餐。
+// 企业版（appliance / private）客户已经买断或按项目付费，且 AI 一律 BYOK ——
+// 烧的是客户自己的 Key，平台没有垫付，拦他自己的调用没有任何道理。
+// 但**显式配置仍然优先**：客户想给内部各账号设上限时，把 BEACON_QUOTA_ENABLED=1 打开即可。
 export function quotaEnabled(): boolean {
   const v = process.env.BEACON_QUOTA_ENABLED?.trim().toLowerCase();
   if (v === '1' || v === 'true') return true;
   if (v === '0' || v === 'false') return false;
+  if (!can('quotaBilling')) return false;
   return process.env.NODE_ENV === 'production' || process.env.BEACON_ENV === 'prod';
 }
 
@@ -73,7 +90,7 @@ function monthlyExceededMsg(plan: string, source: QuotaSource, tier: QuotaTier):
       ? `免费版自带 Key 每月限 ${tier.monthly} 次。购买「自带 Key 版」后不限量使用（防滥用护栏 100,000 次/月）。`
       : `本月 AI 调用次数已达安全上限（${tier.monthly} 次），请联系我们排查是否存在异常调用。`;
   }
-  return `本月 AI 调用额度已用尽（${tier.monthly} 次/月）。可升级套餐，或在「设置 · 模型接入」配置自己的 API Key 后不占用平台额度。`;
+  return `本月 AI 调用额度已用尽（${tier.monthly} 次/月）。可升级套餐，或在「接入与密钥」配置自己的 API Key 后不占用平台额度。`;
 }
 
 function dailyExceededMsg(plan: string, source: QuotaSource, tier: QuotaTier): string {
@@ -82,18 +99,20 @@ function dailyExceededMsg(plan: string, source: QuotaSource, tier: QuotaTier): s
       ? `免费版自带 Key 每日限 ${tier.daily} 次。购买「自带 Key 版」后不限量使用（防滥用护栏 5,000 次/天）。`
       : `今日 AI 调用次数已达安全上限（${tier.daily} 次），请明日再试或联系我们。`;
   }
-  return `今日 AI 调用额度已用尽（${tier.daily} 次/天），明日 0 点重置。可升级套餐，或在「设置 · 模型接入」配置自己的 API Key。`;
+  return `今日 AI 调用额度已用尽（${tier.daily} 次/天），明日 0 点重置。可升级套餐，或在「接入与密钥」配置自己的 API Key。`;
 }
 
+// 【周期一律按北京时间算，不按容器本地时区】容器跑在 UTC 上（见 lib/beijing.ts），
+// 用 setHours(0,0,0,0) 划出来的「一天」是 UTC 日 —— 而配额用尽的文案写死了
+// 「明日 0 点重置」，实际要等到北京时间**早上 8 点**才重置。用户 22 点被拦，
+// 零点半回来一看还是拦着，再等七个半小时，中间没有任何东西告诉他为什么。
+// 账本口径（startOf*）与计数器口径（*Key / endOf*）必须同时改，否则种子与键会指向不同的两天。
 function startOfDay(): Date {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
+  return beijingStartOfDay();
 }
 
 function startOfMonth(): Date {
-  const d = new Date();
-  return new Date(d.getFullYear(), d.getMonth(), 1);
+  return beijingStartOfMonth();
 }
 
 // plan 短缓存：每次 LLM 调用都查一次 Tenant 不值当。
@@ -183,15 +202,16 @@ export type UsageBill = {
 export async function getUsageBill(tenantId: string): Promise<UsageBill> {
   const status = await getQuotaStatus(tenantId, 'platform');
 
-  // 近 7 日窗口（含今天）——用固定的日边界，逐日 count（7 次有界查询，SQLite/PG 通吃）
+  // 近 7 日窗口（含今天）——用固定的日边界，逐日 count（7 次有界查询，SQLite/PG 通吃）。
+  // 日边界与配额窗口同一口径：北京时间的 0 点（见 lib/beijing.ts），否则柱子会整体错位 8 小时，
+  // 「今天用了多少」在早上八点前算的是昨天。
+  const today = beijingStartOfDay();
   const days: { start: Date; end: Date; label: string }[] = [];
   for (let i = 6; i >= 0; i--) {
-    const start = new Date();
-    start.setHours(0, 0, 0, 0);
-    start.setDate(start.getDate() - i);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 1);
-    days.push({ start, end, label: `${start.getMonth() + 1}/${start.getDate()}` });
+    const start = new Date(today.getTime() - i * 86_400_000);
+    const end = new Date(start.getTime() + 86_400_000);
+    const p = beijingParts(start);
+    days.push({ start, end, label: `${p.month}/${p.day}` });
   }
 
   const [byFnRaw, dayCounts] = await Promise.all([
@@ -230,14 +250,11 @@ export async function getUsageBill(tenantId: string): Promise<UsageBill> {
 // 一次调用就是一次调用；分档只体现在拿去比的 limit 上。
 
 function dayKey(tenantId: string): string {
-  const d = new Date();
-  const m = `${d.getMonth() + 1}`.padStart(2, '0');
-  return `quota:llm:${tenantId}:d:${d.getFullYear()}-${m}-${`${d.getDate()}`.padStart(2, '0')}`;
+  return `quota:llm:${tenantId}:d:${beijingDayKey()}`;
 }
 
 function monthKey(tenantId: string): string {
-  const d = new Date();
-  return `quota:llm:${tenantId}:m:${d.getFullYear()}-${`${d.getMonth() + 1}`.padStart(2, '0')}`;
+  return `quota:llm:${tenantId}:m:${beijingMonthKey()}`;
 }
 
 // 计数器活到本周期结束再多留 1 小时（容忍时钟漂移），之后重新从账本播种。
@@ -247,14 +264,11 @@ function msUntil(end: Date): number {
 }
 
 function endOfDay(): Date {
-  const d = new Date();
-  d.setHours(24, 0, 0, 0);
-  return d;
+  return beijingEndOfDay();
 }
 
 function endOfMonth(): Date {
-  const d = new Date();
-  return new Date(d.getFullYear(), d.getMonth() + 1, 1);
+  return beijingEndOfMonth();
 }
 
 // 调用前校验。超额抛 QuotaExceededError（中文文案可直接展示给用户）。
@@ -324,4 +338,68 @@ export async function assertLlmQuota(tenantId: string | null, source: QuotaSourc
 export async function releaseLlmQuota(tenantId: string | null): Promise<void> {
   if (!tenantId || !quotaEnabled()) return; // 跳过条件与 assertLlmQuota 一致：没占过就没得还
   await Promise.all([releaseQuota(dayKey(tenantId)), releaseQuota(monthKey(tenantId))]);
+}
+
+// ── 图像专属日上限 ──────────────────────────────────────
+// 图像调用与文本共用上面那套日/月名额（一次调用就是一次调用），但一张图的钱是一次文本的十倍量级，
+// 而且封面工位一点就是一张——不单独设上限，free 档 30 次/天会被几张封面吃光，用户回头写不了正文。
+// 所以图像**再多一道**日计数器（并联，不替代 assertLlmQuota）：占了图像名额还要过普通名额，
+// 任一没过都拒；成功路径两个都占，失败路径两个都还。
+//
+// 数字是运营参数：平台 key 兜底本就该抠（钱是平台出的）；自带 Key 只留护栏。
+export const IMAGE_DAILY_CAPS: { platform: Record<string, number>; byokPaid: number; byokFree: number } = {
+  platform: { free: 5, trial: 30, personal: 30, byok: 5, enterprise: 200 },
+  byokPaid: 200,
+  byokFree: 5,
+};
+
+export function imageDailyCapFor(plan: string, source: QuotaSource): number {
+  if (source === 'byok') {
+    return plan === 'free' || !PLATFORM_TIERS[plan] ? IMAGE_DAILY_CAPS.byokFree : IMAGE_DAILY_CAPS.byokPaid;
+  }
+  return IMAGE_DAILY_CAPS.platform[plan] ?? IMAGE_DAILY_CAPS.platform.free;
+}
+
+function imageDayKey(tenantId: string): string {
+  return dayKey(tenantId).replace(':llm:', ':img:');
+}
+
+async function imageDailySeed(tenantId: string): Promise<number> {
+  return prisma.llmCallLog.count({ where: { tenantId, mocked: false, fn: 'image', createdAt: { gte: startOfDay() } } });
+}
+
+/** 今日图像用量与上限（封面工位显示「今日还能出 N 张」）。 */
+export async function getImageQuotaStatus(
+  tenantId: string,
+  source: QuotaSource,
+): Promise<{ used: number; cap: number; remaining: number; plan: string }> {
+  const plan = await planOf(tenantId);
+  const cap = imageDailyCapFor(plan, source);
+  const used = await imageDailySeed(tenantId);
+  return { used, cap, remaining: Math.max(0, cap - used), plan };
+}
+
+export async function assertImageDailyCap(tenantId: string | null, source: QuotaSource): Promise<void> {
+  if (!tenantId || !quotaEnabled()) return;
+  const plan = await planOf(tenantId);
+  const cap = imageDailyCapFor(plan, source);
+  const seed = await imageDailySeed(tenantId);
+  const msg =
+    source === 'byok'
+      ? `今日 AI 出图已达 ${cap} 张上限（自带 Key 的防滥用护栏），明日 0 点重置。`
+      : `今日 AI 出图额度已用完（${cap} 张/天）。可在「接入与密钥」配置自己的火山方舟 Key 后按自带 Key 额度出图。`;
+  try {
+    const r = await reserveQuota(imageDayKey(tenantId), seed, cap, msUntil(endOfDay()));
+    if (!r.ok) throw new QuotaExceededError(msg);
+  } catch (err) {
+    if (err instanceof QuotaExceededError) throw err;
+    // 计数器故障 → 账本直读（与 assertLlmQuota 同一取舍：有界的多花几张 vs 功能下线，取前者）
+    log.error('图像日上限计数器异常，降级为账本直读', { err, tenantId, plan });
+    if (seed >= cap) throw new QuotaExceededError(msg);
+  }
+}
+
+export async function releaseImageDailyCap(tenantId: string | null): Promise<void> {
+  if (!tenantId || !quotaEnabled()) return;
+  await releaseQuota(imageDayKey(tenantId));
 }

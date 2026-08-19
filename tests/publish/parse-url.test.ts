@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { parsePublishUrl, resolvePlatformItemId, publicItemUrl } from '@/lib/publish/parse-url';
+import { PLATFORMS } from '@/lib/constants';
 
 // 发布链接解析（PRD §6 F7-1 AC①）。
 //
@@ -341,7 +342,21 @@ describe('publicItemUrl · platformItemId → 作品详情页链接', () => {
     ['youtube', 'https://www.youtube.com/watch?v=dQw4w9WgXcQ'],
     ['wechat', 'https://mp.weixin.qq.com/s/AbCdEf123456_xyz'],
     ['shipinhao', 'https://channels.weixin.qq.com/web/pages/feed?eid=Ab1_Cd2-Ef3gH4iJ5kL6'],
+    // TikTok 的详情页地址要带作者名，而 publicItemUrl 手里只有 ID → 退到只由 ID 决定的
+    // 嵌入播放页；parseTiktok 也认这个形态，两边才互逆。
+    // ⚠️ 2026-08-13 之前这一行**根本不在**：`cases` 是手抄的 7 个平台，漏了 tiktok。
+    //    于是「改坏 TIKTOK_ID、或把 publicItemUrl 的 tiktok 分支改回 @author/video/ 形态」
+    //    这两种破坏都不会红，而用户在 /data 上点 TikTok 记录会得到 404。
+    ['tiktok', 'https://www.tiktok.com/embed/v2/7123456789012345678'],
   ];
+
+  // 手抄的清单会漏——这条把它钉死在 PLATFORMS 上：新加一个平台而不补往返用例，直接红。
+  it('🔒 每个平台都在往返用例里（新增平台不许漏掉这条）', () => {
+    const covered = new Set(cases.map(([p]) => p));
+    for (const key of Object.keys(PLATFORMS)) {
+      expect(covered.has(key), `平台 ${key} 没有 publicItemUrl 往返用例`).toBe(true);
+    }
+  });
 
   it('🔒 与 parsePublishUrl 互为逆运算（往返逐字符相同）', () => {
     for (const [platform, url] of cases) {

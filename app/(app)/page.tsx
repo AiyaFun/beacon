@@ -3,7 +3,7 @@ import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { parseJson, type Metrics } from '@/lib/json';
 import { readPersona, personaCompleteness, isPersonaBlank } from '@/lib/persona';
-import { fmtNum } from '@/lib/format';
+import { fmtNum, fmtDateLong } from '@/lib/format';
 import { TOPIC_DIMENSIONS, HOT_SOURCES } from '@/lib/constants';
 import { PageHead, Card, Stat, Meter, Empty } from '@/components/ui';
 import { ActionButton } from '@/components/ActionButton';
@@ -62,7 +62,7 @@ export default async function Dashboard() {
     <>
       <PageHead
         title="今日概览"
-        desc={`${new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })} · 欢迎回来，${s.memberName}`}
+        desc={`${fmtDateLong(new Date())} · 欢迎回来，${s.memberName}`}
         action={
           <div className="row" style={{ gap: 8 }}>
             {/* 还没添加任何竞对时，「采集竞对」无事可做，不渲染 */}

@@ -170,6 +170,46 @@ describe('抖音主页 · 作品栅格', () => {
     expect(p.profile?.followers).not.toBe(178);
   });
 
+  // ── 2026-08-07 真机重新核对埋点名（在真实 www.douyin.com/user/<sec_uid> 上跑出来的） ──
+  // 页面上的账号：昵称「汀哥主要怕麻烦」，关注 250 / 粉丝 24.1万 / 获赞 110.4万。
+  // 变化：`user-fans` → **`user-info-fans`**（follow/like 同批改名），`user-name` 直接没了。
+  // 埋点认不出时解析器不报错、只是悄悄退到全页扫描——所以这几条是「隐形失效」的哨兵。
+  const REAL_PAGE_0807 = (fansAttr = 'data-e2e="user-info-fans"') => `
+    <div id="login-panel"><div><span>粉丝 12</span></div></div>
+    <div data-e2e="user-detail">
+      <div data-e2e="user-info">
+        <h1>汀哥主要怕麻烦</h1>
+        <div class="stats">
+          <div data-e2e="user-info-follow">关注250</div>
+          <div ${fansAttr}>粉丝24.1万</div>
+          <div data-e2e="user-info-like">获赞110.4万</div>
+        </div>
+        <p>抖音号：52555187199IP属地：中国香港</p>
+      </div>
+      <ul data-e2e="user-post-list">
+        <li><a href="/video/${VID}"><img alt="" /><span>1.2万</span></a><div>作品文案</div></li>
+      </ul>
+    </div>`;
+
+  it('真机 2026-08-07 埋点（user-info-fans）取得到粉丝数与昵称', () => {
+    const p = run(`https://www.douyin.com/user/${UID}`, REAL_PAGE_0807())!;
+    expect(p.profile?.followers).toBe(241_000);
+    expect(p.profile?.name).toBe('汀哥主要怕麻烦');
+  });
+
+  // 登录态下页面顶部（头像面板/侧边「我的」）也写着「粉丝 N」，那是**你自己的**粉丝数。
+  // 兜底扫描按文档序取第一个命中，不限定容器就会把自己的数字写进竞对档案——
+  // 和「关注数当粉丝数」同一类错，但更难发现：数字本身完全正常。
+  it('🔒 埋点再改名（退到兜底扫描）也只在账号信息容器里找，不吃页面顶部自己的「粉丝 12」', () => {
+    const p = run(`https://www.douyin.com/user/${UID}`, REAL_PAGE_0807('data-e2e="user-info-fans-renamed"'))!;
+    expect(p.profile?.followers).toBe(241_000);
+  });
+
+  it('🔒 埋点在的时候也不受页面别处「粉丝 12」影响', () => {
+    const p = run(`https://www.douyin.com/user/${UID}`, REAL_PAGE_0807())!;
+    expect(p.profile?.followers).not.toBe(12);
+  });
+
   it('🔒 「置顶」角标不会被当成标题，也不会被当成计数', () => {
     const p = run(`https://www.douyin.com/user/${UID}`, REAL_PAGE)!;
     expect(p.posts[0].title).not.toBe('置顶');

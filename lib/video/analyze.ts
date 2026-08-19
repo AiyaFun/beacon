@@ -229,6 +229,12 @@ export async function analyzeVideo(params: VideoAnalyzeParams): Promise<VideoAna
     model: res.model,
     hasTranscript: transcript.length > 0,
     transcript,
+    // checked 取的是**原始入参**是不是数组：清洗后的 transcript 分不出「没查过」和「查过是空的」
+    textCarrier: textCarrierState({
+      originUrl: params.originUrl,
+      checked: Array.isArray(params.transcript),
+      hasTranscript: transcript.length > 0,
+    }),
   });
   const title = (params.title || summary.slice(0, 40) || '作品拆解').slice(0, 200);
 
@@ -320,6 +326,98 @@ function formatTranscript(lines: TranscriptLine[]): string {
 export function basisOf(channel: AnalyzeChannel, hasTranscript: boolean): string {
   const base = CHANNEL_BASIS[channel];
   return hasTranscript ? `${base}；另有平台字幕轨的完整文字稿（口播内容精确到时间点）` : base;
+}
+
+// ── 文本载体体检（确定性判断，不过模型） ────────────────────────────
+//
+// 【这条提示在说什么】视频的口播是声音，声音不是文本。平台站内搜索、外部搜索引擎、
+// AI 检索读的都是文本——标题、简介、字幕。一条纯口播、不写字幕的视频，
+// 说过的话在检索侧**根本不存在**。这是「有没有文本载体」的事实判断，
+// 不是内容质量判断，所以在代码里算，一分配额都不烧（与 review.ts「确定性判定在代码算」同一条）。
+//
+// ⚠️ 措辞上有两件事不许做：
+//   ① 不许暗示我们听到了音轨——我们没有，方舟只抽帧读画面（见 CHANNEL_BASIS.video 的注释）。
+//      提示里反而要把这一点再说一遍：我们和检索引擎一样，读不到那半份内容。
+//   ② 不许承诺「上了字幕就会被引用」。我们知道的只有「没有文本载体 → 读不到」这一半。
+
+/** 文本载体三档。`unknown` 是这里最要紧的一档，理由见 TRANSCRIPT_SOURCE_PLATFORMS。 */
+export type TextCarrierState = 'ok' | 'missing' | 'unknown';
+
+/**
+ * 插件真的会去要字幕轨的平台——**只有这两家**（唯一事实来源：extension/content/work.js 的 transcript()）。
+ *
+ * 【为什么必须列白名单，而不是「transcript 空 = 这条没字幕」】
+ * 抖音/小红书/TikTok/X 我们**压根没去要过**字幕：那是我们取不到，不是用户没上。
+ * 对着这些平台报「你这条没字幕」，就是把 unknown 印成 no——与 lib/insight/platform-metrics.ts
+ * 顶部那条口径是同一件事，也是这个库反复踩过的坑。
+ *
+ * isVideoUrl 再挡一道形态：B站专栏 /read/cv…、YouTube 频道页 /@xxx 根本没有口播这回事，
+ * 对着一篇图文说「你没上字幕」是纯粹的胡说。判不准就退回 unknown，宁可不提示。
+ */
+export const TRANSCRIPT_SOURCE_PLATFORMS: Record<string, { name: string; isVideoUrl: (u: URL) => boolean }> = {
+  youtube: {
+    name: 'YouTube',
+    // youtu.be/<id> 只会是视频；youtube.com 得看路径
+    isVideoUrl: (u) =>
+      /(^|\.)youtu\.be$/.test(u.hostname)
+        ? u.pathname.length > 1
+        : /^\/(watch|shorts\/|live\/|embed\/)/.test(u.pathname),
+  },
+  // b23.tv 短链背后可能是专栏/直播，展不开就不猜（插件读的是展开后的真实地址，这里不亏）
+  bilibili: { name: 'B站', isVideoUrl: (u) => /^\/video\//.test(u.pathname) },
+};
+
+function transcriptSourceOf(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const entry = TRANSCRIPT_SOURCE_PLATFORMS[platformOfLink(url).key ?? ''];
+  if (!entry) return null;
+  try {
+    return entry.isVideoUrl(new URL(url)) ? entry.name : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 这条视频的口播有没有文本载体。
+ *
+ * 三档分别是：
+ *   ok       拿到了字幕文字稿 —— 什么都不用说（有字幕是常态，夸一句是废话）
+ *   missing  去要过、确实是空的，且这个平台我们要得到 —— 出提示
+ *   unknown  没去要过 / 这个平台要不到 / 这个链接不是视频页 —— **闭嘴**
+ */
+export function textCarrierState(opts: {
+  originUrl?: string | null;
+  /**
+   * 这条链路有没有真的去要过字幕轨。
+   *
+   * ⚠️ **不许用清洗后的数组反推**：normalizeTranscript(null) 也返回 []，一反推就把
+   * 「没人查过」抹成「查过、没有」。/api/video/analyze 的上传档从不传 transcript 字段，
+   * 靠这个布尔量才没被误报成「你没上字幕」。这就是「缺席不许当 0」在这条链路上的样子。
+   */
+  checked: boolean;
+  hasTranscript: boolean;
+}): { state: TextCarrierState; platform: string | null } {
+  if (opts.hasTranscript) return { state: 'ok', platform: null };
+  const platform = transcriptSourceOf(opts.originUrl);
+  if (!opts.checked || !platform) return { state: 'unknown', platform: null };
+  return { state: 'missing', platform };
+}
+
+/** 提示的小标题。报告与用例引用同一份，不许两处各写一遍。 */
+export const TEXT_CARRIER_HEADING = '检索可见性：没有取到字幕文字稿';
+
+/** missing 档的正文。只陈述「文本载体缺失 → 检索读不到」，不承诺补了就会被引用。 */
+export function textCarrierLines(platform: string): string[] {
+  return [
+    `## ${TEXT_CARRIER_HEADING}`,
+    '- 这条视频里说了什么，现在没有文本载体：平台站内搜索、AI 检索能读到的只有标题、简介这类文字，' +
+      '口播内容不在其中（我们这边同样读不到——视频理解只抽帧看画面，听不见声音）。',
+    '- 可做的：把核心结论落进标题/简介，或在评论区置顶一条文字版要点，或给这条视频上字幕。',
+    `- 依据：插件在你的浏览器里向${platform}要过这条视频的字幕轨，回来是空的。` +
+      '登录态或风控也可能让它回空，拿不准就去作品页自己看一眼。',
+    '',
+  ];
 }
 
 function formatMetrics(m: Record<string, number>): string {
@@ -465,6 +563,7 @@ function renderReport(
     model: string;
     hasTranscript: boolean;
     transcript?: TranscriptLine[];
+    textCarrier?: { state: TextCarrierState; platform: string | null };
   },
 ): string {
   const lines: string[] = [];
@@ -511,6 +610,12 @@ function renderReport(
     lines.push(meta.mode === 'self' ? '## 下次可以怎么改' : '## 你能借鉴哪一层');
     lines.push(String(brief.takeaway), '');
   }
+
+  // 文本载体体检：**只有 missing 才出声**。
+  // ok 档出一句「你有字幕，很好」是纯废话；unknown 档出任何话都会被读成结论，
+  // 而我们那时手里什么结论都没有（见 textCarrierState 的三档注释）。
+  const tc = meta.textCarrier;
+  if (tc?.state === 'missing' && tc.platform) lines.push(...textCarrierLines(tc.platform));
 
   // uncertain 必须显式渲染出来，哪怕是空的也说一句「无」——
   // 「模型说不准的东西」是这份报告最需要被看见的部分，藏起来等于默认它全是事实。

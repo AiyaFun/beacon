@@ -5,6 +5,7 @@ import { Icon } from '@/components/icons';
 import { TierBadge } from '@/components/ui';
 import { useRouter } from 'next/navigation';
 import { actSubmitFeedback, actResolveFeedback, type FeedbackItem } from './actions';
+import { fmtDateFull } from '@/lib/format';
 
 // canResolve：当前成员是否有 compliance.resolve 权限（owner/admin）。由服务端算好传进来，
 // 客户端不做权限判断——这里只决定「要不要渲染按钮」，真正的闸门在 server action 里。
@@ -143,7 +144,7 @@ export function FeedbackPanel({ items, canResolve = false }: Props) {
                       </button>
                     </span>
                   )}
-                  <span className="small muted">{new Date(f.createdAt).toLocaleDateString('zh-CN')}</span>
+                  <span className="small muted">{fmtDateFull(f.createdAt)}</span>
                 </div>
               );
             })}

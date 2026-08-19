@@ -27,7 +27,7 @@ export const FPS_DEFAULT = 1;
  * 按真实报错把它调准——**宁可小，不要大**：小了用户看到的是明确的「请压到 25MB 内」，
  * 大了用户看到的是等 90 秒之后一个看不懂的方舟错误。
  */
-export const MAX_INLINE_VIDEO_BYTES = 25 * 1024 * 1024;
+export const MAX_INLINE_VIDEO_BYTES = 50 * 1024 * 1024;
 
 /** 允许内联的视频容器格式（方舟侧支持面 ∩ 创作者手里真实会有的格式）。 */
 export const ALLOWED_VIDEO_MIME = new Set([

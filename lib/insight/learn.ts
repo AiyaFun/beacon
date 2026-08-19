@@ -88,13 +88,14 @@ export async function learnFromPerformance(
   const title = record.title ?? '未命名内容';
   const angle = topic?.angle?.trim();
 
-  if (baseline.sample >= MIN_PEERS && baseline.avgViews > 0) {
-    const ratio = m.views / baseline.avgViews;
+  if (baseline.sample >= MIN_PEERS && baseline.avgViews !== null && baseline.avgViews > 0) {
+    const avgViews = baseline.avgViews; // 收窄一次，下面整段都不必再判空
+    const ratio = m.views / avgViews;
 
     if (ratio >= OVER_RATIO) {
       insights.push({
         kind: 'overperform',
-        text: `《${title}》在${pName}播放 ${m.views}，高出账号基线（${baseline.avgViews}）${Math.round((ratio - 1) * 100)}%`,
+        text: `《${title}》在${pName}播放 ${m.views}，高出账号基线（${avgViews}）${Math.round((ratio - 1) * 100)}%`,
       });
       // 绩效记忆：账号级稳定措辞（聚合信号，非单篇明细）。
       // 为什么不写「《标题》超基线 x%」：那个 x% 每次回流（T+48h/T+7d/多次手填）都不同，
@@ -126,7 +127,7 @@ export async function learnFromPerformance(
     } else if (ratio <= UNDER_RATIO) {
       insights.push({
         kind: 'underperform',
-        text: `《${title}》在${pName}播放 ${m.views}，低于账号基线（${baseline.avgViews}）${Math.round((1 - ratio) * 100)}%`,
+        text: `《${title}》在${pName}播放 ${m.views}，低于账号基线（${avgViews}）${Math.round((1 - ratio) * 100)}%`,
       });
       if (angle) {
         await deactivateOpposite(workspaceId, accountId, angleProven(angle, pName));
@@ -147,7 +148,7 @@ export async function learnFromPerformance(
         title,
         platformName: pName,
         views: m.views,
-        avgViews: baseline.avgViews,
+        avgViews,
         sample: baseline.sample,
         ratio,
       });
@@ -160,10 +161,16 @@ export async function learnFromPerformance(
       }
     }
 
-    // 互动结构信号：本条互动率显著高于基线均值 → 记账号属性事实
+    // 互动结构信号：本条互动率显著高于基线均值 → 记账号属性事实。
+    // 本条或基线任一算不出互动率（没有播放量做分母）就整个跳过：
+    // 拿 0 去比会稳定得出「没超基线」，等于永远学不到东西，还看不出是缺数据。
     const eng = engagementRate(m);
-    const baseEng = baseline.likeRate + baseline.commentRate + baseline.shareRate + baseline.collectRate;
-    if (baseEng > 0 && eng >= baseEng * 1.5) {
+    const { likeRate, commentRate, shareRate, collectRate } = baseline;
+    const baseEng =
+      likeRate === null || commentRate === null || shareRate === null || collectRate === null
+        ? null
+        : likeRate + commentRate + shareRate + collectRate;
+    if (eng !== null && baseEng !== null && baseEng > 0 && eng >= baseEng * 1.5) {
       await writeMemory({
         workspaceId,
         accountId,
@@ -414,7 +421,7 @@ export type PlatformProfile = {
   sample: number;
   avgViews: number;
   avgCompletion: number | null;
-  engagement: number; // 互动率合计（赞+评+转+藏 / 播放 的均值和）
+  engagement: number | null; // 互动率合计（赞+评+转+藏 / 播放 的均值和）；无播放量的平台为 null
 };
 
 export async function accountPlatformProfiles(accountId: string): Promise<PlatformProfile[]> {
@@ -438,12 +445,19 @@ export async function accountPlatformProfiles(accountId: string): Promise<Platfo
   const profiles: PlatformProfile[] = [];
   for (const [platform, list] of byPlatform) {
     const b = buildBaseline(list);
+    // 上面已经按 views>0 过滤过，这里 avgViews 不可能是 null；真到了就说明过滤失效，
+    // 那宁可不产出这条画像，也不要 `?? 0` 把一个假均播摆到页面上。
+    if (b.avgViews === null) continue;
     profiles.push({
       platform,
       sample: b.sample,
       avgViews: b.avgViews,
       avgCompletion: b.avgCompletion,
-      engagement: b.likeRate + b.commentRate + b.shareRate + b.collectRate,
+      // 四个率任一为 null（该平台拿不到播放量）就整体为 null——不能把缺席当 0 加进来
+      engagement:
+        b.likeRate === null || b.commentRate === null || b.shareRate === null || b.collectRate === null
+          ? null
+          : b.likeRate + b.commentRate + b.shareRate + b.collectRate,
     });
   }
   return profiles.sort((a, b) => b.avgViews - a.avgViews);

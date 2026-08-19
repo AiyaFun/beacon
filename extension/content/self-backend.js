@@ -804,6 +804,57 @@ function beaconScanAttrs(row, cfg) {
 // 现场诊断用 extension/tools/backend-probe.js（在 DevTools 控制台跑，控制台在 MAIN world
 // 才看得见框架状态），它会把 [DOM]（插件可用）与 [框架]（插件读不到）分开标注。
 
+// ── 公众号后台的 token：三类可达来源，按可靠性递降 ──────────────────────
+//
+// ⚠️ 真机 2026-07-29（竞对通道那次）：**插件自己开的 `/cgi-bin/home`，地址里不一定带 token**
+// ——只有用户手动点进来的页面才一定带。当时只修了 content/wechat-competitor.js 的 readToken，
+// 这一侧漏掉了：于是「每日自动回填」在同一个明明采得到数的页面上，把「地址栏没有 token」
+// 当成了「登录态已过期」→ 执行端 abort → sw.js 的 finishSelfAuto 立刻关掉标签页
+// （用户看到的就是「打开公众号后秒退、什么都没采到」），通知还反过来说是用户没登录。
+// 两条通道从此共用同一套判据，别再各修各的。
+//
+// 合规：token 只用于同域内的一次跳转，不存储、不上传、不进日志（自检里一律抹成 ***）。
+const WX_BACKEND_TOKEN_RE = /[?&;]token=(\d{6,12})\b/;
+
+function beaconWechatBackendToken(href) {
+  // 1) 地址栏（用户手动导航来的页面一定有）
+  try {
+    const t = new URL(href || location.href, location.origin).searchParams.get('token') || '';
+    if (/^\d{6,12}$/.test(t)) return t;
+  } catch {
+    /* 地址不合法就往下找 */
+  }
+  // 2) 页面里任意一条带 token= 的地址：左侧菜单/顶栏的 <a>，以及首页「已发表」那个
+  //    /cgi-bin/appmsgpublish iframe。读的是 DOM 属性，不碰 iframe 里的内容。
+  for (const el of beaconQueryAll('a[href*="token="], iframe[src*="token="], frame[src*="token="]')) {
+    const m = WX_BACKEND_TOKEN_RE.exec(el.getAttribute('href') || el.getAttribute('src') || '');
+    if (m) return m[1];
+  }
+  // 3) 内联 <script> 里的 token（后台把它写在 cgiData 里）。隔离世界读不到页面的 JS 变量，
+  //    但读得到 <script> 的**文本**——同一份数据的可达形态。
+  for (const s of beaconQueryAll('script:not([src])')) {
+    const m = /\btoken\s*[:=]\s*["']?(\d{6,12})\b/.exec(s.textContent || '');
+    if (m) return m[1];
+  }
+  return '';
+}
+
+// 取不到 token 时，「没登录」和「登录了但这一页取不到」是两件事：前者要用户去扫码，
+// 后者要用户换一个后台页面再来。指错方向就是让人白折腾——何况这条通道只有一条通知
+// 能说话，说错了就没有第二次机会。与 content/wechat-competitor.js 的 noTokenReason() 同口径。
+function beaconWechatNoRoutesInfo() {
+  // 判据只看页面自己的事实（路由 + 登录组件），不拿「没取到 token」倒推：
+  // needLogin 决定 sw.js 会不会把这一页切到前台等用户扫码，判错就是白弹一个页面给他。
+  const needLogin = /\/cgi-bin\/(loginpage|bizlogin)/.test(location.pathname)
+    || !!document.querySelector('.login__type__container, .login_container, #headimg_qrcode');
+  return {
+    needLogin,
+    reason: needLogin
+      ? '公众号后台未登录——已把登录页切到前台，请扫码登录，登录完成后会自动继续回填'
+      : '公众号后台这一页取不到 token，本轮自动回填已停止——请先手动打开公众号后台（左侧菜单可见的任意页面），再点一次「采集我的数据」',
+  };
+}
+
 const BACKENDS = {
   // ── 微信视频号 ──
   'channels.weixin.qq.com': {
@@ -851,18 +902,23 @@ const BACKENDS = {
     // 真机 2026-07-25 入库的 9 条记录标题全是那句状态文案，就是这么来的。
     // 只认条目本体的类名。
     rowHints: '[class*="appmsg"], [class*="publish"]',
-    // 每日自动回填要依次走的页面。公众号后台每个地址都要 token，从**当前地址上原样取**——
+    // 每日自动回填要依次走的页面。公众号后台每个地址都要 token，**从当前页面上原样取**——
+    // 不只看地址栏：插件自己开的 /cgi-bin/home 地址里常常没有 token，但页面里有
+    //（见上面 beaconWechatBackendToken 那段真机记录）。
     // token 只用于这一次同域跳转，不存储、不上传、不发给任何第三方（自检里也一律抹成 ***）。
     // 顺序有讲究：先发表记录（已验证能采到阅读/在看），再内容分析（完读率与送达人数在那儿）。
     autoRoutes(u) {
-      const token = u.searchParams.get('token');
-      if (!token) return null; // 没有 token = 登录态已过期，交给调用方去如实告知用户
+      const token = beaconWechatBackendToken(u && u.href);
+      // 页面上三类来源都没有 token = 真的走不下去了。是「没登录」还是「这页没有」，
+      // 交给 noRoutesReason 去分辨——调用方只负责如实转述，不猜。
+      if (!token) return null;
       const q = `&token=${encodeURIComponent(token)}&lang=zh_CN`;
       return [
         `https://mp.weixin.qq.com/cgi-bin/appmsgpublish?sub=list&begin=0&count=10${q}`,
         `https://mp.weixin.qq.com/cgi-bin/appmsganalysis?action=all${q}`,
       ];
     },
+    noRoutesInfo: beaconWechatNoRoutesInfo,
     // 真机 2026-07-25：用户连着三轮停在首页的「已发表」面板（t=home/index#tab=sent-panel）。
     // 那个面板确实列着文章，看起来就像「作品数据」，但它没有完读率/送达人数——
     // 光说「切到内容分析」不够，得给一条不依赖菜单长相的路：直接改地址栏。
@@ -1514,8 +1570,16 @@ async function beaconAutoRun() {
   try { u = new URL(location.href); } catch { return; }
   const routes = cfg.autoRoutes(u);
   if (!routes || routes.length === 0) {
-    // 登录态没了。如实说，绝不尝试登录，也不猜地址硬闯。
-    await beaconAutoSend('beacon-self-auto-abort', { reason: '创作者后台登录态已过期，请重新登录后再试（本轮自动回填已停止）' });
+    // 走不下去就停手：**绝不尝试登录**（不填表单、不点按钮、不碰二维码）。
+    // ⚠️ 理由必须分得清「没登录」和「登录了但这一页取不到 token」——这条通道全程静默，
+    // 用户唯一能看到的就是这一句话，说成「登录态已过期」会把登着的人指去重新扫码。
+    // needLogin=true 时 sw.js 会把这一页切到前台交给用户，等他登录完页面自己会跳回来，
+    // 内容脚本随之重新加载、再问一次 hello，本轮从当前这一站继续（见 sw.js 的 abort 分支）。
+    const info = (typeof cfg.noRoutesInfo === 'function' && cfg.noRoutesInfo()) || {};
+    await beaconAutoSend('beacon-self-auto-abort', {
+      reason: info.reason || '创作者后台登录态已过期，请重新登录后再试（本轮自动回填已停止）',
+      needLogin: !!info.needLogin,
+    });
     return;
   }
 
@@ -1541,6 +1605,13 @@ globalThis.__beaconAutoRoutes = function (href) {
   const cfg = BACKENDS[location.hostname];
   if (!cfg || !cfg.autoRoutes) return null;
   try { return cfg.autoRoutes(new URL(href || location.href)); } catch { return null; }
+};
+
+// 同上：走不下去时那句话本身也要能被单独验证——它是这条静默通道唯一的对外输出，
+// 说错方向（把「登着但这页没 token」说成「登录态过期」）比不说更糟。
+globalThis.__beaconAutoNoRoutesInfo = function () {
+  const cfg = BACKENDS[location.hostname];
+  return (cfg && typeof cfg.noRoutesInfo === 'function' && cfg.noRoutesInfo()) || null;
 };
 
 try { beaconAutoRun(); } catch { /* 自动回填出错绝不能影响手动采集 */ }

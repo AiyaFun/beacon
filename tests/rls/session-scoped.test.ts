@@ -34,6 +34,8 @@ const MIGRATED: { file: string; fns: string[] }[] = [
   { file: '(app)/persona/actions.ts', fns: ['actDeleteMemory', 'actUpdateMemory'] },
   { file: '(app)/data/actions.ts', fns: ['actAttachPublishUrl'] },
   { file: '(app)/topics/actions.ts', fns: ['actAccept'] },
+  // 账号合并/删除：按用户传进来的两个 id 搬数据、删账号，是本仓最不可逆的一对写操作
+  { file: '(app)/actions.ts', fns: ['actAccountInventory', 'actMergeAccounts', 'actDeleteAccount'] },
 ];
 
 describe('RLS 生效路径', () => {
@@ -43,9 +45,10 @@ describe('RLS 生效路径', () => {
         const body = bodyOf(read(file), fn);
         expect(body, `${file} 里找不到 ${fn}`).not.toBe('');
         expect(body).toContain('withSession(');
-        // 事务里必须用 tx，不能混用全局 prisma——混用等于那句查询根本没进 RLS 上下文
+        // 事务里必须用 tx，不能混用全局 prisma——混用等于那句查询根本没进 RLS 上下文。
+        // 两种写法都认：直接 `tx.xxx.` 查询，或把 tx 交给 lib 里的函数（如 mergeAccounts(tx, …)）。
         const inTx = body.slice(body.indexOf('withSession('));
-        expect(inTx).toMatch(/\btx\.\w+\./);
+        expect(inTx).toMatch(/\btx\.\w+\.|\(\s*tx\s*,/);
       });
     }
   }

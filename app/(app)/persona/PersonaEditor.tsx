@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { PLATFORM_LIST } from '@/lib/constants';
 import { isPersonaBlank, type PersonaCard } from '@/lib/persona';
+import { COVER_STYLE_OPTIONS, COVER_FONTS } from '@/lib/cover/styles';
 import { actSavePersona } from './actions';
 import { PersonaColdStart } from './PersonaColdStart';
 
@@ -22,6 +23,8 @@ export function PersonaEditor({ initial }: { initial: PersonaCard }) {
   const [canDo, setCanDo] = useState((initial.canDo ?? []).join('\n'));
   const [cantDo, setCantDo] = useState((initial.cantDo ?? []).join('\n'));
   const [platforms, setPlatforms] = useState<string[]>(initial.platforms ?? []);
+  const [coverStyle, setCoverStyle] = useState(initial.coverStyle ?? '');
+  const [coverFont, setCoverFont] = useState(initial.coverFont ?? '');
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState('');
   const router = useRouter();
@@ -40,6 +43,8 @@ export function PersonaEditor({ initial }: { initial: PersonaCard }) {
       canDo: canDo.split('\n').map((x) => x.trim()).filter(Boolean),
       cantDo: cantDo.split('\n').map((x) => x.trim()).filter(Boolean),
       platforms,
+      coverStyle,
+      coverFont,
     };
     start(async () => {
       const r = await actSavePersona(JSON.stringify(card));
@@ -102,6 +107,26 @@ export function PersonaEditor({ initial }: { initial: PersonaCard }) {
         </Field>
         <Field label="不能做 / 内容红线（每行一条）">
           <textarea className="textarea" rows={4} value={cantDo} onChange={(e) => setCantDo(e.target.value)} placeholder={'虚假承诺收入\n医疗健康建议\n金融荐股'} />
+        </Field>
+      </div>
+
+      {/* 品牌视觉：封面工位的默认值。空 = 按赛道自动推荐，不强迫用户先来这里设一遍 */}
+      <div className="grid grid-2" style={{ gap: 12 }}>
+        <Field label="默认封面风格（AI 封面用）">
+          <select className="select" value={coverStyle} onChange={(e) => setCoverStyle(e.target.value)}>
+            <option value="">按赛道自动推荐</option>
+            {COVER_STYLE_OPTIONS.map((o) => (
+              <option key={o.key} value={o.key} title={o.hint}>{o.name}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label="默认字体倾向">
+          <select className="select" value={coverFont} onChange={(e) => setCoverFont(e.target.value)}>
+            <option value="">随风格</option>
+            {COVER_FONTS.filter((f) => f.key !== 'auto').map((f) => (
+              <option key={f.key} value={f.key}>{f.name}</option>
+            ))}
+          </select>
         </Field>
       </div>
 

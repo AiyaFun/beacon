@@ -17,6 +17,11 @@ model Tenant {
   id            String    @id @default(cuid())
   name          String
   plan          String    @default("free") // free | personal | team | enterprise
+  // 平台侧封禁开关（超管在 /ops 里改）。active | suspended。
+  // 判据只在 lib/auth.ts 一处生效：登录时拒发会话、已签发的会话下一次请求即失效。
+  // 刻意**不删数据**——封禁是运营手段不是注销，解封后一切照旧（注销走 AccountDeletion）。
+  status        String    @default("active")
+  suspendReason String? // 封禁原因，登录页原样回给用户（写给用户看的人话，别写内部黑话）
   // 付费档到期时间。null = 无到期日（free 档，或从未付费）。
   // 手动续费模式（不做委托代扣）下，「订阅」= plan + 这个到期时间，不另立 Subscription 表：
   // Tenant.plan 已是 lib/quota.ts planOf() 的唯一真值来源，拆表必然造成双写漂移。
@@ -57,8 +62,15 @@ model Workspace {
   tasks           TaskItem[]
   botIntegrations BotIntegration[]
   inspirations    InspirationItem[]
+  readerComments  ReaderComment[]
+  mediaAssets     MediaAsset[]
+  coverStyles     CoverStylePreset[]
   collectionRuns  CollectionRun[]
   ingestTokens    IngestToken[]
+  agentRuns AgentRun[]
+  publishPlans PublishPlan[]
+  workflowRuns WorkflowRun[]
+  parserIncidents ParserIncident[]
 }
 
 // 插件采集令牌（按设备签发，可逐枚吊销）。
@@ -215,8 +227,20 @@ model Member {
   phone          String?   @unique // 手机号（短信验证码登录主标识）
   email          String?   @unique
   wechatOpenId   String?   @unique // 微信登录 openid（此前只加在 sqlite schema，生产构建因此类型报错）
+  // 企业应用（飞书/钉钉/企微）登录身份，格式 `<provider>:<openId>`，例如 `feishu:ou_xxx`。
+  // 【为什么合成一列而不是 provider + openId 两列】一个实例只接一家企业应用（装机向导里选定），
+  // 跨家不会共存；合成一列换来一条简单的唯一约束，两库行为一致，也不必再维护复合索引。
+  // ⚠️ 不透明 ID 不许转小写（大小写敏感），见 lib/auth/oa.ts。
+  oaIdentity     String?   @unique
   role           String    @default("owner") // owner | admin | editor | viewer
   status         String    @default("active") // active | suspended（停用成员：保留数据但禁止登录）
+  // 平台超级管理员：**与 role 是两个正交的东西**。role 管的是「在自己租户里能干什么」，
+  // 这一位管的是「能不能进跨租户运维台 /ops」。owner 再大也只是自家租户的 owner，
+  // 平台侧的封禁/改套餐/改全域 AI 配置必须靠这一位，绝不能靠 role === 'owner' 判——
+  // 那等于每个注册用户都是平台管理员。
+  // 引导：首任管理员由 env BEACON_PLATFORM_ADMIN_PHONES 白名单授予（见 lib/ops/admin.ts），
+  // 不必手工改库；之后可在 /ops 里互相授予。
+  platformAdmin  Boolean   @default(false)
   consentAt      DateTime? // F9-8 用户同意隐私政策+服务条款的时间
   consentVersion String? // F9-8 同意时的法律文本版本号
   createdAt      DateTime  @default(now())
@@ -335,6 +359,7 @@ model CreatorAccount {
   reviewReports   ReviewReport[]
   dailyStats      AccountDailyStat[]
   audience        AudienceProfile[]
+  publishCredentials PublishCredential[]
 }
 
 // ─────────── 账号级数据（创作者后台回填；作品级数据放不下的那部分）───────────
@@ -477,6 +502,131 @@ model InspirationItem {
   @@index([workspaceId, source, state])
 }
 
+// 读者原声——评论正文逐条留存（2026-08-11 起）。
+//
+// ⚠️ 这张表存的是**第三方个人写下的内容**，是全库边界最紧的一张。为什么它与
+// InspirationItem 的读者提问分成两张表，而不是加个字段：两者的**用途**不同，
+// 因而能享有的口径也不同（长论证见 lib/comment-collect-rules.ts）：
+//   · InspirationItem 的提问会进选题候选池、喂进 AI 上下文 → 必须是「≥2 人问过的共同疑问」；
+//   · ReaderComment 只被用户本人阅读 + 做聚合统计 → 可以逐条留存，但换来四条护栏。
+// 混成一张表，迟早有人把这里的正文顺手喂进生成链路，那道论证就没了。
+//
+// 不采清单（回传结构里根本没有这些字段，不是「取了不存」）：
+//   评论者昵称 / 头像 / 主页链接 / 用户 ID / IP 属地 / 评论时间 / 点赞数 / 楼层回复关系 / @提及。
+// 因此本表**没有任何指向评论者个人的列**——author 存的是作品作者，见下。
+model ReaderComment {
+  id          String @id @default(cuid())
+  workspaceId String
+  accountId   String? // 自有作品时归属账号；竞对作品为空。空 = 工作区共享（同 InspirationItem 语义）
+  platform    String
+  scope       String // own（自有作品）| rival（竞对作品）
+
+  // 这条作品**作者**的 handle——不是评论者的（本表没有评论者的任何标识）。
+  // 唯一用途与 InspirationItem.author 相同：让「被监控账号申请移除」能精确删掉
+  // 这一个账号名下的评论，而不是按平台把所有人的一起清空。
+  author String?
+
+  // 与 InspirationItem.askedBreak 的 key **同一口径**：platformItemId ?? `sha:<标题哈希>` ?? 'unknown'。
+  // 两边必须一致，否则 /data 作品行上「提问」和「原声」会各挂各的，同一条作品对不上。
+  // ⚠️ 非空且有默认值是为了唯一索引能生效：可空列在唯一索引里 NULL≠NULL，
+  // 作品 ID 采不到时同一条评论每采一次就重复插一行。
+  workKey   String  @default("unknown")
+  workTitle String?
+
+  text String // 评论正文（长度上限 MAX_COMMENT_TEXT_LEN，超出在插件端截断）
+  // 粗分类，只用于「粉丝在关心什么」的占比展示：question | demand | praise | complaint | other。
+  // 是启发式判断，不是事实断言——UI 上必须说成「大致分类」。
+  kind String @default("other")
+  // 正文的归一化哈希，唯一索引用。放列里而不是直接对 text 建唯一索引：
+  // text 可能到 300 字，长文本索引在 Postgres 上有 btree 尺寸限制。
+  textHash String
+
+  collectedAt DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  // 同一条作品下同一句话只留一行：重复采集是覆盖不是累加（同 askedBreak 的 max 语义）
+  @@unique([workspaceId, platform, workKey, textHash])
+  @@index([workspaceId, scope, collectedAt])
+  @@index([workspaceId, platform, workKey])
+  // 保留期清理（COMMENT_TEXT_PURGE_DAYS）按时间扫全表，不带 workspaceId
+  @@index([collectedAt])
+}
+
+// 媒体资产（域14 · AI 封面）：用户上传的参考图与生成出来的封面。
+//
+// 【为什么要有这张表】此前封面「过手不留」：生成的图只在浏览器 state 里，刷新即丢；
+// 人像参考图每出一张封面都要重传一次。落库之后才有「本稿封面」历史与「我的形象」小库。
+//
+// 【为什么 bytes 直接进库、不上对象存储】项目至今没有对象存储密钥，容器无 volume、
+// 蓝绿双实例重建即丢，写本地盘等于写了个必然消失的地方。数据库在托管 Postgres 上，
+// 不占应用服务器根盘。代价是 pg_dump 会把图片一起备份（每 1GB 图 ≈ 11 份备份），
+// 所以配额是硬的（lib/cover/rules.ts），且封面历史有保留期。
+// 表大到 2GB 量级时把 bytes 换成 storageKey 迁对象存储，读路径 /api/media/[id] 不用改。
+//
+// 【加密】kind=portrait/background/brand 是用户上传的照片（人像属敏感个人信息），
+// 落库前过 encryptBytes；kind=cover 是 AI 生成的成品图，明文存（它本来就要给用户下载/分享）。
+model MediaAsset {
+  id          String  @id @default(cuid())
+  workspaceId String
+  // 归属账号：形象库按账号分（不同账号可能是不同的人）；封面跟着草稿走时也记一份便于合并/删除
+  accountId   String?
+  // 这张图挂在哪篇草稿名下（仅 kind=cover）。草稿删除时置空而非连带删——
+  // 用户可能已经把这张封面存进形象库当素材了，不该因为删草稿就没了。
+  draftId     String?
+
+  // portrait（人像/主体）| background（背景空镜）| brand（品牌元素）| cover（生成的封面）
+  kind String
+  mime String
+  // 图片字节。portrait/background/brand 为 encryptBytes 后的密文（iv|tag|密文），cover 为明文。
+  data     Bytes
+  encrypted Boolean @default(false)
+  // 原始字节数（明文长度）。配额统计用，不必解密就能算。
+  size     Int
+  width    Int?
+  height   Int?
+
+  // 生成参数与来源（仅 cover）：{styleKey, specKey, fontKey, decors, mainTitle, subTitle, imagePrompt, model, source, aigcProduceId}
+  meta String @default("{}")
+
+  // 用户给这张素材起的名字（形象库列表显示用）
+  label String?
+  // 用户把它钉在形象库里：钉住的不进保留期清理
+  pinned Boolean @default(false)
+
+  // 上传人像时勾选「本人或已获单独同意」的时间与当时的政策版本（PIPL 单独同意的留痕）
+  consentAt      DateTime?
+  consentVersion String?
+
+  createdAt DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, kind, createdAt])
+  @@index([workspaceId, draftId])
+  // 保留期清理按时间扫全表，不带 workspaceId（同 ReaderComment 的口径）
+  @@index([createdAt])
+}
+
+// 「我的风格库」：用户自己写的封面风格（域14）。
+//
+// 内置风格是 lib/cover/styles.ts 里的数据（全租户共享）；这张表是**用户自己攒的**那些——
+// 他心里有一个具体的样子（「我那种黑底金字、右下角留白的系列封面」），内置 16 档里没有。
+// description 是他自己写的一句话，**原样进提示词**，不替他 AI 扩写：扩写要花钱、会走样，
+// 而且他明明已经说清楚要什么了（见 lib/cover/prompt.ts 的 customStyle）。
+model CoverStylePreset {
+  id          String @id @default(cuid())
+  workspaceId String
+  name        String // 用户起的名字，显示在风格网格里
+  description String // 画面描述，原样进提示词
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+}
+
+
 // ─────────────────────────── 域2：竞对监控（全局共享）───────────────────────────
 
 // 全局共享，无 tenantId：同一竞对被 N 个租户订阅只采一次
@@ -493,9 +643,40 @@ model CompetitorAccount {
 
   posts          CrawledPost[]
   watchlistItems WatchlistItem[]
+  dailyStats     CompetitorDailyStat[]
 
   @@unique([platform, handle])
 }
+
+// 竞对账号级的逐日快照（粉丝数等只有「当前值」的字段的历史）。
+//
+// 【为什么必须单独建表】CompetitorAccount.followers 是**覆盖写**的单值：每采一次就把上次
+// 的数字盖掉，于是「这个竞对这周涨了多少粉」在库里根本无从查起——只能看到此刻是多少。
+// 作品级有 PostMetricSnapshot 撑着，账号级此前是一片空白。
+//
+// 跟随竞对域的既有约定：**全局共享、不带 workspaceId、不启用 RLS**（同一竞对被 N 个租户
+// 订阅只采一次，见 CompetitorAccount 上方注释与 prisma/postgres/02-rls.sql 第 4 行）。
+//
+// 按「逻辑日」去重：同一竞对同一天多次采集只保留一条（upsert 覆盖成当天最后一次观测），
+// 与 AccountDailyStat 同口径，避免一天点十次采集就堆十行垃圾。
+model CompetitorDailyStat {
+  id           String   @id @default(cuid())
+  competitorId String
+  date         String // YYYY-MM-DD（逻辑日，按 Asia/Shanghai 折算，见 lib/insight/growth-store.ts）
+  followers    Int? // 粉丝总数；采不到就是 null，不许写 0 冒充
+  posts        Int? // 当时在库的作品数
+  totalViews   Int? // 在库作品的播放合计；平台不给播放量时为 null
+  totalLikes   Int?
+  totalComments Int?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  competitor CompetitorAccount @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+
+  @@unique([competitorId, date])
+  @@index([competitorId, date])
+}
+
 
 // F9-4 被监控账号移除申请：处理已公开个人信息的权利人拒绝权（PIPL）。
 // 全局无租户——竞对档案全局共享，申请也针对全局档案。
@@ -555,6 +736,14 @@ model PostMetricSnapshot {
   postId  String
   metrics String   @default("{}")
   takenAt DateTime @default(now())
+  // 这一次观测是**从哪种页面**采来的。不同页面给的字段天差地别：
+  //   home   账号主页/列表页 —— 抖音这类平台只给得到点赞
+  //   detail 作品详情页 —— 评论/收藏/转发只有这儿有
+  //   server 服务端定时/RSS   import 文件导入
+  // 不标来源的话，同一条作品的快照序列会在「只有点赞」和「四项齐全」之间反复横跳，
+  // 用户看到的是一条读不懂的记录：分不清是平台改了、还是这次换了种采法。
+  // 自有侧的 PerformanceSnapshot 早就有 source，竞对侧此前是漏的。
+  source  String   @default("home")
 
   post CrawledPost @relation(fields: [postId], references: [id], onDelete: Cascade)
 
@@ -609,6 +798,10 @@ model TopicIdea {
   accountId     String
   title         String
   angle         String // 差异化切入角（LLM 精排强制输出）
+  // 切入角的答案结构：definition | comparison | list | process | judgment（口径见 lib/topic/scoring.ts）。
+  // null = 没判定（老数据、模型返回 other 或集合外的值、JSON 解析失败、或这条被判「硬凑」不推荐），
+  // **不是**某个默认形状——空着比按一个错标签便宜。
+  angleShape    String?
   rationale     String?
   // 六维评分 JSON: {traffic, personaFit, cost, monetization, compliance, differentiation}
   scores        String   @default("{}")
@@ -685,6 +878,9 @@ model Draft {
   // 而「同一篇的多平台版本」恰恰是这类稿件最常见的需求。SetNull 而非 Cascade——
   // 删掉原稿不该连坐已经派生出去、可能已经发布的兄弟稿。
   parentDraftId String?
+  // 这篇稿子选定的封面（MediaAsset.id）。刻意不建外键关系：封面被清理/删除时这里就是一个
+  // 查不到的 id，读的时候查不到当没有即可——建了外键反而要为「删一张封面」维护一条级联。
+  coverAssetId  String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -981,10 +1177,16 @@ model LlmCallLog {
   promptTokens     Int      @default(0)
   completionTokens Int      @default(0)
   costUsd          Float    @default(0)
+  // 这笔钱谁出的：platform=平台垫付 | byok=用户自己的 Key | mock=没花钱 | unknown=本列加上之前的历史行。
+  // 平台预算闸（lib/ops/platform-config.ts）只数 platform 那部分——把用户自付的钱算进平台预算，
+  // 会让预算莫名其妙提前烧完，且越是重度 BYOK 用户越早把别人拦死。
+  // 历史行一律 unknown 而不是默认 platform：不知道就说不知道，别拿猜的数当账。
+  source           String   @default("unknown")
   createdAt        DateTime @default(now())
 
   @@index([tenantId, createdAt])
   @@index([createdAt])
+  @@index([source, createdAt])
 }
 
 // 后台任务执行记录（三轨编排的可观测性）
@@ -1174,4 +1376,308 @@ model WxPayRefund {
   @@index([orderId])
   @@index([status, createdAt])
   @@index([tenantId, createdAt])
+}
+
+
+// ─────────────────────── 域15：平台运维（跨租户超管台 /ops）───────────────────────
+
+// 超管操作审计：谁、什么时候、对哪个租户做了什么。
+// **不设外键、不做 RLS**：它记的正是跨租户动作，且被操作对象（租户/成员）可能随后就被删除——
+// 留痕要比被留痕的对象活得久，这是审计的意义所在。
+model AdminAuditLog {
+  id            String   @id @default(cuid())
+  actorMemberId String // 操作人 Member.id（不做外键，成员删了也要留痕）
+  actorName     String
+  action        String // 动作 key，唯一事实来源见 lib/ops/audit.ts
+  targetType    String // tenant | member | provider | setting | parser
+  targetId      String
+  targetLabel   String @default("")
+  detail        String @default("{}") // JSON：{before, after, note}
+  createdAt     DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorMemberId, createdAt])
+  @@index([targetType, targetId])
+}
+
+// 平台级默认模型渠道（超管配置）。与 ModelProvider（租户 BYOK）字段同形但**刻意分表**：
+// 混在一张表里就得靠一个「tenantId = 特殊值」的哨兵值来区分，而 ModelProvider 上有 RLS 策略，
+// 哨兵行会在租户会话里被策略挡掉——读侧永远拿不到平台默认，症状是「配了没生效」。
+//
+// 优先级（lib/llm/gateway.ts 的唯一口径）：租户 BYOK → 平台渠道（本表）→ env → Mock。
+// env 保留为兜底：库还没建表/还没配时不能让整个站的 AI 全哑。
+model PlatformProvider {
+  id        String   @id @default(cuid())
+  label     String
+  vendor    String
+  baseUrl   String
+  apiKeyEnc String // 与 ModelProvider 同一套 lib/crypto 加密，绝不明文
+  model     String
+  region    String   @default("cn") // cn | overseas
+  routing   String   @default("{}") // 按功能路由：{"scoring":true,...} 命中即这条渠道接管该功能
+  isDefault Boolean  @default(false)
+  enabled   Boolean  @default(true)
+  status    String   @default("untested") // untested | ok | failed
+  note      String   @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// 平台级键值配置（超管改，全站生效）。value 存 JSON 字符串。
+// 只一张表、按 key 分区，是因为这类配置的形状会随功能长——每加一组就加一张表，
+// 迁移成本会压过收益。key 的清单与解析口径收在 lib/ops/platform-config.ts。
+model PlatformSetting {
+  key       String   @id
+  value     String // JSON
+  updatedBy String? // Member.id
+  updatedAt DateTime @updatedAt
+}
+
+
+// ─────────────────────── 域16：AI 全域调用（工具执行器）───────────────────────
+//
+// 一次「让 AI 去把这件事做了」的完整过程。messages 存整段对话（含工具调用与回灌结果），
+// 这样一次运行可以中途停下等用户确认、几分钟后再从原样的上下文继续——
+// 不存的话，「确认」之后模型就失忆了，只能重跑一遍（还可能做出不一样的决定）。
+model AgentRun {
+  id          String   @id @default(cuid())
+  workspaceId String
+  accountId   String? // 运行时所在的创作账号（工具按它取人设/数据）
+  memberId    String // 发起人。**权限按他算**，不是按工作区里权限最大的人算
+  goal        String // 用户那句话
+  // running=模型正在想 | awaiting_confirm=等用户点确认写操作 | done | failed | cancelled
+  status      String   @default("running")
+  messages    String   @default("[]") // JSON: ChatMessage[]（含 tool 角色）
+  pending     String? // JSON: 等确认的那次 ToolCall
+  answer      String? // 最终回答
+  error       String?
+  steps       Int      @default(0) // 已消耗的模型轮数，用于封顶
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace  Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  agentSteps AgentStep[]
+
+  @@index([workspaceId, createdAt])
+}
+
+// 每一步留痕：调了什么工具、参数是什么、结果是什么、用户是不是拒绝了。
+// 这张表是「AI 到底动了我哪些东西」唯一能回答清楚的地方，不许省。
+model AgentStep {
+  id        String   @id @default(cuid())
+  runId     String
+  seq       Int
+  kind      String // tool_call | tool_result | answer | rejected | error
+  tool      String   @default("")
+  args      String   @default("{}")
+  result    String   @default("")
+  ok        Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  run AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, seq])
+}
+
+
+// ─────────────────────── 域17：多平台一键发布 ───────────────────────
+//
+// 【为什么是「计划 + 任务」而不是一个 publish 字段】各平台的发布口径差得太远：
+// 公众号有官方接口（服务端能直发到草稿箱），抖音/小红书/B站没有对个人开放的发布接口
+//（只能由插件在你自己的创作后台把内容填好、**停在发布按钮前**由你点），
+// X/YouTube 要么要付费 API 要么要视频文件。把它们塞进一个状态字段，
+// 结果一定是「显示已发布，其实只是填好了」这种最糟糕的错报。
+model PublishPlan {
+  id            String   @id @default(cuid())
+  workspaceId   String
+  accountId     String
+  draftId       String
+  status        String   @default("open") // open | done | cancelled
+  // AIGC 声明确认（与登记发布同一道闸）：没确认不许进入任何真实发布动作
+  aigcConfirmed Boolean  @default(false)
+  createdBy     String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tasks     PublishTask[]
+
+  @@index([workspaceId, createdAt])
+  @@index([draftId])
+}
+
+model PublishTask {
+  id             String  @id @default(cuid())
+  planId         String
+  platform       String
+  // api=服务端调官方接口 | extension=插件在创作后台填好由用户点发布 | manual=只能人工，平台没有可用通道
+  channel        String
+  // pending=待处理 | ready=内容已备好（等插件/人工）| filled=插件已填好待用户点发布
+  // | submitted=已提交平台（公众号草稿箱）| published=确认已发布 | failed | skipped
+  status         String  @default("pending")
+  title          String
+  content        String
+  // {tags:[], topics:[], firstComment:'', mentions:[], submitToPublish:false}
+  extra          String  @default("{}")
+  coverAssetId   String?
+  error          String?
+  publishedUrl   String?
+  platformItemId String?
+  // 平台侧返回的凭据（如公众号草稿 media_id），供后续跳转/提交用
+  externalRef    String?
+  filledAt       DateTime?
+  publishedAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  plan PublishPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@index([planId])
+  @@index([status, updatedAt])
+}
+
+// 平台官方接口凭证（目前只有微信公众号用得上）。appSecret 与模型 Key 同一套加密。
+model PublishCredential {
+  id           String   @id @default(cuid())
+  accountId    String
+  platform     String // wechat
+  appId        String
+  appSecretEnc String
+  status       String   @default("untested") // untested | ok | failed
+  lastError    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  account CreatorAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([accountId, platform])
+}
+
+
+// ─────────────────────── 域18：工作流模板与模板市场 ───────────────────────
+//
+// 模板 = 一条可复用的流水线：选题 → 初稿 → 技能改写 → 封面 → 配图 → 发布计划。
+// 与「技能」（ContentSkill = 一个提示词模板）的分工：技能是**一步**，模板是**一串**。
+// 存储沿用技能那一套（内置全局 + 租户自建 + 按租户安装），不另发明一套市场机制。
+model WorkflowTemplate {
+  id          String   @id @default(cuid())
+  // null = 内置模板（全租户可见）；有值 = 某个租户自建的
+  tenantId    String?
+  slug        String   @unique
+  name        String
+  description String   @default("")
+  emoji       String   @default("🧩")
+  category    String   @default("general")
+  // JSON: WorkflowStep[]，形状与解析口径见 lib/workflow/steps.ts
+  steps       String   @default("[]")
+  isBuiltin   Boolean  @default(false)
+  enabled     Boolean  @default(true)
+  createdBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  installs WorkflowInstall[]
+  runs     WorkflowRun[]
+}
+
+model WorkflowInstall {
+  id          String   @id @default(cuid())
+  tenantId    String
+  templateId  String
+  enabled     Boolean  @default(true)
+  installedAt DateTime @default(now())
+
+  template WorkflowTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, templateId])
+}
+
+// 一次跑模板的过程。中途失败要能看出**停在哪一步、为什么**——
+// 只记一个 failed 的话，用户唯一能做的就是整条重跑（前面几步的钱白花了）。
+model WorkflowRun {
+  id          String   @id @default(cuid())
+  workspaceId String
+  accountId   String
+  templateId  String
+  draftId     String?
+  status      String   @default("running") // running | done | failed | cancelled
+  stepIndex   Int      @default(0)
+  // JSON: 每步的 {kind, ok, message, at}
+  log         String   @default("[]")
+  error       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  template  WorkflowTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+}
+
+
+// ─────────────────────── 域19：采集自学习（解析规则自愈）───────────────────────
+//
+// 【要解决什么】平台改版 → 插件的选择器失效 → 采不到数据。此前的能力只到「看得见」
+//（lib/ingest/parser-health.ts 的降级告警），修还是要人去改代码、发新版插件、等用户更新。
+// 这两张表把后半程补上：疑似改版留证 → 让模型从**脱敏后的页面结构**里推断新锚点 →
+// 影子验证 → 人工审核 → 规则包下发（插件当天就能用上，不必发版）。
+//
+// 【隐私红线】ParserIncident.skeleton 存的是**结构骨架**：标签名、类名、data-* 属性名、
+// 文本的形状（如「12.3万」→「NUM万」），**不含任何正文、昵称、链接、图片**。
+// 服务端收到后还会再脱敏一次（lib/ingest/parser-learn.ts sanitizeSkeleton）——
+// 不信任客户端上传的东西是这条链路的底线。
+model ParserIncident {
+  id          String   @id @default(cuid())
+  workspaceId String
+  platform    String
+  // rival | self
+  scope       String
+  // 哪个字段没采到（followers | views | likes | items | title …）
+  field       String
+  // open=待处理 | proposed=已产出候选规则 | resolved=已修好 | ignored
+  status      String   @default("open")
+  // 脱敏后的页面结构骨架（JSON 字符串，有大小上限）
+  skeleton    String   @default("")
+  note        String   @default("")
+  samples     Int      @default(1) // 同一指纹撞了几次
+  fingerprint String // platform+scope+field，用于合并同类事件
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  rules     ParserRule[]
+
+  @@index([platform, status])
+  @@index([workspaceId, createdAt])
+}
+
+// 可下发的解析规则（版本化）。插件按 platform 拉「当前生效」的那一版。
+//
+// ⚠️ candidate → active 必须经人审：模型推断出来的选择器可能指向**旁边那个数字**
+//（抖音「关注 178 / 粉丝 328.3万」那次事故的形状）。自动上线等于把一个看着正常、
+// 实际差三个数量级的数字直接写进所有人的库。
+model ParserRule {
+  id         String   @id @default(cuid())
+  platform   String
+  field      String
+  // CSS 选择器候选，按优先级排列（JSON string[]）
+  selectors  String   @default("[]")
+  // 文本锚点兜底（JSON string[]，如「粉丝」「获赞」）
+  anchors    String   @default("[]")
+  // candidate=模型产出待审 | active=已下发 | retired=被新版本取代或回滚
+  status     String   @default("candidate")
+  version    Int      @default(1)
+  // 影子验证的命中率（0-1）。null = 还没验证过——**不许当成 0 或 1**
+  hitRate    Float?
+  source     String   @default("llm") // llm | manual
+  note       String   @default("")
+  incidentId String?
+  reviewedBy String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  incident ParserIncident? @relation(fields: [incidentId], references: [id], onDelete: SetNull)
+
+  @@index([platform, status])
+  @@unique([platform, field, version])
 }

@@ -3,6 +3,7 @@ import { getSession } from '@/lib/session';
 import { can } from '@/lib/rbac';
 import { buildAccountExport } from '@/lib/account/export';
 import { checkRateLimit, retryHint, tenantKey } from '@/lib/ratelimit';
+import { beijingDayKey } from '@/lib/beijing';
 
 // 全量数据导出下载（PIPL 第 45 条可携带权）。
 //
@@ -45,7 +46,7 @@ export async function GET(req: NextRequest) {
   }
 
   const bundle = await buildAccountExport({ tenantId: session.tenantId, memberId: session.memberId });
-  const day = new Date().toISOString().slice(0, 10);
+  const day = beijingDayKey();
   const cnName = `烽火台数据导出_${day}.json`;
 
   return new NextResponse(JSON.stringify(bundle, null, 2), {

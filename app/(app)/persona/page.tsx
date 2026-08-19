@@ -117,6 +117,7 @@ export default async function PersonaPage() {
             isCurrent: a.id === s.accountId,
             draftCount: a._count.drafts,
             publishCount: a._count.publishRecords,
+            personaScore: personaCompleteness(readPersona(a.personaCard)),
           }))}
         />
       </Card>

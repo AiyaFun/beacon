@@ -2,11 +2,11 @@
 
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { ASSIGNABLE_ROLES, ROLE_LABEL, ROLE_DESC } from '@/lib/rbac';
+import { ROLE_LABEL, ROLE_DESC, type Role } from '@/lib/rbac';
 import { actCreateInvite } from './actions';
 
 // 邀请表单：手机号可选（留空 = 凭链接任何人可接受）+ 角色选择。
-export function InviteForm() {
+export function InviteForm({ roles }: { roles: Role[] }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [phone, setPhone] = useState('');
@@ -53,7 +53,7 @@ export function InviteForm() {
         <div className="field" style={{ marginBottom: 0 }}>
           <label className="field-label">角色</label>
           <select className="select" value={role} onChange={(e) => setRole(e.target.value)}>
-            {ASSIGNABLE_ROLES.map((r) => (
+            {roles.map((r) => (
               <option key={r} value={r}>{ROLE_LABEL[r]}</option>
             ))}
           </select>

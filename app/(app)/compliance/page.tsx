@@ -84,7 +84,11 @@ export default async function CompliancePage() {
       </div>
 
       <div className="grid-asym-left" style={{ marginBottom: 16 }}>
-        <Card title="实时检测器" sub="本地秒查（不联网、不出库）">
+        {/* ⚠️ 这里此前写的是「本地秒查（不联网、不出库）」——三处都不成立：
+            actCheck 是 server action（文案离开浏览器）、llmSemanticReview 无条件把原文拼进
+            prompt 发给模型、命中且关联草稿时还会 prisma.complianceCheck.create。
+            用户可能把未发布的商业稿贴进来，「不联网」这四个字直接影响他要不要贴。 */}
+        <Card title="实时检测器" sub="词库秒查 + AI 语义复核（文案会发往服务端）">
           <Checker drafts={draftOptions} />
         </Card>
 
@@ -164,9 +168,13 @@ export default async function CompliancePage() {
           <div className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
             <span style={{ color: 'var(--brand)', marginTop: 2 }}><Icon.bulb size={16} /></span>
             <div>
-              <b className="small">本地秒查 + AI 二次复核</b>
+              <b className="small">词库秒查 + AI 语义二次复核</b>
               <div className="small muted" style={{ marginTop: 3 }}>
-                检测先在本地跑词库秒查（不联网、不出库，免费），接入模型后在此之上叠加 AI 语义二次复核。
+                检测分两步：先在<b>服务端</b>跑词库匹配（毫秒级、不调用模型、不计费），
+                再把文案送一次 AI 做语义复核，找词库覆盖不到的变体与隐含承诺。
+                <b>你贴进来的文案会离开浏览器</b>——它会发到烽火台服务器，并在第二步随请求发给模型服务商。
+                检测记录只有在<b>关联了草稿且确实命中</b>时才会留存（用于「上周被拦了什么」），
+                检测框里的临时文本不入库。
                 法律级红线命中即禁止导出，需先改写规避。
                 <b>边界说明：</b>本工具做的是发布前自查，不替代平台审核，也不构成法律意见；变体规避写法（拼音/谐音/拆字）可能漏检。
               </div>

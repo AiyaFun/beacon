@@ -2,7 +2,8 @@ import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { readPersona, personaCompleteness } from '@/lib/persona';
 import { PageHead } from '@/components/ui';
-import { Chat } from './Chat';
+import { AssistantTabs } from './AssistantTabs';
+import { availableTools } from '@/lib/agent/run';
 
 export const dynamic = 'force-dynamic';
 
@@ -21,7 +22,7 @@ export default async function AssistantPage() {
     <>
       <PageHead
         title="AI 助手"
-        desc="选题 / 文案 / 运营随便问，助手带你的账号人设与长期记忆上下文来答"
+        desc="选题 / 文案 / 运营随便问；切到「执行」它还能直接操作这个系统——写操作会先问你"
       />
 
       <div className="row wrap" style={{ gap: 8, marginBottom: 14 }}>
@@ -33,7 +34,7 @@ export default async function AssistantPage() {
         </span>
       </div>
 
-      <Chat accountName={accountName} />
+      <AssistantTabs accountName={accountName} tools={availableTools(s.role)} />
     </>
   );
 }

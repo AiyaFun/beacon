@@ -1,6 +1,13 @@
 // 抖音视频详情页解析（www.douyin.com/video/<id>）——采集单条作品的完整互动指标。
-// ⚠️ 抖音改版频繁、且详情页 DOM 未当场实测校准：优先用相对稳定的 data-e2e 埋点，逐层回退，
-//    取不到就少采几项（合并式入库，不覆盖已有、不报错）。真实失效时按此文件调选择器即可。
+//
+// 2026-08-08 真机校准（直链 /video/<id> 形态，用户真实 Chrome）：
+//   指标埋点已从带 -count 后缀改为不带：video-player-digg / video-player-collect /
+//   video-player-share；评论数在 feed-comment-icon。四个数与页面显示逐项核对一致
+//   （1.8万/1.5万/1012/50）。旧的 *-count 选择器保留作回退（全 null 不干扰）。
+// ⚠️ modal 形态（/jingxuan?modal_id=<id>，用户刷精选流点开）**故意不采**：
+//   pathname 不含 /video/ → 本解析器返回 null。真机证实 modal 页上全局可见的
+//   video-player-digg 等数字属于**背景推荐流里的另一条视频**（3635 vs 本条真值 1.8万），
+//   在那个形态下取数=张冠李戴。要采就走直链——App 里点作品标题跳的就是直链。
 
 // ⚠️ **必须接力，不能直接覆盖 __beaconParse**。
 // manifest 里 douyin.js（主页）与本文件（作品页）是**同一条 content_scripts 规则**的第 2、3 个脚本，
@@ -48,8 +55,14 @@ function dyAuthorLink() {
     const a = root && root.querySelector('a[href*="/user/"]');
     if (a && !dyInExcluded(a)) return a;
   }
+  // 全页兜底还要再排两样（2026-08-08 真机踩实）：导航栏「我的」是全页第一条 /user/ 链接，
+  // href 是 /user/self——作用域埋点一旦被改版删光，这里若不排，**竞对的作品会挂到用户
+  // 自己的抖音号名下**（张冠李戴的最坏形态：数据看着完全正常）。header 里的一律不是作者。
   for (const a of document.querySelectorAll('a[href*="/user/"]')) {
-    if (!dyInExcluded(a)) return a;
+    if (dyInExcluded(a)) continue;
+    if (/\/user\/self(?:[/?#]|$)/.test(a.href)) continue;
+    if (a.closest('header, [data-e2e="douyin-navigation"], #douyin-header, #douyin-right-container-header')) continue;
+    return a;
   }
   return null;
 }
@@ -98,10 +111,11 @@ globalThis.__beaconParse = function () {
   const txt = (sel) => { const e = document.querySelector(sel); return e ? e.textContent.trim() : null; };
   const metrics = {};
   const set = (k, v) => { const n = pc(v); if (n != null && n >= 0) metrics[k] = n; };
-  set('likes', txt('[data-e2e="video-player-digg-count"]') || txt('[data-e2e="like-count"]'));
-  set('comments', txt('[data-e2e="video-player-comment"]') || txt('[data-e2e="comment-count"]') || txt('[data-e2e="comment-icon"] + *'));
-  set('collects', txt('[data-e2e="video-player-collect-count"]') || txt('[data-e2e="collect-count"]'));
-  set('shares', txt('[data-e2e="video-player-share-count"]') || txt('[data-e2e="share-count"]'));
+  // 2026-08-08 真机：新埋点在前（当天实测命中），旧 *-count 断层保留作回退。
+  set('likes', txt('[data-e2e="video-player-digg"]') || txt('[data-e2e="video-player-digg-count"]') || txt('[data-e2e="like-count"]'));
+  set('comments', txt('[data-e2e="feed-comment-icon"]') || txt('[data-e2e="video-player-comment"]') || txt('[data-e2e="comment-count"]'));
+  set('collects', txt('[data-e2e="video-player-collect"]') || txt('[data-e2e="video-player-collect-count"]') || txt('[data-e2e="collect-count"]'));
+  set('shares', txt('[data-e2e="video-player-share"]') || txt('[data-e2e="video-player-share-count"]') || txt('[data-e2e="share-count"]'));
 
   // 发布时间在作者信息区（评论区里也全是日期，所以必须限定范围再找）
   const publishedAt = dyPublishedAt(

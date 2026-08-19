@@ -17,9 +17,8 @@
  *  2. 核验身份这一步在**线下**做（申请人填的 contact），脚本不代替判断，只执行结论。
  *  3. reject 之后该账号恢复采集——所以驳回要有理由，别拿它当「先放着」的抽屉。
  */
-import { PrismaClient } from '@prisma/client';
-
-const prisma = new PrismaClient();
+import { prisma } from '../lib/db';
+import { purgeRemovedAccountData, removalHandleVariants } from '../lib/legal/removal';
 
 const argv = process.argv.slice(2);
 const cmd = argv[0] || 'list';
@@ -27,15 +26,53 @@ const id = argv[1] && !argv[1].startsWith('--') ? argv[1] : '';
 const APPLY = argv.includes('--apply');
 const ALL = argv.includes('--all');
 
-// 与 lib/legal/removal.ts 同一套语义，但脚本走独立 PrismaClient（不经 Next 运行时），
-// 故这里直接用 Prisma 实现，避免把 app 侧的模块图拖进来。
+// ⚠️ 这里曾经是一份**独立实现**（自己 new PrismaClient、自己查 competitorAccount 再删），
+// 注释写着「与 lib/legal/removal.ts 同一套语义」——但它并不是，而且是三处实打实的差：
+//   ① 完全没删读者提问（InspirationItem source='rival-comment'）；
+//   ② handle 精确匹配，差一个 @ 或大小写就一条都删不到（lib 那侧专门做了变体与兜底）；
+//   ③ 没删采集台账（CollectionRun）。
+// 也就是说：运营用这个脚本处理完申请、告诉权利人「已删除」，评论区提取的内容其实还在库里。
+// 2026-08-11 接入评论正文时一并修掉——正文比提问更不能留。
+//
+// 现在直接复用 lib 那份唯一实现。「同一套语义」这句话只有靠同一段代码才成立，
+// 靠注释维持的一致性迟早会漂（这次就漂了）。
 async function purge(platform: string, handle: string) {
-  const account = await prisma.competitorAccount.findUnique({ where: { platform_handle: { platform, handle } }, select: { id: true, name: true } });
-  if (!account) return { accounts: 0, posts: 0, watchlistItems: 0, name: '' };
-  const posts = await prisma.crawledPost.count({ where: { competitorId: account.id } });
-  const watchlistItems = await prisma.watchlistItem.count({ where: { competitorId: account.id } });
-  if (APPLY) await prisma.competitorAccount.delete({ where: { id: account.id } });
-  return { accounts: 1, posts, watchlistItems, name: account.name };
+  // dry-run：不删，只把「会删掉什么」数出来。数法必须与真删那条路径逐项对齐。
+  if (!APPLY) {
+    const variants = removalHandleVariants(platform, handle);
+    const account = await prisma.competitorAccount.findFirst({
+      where: { platform, handle: { in: variants } },
+      select: { id: true, name: true },
+    });
+    const [commentQuestions, readerComments] = await Promise.all([
+      prisma.inspirationItem.count({ where: { source: 'rival-comment', platform, author: { in: variants } } }),
+      prisma.readerComment.count({ where: { scope: 'rival', platform, author: { in: variants } } }),
+    ]);
+    if (!account) return { accounts: 0, posts: 0, watchlistItems: 0, runs: 0, commentQuestions, readerComments, name: '' };
+    const [posts, watchlistItems, runs] = await Promise.all([
+      prisma.crawledPost.count({ where: { competitorId: account.id } }),
+      prisma.watchlistItem.count({ where: { competitorId: account.id } }),
+      prisma.collectionRun.count({ where: { scope: 'rival', targetId: account.id } }),
+    ]);
+    return { accounts: 1, posts, watchlistItems, runs, commentQuestions, readerComments, name: account.name };
+  }
+
+  const name = (await prisma.competitorAccount.findFirst({
+    where: { platform, handle: { in: removalHandleVariants(platform, handle) } },
+    select: { name: true },
+  }))?.name ?? '';
+  return { ...(await purgeRemovedAccountData(platform, handle)), name };
+}
+
+function purgeLine(p: Awaited<ReturnType<typeof purge>>): string {
+  return [
+    `竞对档案 ${p.accounts} 个${p.name ? `（${p.name}）` : ''}`,
+    `作品 ${p.posts} 条`,
+    `订阅关系 ${p.watchlistItems} 条`,
+    `采集台账 ${p.runs} 条`,
+    `读者提问 ${p.commentQuestions} 条`,
+    `读者原声 ${p.readerComments} 条`,
+  ].join(' · ');
 }
 
 async function main() {
@@ -72,7 +109,7 @@ async function main() {
   if (cmd === 'show') {
     console.log(JSON.stringify({ ...req, createdAt: req.createdAt.toISOString() }, null, 2));
     const p = await purge(req.platform, req.handle); // APPLY=false ⇒ 只统计不删
-    console.log(`\n核验成立将删除：竞对档案 ${p.accounts} 个（${p.name || '未入库'}）· 作品 ${p.posts} 条 · 订阅关系 ${p.watchlistItems} 条`);
+    console.log(`\n核验成立将删除：${purgeLine(p)}`);
     console.log('（用户自己基于该账号产出的选题/草稿/记忆不删——那是第三方的创作产物，不属于被申请人的个人信息）');
     return;
   }
@@ -82,7 +119,7 @@ async function main() {
     console.log(`${APPLY ? '执行' : '[dry-run] 将'}把申请 ${id}（${req.platform}/${req.handle}）标记为 ${status}`);
     if (cmd === 'verify') {
       const p = await purge(req.platform, req.handle);
-      console.log(`${APPLY ? '已删除' : '将删除'}：竞对档案 ${p.accounts} 个 · 作品 ${p.posts} 条 · 订阅关系 ${p.watchlistItems} 条`);
+      console.log(`${APPLY ? '已删除' : '将删除'}：${purgeLine(p)}`);
     } else {
       console.log('驳回后该账号恢复采集——确认申请人确实无权代表该账号再执行。');
     }

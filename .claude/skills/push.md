@@ -69,6 +69,28 @@ docs/方案-*.md
 
 Run `git ls-files` to verify none of these are tracked. If any are tracked, run `git rm --cached` to untrack them before proceeding.
 
+### Step 2b: Strip the Commercial-Delivery Artifacts
+
+These files **stay tracked in the private repo** (cnb.cool needs them) but are **stripped from the
+public tree**. They are the packaging of the paid editions — the Mac-mini appliance and the
+customer-hosted private deployment — plus our own production runbook:
+
+```
+deploy/README.md                  # the three-editions delivery matrix
+deploy/appliance/                 # one-click installers for the appliance edition
+deploy/private/                   # compose + env template for the private edition
+docs/上线清单-2026-08-18.md        # our production's own release checklist
+```
+
+Nothing in `lib/`, `app/`, `tests/` or `scripts/` reads these paths, so removing them keeps the
+public tree buildable and the suite green. **Do not** try to strip `lib/edition.ts`, `app/setup/`
+or `connector.ts` along with them — those are wired into the app and its tests; pulling them
+would fork the public repo from the private one permanently.
+
+Because the public branch is built by squashing onto `github/main` (see Step 5), the strip has to
+be redone on every push. Verify with `git ls-tree -r --name-only HEAD | grep -E 'deploy/(appliance|private)|deploy/README|上线清单'`
+returning nothing **before** you push.
+
 ### Step 3: Commercial Content Check
 
 Scan for commercially sensitive content that should not be open-sourced:
@@ -94,9 +116,25 @@ Check `git log` for any commits with other author names (e.g., "Claude", persona
 
 ### Step 5: Push to GitHub
 
+Never push the working branch straight across — its commits carry cnb.cool authorship and
+`Co-Authored-By` trailers, and it still contains the Step 2b artifacts. Build a publish branch by
+squashing onto whatever GitHub already has, strip, then commit under the AiyaFun identity:
+
 ```bash
-git push github <current-branch>:main
+git fetch github
+git checkout -B github-publish github/main
+git merge --squash <working-branch>          # stages the whole diff, no merge commit
+git rm -r --cached --quiet deploy/appliance deploy/private deploy/README.md docs/上线清单-*.md
+git ls-tree -r --name-only HEAD | grep -E 'deploy/(appliance|private)|deploy/README' && echo STOP
+GIT_AUTHOR_NAME=AiyaFun GIT_AUTHOR_EMAIL=293326193+AiyaFun@users.noreply.github.com \
+GIT_COMMITTER_NAME=AiyaFun GIT_COMMITTER_EMAIL=293326193+AiyaFun@users.noreply.github.com \
+  git commit -q -F <release-notes-file>
+git push github github-publish:main
+git checkout <working-branch>                # the private branch is never rewritten
 ```
+
+The squash keeps the public history curated (one commit per release) and leaves the private
+branch untouched, so cnb.cool and GitHub never fight over hashes.
 
 If GitHub Push Protection blocks the push, read the error, fix the offending pattern (split strings, use placeholders), and retry.
 

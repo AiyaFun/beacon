@@ -147,16 +147,23 @@ describe('入库语义', () => {
     expect(parseJson<Record<string, number>>(posts[0].metrics, {})).toEqual({ likes: 3000 });
   });
 
-  it('重复回传幂等：不重复建作品；指标变化才记 PostMetricSnapshot', async () => {
+  // 2026-08-10：作品**不**重复建（幂等仍然成立），但快照改成每次采集都留一个时点。
+  // 理由见 tests/pipeline/competitor-snapshot.test.ts 里那段说明：
+  // 「没涨」和「没采」在序列上必须能分开，否则区间增长算不出来。
+  // 首次入库也落一条起点（原来不落，导致第一段增长——往往最猛的那段——永远丢失）。
+  it('重复回传幂等：不重复建作品；每次采集都留一条 PostMetricSnapshot', async () => {
+    // 两条作品里只有 v1 带指标；v2 无指标 → 不写空快照（空快照会在曲线上造出一个假的 0 点）
     await ingestCompetitorData(workspaceId, payload());
-    await ingestCompetitorData(workspaceId, payload()); // 指标没变 → 不加快照
+    expect(await prisma.postMetricSnapshot.count()).toBe(1); // v1 的起点
+
+    await ingestCompetitorData(workspaceId, payload()); // 指标没变，但仍然留时点
     expect(await prisma.crawledPost.count()).toBe(2);
-    expect(await prisma.postMetricSnapshot.count()).toBe(0);
+    expect(await prisma.postMetricSnapshot.count()).toBe(2);
 
     const p2 = payload();
-    p2.posts[0].metrics = { likes: 4500 }; // 指标变了 → 记一条快照
+    p2.posts[0].metrics = { likes: 4500 };
     await ingestCompetitorData(workspaceId, p2);
-    expect(await prisma.postMetricSnapshot.count()).toBe(1);
+    expect(await prisma.postMetricSnapshot.count()).toBe(3);
     const post = await prisma.crawledPost.findFirstOrThrow({ where: { platformItemId: 'v1' } });
     expect(parseJson<Record<string, number>>(post.metrics, {})).toEqual({ likes: 4500 });
   });
@@ -212,6 +219,57 @@ describe('守卫2·反面 · autoSubscribe=true 的众包采集路径', () => {
     const comp = await prisma.competitorAccount.findUniqueOrThrow({ where: { id: competitorId } });
     expect(comp.followers).toBe(1200);
     expect(await prisma.watchlistItem.count({ where: { workspaceId: ws2.id, competitorId } })).toBe(1);
+  });
+});
+
+// ── 粉丝数量级闸（lib/ingest/parser-health.ts）──
+// 「关注 178 / 粉丝 328.3万」取错时回传上来的就是 178。写进去不是「这次数据不准」——
+// 竞对档案是全局共享表，一个错值会喂给基线、同行对比和算法教练，而且没有一键撤销。
+describe('粉丝数量级闸', () => {
+  const ingest = (followers: number, via?: string) =>
+    ingestCompetitorData(workspaceId, {
+      platform: 'douyin',
+      handle: 'MS4wLjABAAAA-x',
+      autoSubscribe: true,
+      profile: { followers, ...(via ? { followersVia: via } : {}) },
+      posts: [],
+    } as never);
+
+  it('🔒 量级突变（328.3万 → 178）→ 库里的值保持不变', async () => {
+    await prisma.competitorAccount.update({ where: { id: competitorId }, data: { followers: 3_283_000 } });
+    const r = await ingest(178, 'text');
+    expect(r.ok).toBe(true); // 整批不打回：作品照常入库，只是粉丝数这一项不认
+    const comp = await prisma.competitorAccount.findUniqueOrThrow({ where: { id: competitorId } });
+    expect(comp.followers).toBe(3_283_000);
+  });
+
+  it('台账上留痕，不是悄悄丢掉', async () => {
+    await prisma.competitorAccount.update({ where: { id: competitorId }, data: { followers: 3_283_000 } });
+    await ingest(178, 'text');
+    const run = await prisma.collectionRun.findFirst({ where: { workspaceId, scope: 'rival' }, orderBy: { ranAt: 'desc' } });
+    expect(run?.note).toContain('不覆盖');
+  });
+
+  it('正常波动照常写入', async () => {
+    await prisma.competitorAccount.update({ where: { id: competitorId }, data: { followers: 241_000 } });
+    await ingest(243_500, 'e2e');
+    const comp = await prisma.competitorAccount.findUniqueOrThrow({ where: { id: competitorId } });
+    expect(comp.followers).toBe(243_500);
+  });
+
+  it('🔒 建档后第一次拿到真实粉丝数（0 → 24.1万）必须写得进去', async () => {
+    await prisma.competitorAccount.update({ where: { id: competitorId }, data: { followers: 0 } });
+    await ingest(241_000, 'e2e');
+    const comp = await prisma.competitorAccount.findUniqueOrThrow({ where: { id: competitorId } });
+    expect(comp.followers).toBe(241_000);
+  });
+
+  it('老版本插件不带 followersVia 也照常入库（字段是 optional，不能因为它缺席打回整批）', async () => {
+    await prisma.competitorAccount.update({ where: { id: competitorId }, data: { followers: 241_000 } });
+    const r = await ingest(245_000);
+    expect(r.ok).toBe(true);
+    const comp = await prisma.competitorAccount.findUniqueOrThrow({ where: { id: competitorId } });
+    expect(comp.followers).toBe(245_000);
   });
 });
 

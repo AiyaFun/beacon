@@ -146,6 +146,9 @@ export function buildDraftMessages(target: DraftTarget, ctx: DraftContext): { me
           ctx.accountCtx.text,
           ctx.selectionCtx,
           aiFlavorBanBlock(),
+          // 平台形态：改写 / 派生 / 深度模式一直都注入它，唯独**普通模式初稿**没有——
+          // 于是一步起稿的「小红书味」全靠模型自觉，出来常是通用公众号腔。补上这一句。
+          PLATFORM_STYLE[target.platform] ? `目标平台的内容形态：${PLATFORM_STYLE[target.platform]}` : '',
           '要求：结构完整（钩子-正文-引导），贴合人设与目标平台，优先复用素材库里的真实经历与被验证的擅长方向增强差异化，控制在合理篇幅。只输出正文。',
           '语感要求：句子长短要有起伏，不要句句工整、段段等长；该说人话的地方就说半句话。',
         ]

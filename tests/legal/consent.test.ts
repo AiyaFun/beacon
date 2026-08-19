@@ -18,8 +18,8 @@ describe('法律文本与同意管理 (F9-8)', () => {
     await prisma.tenant.deleteMany({ where: { name: 'consent-test' } });
   });
 
-  it('LEGAL_VERSION 格式正确', () => {
-    expect(LEGAL_VERSION).toMatch(/^\d{4}\.\d{2}$/);
+  it('LEGAL_VERSION 格式正确（年.月，同月内再改政策文本时追加 .序号，如 2026.08.2）', () => {
+    expect(LEGAL_VERSION).toMatch(/^\d{4}\.\d{2}(\.\d+)?$/);
   });
 
   it('新建 Member 的 consentAt/consentVersion 默认为 null', async () => {

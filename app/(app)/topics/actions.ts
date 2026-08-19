@@ -232,6 +232,9 @@ export async function actRescoreTopic(topicId: string): Promise<{ ok: true; stil
       where: { id: topic.id },
       data: {
         angle: scored.angle,
+        // 这里必须 ?? null 而不是原样传 undefined：update 里 undefined 是「这一列别动」，
+        // 那会让重评分后仍留着上一轮的形状标签，配一个已经换掉的角度。
+        angleShape: scored.angleShape ?? null,
         rationale: scored.rationale,
         scores: JSON.stringify(scored.scores),
         totalScore: scored.totalScore,

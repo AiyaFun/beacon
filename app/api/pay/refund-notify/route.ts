@@ -5,6 +5,7 @@ import { decryptResource, verifySignature } from '@/lib/pay/sign';
 import { readWxPayEnv } from '@/lib/pay/provider';
 import { applyRefundResult } from '@/lib/pay/order';
 import type { RefundState } from '@/lib/pay/types';
+import { can } from '@/lib/edition';
 
 // 微信支付**退款结果**回调。与支付回调 (../notify) 同构：验签 → 解密 → 幂等兑现。
 // 单独一条路由是必须的：支付回调路由按 event_type 直接 204 吞掉 REFUND.*，且它解出的是
@@ -42,6 +43,10 @@ function toRefundState(s: string | undefined): RefundState {
 }
 
 export async function POST(req: Request) {
+  // 形态闸：企业版（appliance/private）不收钱，支付回调端点不该存在。
+  // 回 404 而不是 403 —— 客户机器上这个端点在语义上就是「没有这个东西」，
+  // 403 反而是在告诉扫描器「这里有支付入口，只是被关了」。
+  if (!can('payment')) return new Response('Not Found', { status: 404 });
   // 🔒 原始字节验签，同支付回调：先 text() 验签，再 JSON.parse 用于业务
   const raw = await req.text();
   const h = req.headers;

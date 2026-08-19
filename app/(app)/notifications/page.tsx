@@ -61,8 +61,13 @@ export default async function NotificationsPage() {
     <>
       <PageHead
         title="机器人与消息通知"
-        desc="一键配置飞书/IM 机器人，自动推送每日推荐选题、热点刷新、合规警告，支持群聊 ChatOps 交互收录内容"
-        action={<Link href="/help" className="btn btn-sm btn-ghost"><Icon.help size={13} /> 配置说明</Link>}
+        desc="推送什么、什么时候推、群里能用哪些命令 · 机器人的密钥填在「接入与密钥」"
+        action={
+          <span className="row" style={{ gap: 8 }}>
+            <Link href="/settings/keys" className="btn btn-sm btn-primary"><Icon.cpu size={13} /> 接入与密钥</Link>
+            <Link href="/help" className="btn btn-sm btn-ghost"><Icon.help size={13} /> 配置说明</Link>
+          </span>
+        }
       />
 
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
@@ -78,6 +83,15 @@ export default async function NotificationsPage() {
         style={{ marginBottom: 16 }}
         action={<span className="badge badge-brand"><Icon.chat size={13} /> 出站推送 + 入站 ChatOps</span>}
       >
+        {botRows.length === 0 && (
+          <div className="alert-gradient-amber" style={{ padding: '10px 14px', marginBottom: 12 }}>
+            <span className="small">
+              还没有机器人。<b>先去「接入与密钥」把机器人凭据填上</b>（Webhook 地址或自建应用的 App Secret），
+              填完这一页就能配推送内容与时间。
+              <Link href="/settings/keys" style={{ color: 'var(--brand)', fontWeight: 600, marginLeft: 4 }}>去填 →</Link>
+            </span>
+          </div>
+        )}
         <p className="small muted" style={{ marginBottom: 12, lineHeight: 1.7 }}>
           <b>出站推送</b>：把每日选题推荐、热点刷新、合规拦截告警、学习小结自动推到飞书群——只要粘贴群自定义机器人 webhook。
           <br />

@@ -14,7 +14,8 @@ export type JobName =
   | 'optimize_memory' // 批租户：记忆持续学习优化
   | 'generate_reviews' // 批租户：发布满 7 天自动生成 AI 复盘
   | 'weekly_review' // 批租户：每周运营复盘
-  | 'plan_expiry_notice'; // 批租户：套餐/试用到期前后的续费提醒
+  | 'plan_expiry_notice' // 批租户：套餐/试用到期前后的续费提醒
+  | 'purge_retention'; // 广播：全库到期数据清理（保留期承诺的兑现闸，见 lib/legal/retention.ts）
 
 export type JobPayload = Record<string, unknown>;
 
@@ -46,4 +47,6 @@ export const JOB_TRACK: Record<JobName, JobTrack> = {
   generate_reviews: 'batch_tenant',
   weekly_review: 'batch_tenant',
   plan_expiry_notice: 'batch_tenant',
+  // 广播而非批租户：它扫的正是「已经没人再写入」的工作区，按活跃租户遍历会漏掉的恰好是最该清的那些。
+  purge_retention: 'broadcast',
 };

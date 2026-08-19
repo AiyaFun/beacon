@@ -3,6 +3,7 @@ import Image from 'next/image';
 import { Sidebar } from '@/components/Sidebar';
 import { Topbar } from '@/components/Topbar';
 import { getSessionOrNull } from '@/lib/session';
+import { visibleNav } from '@/lib/nav';
 
 // 公开区外壳。登录用户 → 完整 app 外壳（与 (app)/layout 一致，侧栏/顶栏都在）；
 // 游客 → 轻量落地外壳（logo + 登录/注册 CTA），用于「先逛后注册」。
@@ -17,7 +18,7 @@ export default async function PublicLayout({ children }: { children: React.React
   if (session) {
     return (
       <div className="app-shell">
-        <Sidebar />
+        <Sidebar nav={visibleNav()} />
         <div className="main">
           <Topbar />
           <div className="content">{children}</div>

@@ -43,10 +43,15 @@ export type InspirationView = {
   points: string[];
   analysis: string | null;
   contentChars: number;
+  // 评论提问（source='comment'|'rival-comment'）
+  askedCount: number;
+  askedWorks: number;
+  lastAskedAt: string | null;
 };
 
 const TABS = [
   { key: 'open', name: '待用', hint: '会参与每日选题推荐' },
+  { key: 'comments', name: '读者提问', hint: '从评论区挖出的问题——回答自己读者的问题不需要蹭热点' },
   { key: 'used', name: '已转选题', hint: '被采纳成选题后自动出队' },
   { key: 'archived', name: '已归档', hint: '不再进候选池，但记录保留' },
 ] as const;
@@ -65,7 +70,10 @@ export function InspirationBoard({ items }: { items: InspirationView[] }) {
   const [showMine, setShowMine] = useState(false);
   const [pending, start] = useTransition();
 
-  const shown = items.filter((i) => i.state === tab);
+  const isComment = (i: InspirationView) => i.source === 'comment' || i.source === 'rival-comment';
+  const shown = tab === 'comments'
+    ? items.filter(isComment).sort((a, b) => b.askedCount - a.askedCount)
+    : items.filter((i) => i.state === tab);
   const active = TABS.find((t) => t.key === tab)!;
 
   function run(fn: () => Promise<unknown>) {
@@ -83,7 +91,7 @@ export function InspirationBoard({ items }: { items: InspirationView[] }) {
             className={`btn btn-sm ${tab === t.key ? 'btn-primary' : ''}`}
             onClick={() => setTab(t.key)}
           >
-            {t.name} ({items.filter((i) => i.state === t.key).length})
+            {t.name} ({t.key === 'comments' ? items.filter(isComment).length : items.filter((i) => i.state === t.key).length})
           </button>
         ))}
         <span className="small muted">{active.hint}</span>
@@ -103,7 +111,9 @@ export function InspirationBoard({ items }: { items: InspirationView[] }) {
         <p className="small muted" style={{ textAlign: 'center', padding: 28, margin: 0 }}>
           {tab === 'open'
             ? '收集箱是空的。装上采集助手后，刷到任何值得记一笔的内容都能一键存进来；也可以点右上角手动记。'
-            : `「${active.name}」暂无内容`}
+            : tab === 'comments'
+              ? '还没有读者提问。在插件设置中开启「评论提问采集」，然后在作品详情页点「读评论提问」，或在上方点「从评论里挖问题」粘贴评论文本。'
+              : `「${active.name}」暂无内容`}
         </p>
       ) : (
         <div className="stack" style={{ gap: 10 }}>
@@ -144,6 +154,22 @@ export function InspirationBoard({ items }: { items: InspirationView[] }) {
                       <b>对你的用处：</b>
                       {it.analysis}
                     </p>
+                  )}
+                  {isComment(it) && it.askedCount > 0 && (
+                    <div className="small row wrap" style={{ gap: 8, marginTop: 2 }}>
+                      <span style={{ color: 'var(--green)' }}>
+                        被问 {it.askedCount} 次
+                      </span>
+                      {it.askedWorks > 1 && (
+                        <span className="muted">分布在 {it.askedWorks} 条作品下</span>
+                      )}
+                      {it.lastAskedAt && (
+                        <span className="muted">{relDays(it.lastAskedAt)}最近一次</span>
+                      )}
+                      <span className={`badge ${it.state === 'open' ? 'badge-green' : 'badge-gray'}`} style={{ fontSize: 10 }}>
+                        {it.state === 'open' ? '待用' : it.state === 'used' ? '已转选题' : '已归档'}
+                      </span>
+                    </div>
                   )}
                   <div className="small muted row wrap" style={{ gap: 8 }}>
                     <span>{relDays(it.createdAt)}收藏</span>

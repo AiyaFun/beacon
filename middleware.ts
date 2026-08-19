@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { AUTH_COOKIE, AUTH_COOKIE_MAX_AGE_S } from '@/lib/auth-constants';
+import { AUTH_COOKIE, AUTH_COOKIE_MAX_AGE_S, authCookieSecure } from '@/lib/auth-constants';
 
 // 边缘中间件：仅做 cookie 存在性快速拦截（真正校验在 getSession）。
 // 未登录访问受保护页面 → 跳 /login。
@@ -22,6 +22,16 @@ import { AUTH_COOKIE, AUTH_COOKIE_MAX_AGE_S } from '@/lib/auth-constants';
 // ⚠️ /api/ingest/self：插件回传**自有作品**表现数据（同上 authorized 通道，同一采集令牌自守卫）。
 const PUBLIC_PATHS = [
   '/login',
+  // ⚠️ /setup 是企业版（appliance/private）的装机向导 —— 那一刻库里还没有任何账号，
+  //    拦它就是把用户 307 到 /login，而登录页在企业版里也需要一个还不存在的管理员，
+  //    形成死锁：装不了机，也登不进去。放行不等于不设防：页面自己判形态 + 是否已初始化，
+  //    写操作全部要求装机口令（lib/setup/state.ts 的 assertSetupAllowed）。
+  //    SaaS 形态下这一页直接 404（can('setupWizard') 恒为 false）。
+  '/setup',
+  // ⚠️ /api/auth/oa/magic：机器人私聊发出的一次性登录链接的落地点 —— 用户点它的时候
+  //    按定义**还没有**登录 cookie，拦了就是 307 跳 /login，企业版从此没人登得进来。
+  //    放行不等于不设防：票据是 48 位随机串、一次性消费、5 分钟过期，路由内部自守卫。
+  '/api/auth/oa',
   '/hotlists',
   '/legal',
   '/robots.txt',
@@ -47,6 +57,15 @@ const PUBLIC_PATHS = [
   // 必须放行：插件的 service worker 没有登录 cookie，被 307 到 /login 会拿到一份 HTML，
   // 于是「检查更新」永远失败且看不出原因。
   '/api/ingest/version',
+  // ⚠️ /api/publish/tasks 与 /api/publish/receipt：插件拉「待填充的发布任务」并回执。
+  //    插件的 fetch 不带登录 cookie，两条路由内部都用工作区采集令牌自守卫（无令牌 401），
+  //    且只授权「读本工作区待发布任务 + 报回执」这两件事。拦了它们插件会拿到一份 HTML 登录页，
+  //    表现为「一键发布点了没反应」，且看不出原因。
+  '/api/publish/tasks',
+  '/api/publish/receipt',
+  // ⚠️ /api/ingest/parser：插件拉解析规则包 + 上报「这个字段采不到」的脱敏结构样本。
+  //    同样用工作区采集令牌自守卫；样本里只有标签/类名/属性名与文本形状，无任何正文与个人信息。
+  '/api/ingest/parser',
   // ⚠️ /api/bot：飞书等平台机器人事件回调（authorized 通道）——平台服务器的请求不带登录
   //    cookie。路由内部用 inboundKey(app_id) 反查工作区 + Verification Token/签名自守卫，
   //    无效即拒。见 app/api/bot/feishu/events/[key]/route.ts。
@@ -79,7 +98,7 @@ export function middleware(req: NextRequest) {
     res.cookies.set(AUTH_COOKIE, token, {
       httpOnly: true,
       sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
+      secure: authCookieSecure(),
       path: '/',
       maxAge: AUTH_COOKIE_MAX_AGE_S,
     });

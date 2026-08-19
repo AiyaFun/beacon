@@ -12,6 +12,9 @@ import {
 import { resolveAccount, listActiveAccounts, accountLine } from './accounts';
 import { botChat } from './chat';
 import { analyzeAccount } from './analyze';
+import { fmtDate } from '../format';
+import { bindOaByCode, issueOaLoginTicket, type OaProvider } from '@/lib/auth/oa';
+import { siteUrl } from '@/lib/site-url';
 
 // 入站命令路由（需求④）：把一条群消息 → 内容引擎的一次操作，返回给用户的回执文本。
 // 红线：所有操作只「收录/查询/采集/分析」，不触发任何发布；生成走既有管线时仍全程过合规。
@@ -90,6 +93,10 @@ export type InboundCtx = {
   integrationId?: string;
   chatId?: string;
   senderId?: string;
+  /** 这条消息是不是在群里说的。登录/绑定类指令只在**私聊**里响应，见下面 handleInbound。 */
+  isGroup?: boolean;
+  /** 发消息人的显示名，只在「加入」时用来给新成员起名。取不到就用兜底名。 */
+  senderName?: string;
 };
 
 // ── 各指令的实现（斜杠与自然语言共用）──
@@ -139,7 +146,17 @@ async function cmdClip(
   const rival = url ? await rivalOfUrl(workspaceId, url) : null;
   const mode = opts.mode ?? (rival ? 'rival' : 'note');
   const { clipUrl, clipText } = await import('../clip');
-  const common = { workspaceId, accountId: account?.id, accountName: account?.name, mode, rivalName: rival };
+  const common = {
+    workspaceId,
+    accountId: account?.id,
+    accountName: account?.name,
+    mode,
+    rivalName: rival?.name ?? null,
+    // handle+platform 一起传下去：拆解时要按它查这个竞对名下的读者提问（rival-comment 的
+    // author 存的是 handle 不是昵称，光有 name 查不到）。
+    rivalHandle: rival?.handle ?? null,
+    rivalPlatform: rival?.platform ?? null,
+  };
   const r = url
     ? await clipUrl({ ...common, url, note: opts.note })
     : await clipText({ ...common, text: raw, note: opts.note });
@@ -147,20 +164,26 @@ async function cmdClip(
 }
 
 /** URL 属于本工作区监控中的哪个竞对（不属于返回 null）。按作品链接精确匹配，其次按主页域名/handle。 */
-async function rivalOfUrl(workspaceId: string, url: string): Promise<string | null> {
+async function rivalOfUrl(
+  workspaceId: string,
+  url: string,
+): Promise<{ name: string; handle: string; platform: string } | null> {
   const watch = await prisma.watchlistItem.findMany({
     where: { workspaceId },
-    select: { competitorId: true, competitor: { select: { name: true, handle: true } } },
+    select: { competitorId: true, competitor: { select: { name: true, handle: true, platform: true } } },
   });
   if (watch.length === 0) return null;
   const hit = await prisma.crawledPost.findFirst({
     where: { url, competitorId: { in: watch.map((w) => w.competitorId) } },
     select: { competitorId: true },
   });
-  if (hit) return watch.find((w) => w.competitorId === hit.competitorId)?.competitor.name ?? null;
+  if (hit) {
+    const c = watch.find((w) => w.competitorId === hit.competitorId)?.competitor;
+    return c ? { name: c.name, handle: c.handle, platform: c.platform } : null;
+  }
   // 作品还没被采到，但链接里带着竞对 handle（如 /@MrBeast/…）也算
   const w = watch.find((x) => x.competitor.handle && url.includes(x.competitor.handle.replace(/^@/, '')));
-  return w?.competitor.name ?? null;
+  return w ? { name: w.competitor.name, handle: w.competitor.handle, platform: w.competitor.platform } : null;
 }
 
 export function describeClip(r: Awaited<ReturnType<typeof import('../clip').clipUrl>>): string {
@@ -212,7 +235,7 @@ async function cmdCompetitor(workspaceId: string, name: string): Promise<string>
   const lines = posts.map((p, i) => {
     const views = parseJson<{ views?: number }>(p.metrics, {}).views;
     const who = byId.get(p.competitorId)?.name ?? '';
-    const day = p.publishedAt ? `${p.publishedAt.getMonth() + 1}/${p.publishedAt.getDate()}` : '';
+    const day = p.publishedAt ? fmtDate(p.publishedAt) : '';
     return [
       `${i + 1}. ${p.title.slice(0, 40)}`,
       `   —${who}${day ? ` ${day}` : ''}${views ? ` · ${views}` : ''}${p.hotScore ? ` · 热度${Math.round(p.hotScore)}` : ''}`,
@@ -296,6 +319,37 @@ export async function handleInbound(workspaceId: string, rawText: string, ctx: I
   const boundId = state.accountId;
   const can = (cmd: BotCommandKey) => isCommandAllowed(cmd, allow);
   if (!text) return helpText(allow);
+
+  // ── 身份指令：登录 / 绑定 / 加入 ───────────────────────────────────────
+  //
+  // 排在 allowCommands 白名单**之前**，因为它们不是「操作」而是「进门」——
+  // 被白名单挡掉的话，企业版会出现「没人能登录，所以没人能去改白名单」的死锁。
+  //
+  // 🔒 只在私聊里响应。群里发一条登录链接 = 群里任何人点开都能拿到这个人的会话；
+  //    绑定码同理（别人抢先绑上去就顶替了本人的身份）。
+  //    群里说这些词时明确回一句「私聊我」，而不是静默——静默会让人以为机器人坏了。
+  const authCmd = text.match(/^\/?(登录|登陆|绑定)(?=\s|$)/);
+  if (authCmd) {
+    if (ctx.isGroup) return '这条要私聊我说——登录链接和绑定码只对你一个人有效，发在群里等于给了所有人。';
+    if (!ctx.senderId) return '取不到你的企业应用账号，无法完成身份操作。';
+    const oaProvider = (provider === 'dingtalk' || provider === 'wecom' ? provider : 'feishu') as OaProvider;
+    const arg = text.replace(/^\/?(登录|登陆|绑定)\s*/, '').trim();
+
+    // 绑定：只有装机管理员会用一次（把 /setup 建的那个账号和自己的企业应用账号接上）
+    if (authCmd[1] === '绑定') {
+      if (!arg) return '用法：绑定 <6 位绑定码>。码在网页「设置 → 账号与安全 → 绑定企业应用」里拿。';
+      return (await bindOaByCode(arg, oaProvider, ctx.senderId)).message;
+    }
+
+    // 登录：员工只需要记住这一个词。不是成员的会当场加入（见 lib/auth/oa.ts 文件头）
+    const t = await issueOaLoginTicket(oaProvider, ctx.senderId, ctx.senderName);
+    if (!t.ok) return t.message;
+    const link = `${siteUrl()}/api/auth/oa/magic?t=${t.ticket}`;
+    // 新人第一次进来要说清楚"你现在是什么身份"，不能让人以为自己只是拿了条链接
+    return t.joined
+      ? `欢迎，${t.memberName}！已经把你加进来了，身份是「${t.roleLabel}」。\n点这条链接进入（5 分钟内有效，只能用一次）：\n${link}`
+      : `点这条链接登录（5 分钟内有效，只能用一次）：\n${link}`;
+  }
 
   // ── 斜杠指令 ──（注意：\b 是 ASCII 词边界，跟在中文后不成立，故用 (?=\s|$) 收尾）
   if (/^\/(帮助|help)(?=\s|$)/i.test(text)) return helpText(allow);

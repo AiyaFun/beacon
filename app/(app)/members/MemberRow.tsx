@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { ASSIGNABLE_ROLES, ROLE_LABEL } from '@/lib/rbac';
+import { ROLE_LABEL, type Role } from '@/lib/rbac';
 import { actChangeRole, actSetMemberStatus, actRemoveMember } from './actions';
 
 // 单个成员的操作条：改角色 / 停用恢复 / 移除。
@@ -14,6 +14,7 @@ export function MemberRow({
   status,
   locked,
   lockReason,
+  roles,
 }: {
   id: string;
   name: string;
@@ -21,6 +22,8 @@ export function MemberRow({
   status: string;
   locked: boolean;
   lockReason?: string;
+  /** 可授予的角色由服务端按部署形态算好传进来（客户端读不到 BEACON_EDITION） */
+  roles: Role[];
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
@@ -55,7 +58,7 @@ export function MemberRow({
         disabled={pending}
         onChange={(e) => run(() => actChangeRole(id, e.target.value))}
       >
-        {ASSIGNABLE_ROLES.map((r) => (
+        {roles.map((r) => (
           <option key={r} value={r}>{ROLE_LABEL[r]}</option>
         ))}
       </select>

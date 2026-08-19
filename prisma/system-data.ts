@@ -650,18 +650,20 @@ export const BUILTIN_SKILLS: SystemSkill[] = [
     ].join('\n'),
   },
   {
-    // AI 生图封面。category=visual：不进自动预装，用户在技能中心按需安装（见 lib/skills/index.ts）。
-    // outputKind=image：运行走 llmImage 而非文本，promptTemplate 在这里当“抽封面要素”的指令
-    // （渲染后交给 deriveCoverMeta，见 lib/cover/prompt.ts）。
+    // AI 生图封面。category=visual：不进自动预装。
+    // 2026-08 起封面的用户入口是创作工坊「标题与封面」里的封面工位（/api/cover/generate → lib/cover/run.ts），
+    // **不要求安装这个技能**；这条记录保留两个用途：① promptTemplate 仍是「从正文抽封面文案」那一步的指令
+    // （技能=提示词模板的不变式，对图像技能同样成立，路由里按 slug 取）；② 技能中心里作说明与指路。
+    // outputKind=image：从技能列表触发时仍走 runSkill 的 image 分支（同一条管线）。
     slug: 'xhs-cover',
-    name: '小红书封面（AI 生图）',
-    description: '读你的正文自动出一张小红书竖版封面：可选风格、可上传人像/产品照「主体保真」，出图即可下载',
+    name: 'AI 封面（多平台比例）',
+    description: '在创作工坊「标题与封面」里一键出封面：比例按草稿平台自动定（小红书 3:4 / 抖音 9:16 / 公众号 2.35:1…），大字用你采纳的标题，可上传本人照片「主体保真」（不保存），出图自带 AI 生成标识。无需安装即可使用',
     emoji: '🎨',
-    platform: 'xiaohongshu',
+    platform: 'generic',
     category: 'visual',
     outputKind: 'image',
     promptTemplate: [
-      '从下面这篇要发到小红书的内容里，提炼一张封面图要用的文案要素。',
+      '从下面这篇内容里，提炼一张封面图要用的文案要素。',
       '标题：{{title}}',
       '{{context}}',
       '{{brief}}',

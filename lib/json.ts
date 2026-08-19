@@ -57,10 +57,39 @@ export function emptyMetrics(): Metrics {
   return { views: 0, likes: 0, comments: 0, shares: 0, collects: 0 };
 }
 
-// 互动率粗算（用于竞对/自有内容打分）
-export function engagementRate(m: Metrics): number {
-  const v = m.views ?? 0;
-  if (v <= 0) return 0;
+/**
+ * 这条作品到底有没有播放量。
+ *
+ * **抖音等平台的公开页面根本不显示播放量**（主页角标是 ♡ 点赞、详情页给的是赞/评/藏/转），
+ * 播放量只有创作者后台才有。所以 `views` 缺席或为 0，含义都是「不知道」而不是「零次播放」——
+ * 二者一旦混为一谈，下游就会拿 0 当真实观测，算出一堆看着像数据的假结论。
+ */
+export function hasViews(m: Metrics): boolean {
+  return typeof m.views === 'number' && Number.isFinite(m.views) && m.views > 0;
+}
+
+/**
+ * 比值。**算不出来就返回 null，绝不返回 0**——0 会被页面渲染成「0.0%」，
+ * 那是把「没这项数据」说成了「这项数据是零」。
+ *
+ * 分子真的采到 0（比如这条确实零评论）是有意义的观测，照常返回 0；
+ * 分子压根没采到（undefined）才是 null。这两件事的区别正是本函数存在的理由。
+ */
+export function ratioOf(numerator: number | undefined | null, denominator: number | undefined | null): number | null {
+  if (typeof numerator !== 'number' || !Number.isFinite(numerator)) return null;
+  if (typeof denominator !== 'number' || !Number.isFinite(denominator) || denominator <= 0) return null;
+  return numerator / denominator;
+}
+
+/**
+ * 互动率 =（赞+评+转+藏）/ 播放。**拿不到播放量返回 null**。
+ *
+ * 曾经在这里返回 0，代价有两层：页面上抖音作品一律显示「互动率 0.0%」（编的），
+ * 以及任何按互动率排序/求均值的地方都会把抖音作品系统性摁到最底（也是编的）。
+ * 同文件的 sourceShare / clickThroughRate 早就是 null 口径，这里补齐。
+ */
+export function engagementRate(m: Metrics): number | null {
+  if (!hasViews(m)) return null;
   const interactions = (m.likes ?? 0) + (m.comments ?? 0) + (m.shares ?? 0) + (m.collects ?? 0);
-  return interactions / v;
+  return interactions / (m.views as number);
 }

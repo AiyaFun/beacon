@@ -3,10 +3,13 @@
 import { useState, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import { parseJson, engagementRate, type Metrics } from '@/lib/json';
+import { heatForSort } from '@/lib/insight/heat';
+import { displayKeys, absenceNote } from '@/lib/insight/platform-metrics';
 import { platformName, platformColor } from '@/lib/constants';
 import { fmtNum, fmtDate } from '@/lib/format';
 import { Icon } from '@/components/icons';
 import { CompetitorTrendCell } from './CompetitorTrendCell';
+import { beijingDayKey } from '@/lib/beijing';
 
 type CompetitorPost = {
   id: string;
@@ -23,7 +26,7 @@ type CompetitorPost = {
   };
 };
 
-type SnapItem = { takenAt: Date | string; metrics: string };
+type SnapItem = { takenAt: Date | string; metrics: string; source?: string | null };
 
 const PLATFORM_EMOJI: Record<string, string> = {
   douyin: '🎵',
@@ -36,24 +39,105 @@ const PLATFORM_EMOJI: Record<string, string> = {
 };
 
 type TimeRangeKey = 'all' | '24h' | '7d' | '30d';
-type SortKey = 'hot' | 'views' | 'engagement' | 'growth';
+// 'hot' 改成 'interaction'：原来的 hot 按 hotScore（= views/20000）排，
+// 没有播放量的平台恒为 0，排序等于随机。见 lib/insight/heat.ts。
+type SortKey = 'interaction' | 'views' | 'engagement' | 'growth';
 type ViewModeKey = 'cards' | 'table';
+
+/** 这条作品在当前时间窗内的增长（服务端算好传下来，口径同增长卡）。 */
+export type PostGrowth = {
+  status: 'ok' | 'no-data' | 'single-point';
+  delta: Record<string, number | undefined>;
+  points: number;
+};
+
+// 榜上摆哪些绝对数。**全是真实采到的量**，没采到的项自己不出现。
+const METRIC_CHIPS = [
+  { key: 'views', icon: '▶️', title: '播放/阅读量' },
+  { key: 'likes', icon: '👍', title: '点赞量' },
+  { key: 'comments', icon: '💬', title: '评论量' },
+  { key: 'collects', icon: '⭐', title: '收藏量' },
+  { key: 'shares', icon: '🔁', title: '转发量' },
+  { key: 'coins', icon: '🪙', title: '投币数（B站）' },
+  { key: 'danmaku', icon: '🎬', title: '弹幕数（B站）' },
+] as const;
+
+/** 卡片行上按顺序考虑的指标键（平台没有的会被 displayKeys 滤掉）。 */
+const CHIP_KEYS = ['views', 'likes', 'comments', 'collects', 'shares', 'coins', 'danmaku'] as const;
+
+/** 增长优先展示的指标：有播放量看播放，没有就看点赞——都答「这条还在不在涨」。 */
+const GROWTH_PRIORITY = ['views', 'likes', 'comments', 'collects', 'shares'] as const;
+
+/**
+ * 领奖台要显示的三格：按优先级挑**真的采到**的指标，不足三项就少显示几格。
+ * 互动率只在算得出来（有播放量）时才够格入选。
+ */
+function podiumCells(p: {
+  views: number; likes: number; comments: number; collects: number; shares: number;
+  rate: number | null; interaction: number;
+}): { lbl: string; val: string; hot: boolean }[] {
+  const cells: { lbl: string; val: string; hot: boolean }[] = [];
+  const push = (lbl: string, v: number) => { if (v > 0) cells.push({ lbl, val: fmtNum(v), hot: false }); };
+  push('播放量', p.views);
+  push('点赞', p.likes);
+  push('评论', p.comments);
+  push('收藏', p.collects);
+  push('转发', p.shares);
+  // 用同一个 pctOrNull 走格式化：文件里只留一条百分比路径，
+  // 也避免绕过「不许无条件 toFixed」那条守卫（见 tests/algorithm/no-views-platforms.test.ts）
+  if (p.rate !== null) cells.push({ lbl: '互动率', val: pctOrNull(p.rate) ?? NA_TEXT, hot: p.rate > 0.03 });
+  // 一项都没采到时，至少把互动量摆出来（它自己会是 —）
+  if (cells.length === 0 && p.interaction >= 0) cells.push({ lbl: '互动量', val: fmtNum(p.interaction), hot: false });
+  return cells.slice(0, 3);
+}
+
+function GrowthChip({ g, label }: { g?: PostGrowth; label: string }) {
+  if (!g || g.status !== 'ok') return null;
+  for (const k of GROWTH_PRIORITY) {
+    const d = g.delta[k];
+    if (typeof d !== 'number' || d === 0) continue;
+    const name = METRIC_CHIPS.find((c) => c.key === k)?.title.replace(/[（(].*$/, '') ?? k;
+    return (
+      <span
+        className="metric-chip"
+        style={{ color: d > 0 ? 'var(--green)' : 'var(--red)', fontWeight: 600 }}
+        title={`近 ${label}${name}净增（两次采集之间的差值）`}
+      >
+        {d > 0 ? '↑' : '↓'} {fmtNum(Math.abs(d))} {name}
+      </span>
+    );
+  }
+  return null;
+}
+
+// 「这项算不出来」的统一占位。抖音这类平台的公开页面不给播放量，
+// 于是互动率/赞播比这些以播放为分母的指标一律不可得——
+// 表格里必须留个位置说明「没有」，而不是填一个 0.0% 冒充观测值。
+const NA_TEXT = '—';
+const NA_TITLE = '该平台公开页面不提供播放量，这项算不出来（点赞/评论/收藏/转发是真实采到的）';
+/** 比率 → 百分比文本；null 表示算不出来，返回 null 让调用方决定是留白还是画占位。 */
+const pctOrNull = (x: number | null): string | null => (x === null ? null : `${(x * 100).toFixed(1)}%`);
 
 export function CompetitorTopPosts({
   topPosts,
   snapsByPostMap,
+  postGrowth,
+  windowLabel,
 }: {
   topPosts: CompetitorPost[];
   snapsByPostMap: Record<string, SnapItem[]>;
+  /** 每条作品在当前时间窗内的增长，服务端算好（口径与增长卡一致） */
+  postGrowth: Record<string, PostGrowth>;
+  windowLabel: string;
 }) {
   const [timeRange, setTimeRange] = useState<TimeRangeKey>('all');
-  const [sortBy, setSortBy] = useState<SortKey>('hot');
+  const [sortBy, setSortBy] = useState<SortKey>('interaction');
   const [viewMode, setViewMode] = useState<ViewModeKey>('cards');
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  // 计算多维衍生指标 (赞播比, 评赞比, 藏赞比, 增速)
+  // 逐条算出展示所需的量：真实绝对数 + 互动量（排序用）+ 互动率（有播放量才有）
   const postsWithAnalysis = useMemo(() => {
     const now = Date.now();
     return topPosts.map((p) => {
@@ -66,10 +150,15 @@ export function CompetitorTopPosts({
       const coins = m.coins ?? 0;
       const danmaku = m.danmaku ?? 0;
 
+      // ⚠️ 这四项都可能**算不出来**，算不出来一律 null 而不是 0。
+      // 抖音（以及一切公开页不给播放量的平台）上：播放量根本没有 → 互动率、赞播比是 null；
+      // 主页只采到点赞、没采到评论 → 评赞比也是 null。
+      // 从前这里一律给 0，页面就照着渲染出「互动率 0.0%」「赞播比 0.0%」——
+      // 那不是「这条作品互动差」，是我们把「没这项数据」写成了「这项数据是零」。
       const rate = engagementRate(m);
-      const likeToView = views > 0 ? likes / views : 0;
-      const commentToLike = likes > 0 ? comments / likes : 0;
-      const collectToLike = likes > 0 ? collects / likes : 0;
+      // 互动量：榜的默认排序口径。每个平台都拿得到（至少有点赞），
+      // 不像 hotScore 那样在没有播放量的平台上恒为 0。
+      const interaction = heatForSort(m);
 
       // 评估增速 (基于最新两次快照的播放/增量)
       const snaps = snapsByPostMap[p.id] || [];
@@ -99,15 +188,14 @@ export function CompetitorTopPosts({
         coins,
         danmaku,
         rate,
-        likeToView,
-        commentToLike,
-        collectToLike,
+        interaction,
+        growth: postGrowth[p.id],
         growthDelta,
         ageHours,
         snaps,
       };
     });
-  }, [topPosts, snapsByPostMap]);
+  }, [topPosts, snapsByPostMap, postGrowth]);
 
   // 时间维度过滤 + 搜索过滤
   const filteredPosts = useMemo(() => {
@@ -134,9 +222,11 @@ export function CompetitorTopPosts({
     const list = [...filteredPosts];
     list.sort((a, b) => {
       if (sortBy === 'views') return b.views - a.views;
-      if (sortBy === 'engagement') return b.rate - a.rate;
+      // 按互动率排序时，算不出来的排在最后（而不是当成 0 混在「互动率最低」那一堆里——
+      // 那会让用户以为抖音这些作品是「互动垫底」，其实只是没有播放量这个分母）
+      if (sortBy === 'engagement') return (b.rate ?? -1) - (a.rate ?? -1);
       if (sortBy === 'growth') return b.growthDelta - a.growthDelta;
-      return (b.hotScore || 0) - (a.hotScore || 0); // default: hot
+      return b.interaction - a.interaction; // 默认：互动量（赞+评+藏+转）
     });
     return list;
   }, [filteredPosts, sortBy]);
@@ -162,18 +252,21 @@ export function CompetitorTopPosts({
   // CSV 导出功能
   const exportCSV = () => {
     if (sortedPosts.length === 0) return;
-    const headers = ['排名', '平台', '作品标题', '创作者', '播放量', '点赞量', '评论量', '收藏量', '互动率', '热度指数', '发布时间'];
+    const headers = ['排名', '平台', '作品标题', '创作者', '播放量', '点赞量', '评论量', '收藏量', '转发量', '互动量', '互动率', '发布时间'];
     const rows = sortedPosts.map((p, idx) => [
       idx + 1,
       platformName(p.platform),
       `"${p.cleanTitle.replace(/"/g, '""')}"`,
       `"${p.competitor.name.replace(/"/g, '""')}"`,
-      p.views,
+      // 播放量拿不到就导出空格，不导 0——导成 0 的表格发给别人，对方无从分辨
+      // 「这条真没人看」和「这个平台不给播放量」
+      p.views > 0 ? p.views : '',
       p.likes,
       p.comments,
       p.collects,
-      `${(p.rate * 100).toFixed(2)}%`,
-      p.hotScore || 0,
+      p.shares,
+      p.interaction < 0 ? '' : p.interaction,
+      p.rate === null ? '' : `${(p.rate * 100).toFixed(2)}%`,
       p.publishedAt ? fmtDate(p.publishedAt) : '未记录',
     ]);
     const csvContent = '\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
@@ -181,7 +274,7 @@ export function CompetitorTopPosts({
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `高热作品榜单_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute('download', `高热作品榜单_${beijingDayKey()}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -197,7 +290,6 @@ export function CompetitorTopPosts({
     );
   }
 
-  const maxHot = Math.max(...sortedPosts.map((p) => p.hotScore || 1), 1);
   const maxViews = Math.max(...sortedPosts.map((p) => p.views || 1), 1);
 
   // 分离 Top 3 (当在卡片模式且不筛选过多时呈现 Podium 颁奖台)
@@ -273,7 +365,7 @@ export function CompetitorTopPosts({
             </span>
             {(
               [
-                ['hot', '🔥 综合热度'],
+                ['interaction', '🔥 互动量'],
                 ['views', '👁️ 播放总量'],
                 ['engagement', '⚡ 互动率'],
                 ['growth', '🚀 飙升增速'],
@@ -360,7 +452,7 @@ export function CompetitorTopPosts({
             <span className="badge badge-brand" style={{ fontWeight: 700, fontSize: 12, padding: '3px 10px' }}>
               👑 TOP 3 超级爆款领跑台
             </span>
-            <span className="small muted">全网热度指数最高对标作品</span>
+            <span className="small muted">互动量最高的对标作品</span>
           </div>
 
           <div className="podium-grid">
@@ -407,27 +499,30 @@ export function CompetitorTopPosts({
                     {p.publishedAt && <span>{fmtDate(p.publishedAt)}</span>}
                   </div>
 
-                  {/* 三大爆款指标亮眼 Chip 组 */}
+                  {/* 三大爆款指标亮眼 Chip 组。
+                      有播放量 → 播放量 / 互动率 / 赞播比（老样子）。
+                      没有播放量（抖音这类平台的公开页面根本不显示）→ 换成**真实采到的绝对数**：
+                      点赞 / 评论 / 收藏。此前是无条件渲染那三格，于是抖音作品上永远是
+                      「播放量 0 · 互动率 0.0% · 赞播比 0.0%」——三个编出来的数字并排摆着。
+                      摆三个破折号也不对：用户要的是能横向比作品的数，而这三个数我们是真有的。 */}
+                  {/* 领奖台三格：**挑这条作品真正采到的前三项**，不是固定的三个指标。
+                      写死「点赞/评论/收藏」的代价刚在真机上撞到：抖音主页只采得到点赞，
+                      于是榜首赫然写着「评论 0 · 收藏 0」——那不是零互动，是没采到这两项。
+                      和本文件其它地方同一条纪律：没有的项不出现，绝不用 0 冒充观测值。 */}
                   <div className="podium-metrics-grid">
-                    <div className="podium-metric-item">
-                      <span className="metric-lbl">播放量</span>
-                      <span className="metric-val">{fmtNum(p.views)}</span>
-                    </div>
-                    <div className="podium-metric-item">
-                      <span className="metric-lbl">互动率</span>
-                      <span className="metric-val" style={{ color: p.rate > 0.03 ? '#10b981' : 'inherit' }}>
-                        {(p.rate * 100).toFixed(1)}%
-                      </span>
-                    </div>
-                    <div className="podium-metric-item">
-                      <span className="metric-lbl">赞播比</span>
-                      <span className="metric-val">{(p.likeToView * 100).toFixed(1)}%</span>
-                    </div>
+                    {podiumCells(p).map((it) => (
+                      <div className="podium-metric-item" key={it.lbl}>
+                        <span className="metric-lbl">{it.lbl}</span>
+                        <span className="metric-val" style={{ color: it.hot ? '#10b981' : 'inherit' }}>
+                          {it.val}
+                        </span>
+                      </div>
+                    ))}
                   </div>
 
                   {/* 底部一键转选题 */}
                   <div className="row-between" style={{ marginTop: 12, paddingTop: 8, borderTop: '1px dashed var(--border)' }}>
-                    <span className="small muted">爆款热度: {p.hotScore || 0}</span>
+                    <span className="small muted">互动量 {p.interaction >= 0 ? fmtNum(p.interaction) : NA_TEXT}</span>
                     <Link
                       href={`/topics?source=${encodeURIComponent(p.cleanTitle)}`}
                       className="btn btn-sm btn-primary"
@@ -452,8 +547,6 @@ export function CompetitorTopPosts({
             const isExpanded = expandedId === p.id;
             const isSelected = selectedIds.has(p.id);
 
-            // 热度与播放占比条
-            const heatPercent = Math.max(10, Math.min(100, Math.round(((p.hotScore || 1) / maxHot) * 100)));
             const viewsPercent = Math.max(10, Math.min(100, Math.round(((p.views || 1) / maxViews) * 100)));
 
             return (
@@ -531,55 +624,41 @@ export function CompetitorTopPosts({
 
                       {p.publishedAt && <span className="small muted">{fmtDate(p.publishedAt)}</span>}
 
-                      {/* 关键数据 Mini Chips */}
+                      {/* 关键数据。**按这个平台真正有的项来摆**：
+                          · 平台压根不提供的（如抖音的播放量）连位置都不占——每行多一个破折号没意义
+                          · 平台有、这次没采到的画「—」，鼠标悬停说明为什么（详情页才有 / 还没验过 / 该重采）
+                          三种缺席给三种说法，用户才分得清「数据差」「平台没有」「我们没采到」。 */}
                       <div className="row wrap" style={{ gap: 6, alignItems: 'center' }}>
-                        {p.views > 0 && (
-                          <span className="metric-chip views-chip" title="累计播放/阅读量">
-                            <Icon.eye size={11} />
-                            <b>{fmtNum(p.views)}</b>
-                          </span>
-                        )}
-                        {p.likes > 0 && (
-                          <span className="metric-chip likes-chip" title="点赞数">
-                            👍 {fmtNum(p.likes)}
+                        {displayKeys(p.platform, CHIP_KEYS).map((k) => {
+                          const c = METRIC_CHIPS.find((x) => x.key === k)!;
+                          const v = p[k];
+                          const has = typeof v === 'number' && v > 0;
+                          return (
+                            <span
+                              key={k}
+                              className="metric-chip"
+                              style={has ? undefined : { opacity: 0.5 }}
+                              title={has ? c.title : `${c.title}：${absenceNote(p.platform, k)}`}
+                            >
+                              {c.icon} {has ? fmtNum(v) : NA_TEXT}
+                            </span>
+                          );
+                        })}
+
+                        {/* 互动率只在算得出来时出现（有播放量才有分母） */}
+                        {p.rate !== null && (
+                          <span
+                            className={`badge ${p.rate > 0.03 ? 'badge-green' : p.rate > 0.015 ? 'badge-brand' : 'badge-gray'}`}
+                            style={{ fontSize: 11, padding: '1px 6px' }}
+                            title="互动率 (点赞+评论+收藏 / 播放)"
+                          >
+                            {p.rate > 0.03 ? '🔥 ' : ''}互动率 {pctOrNull(p.rate)}
                           </span>
                         )}
 
-                        {/* 互动率 Badge */}
-                        <span
-                          className={`badge ${p.rate > 0.03 ? 'badge-green' : p.rate > 0.015 ? 'badge-brand' : 'badge-gray'}`}
-                          style={{ fontSize: 11, padding: '1px 6px' }}
-                          title="互动率 (点赞+评论+收藏 / 播放)"
-                        >
-                          {p.rate > 0.03 ? '🔥 ' : ''}互动率 {(p.rate * 100).toFixed(1)}%
-                        </span>
-
-                        {/* 赞播比 (赞/播) */}
-                        {p.likeToView > 0 && (
-                          <span className="ratio-tag" title="赞播比: 点赞 / 播放 (>5% 说明第一眼吸引力与完播率极佳)">
-                            赞播比 {(p.likeToView * 100).toFixed(1)}%
-                          </span>
-                        )}
-
-                        {/* 评赞比 (评/赞) */}
-                        {p.commentToLike > 0 && (
-                          <span className="ratio-tag ratio-comment" title="评赞比: 评论 / 点赞 (>10% 说明引发强互动讨论)">
-                            评赞比 {(p.commentToLike * 100).toFixed(1)}%
-                          </span>
-                        )}
-
-                        {/* 藏赞比 (藏/赞) */}
-                        {p.collectToLike > 0 && (
-                          <span className="ratio-tag ratio-collect" title="藏赞比: 收藏 / 点赞 (>20% 说明干货价值极高)">
-                            藏赞比 {(p.collectToLike * 100).toFixed(1)}%
-                          </span>
-                        )}
+                        {/* 这条作品在当前时间窗内的增长 */}
+                        <GrowthChip g={p.growth} label={windowLabel} />
                       </div>
-                    </div>
-
-                    {/* 热度感应双色动态条 */}
-                    <div className="heat-bar-wrap" title={`爆款热度指数: ${p.hotScore || 0}`}>
-                      <div className="heat-bar-inner" style={{ width: `${heatPercent}%` }} />
                     </div>
                   </div>
 
@@ -625,39 +704,61 @@ export function CompetitorTopPosts({
                       {/* 全维数据指标卡 */}
                       <div className="analysis-box">
                         <div className="analysis-title">📊 基础数据对比</div>
+                        {/* 与卡片行上的 chip **同一套判据**：平台没有的项不占位，
+                            平台有、这次没采到的画「—」并说明原因。
+                            此前这里是七行写死的 fmtNum(p.x)，于是抖音的「播放/阅读: 0」、
+                            小红书只采了主页时的「收藏数: 0」都被当成事实印出来——
+                            那不是 0，那是这一页压根没有这项（同「缺席不许当 0」那条纪律）。 */}
                         <div className="metrics-detail-row">
-                          <span>👁️ 播放/阅读: <b>{fmtNum(p.views)}</b></span>
-                          <span>👍 点赞数: <b>{fmtNum(p.likes)}</b></span>
-                          <span>💬 评论数: <b>{fmtNum(p.comments)}</b></span>
-                          <span>⭐ 收藏数: <b>{fmtNum(p.collects)}</b></span>
-                          {p.shares > 0 && <span>🔄 转发数: <b>{fmtNum(p.shares)}</b></span>}
-                          {p.danmaku > 0 && <span>📺 弹幕数: <b>{fmtNum(p.danmaku)}</b></span>}
-                          {p.coins > 0 && <span>🪙 投币数: <b>{fmtNum(p.coins)}</b></span>}
+                          {displayKeys(p.platform, CHIP_KEYS).map((k) => {
+                            const c = METRIC_CHIPS.find((x) => x.key === k)!;
+                            const v = p[k];
+                            const has = typeof v === 'number' && v > 0;
+                            return (
+                              <span key={k} style={has ? undefined : { opacity: 0.6 }} title={has ? undefined : absenceNote(p.platform, k)}>
+                                {c.icon} {c.title}: <b>{has ? fmtNum(v) : NA_TEXT}</b>
+                              </span>
+                            );
+                          })}
                         </div>
                       </div>
 
-                      {/* 爆款三高比例评估 */}
+                      {/* 互动构成。原来这里是赞播比/评赞比/藏赞比三个比例——
+                          它们要么吃播放量（多数平台没有）、要么两个分量凑不齐，
+                          绝大多数作品上三行全是「—」。换成真实采到的绝对数，
+                          没采到的项不出现（不是显示 0）。 */}
                       <div className="analysis-box">
-                        <div className="analysis-title">🔥 爆款基因属性分析</div>
+                        <div className="analysis-title">📊 互动构成</div>
                         <div className="stack" style={{ gap: 6, fontSize: 12 }}>
-                          <div className="row-between">
-                            <span className="muted">赞播比 (Hook吸睛力):</span>
-                            <b style={{ color: p.likeToView > 0.05 ? 'var(--green)' : 'inherit' }}>
-                              {(p.likeToView * 100).toFixed(1)}% {p.likeToView > 0.05 ? '(优秀级)' : ''}
-                            </b>
-                          </div>
-                          <div className="row-between">
-                            <span className="muted">评赞比 (争议讨论力):</span>
-                            <b style={{ color: p.commentToLike > 0.1 ? 'var(--green)' : 'inherit' }}>
-                              {(p.commentToLike * 100).toFixed(1)}% {p.commentToLike > 0.1 ? '(高讨论)' : ''}
-                            </b>
-                          </div>
-                          <div className="row-between">
-                            <span className="muted">藏赞比 (实用价值力):</span>
-                            <b style={{ color: p.collectToLike > 0.2 ? 'var(--green)' : 'inherit' }}>
-                              {(p.collectToLike * 100).toFixed(1)}% {p.collectToLike > 0.2 ? '(高收藏)' : ''}
-                            </b>
-                          </div>
+                          {METRIC_CHIPS.map((c) => {
+                            const v = p[c.key];
+                            if (typeof v !== 'number' || v <= 0) return null;
+                            return (
+                              <div className="row-between" key={c.key}>
+                                <span className="muted">{c.icon} {c.title}:</span>
+                                <b>{fmtNum(v)}</b>
+                              </div>
+                            );
+                          })}
+                          {p.interaction >= 0 && (
+                            <div className="row-between" style={{ borderTop: '1px dashed var(--border)', paddingTop: 6 }}>
+                              <span className="muted">互动量合计（赞+评+藏+转）:</span>
+                              <b>{fmtNum(p.interaction)}</b>
+                            </div>
+                          )}
+                          {p.growth?.status === 'ok' && (
+                            <div className="row-between">
+                              <span className="muted">近 {windowLabel}净增:</span>
+                              <b>
+                                {GROWTH_PRIORITY.map((k) => {
+                                  const d = p.growth!.delta[k];
+                                  if (typeof d !== 'number' || d === 0) return null;
+                                  const name = METRIC_CHIPS.find((c) => c.key === k)?.title.replace(/[（(].*$/, '') ?? k;
+                                  return `${name} ${d > 0 ? '+' : ''}${fmtNum(d)}`;
+                                }).filter(Boolean).join(' · ') || '无变化'}
+                              </b>
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -673,7 +774,11 @@ export function CompetitorTopPosts({
                       </div>
                       <p className="small muted" style={{ marginTop: 4, lineHeight: 1.6 }}>
                         💡 该作品在【{platformName(p.platform)}】展现出强烈的
-                        {p.collectToLike > 0.15 ? '【实用干货与复看沉淀】' : p.commentToLike > 0.08 ? '【话题争议与情绪共鸣】' : '【第一眼 Hook 吸睛力】'}。
+                        {p.collects > p.likes * 0.15
+                          ? '【实用干货与复看沉淀】'
+                          : p.comments > p.likes * 0.08
+                            ? '【话题争议与情绪共鸣】'
+                            : '【第一眼 Hook 吸睛力】'}。
                         建议创作时保留原题的痛点切入，但使用差异化的案例或从反面视角反套路重构。
                       </p>
                     </div>
@@ -701,10 +806,10 @@ export function CompetitorTopPosts({
                 <th>作品标题 / 对标账号</th>
                 <th style={{ textAlign: 'right' }}>播放量</th>
                 <th style={{ textAlign: 'right' }}>点赞量</th>
+                <th style={{ textAlign: 'right' }}>评论量</th>
+                <th style={{ textAlign: 'right' }}>收藏量</th>
+                <th style={{ textAlign: 'right' }}>转发量</th>
                 <th style={{ textAlign: 'right' }}>互动率</th>
-                <th style={{ textAlign: 'right' }}>赞播比</th>
-                <th style={{ textAlign: 'right' }}>评赞比</th>
-                <th style={{ textAlign: 'right' }}>热度分</th>
                 <th style={{ textAlign: 'center', width: 90 }}>操作</th>
               </tr>
             </thead>
@@ -737,23 +842,25 @@ export function CompetitorTopPosts({
                         <span className="small muted">@{p.competitor.name}</span>
                       </div>
                     </td>
+                    {/* 表格里算不出来的格子画占位并挂上原因，绝不填 0.0%：
+                        一张全是 0.0% 的表看不出「真的差」和「这平台没这数据」的区别 */}
                     <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono, monospace)', fontWeight: 600 }}>
-                      {fmtNum(p.views)}
+                      {p.views > 0 ? fmtNum(p.views) : <span className="muted" title={absenceNote(p.platform, 'views')}>{NA_TEXT}</span>}
                     </td>
                     <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono, monospace)' }}>
                       {fmtNum(p.likes)}
                     </td>
-                    <td style={{ textAlign: 'right', fontWeight: 600, color: p.rate > 0.03 ? 'var(--green)' : 'inherit' }}>
-                      {(p.rate * 100).toFixed(1)}%
-                    </td>
-                    <td style={{ textAlign: 'right', fontSize: 12 }}>
-                      {(p.likeToView * 100).toFixed(1)}%
-                    </td>
-                    <td style={{ textAlign: 'right', fontSize: 12 }}>
-                      {(p.commentToLike * 100).toFixed(1)}%
-                    </td>
-                    <td style={{ textAlign: 'right', fontWeight: 700, color: 'var(--brand)' }}>
-                      {p.hotScore || 0}
+                    {(['comments', 'collects', 'shares'] as const).map((k) => (
+                      <td key={k} style={{ textAlign: 'right', fontFamily: 'var(--font-mono, monospace)' }}>
+                        {p[k] > 0 ? (
+                          fmtNum(p[k])
+                        ) : (
+                          <span className="muted" title={absenceNote(p.platform, k)}>{NA_TEXT}</span>
+                        )}
+                      </td>
+                    ))}
+                    <td style={{ textAlign: 'right', fontWeight: 600, color: (p.rate ?? 0) > 0.03 ? 'var(--green)' : 'inherit' }}>
+                      {pctOrNull(p.rate) ?? <span className="muted" title={NA_TITLE}>{NA_TEXT}</span>}
                     </td>
                     <td style={{ textAlign: 'center' }}>
                       <Link

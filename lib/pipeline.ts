@@ -1,5 +1,6 @@
 import { prisma } from './db';
 import { toJson, parseJson, type Metrics } from './json';
+import { heatForSort, normalizedHeat } from './insight/heat';
 import { isRemovalRequested } from './legal/removal';
 import { fetchAllHot, fetchCompetitorPosts } from './adapters/registry';
 import { readPersona, type PersonaCard } from './persona';
@@ -24,6 +25,7 @@ import { llmComplete, resolveProvider } from './llm/gateway';
 import { computeLifecycle } from './hot/lifecycle';
 import { isSensitiveTitle } from './hot/sensitive';
 import { angleTrackRecordBlock } from './insight/learn';
+import { recordCompetitorDaily } from './insight/growth-store';
 
 // 敏感词库已拆到 lib/hot/sensitive.ts（候选源要用，留在这里会循环依赖）。
 // 原样再导出：sensitiveHits/isSensitiveTitle/SENSITIVE_RULES_VERSION 长期被当作 pipeline 的公开面使用，
@@ -162,10 +164,11 @@ export async function crawlOneCompetitor(
     });
     if (existing) {
       if (p.metrics) {
-        const prev = parseJson<Metrics>(existing.metrics, {});
-        if (toJson(prev) !== toJson(p.metrics)) {
-          await prisma.postMetricSnapshot.create({ data: { postId: existing.id, metrics: toJson(p.metrics) } });
-        }
+        // 每次采集都留时点（与插件通道 lib/ingest/competitor.ts 同口径）。
+        // 原来「和上次一样就不写」，会让「没涨」和「没采」在序列上无法区分，
+        // 且与展示值四舍五入叠加后，大号可能几个月写不出一条快照。
+        // 这条是服务端通道（RSS/定时抓取），与插件在页面上采的不是一回事，来源要分开标
+        await prisma.postMetricSnapshot.create({ data: { postId: existing.id, metrics: toJson(p.metrics), source: 'server' } });
         await prisma.crawledPost.update({ where: { id: existing.id }, data: { metrics: toJson(p.metrics), hotScore } });
       }
       updCount++;
@@ -185,13 +188,15 @@ export async function crawlOneCompetitor(
       });
       // 首次入库也落一条快照：它是这条作品趋势的起点，缺了它第二次采集就只有一个点画不出线
       if (p.metrics) {
-        await prisma.postMetricSnapshot.create({ data: { postId: created.id, metrics: toJson(p.metrics) } });
+        await prisma.postMetricSnapshot.create({ data: { postId: created.id, metrics: toJson(p.metrics), source: 'server' } });
       }
       newCount++;
     }
     posts++;
   }
   await prisma.competitorAccount.update({ where: { id: competitorId }, data: { lastCrawledAt: new Date() } });
+  // 账号级当日快照（与插件通道 lib/ingest/competitor.ts 同一处调用点，两条通道口径一致）
+  await recordCompetitorDaily(competitorId);
   if (ledger) {
     await recordCollectionRun({
       ...ledger,
@@ -299,13 +304,22 @@ export async function generateRecommendations(accountId: string, workspaceId: st
     include: { cluster: { include: { _count: { select: { hotItems: true } } } } },
   });
   const watch = await prisma.watchlistItem.findMany({ where: { workspaceId }, select: { competitorId: true } });
-  const topPosts = watch.length
+  // 竞对作品候选。**不按 hotScore 取**——那是 `views / 20000` 算的，没有播放量的平台恒为 0，
+  // 于是抖音/小红书/X 的竞对作品几乎永远进不了选题候选池（见 lib/insight/heat.ts）。
+  // 改成多取一些、按互动量在内存里排：互动量每个平台都拿得到。
+  const topPostPool = watch.length
     ? await prisma.crawledPost.findMany({
         where: { competitorId: { in: watch.map((w) => w.competitorId) } },
-        orderBy: { hotScore: 'desc' },
-        take: 15,
+        orderBy: { publishedAt: 'desc' },
+        take: 200,
       })
     : [];
+  const topPosts = [...topPostPool]
+    .sort((a, b) => heatForSort(parseJson<Metrics>(b.metrics, {})) - heatForSort(parseJson<Metrics>(a.metrics, {})))
+    .slice(0, 15);
+  // heat 按**批内最大值**归一，不用固定除数：原来是 `hotScore / 100`，
+  // 小号的作品永远接近 0、大号永远顶格 1，两者都不是「相对权重」。
+  const postHeat = normalizedHeat(topPosts.map((p) => parseJson<Metrics>(p.metrics, {})));
   const maxHeat = Math.max(1, ...hotItems.map((h) => h.heat));
   const externalCandidates: Candidate[] = [
     // F1-4 双闸：簇级打标（clusterHotTopics 写入，含 LLM 复核结论）+ 条目级词库兜底。
@@ -314,7 +328,7 @@ export async function generateRecommendations(accountId: string, workspaceId: st
     ...hotItems
       .filter((h) => !h.cluster?.isSensitive && !isSensitiveTitle(h.title))
       .map((h) => ({ title: h.title, heat: h.heat / maxHeat, sourceType: h.source, sourceRef: h.id, lifecycle: h.lifecycle, firstSeenAt: h.firstSeenAt, platform: h.source })),
-    ...topPosts.map((p) => ({ title: p.title, heat: Math.min(1, p.hotScore / 100), sourceType: 'competitor', sourceRef: p.id, platform: p.platform })),
+    ...topPosts.map((p, i) => ({ title: p.title, heat: postHeat[i], sourceType: 'competitor', sourceRef: p.id, platform: p.platform })),
   ];
 
   // P2 需求代理（bluesea.ts）：在榜时长 × 跨平台扩散广度。**只有热榜项算得出**——
@@ -417,6 +431,8 @@ export async function generateRecommendations(accountId: string, workspaceId: st
       accountId,
       title: s.title,
       angle: s.angle,
+      // 缺席即 null（Prisma 对 undefined 走列默认值）：没判定就是没判定，不补默认形状
+      angleShape: s.angleShape,
       rationale: s.rationale,
       scores: toJson(s.scores),
       totalScore: s.totalScore,
@@ -461,6 +477,7 @@ export async function generateRecommendations(accountId: string, workspaceId: st
           accountId,
           title: ex.title,
           angle: ex.angle,
+          angleShape: ex.angleShape,
           rationale: `${EXPLORATION_NOTE}${ex.rationale}`,
           scores: toJson(ex.scores),
           totalScore: ex.totalScore,

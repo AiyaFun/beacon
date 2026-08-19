@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { actSaveBot, actTestBot, actToggleBot, actDeleteBot, actRevealBotSecrets, actDiagnoseBot } from './bot-actions';
 import { BOT_PROVIDERS, PUSH_EVENTS, TOGGLEABLE_COMMANDS } from '@/lib/bot/types';
+import { fmtDateTime } from '@/lib/format';
 
 // 一键配置飞书机器人（需求③④）。密钥永不回显；表单留空=保持原值。
 // 出站（推送）是真·一键：粘贴 webhook → 选事件 → 保存 → 测试发送。
@@ -268,8 +269,8 @@ export function BotIntegrationCard({ rows, callbackBase }: { rows: BotRow[]; cal
                 )}
 
                 <div className="row wrap small muted" style={{ gap: 14, paddingTop: 4, borderTop: '1px dashed var(--border)' }}>
-                  <span>最近推送：{r.lastOutboundAt ? new Date(r.lastOutboundAt).toLocaleString('zh-CN') : '暂无'}</span>
-                  <span>最近接收指令：{r.lastInboundAt ? new Date(r.lastInboundAt).toLocaleString('zh-CN') : '暂无'}</span>
+                  <span>最近推送：{r.lastOutboundAt ? fmtDateTime(r.lastOutboundAt) : '暂无'}</span>
+                  <span>最近接收指令：{r.lastInboundAt ? fmtDateTime(r.lastInboundAt) : '暂无'}</span>
                   {r.lastError && <span style={{ color: 'var(--red)' }}>⚠ 上次状态：{r.lastError}</span>}
                 </div>
               </div>
@@ -667,7 +668,7 @@ export function BotIntegrationCard({ rows, callbackBase }: { rows: BotRow[]; cal
                 {editing?.inboundKey && (
                   <div className="small" style={{ color: editing.lastInboundAt ? 'var(--green)' : 'var(--amber)' }}>
                     {editing.lastInboundAt
-                      ? `✅ 入站与出站已通，最近收到消息 ${new Date(editing.lastInboundAt).toLocaleString('zh-CN')}`
+                      ? `✅ 入站与出站已通，最近收到消息 ${fmtDateTime(editing.lastInboundAt)}`
                       : '⏳ 已保存，等飞书发来第一条消息（去群里 @机器人 发「/帮助」试试）'}
                   </div>
                 )}

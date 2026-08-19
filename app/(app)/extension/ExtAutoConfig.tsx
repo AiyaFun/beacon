@@ -12,7 +12,7 @@ import { actIssueIngestToken } from '../settings/actions';
 //     哪怕用户根本没打算配置插件。
 export function ExtAutoConfig({ host }: { host: string }) {
   const [extPresent, setExtPresent] = useState(false);
-  const [status, setStatus] = useState<'idle' | 'sending' | 'done' | 'fail'>('idle');
+  const [status, setStatus] = useState<'idle' | 'sending' | 'done' | 'fail' | 'rejected'>('idle');
   const [label, setLabel] = useState('');
 
   useEffect(() => {
@@ -20,6 +20,9 @@ export function ExtAutoConfig({ host }: { host: string }) {
       if (e.source !== window || !e.data || typeof e.data !== 'object') return;
       if (e.data.__beacon === 'ext-present') setExtPresent(true);
       if (e.data.__beacon === 'config-token-done') setStatus('done');
+      // 插件按白名单拒了（host 不等于本页面的源、也不是生产地址）。这与「超时」是两回事：
+      // 超时该让人重试，被拒重试一百次也一样，得去看部署地址配得对不对。
+      if (e.data.__beacon === 'config-token-rejected') setStatus('rejected');
     }
     window.addEventListener('message', onMessage);
     window.postMessage({ __beacon: 'ping' }, '*');
@@ -55,6 +58,7 @@ export function ExtAutoConfig({ host }: { host: string }) {
           检测到已安装烽火台插件
           {status === 'done' && `　·　已为「${label || '这台设备'}」签发令牌并写入插件`}
           {status === 'fail' && ' · 写入超时，请用下方令牌手动配置'}
+          {status === 'rejected' && ` · 插件拒绝了这个地址（${host}）——它只接受本页面所在的地址或官方地址，请用下方令牌手动配置`}
         </span>
         {status === 'idle' && (
           <button className="btn btn-sm btn-primary" onClick={send}>

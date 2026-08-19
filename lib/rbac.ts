@@ -1,3 +1,4 @@
+import { can as editionCan } from './edition';
 // RBAC 权限矩阵（PRD §14 团队协作）。
 // 动作粒度而非页面粒度：页面可以合并拆分，动作是稳定的业务语义。
 // 用法：页面用 can() 决定渲染，server action 用 requireRole() 硬拦。
@@ -21,6 +22,20 @@ export const ROLE_DESC: Record<Role, string> = {
 
 // 可授予的角色：owner 不在其中——所有权只能通过「转让」流转，不能靠邀请/改角色凭空产生
 export const ASSIGNABLE_ROLES: Role[] = ['admin', 'editor', 'viewer'];
+
+/**
+ * 当前形态下真正可授予的角色。
+ *
+ * 企业版只留两档（管理员 / 编辑）：一台机器服务一家公司，买它就是给团队用的，
+ * 「只读」这一档在这个场景里几乎没人选，却让每次加人都要多做一次判断。
+ * 少一个选项就是少一次犹豫 —— 真要限制某个人，停用比降级更直接也更容易解释。
+ *
+ * ⚠️ UI 与服务端必须共用它。只在下拉框里少渲染一项而服务端仍然放行，
+ * 等于把 viewer 变成一个「藏起来但打得通」的值。
+ */
+export function assignableRoles(): Role[] {
+  return editionCan('oaLogin') ? ['admin', 'editor'] : ASSIGNABLE_ROLES;
+}
 
 export type Action =
   // 租户级（仅 owner）

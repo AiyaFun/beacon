@@ -17,6 +17,16 @@ function json(body: unknown, status = 200) {
   return NextResponse.json(body, { status, headers: CORS });
 }
 
+// 这条路由**没有 zod**，字段直接拼进 system prompt。2026-08-13 体检查出来的口子：
+// `extension/content/common.js:421` 的 `PAGE_TEXT_CAP = 4000` 是**只有插件在兑现**的承诺，
+// 服务端一侧不可执行——任何持有采集令牌的调用方（含被改过的本地插件、或直接 curl）
+// 发 200KB 的 snippet，服务端照单全收送给模型，烧的是该工作区自己的 AI 配额。
+//
+// 不改成 zod 是有意的：这里**一个字段都不该因为超长而打回**（助手是交互式的，
+// 400 出去用户只会看到「问不出来」）。截断才是对的处理，clamp 就够了。
+const CAPS = { question: 2000, snippet: 4000, title: 300, author: 80, url: 1000, metrics: 2000 };
+const clamp = (v: unknown, n: number) => (typeof v === 'string' ? v.slice(0, n) : undefined);
+
 export function OPTIONS() {
   return new Response(null, { status: 204, headers: CORS });
 }
@@ -48,8 +58,17 @@ export async function POST(req: Request) {
     return json({ ok: false, error: 'JSON 格式无效' }, 400);
   }
 
-  const question = (body.question || '').trim();
-  const context = body.context || {};
+  const question = (clamp(body.question, CAPS.question) || '').trim();
+  const raw = body.context || {};
+  const context = {
+    platform: clamp(raw.platform, 32),
+    title: clamp(raw.title, CAPS.title),
+    author: clamp(raw.author, CAPS.author),
+    url: clamp(raw.url, CAPS.url),
+    snippet: clamp(raw.snippet, CAPS.snippet),
+    // metrics 是任意对象，序列化之后再截——它同样是原样拼进 prompt 的
+    metrics: raw.metrics && typeof raw.metrics === 'object' ? raw.metrics : undefined,
+  };
   const action = body.action || 'chat';
 
   const system = [
@@ -59,7 +78,7 @@ export async function POST(req: Request) {
     context.title ? `当前页面标题/主题: ${context.title}` : '',
     context.author ? `作者/账号: ${context.author}` : '',
     context.platform ? `平台: ${context.platform}` : '',
-    context.metrics ? `数据表现: ${JSON.stringify(context.metrics)}` : '',
+    context.metrics ? `数据表现: ${JSON.stringify(context.metrics).slice(0, CAPS.metrics)}` : '',
     context.snippet ? `正文/摘要: ${context.snippet}` : '',
     '',
     '指导原则：',

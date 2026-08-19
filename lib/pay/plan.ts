@@ -1,4 +1,5 @@
 import { dailyFenOf, isLifetime, isPaidPlan, PRICING, type PaidPlan, type PeriodMonths } from './pricing';
+import { fmtDateFull } from '../format';
 
 // 套餐到期与续费/升档折算。**纯函数**，不碰 DB、不读时钟（now 由调用方注入）。
 
@@ -165,7 +166,7 @@ export function assertCanPurchase(i: { currentPlan: string; currentExpiresAt: Da
   if (i.currentPlan === i.newPlan) return; // 续费
   if (dailyFenOf(i.newPlan) < dailyFenOf(i.currentPlan)) {
     throw new Error(
-      `当前 ${PRICING[i.currentPlan as PaidPlan].name} 仍在有效期内（至 ${expiresAt.toLocaleDateString('zh-CN')}），` +
+      `当前 ${PRICING[i.currentPlan as PaidPlan].name} 仍在有效期内（至 ${fmtDateFull(expiresAt)}），` +
         `不能直接降档到${PRICING[i.newPlan].name}。可等当前套餐到期后再购买，或联系客服处理。`,
     );
   }

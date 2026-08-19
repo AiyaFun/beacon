@@ -21,7 +21,11 @@ function item(over: Partial<InspirationRow> = {}): InspirationRow {
     platform: null,
     author: null,
     tags: '[]',
+    source: 'plugin',
     createdAt: daysAgo(20),
+    askedCount: 1,
+    askedWorks: 1,
+    lastAskedAt: null,
     ...over,
   };
 }
@@ -263,5 +267,89 @@ describe('取数范围与出队', () => {
 
   it('markInspirationUsed 对不存在的 id 静默通过（选题的 sourceRef 是松引用）', async () => {
     await expect(markInspirationUsed('nope')).resolves.toBeUndefined();
+  });
+});
+
+// ── 背书流量（场景③：提问 × 作品表现加权）──
+// 爆款作品下的提问是被流量验证过的需求。加成只让它更快够到 CAP——
+// 「确定有人要 ≠ 确定有流量」的上限原则不因背书而松。
+describe('背书流量', () => {
+  it('endorsementBoost 分档：千/万/十万三档，不够千不加', async () => {
+    const { endorsementBoost } = await import('@/lib/topic/sources/inspiration');
+    expect(endorsementBoost(999)).toBe(0);
+    expect(endorsementBoost(1_000)).toBe(0.02);
+    expect(endorsementBoost(10_000)).toBe(0.05);
+    expect(endorsementBoost(100_000)).toBe(0.08);
+  });
+
+  it('🔒 commentHeat 带背书也绝不破 CAP', async () => {
+    const { commentHeat, COMMENT_HEAT_CAP } = await import('@/lib/topic/sources/inspiration');
+    expect(commentHeat(8, 4, 1_000_000)).toBe(COMMENT_HEAT_CAP);
+    // 无背书行为与旧签名完全一致
+    expect(commentHeat(2, 1)).toBe(commentHeat(2, 1, 0));
+  });
+
+  it('有背书的评论提问：heat 提升 + 证据里写明播放量；无背书一个字不提', () => {
+    const base = { source: 'comment', askedCount: 3, askedWorks: 1, lastAskedAt: daysAgo(1) };
+    const withE = item({ ...base, title: '这个链路怎么部署起来呢', endorseViews: 123_456 });
+    const withoutE = item({ ...base, title: '换个键盘轴体会好用吗' });
+    const r = applyInspiration([cand('毫不相干')], [withE, withoutE], NOW);
+    const cE = r.candidates.find((c) => c.title.includes('部署'))!;
+    const cN = r.candidates.find((c) => c.title.includes('键盘'))!;
+    expect(cE.evidence).toContain('12.3 万');
+    expect(cE.evidence).toContain('被你自己的流量验证过');
+    expect(cE.heat).toBeGreaterThan(cN.heat);
+    expect(cN.evidence).not.toContain('验证过');
+  });
+
+  it('竞对作品下的提问措辞是「需求缺口」，不是「你的流量」', () => {
+    const it0 = item({
+      source: 'rival-comment', title: '这套模板哪里能下载', askedCount: 4, askedWorks: 2,
+      lastAskedAt: daysAgo(2), endorseViews: 250_000,
+    });
+    const r = applyInspiration([cand('毫不相干')], [it0], NOW);
+    const c = r.candidates.find((x) => x.sourceType === 'rival-comment')!;
+    expect(c.evidence).toContain('竞对');
+    expect(c.evidence).toContain('25.0 万');
+    expect(c.evidence).toContain('对方未必接住');
+  });
+
+  it('loadInspirations 把 askedBreak 的 workId join 到竞对作品指标上（挂 endorseViews）', async () => {
+    const tenant = await prisma.tenant.create({ data: { name: 't' } });
+    const w = await prisma.workspace.create({ data: { tenantId: tenant.id, name: 'w' } });
+    const acc = await prisma.creatorAccount.create({ data: { workspaceId: w.id, name: 'a', platform: 'douyin' } });
+    const rivalAcc = await prisma.competitorAccount.create({ data: { platform: 'douyin', handle: 'r1', name: '同行' } });
+    await prisma.crawledPost.create({
+      data: {
+        competitorId: rivalAcc.id, platform: 'douyin', platformItemId: '7001',
+        title: '爆款', metrics: JSON.stringify({ views: 88_000 }),
+      },
+    });
+    await prisma.inspirationItem.create({
+      data: {
+        workspaceId: w.id, source: 'rival-comment', title: '这个怎么收费呢', platform: 'douyin',
+        author: 'r1', askedBreak: '{"7001":3,"sha:x":2}', askedCount: 5, askedWorks: 2, lastAskedAt: new Date(),
+      },
+    });
+    const rows = await loadInspirations(w.id, acc.id);
+    expect(rows.find((r) => r.title === '这个怎么收费呢')?.endorseViews).toBe(88_000);
+  });
+
+  it('🔒 join 不上作品（老提问/作品没入库）→ 没有 endorseViews，证据里绝不编数字', async () => {
+    const tenant = await prisma.tenant.create({ data: { name: 't' } });
+    const w = await prisma.workspace.create({ data: { tenantId: tenant.id, name: 'w' } });
+    const acc = await prisma.creatorAccount.create({ data: { workspaceId: w.id, name: 'a', platform: 'douyin' } });
+    await prisma.inspirationItem.create({
+      data: {
+        workspaceId: w.id, source: 'comment', title: '什么时候出下一期呢', platform: 'douyin',
+        askedBreak: '{"gone-work":3}', askedCount: 3, askedWorks: 1, lastAskedAt: new Date(),
+      },
+    });
+    const rows = await loadInspirations(w.id, acc.id);
+    const row = rows.find((r) => r.title === '什么时候出下一期呢')!;
+    expect(row.endorseViews).toBeUndefined();
+    const r = applyInspiration([cand('毫不相干')], [row], NOW);
+    const c = r.candidates.find((x) => x.sourceType === 'comment')!;
+    expect(c.evidence).not.toContain('验证过');
   });
 });

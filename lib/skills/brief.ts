@@ -20,6 +20,12 @@ export type SkillBrief = {
   materialIds?: string[];
   /** 用户自己补的一句话要求 */
   extra?: string;
+  /**
+   * 这篇要突出的关键词（空格分隔，前端拆好传数组）。
+   * 单开一格而不是让用户写进 extra：搜索流量吃的就是关键词，它值一个显式的输入格——
+   * 埋在一句自由文本里，模型经常当成语气要求一带而过。
+   */
+  keywords?: string[];
 };
 
 const LENGTH_HINT: Record<string, string> = {
@@ -44,6 +50,12 @@ export function buildSkillBriefBlock(
   if (materials.length) {
     lines.push('- 本篇必须用上这几条素材（用户点名指定，比账号素材库里其他条目优先）：');
     for (const m of materials) lines.push(`  · ${m.content.slice(0, 200)}`);
+  }
+  const keywords = (brief.keywords ?? []).map((k) => k.trim()).filter(Boolean).slice(0, 8);
+  if (keywords.length) {
+    lines.push(
+      `- 必须自然带上这些关键词（搜索流量靠它们，但不许硬塞、不许堆砌）：${keywords.join('、')}`,
+    );
   }
   const extra = (brief.extra ?? '').trim();
   if (extra) lines.push(`- 用户补充要求：${extra.slice(0, 300)}`);

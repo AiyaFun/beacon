@@ -106,7 +106,7 @@ export default async function ExtensionPage() {
     <>
       <PageHead
         title="下载采集助手"
-        desc="装上浏览器插件，浏览竞对公开主页时顺手回传公开数据、在自己作品页一键回填表现数据 · 只采你亲眼可见的公开数据，不后台抓取"
+        desc="装上浏览器插件，浏览竞对公开主页时顺手回传公开数据、在自己作品页一键回填表现数据 · 只采你在页面上亲眼可见的公开数据"
         action={<Link href="/help" className="btn btn-sm btn-ghost"><Icon.help size={13} /> 使用帮助</Link>}
       />
 
@@ -118,7 +118,7 @@ export default async function ExtensionPage() {
           foot={links.chrome ? (storeVer ? '随审核更新' : '版本以商店页为准') : '未上架'}
         />
         <Stat label="支持浏览器" value={supportedCount} foot="Chromium 系通用" />
-        <Stat label="Host 权限" value="0" foot="不申请任何主机权限" />
+        <Stat label="Host 权限" value="8" foot="仅 6 站公开作品页，不含创作者后台" />
       </div>
 
       {/* 两条通道并存的说明卡：上架之后最容易产生的困惑就是「我从商店装的，怎么没有新平台」。
@@ -181,7 +181,7 @@ export default async function ExtensionPage() {
         title="选择你的浏览器"
         sub="Chrome / Edge / 360 / Brave 同为 Chromium，同一个包通用 · 仅 Chrome 上架商店，其余走 zip 开发者模式加载"
         style={{ marginBottom: 16 }}
-        action={<span className="badge badge-brand"><Icon.shield size={13} /> 零 host 权限 · 只采可见公开数据</span>}
+        action={<span className="badge badge-brand"><Icon.shield size={13} /> 最小主机权限 · 只采可见公开数据</span>}
       >
         <div className="grid grid-2" style={{ gap: 12 }}>
           {BROWSER_CARDS.map((card) => (
@@ -244,24 +244,24 @@ export default async function ExtensionPage() {
       </div>
 
       <div className="grid grid-2">
-        <Card title="合规边界" sub="只采你亲眼可见的公开数据，不后台抓取">
+        <Card title="合规边界" sub="只采你在页面上亲眼可见的公开数据">
           <div className="stack" style={{ gap: 10 }}>
             <div className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
               <span style={{ color: 'var(--green)', flexShrink: 0 }}><Icon.check size={16} /></span>
               <span className="small" style={{ lineHeight: 1.7 }}>
-                <b>只在你真实打开的公开主页上采集。</b>不设轮询、不后台开页、不碰登录态接口，采的永远是你亲眼可见的已渲染公开 DOM。
+                <b>采的永远是公开主页上已渲染、你亲眼可见的 DOM，不碰登录态接口。</b>除了你当场点击，还有一处是自动的：<b>每日定时采集默认开启</b>，插件会在你设定的时间（默认 09:00）用<b>后台标签页</b>逐个打开你自己已订阅的竞对公开主页，采完立即关闭，可在插件设置里关掉。范围与手动采集完全相同，不因自动化而扩大。
               </span>
             </div>
             <div className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
               <span style={{ color: 'var(--green)', flexShrink: 0 }}><Icon.check size={16} /></span>
               <span className="small" style={{ lineHeight: 1.7 }}>
-                <b>零 host 权限。</b>manifest 不申请任何 host_permissions，回传靠服务端 CORS + 令牌头，令牌只授权「向本工作区订阅的竞对补充公开数据」。
+                <b>最小主机权限。</b>0.8.2 起申请 8 条路径，全部是 B站/抖音/小红书/X/YouTube/TikTok 的<b>公开作品页</b>——为了让「读评论提问」在页内侧栏上也能用（activeTab 只在你点扩展自己的界面时授予，点页内按钮拿不到）。<b>不含任何创作者后台域名</b>。回传本身不依赖主机权限，走服务端 CORS + 令牌头，令牌只授权「向本工作区订阅的竞对补充公开数据」。
               </span>
             </div>
             <div className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
               <span style={{ color: 'var(--green)', flexShrink: 0 }}><Icon.check size={16} /></span>
               <span className="small" style={{ lineHeight: 1.7 }}>
-                <b>仅采各平台已公开发布的账号与作品信息</b>，不获取任何非公开数据、不托管平台凭证。若你是被监控账号主体，可
+                <b>他人/竞对：只采各平台已公开发布的账号与作品信息</b>，不碰任何非公开数据。<b>你自己的作品另算</b>：在你本人已登录的创作者后台里，插件会读你自己作品的表现数字（含公开页拿不到的完播率/完读率）——那是你自己的数据，只回传到你自己的工作区。两种情况都<b>不托管、不上传任何平台凭证</b>。若你是被监控账号主体，可
                 <a href="/legal/data-request" target="_blank" style={{ color: 'var(--brand)', fontWeight: 600 }}>申请移除监控 →</a>
               </span>
             </div>

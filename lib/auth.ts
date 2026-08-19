@@ -10,6 +10,7 @@ import { isProd } from './env';
 import { effectivePlan } from './pay/plan';
 import { TRIAL_DAYS } from './pay/pricing';
 import { LEGAL_VERSION } from './legal';
+import { can } from './edition';
 
 // 手机短信验证码鉴权 + 多租户自动开通。
 
@@ -35,6 +36,10 @@ export type RequestCodeResult = { ok: boolean; message?: string; devCode?: strin
 
 // 发送验证码（新号也可发——验证通过时自动注册）
 export async function requestLoginCode(phone: string): Promise<RequestCodeResult> {
+  // 形态闸：企业版机器上没有短信通道（也没有为此付费的主体）。
+  // 这里返回可读文案而不是抛异常 —— 调用方是登录页，用户该看到「走哪条路登录」，
+  // 而不是一个 500。真正的入口收紧在登录页：企业版根本不渲染手机号表单。
+  if (!can('smsLogin')) return { ok: false, message: '本版本不提供短信登录，请使用企业应用扫码登录' };
   if (!isValidPhone(phone)) return { ok: false, message: '手机号格式不正确' };
   // 频控：60s 冷却
   const recent = await prisma.verificationCode.findFirst({
@@ -90,6 +95,8 @@ export async function verifyLoginCode(
   if (member) {
     // 停用成员不得登录，也不得借邀请链接绕回来；先于任何邀请状态变更判断，免得白烧一张邀请
     if (member.status !== 'active') return { ok: false, message: '账号已被停用，请联系工作区管理员' };
+    const suspended = await tenantSuspendedMessage(member.tenantId);
+    if (suspended) return { ok: false, message: suspended };
     // 模型约束：Member.phone 全局唯一 = 一个手机号只能属于一个租户。
     // 被邀请方已在别的工作区时无法「多租户身份」，如实报错而不是悄悄搬人。
     if (invite && member.tenantId !== invite.tenantId) {
@@ -241,6 +248,23 @@ export type AuthedMember = {
 
 // 由 token 解析当前登录用户上下文。
 // preferredAccountId 来自账号切换 cookie：校验归属本工作区后生效，否则回退最早创建的活跃账号。
+// 租户被平台封禁时，返回一句给用户看的话；正常返回 null。
+//
+// 封禁是**平台侧**动作（超管在 /ops 里点的），与「成员被停用」（租户内管理员点的）是两件事，
+// 所以文案也分开：前者要告诉用户去联系平台客服，后者是找自己工作区的管理员。
+// 拿不到租户（理论上不该发生）按放行处理——登录链路不能因为一次读库异常把所有人挡在门外。
+export async function tenantSuspendedMessage(tenantId: string): Promise<string | null> {
+  const tenant = await prisma.tenant.findUnique({
+    where: { id: tenantId },
+    select: { status: true, suspendReason: true },
+  });
+  if (!tenant || tenant.status === 'active') return null;
+  const reason = (tenant.suspendReason ?? '').trim();
+  return reason
+    ? `该工作区已被平台暂停使用：${reason}。如有疑问请联系平台客服。`
+    : '该工作区已被平台暂停使用，如有疑问请联系平台客服。';
+}
+
 export async function getMemberByToken(token: string | undefined, preferredAccountId?: string): Promise<AuthedMember | null> {
   if (!token) return null;
   const session = await prisma.authSession.findUnique({ where: { token }, include: { member: true } });
@@ -261,6 +285,9 @@ export async function getMemberByToken(token: string | undefined, preferredAccou
     include: { tenant: true },
   });
   if (!workspace) return null;
+  // 租户被平台封禁：已签发的会话下一次请求即失效（与「成员被停用」同口径）。
+  // 判据放在这里而不是 middleware：middleware 只看 cookie 在不在，不查库。
+  if (workspace.tenant.status !== 'active') return null;
   let account = preferredAccountId
     ? await prisma.creatorAccount.findFirst({
         where: { id: preferredAccountId, workspaceId: workspace.id, status: 'active' },
@@ -314,6 +341,8 @@ export async function loginByWechat(
   let member = await prisma.member.findUnique({ where: { wechatOpenId: openId } });
   if (member) {
     if (member.status !== 'active') return { ok: false, message: '账号已被停用，请联系工作区管理员' };
+    const suspended = await tenantSuspendedMessage(member.tenantId);
+    if (suspended) return { ok: false, message: suspended };
   } else {
     member = await provisionNewWechatUser(openId, nickname);
   }
