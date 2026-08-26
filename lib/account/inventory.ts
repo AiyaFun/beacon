@@ -75,6 +75,12 @@ export async function dataInventory(scope: TenantScope): Promise<InventoryRow[]>
     customSkills,
     orders,
     llmLogs,
+    customWorkflows,
+    workflowInstalls,
+    schedules,
+    taskPresets,
+    coverStyles,
+    browserTasks,
   ] = await Promise.all([
     prisma.member.count({ where: { tenantId } }),
     prisma.creatorAccount.count({ where: byWorkspace }),
@@ -107,6 +113,14 @@ export async function dataInventory(scope: TenantScope): Promise<InventoryRow[]>
     prisma.contentSkill.count({ where: { tenantId } }),
     prisma.paymentOrder.count({ where: { tenantId } }),
     prisma.llmCallLog.count({ where: { tenantId } }),
+    // 用户自己攒的智能体（工作流模板）与定时计划：这是他花心思配出来的东西，
+    // 清单里不列 = 导出包里出现了一份他不知道自己有的数据，或者更糟——他以为没导出
+    prisma.workflowTemplate.count({ where: { tenantId } }),
+    prisma.workflowInstall.count({ where: { tenantId } }),
+    prisma.scheduledAgent.count({ where: byWorkspace }),
+    prisma.taskPreset.count({ where: byWorkspace }),
+    prisma.coverStylePreset.count({ where: byWorkspace }),
+    prisma.browserTask.count({ where: byWorkspace }),
   ]);
 
   const rows: InventoryRow[] = [
@@ -141,6 +155,11 @@ export async function dataInventory(scope: TenantScope): Promise<InventoryRow[]>
     { key: 'bots', label: '机器人集成（含加密密钥）', count: bots },
     { key: 'ingestTokens', label: '已授权的插件设备（采集令牌）', count: ingestTokens },
     { key: 'skills', label: '技能安装 / 自建技能', count: skillInstalls + customSkills },
+    { key: 'workflows', label: '智能体（工作流模板安装 / 自建）', count: workflowInstalls + customWorkflows },
+    { key: 'schedules', label: '定时智能体计划', count: schedules },
+    { key: 'taskPresets', label: '一键任务卡', count: taskPresets },
+    { key: 'coverStyles', label: '封面风格库', count: coverStyles },
+    { key: 'browserTasks', label: '派给插件的任务', count: browserTasks },
     { key: 'orders', label: '支付订单', count: orders },
     { key: 'llmLogs', label: 'AI 调用日志', count: llmLogs },
   ];

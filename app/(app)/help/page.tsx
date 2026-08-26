@@ -1,8 +1,10 @@
 import Link from 'next/link';
-import { PageHead, Card } from '@/components/ui';
+import { Card } from '@/components/ui';
 import { Icon } from '@/components/icons';
+import { HELP_ROUTES, navPathLabel } from '@/lib/nav';
 
 import { PrivacyCard } from '../settings/PrivacyCard';
+import { HubHeader } from '@/components/HubHeader';
 
 export const dynamic = 'force-dynamic';
 
@@ -45,19 +47,6 @@ const COMMANDS: [string, string][] = [
   ['/帮助', '看指令说明'],
 ];
 
-const OVERVIEW: [string, string, string][] = [
-  ['装插件采公开数据', '工具 → 下载采集助手', '/extension'],
-  ['生成采集令牌', '工具 → 接入与密钥', '/settings/keys'],
-  ['配飞书机器人', '工具 → 机器人与通知', '/notifications'],
-  ['看今天该做什么选题', '选题 → 选题引擎', '/topics'],
-  ['存下刷到的灵感 / 从评论挖问题', '选题 → 灵感收集箱', '/inspiration'],
-  ['看什么样的内容在你账号跑得动', '资产 → 爆款基因', '/genes'],
-  ['优化记忆 / 看学习建议', '资产 → 人设与记忆 → 持续学习与优化', '/persona'],
-  ['自己起稿 / 粘一版旧稿来打磨', '创作 → 创作工坊 → 新建草稿', '/studio'],
-  ['让 AI 写得像我自己写的', '资产 → 素材库 → 文风样本', '/material'],
-  ['问题反馈 / 意见交流', '工具 → 问题反馈与社群支持', '/feedback'],
-  ['查看隐私与数据安全声明', '工具 → 账号与安全 → 隐私与数据安全声明', '/settings/account'],
-];
 
 // 选题引擎的八种候选来源。这张表就是「推荐从哪儿来」的完整答案——
 // 不写出来的话，用户看到卡片上的「抢跑窗口」「旧文翻新」这些徽标只能猜。
@@ -75,7 +64,7 @@ const TOPIC_SOURCES: [string, string][] = [
 export default function HelpPage() {
   return (
     <>
-      <PageHead title="使用帮助" desc="第一天 10 分钟跑通，之后只需要花在创作上" />
+      <HubHeader title="使用帮助" hint="第一天 10 分钟跑通，之后只需要花在创作上" />
 
       {/* 0. 快速上手 */}
       <Card
@@ -211,7 +200,7 @@ export default function HelpPage() {
         title="⑤ 把转瞬即逝的念头存下来"
         sub="灵感收集箱 · 读者提问"
         style={{ marginBottom: 16 }}
-        action={<Link href="/inspiration" className="btn btn-sm btn-primary"><Icon.plus size={13} /> 去收集箱</Link>}
+        action={<Link href="/topics?view=inspiration" className="btn btn-sm btn-primary"><Icon.plus size={13} /> 去收集箱</Link>}
       >
         <div className="stack" style={{ gap: 10 }}>
           <Step n={1}>
@@ -303,7 +292,7 @@ export default function HelpPage() {
       {/* 一句话总览 */}
       <Card title="一句话总览" sub="想做什么 · 去哪">
         <div className="stack" style={{ gap: 0 }}>
-          {OVERVIEW.map(([what, where, href], i) => (
+          {HELP_ROUTES.map(({ what, href }, i) => (
             <Link
               key={i}
               href={href}
@@ -312,7 +301,7 @@ export default function HelpPage() {
             >
               <span className="small"><b>{what}</b></span>
               <span className="row small muted" style={{ gap: 6, alignItems: 'center', textAlign: 'right' }}>
-                {where} <Icon.arrow size={13} />
+                {navPathLabel(href) ?? ''} <Icon.arrow size={13} />
               </span>
             </Link>
           ))}

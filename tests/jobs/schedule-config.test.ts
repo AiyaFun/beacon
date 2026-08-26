@@ -36,7 +36,11 @@ describe('定时表 · 覆盖面与写法', () => {
     const scheduled = new Set(SCHEDULES.map((s) => s.name));
     // 事件驱动的任务（由业务动作直接 enqueue，不挂 cron）。加新任务时必须二选一登记，
     // 漏登记 = 一个永远不会被触发的任务静静躺着，没有任何地方会提示。
-    const EVENT_DRIVEN = new Set<string>([]);
+    const EVENT_DRIVEN = new Set<string>([
+      // 由「用户开了一次 AI 执行 / 点了确认 / 等的事有结果了」触发，带着 runId 来。
+      // 挂 cron 没有意义：它推的是某一次具体的运行，不是到点扫全表（见 lib/agent/kick.ts）
+      'run_agent_loop',
+    ]);
     const orphans = Object.keys(JOB_TRACK).filter((n) => !scheduled.has(n as never) && !EVENT_DRIVEN.has(n));
     expect(
       orphans,

@@ -10,9 +10,10 @@ import type { PlatformKey } from '@/lib/constants';
 // MATRIX、lib/studio/draft-core.ts 的 PLATFORM_STYLE。建表要付「两份 schema + RLS 数组 +
 // 生产手动建表」的代价，换来的能力是零——没有任何人要在运行时改它，改它的人是下一次校准的我们。
 //
-// 【为什么只有 8 行】只列 beacon 自己支持的平台。知乎/百家号/今日头条这些在 GEO 口径里权重更高，
-// 但 beacon 建不了号（AccountManager 下拉被 PLATFORM_LIST 钉死）、派生不了（PLATFORM_STYLE 只有 8 key）、
-// 采不到、/data 也看不见。写一条用户既执行不了又度量不了的建议，只会变成客服负担。
+// 【为什么每个平台都要有一行】只列 beacon 自己支持的平台——**支持的定义是 PLATFORMS**。
+// 2026-08-19 把微博/知乎/头条号/百家号/快手加进 PLATFORMS 之后，这五行就不再是「用户执行不了的建议」，
+// 而是必须给出的判断（Record<PlatformKey, …> 会在编译期逼你补，别绕过它）。
+// 补的时候守住同一条线：有实证才写 yes，没有就是 unknown —— **一格 'no' 都不许有**。
 
 /** 这张表的口径版本。改了任何一行都要连它一起改，出问题时能一眼看出用户看到的是哪一版。 */
 export const AI_SOURCE_VERSION = '2026-08-12';
@@ -129,6 +130,53 @@ export const AI_SOURCE: Record<PlatformKey, AiSourceRow> = {
     note: '手上这份实证只统计国产引擎（豆包/元宝/DeepSeek/Kimi），海外平台不在它的抽样范围里。海外引擎怎么取 X，我们没有测过，不编。',
     caveat: null,
     source: `${NEWRANK}：统计范围不含海外平台`,
+    asOf: '2025',
+  },
+  // ── 2026-08-19 随「大陆平台补齐」新增的五格 ──
+  toutiao: {
+    coverage: 'yes',
+    engine: '豆包',
+    confidence: 'consensus',
+    note: '头条与抖音同属字节自有内容池，豆包的 TOP5 信源里有它。图文本身就是文本，不像视频还要靠字幕转录——这一格比抖音那一格更容易兑现。',
+    caveat: null,
+    source: NEWRANK,
+    asOf: '2025',
+  },
+  baijiahao: {
+    coverage: 'yes',
+    engine: '百度 AI 搜索（文心）',
+    confidence: 'consensus',
+    // 与视频号那格同一种诚实：这是生态判断，不是逐平台引用量实证，note 里必须说破。
+    note: '百家号是百度自有内容池，百度 AI 搜索优先引自家生态。注意这一格是**生态判断**：手上那份实证只统计了豆包/元宝/DeepSeek/Kimi 四家，没有百度侧的逐平台引用数据。',
+    caveat: null,
+    source: '生态判断（百度自有内容池）；四大引擎实证不含百度侧数据',
+    asOf: '2025',
+  },
+  zhihu: {
+    coverage: 'unknown',
+    engine: null,
+    confidence: null,
+    note: '知乎常被当成「AI 爱引的问答语料」来说，但手上这份实证里没有它的条目，我们也没有自己的测量。没有条目只说明没人统计过——不写成 yes，也绝不写成 no。',
+    caveat: null,
+    source: `${NEWRANK}：无该平台条目`,
+    asOf: '2025',
+  },
+  weibo: {
+    coverage: 'unknown',
+    engine: null,
+    confidence: null,
+    note: '微博以短文本和时效话题为主，是否进引用池没有条目可依。热搜进不进 AI 的答案，与博文本身被不被引用是两件事，别混着推。',
+    caveat: null,
+    source: `${NEWRANK}：无该平台条目`,
+    asOf: '2025',
+  },
+  kuaishou: {
+    coverage: 'unknown',
+    engine: null,
+    confidence: null,
+    note: '快手是视频平台，与抖音同样要靠字幕/文案转录才进得了引用池；但它不在字节生态里，抖音那一格的实证不能顺移过来，也没有它自己的条目。',
+    caveat: null,
+    source: `${NEWRANK}：无该平台条目`,
     asOf: '2025',
   },
   tiktok: {

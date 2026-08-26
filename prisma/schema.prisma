@@ -35,6 +35,8 @@ model Tenant {
   modelProviders     ModelProvider[]
   paymentOrders      PaymentOrder[]
   contentSkills      ContentSkill[]
+  workflowTemplates  WorkflowTemplate[]
+  workflowInstalls   WorkflowInstall[]
   skillInstalls      SkillInstall[]
   complianceFeedback ComplianceFeedback[]
 
@@ -53,9 +55,18 @@ model Workspace {
   // 自动化任务开关（JSON）：每日推荐/数据同步/自动复盘/记忆优化等定时任务的按工作区开关。
   // 缺省 '{}' → 各项取默认（多数为开），保持既有全自动行为。见 lib/jobs/automation.ts。
   automationConfig String   @default("{}")
+  // AI 能调的系统能力开关（JSON）：只记**被关掉的**那些（{"create_draft":false}）。
+  // 缺省 '{}' → 全开，加新工具不必要求每个工作区先去打开一次。见 lib/agent/tool-config.ts。
+  agentToolConfig  String   @default("{}")
+  // 「让插件替我打开并读取指定网页」的开关。**默认关，必须用户显式打开**。
+  //
+  // 与 agentToolConfig 里那些工具开关不同（那些缺省全开），这一项缺省是关的：
+  // 它是唯一一个由服务端指定 URL、让用户已登录的浏览器去打开的能力，
+  // 属于「用户得知道自己开了什么」的那一类，不能靠默认值替他决定。
+  browserReadEnabled Boolean @default(false)
   createdAt        DateTime @default(now())
 
-  tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant          Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   accounts        CreatorAccount[]
   watchlistItems  WatchlistItem[]
   memories        MemoryEntry[]
@@ -67,9 +78,12 @@ model Workspace {
   coverStyles     CoverStylePreset[]
   collectionRuns  CollectionRun[]
   ingestTokens    IngestToken[]
-  agentRuns AgentRun[]
-  publishPlans PublishPlan[]
-  workflowRuns WorkflowRun[]
+  agentRuns       AgentRun[]
+  taskPresets     TaskPreset[]
+  publishPlans    PublishPlan[]
+  workflowRuns    WorkflowRun[]
+  scheduledAgents ScheduledAgent[]
+  browserTasks    BrowserTask[]
   parserIncidents ParserIncident[]
 }
 
@@ -241,6 +255,12 @@ model Member {
   // 引导：首任管理员由 env BEACON_PLATFORM_ADMIN_PHONES 白名单授予（见 lib/ops/admin.ts），
   // 不必手工改库；之后可在 /ops 里互相授予。
   platformAdmin  Boolean   @default(false)
+  // 用户选的界面外壳：workbench（按阶段排）/ taskdeck（按我要什么排）。
+  // null = 还没选过，用 DEFAULT_SHELL。两种模式**功能完全对等**，差的只是按什么排，
+  // 所以这里存的是偏好、不是权限，不参与任何鉴权判断。
+  // 【为什么不只用 cookie】只靠 cookie 的话「我选的默认」其实只是
+  // 「这台机器这个浏览器的默认」——换台电脑、清一次缓存就被拉回工作台。
+  shellMode      String?
   consentAt      DateTime? // F9-8 用户同意隐私政策+服务条款的时间
   consentVersion String? // F9-8 同意时的法律文本版本号
   createdAt      DateTime  @default(now())
@@ -251,6 +271,7 @@ model Member {
   ingestTokens IngestToken[]
 
   @@index([tenantId, phone])
+  apiTokens        ApiToken[]
 }
 
 // 团队成员邀请（RBAC 地基）：token 链接邀请，手机号可空表示"任何人凭链接可接受"
@@ -346,19 +367,19 @@ model CreatorAccount {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  workspace       Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  personaVersions PersonaVersion[]
-  topicIdeas      TopicIdea[]
-  drafts          Draft[]
-  memories        MemoryEntry[]
-  publishRecords  PublishRecord[]
-  advisorSessions AdvisorSession[]
-  ownPosts        OwnPost[]
-  advisorPersonas AdvisorPersona[]
-  materials       Material[]
-  reviewReports   ReviewReport[]
-  dailyStats      AccountDailyStat[]
-  audience        AudienceProfile[]
+  workspace          Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  personaVersions    PersonaVersion[]
+  topicIdeas         TopicIdea[]
+  drafts             Draft[]
+  memories           MemoryEntry[]
+  publishRecords     PublishRecord[]
+  advisorSessions    AdvisorSession[]
+  ownPosts           OwnPost[]
+  advisorPersonas    AdvisorPersona[]
+  materials          Material[]
+  reviewReports      ReviewReport[]
+  dailyStats         AccountDailyStat[]
+  audience           AudienceProfile[]
   publishCredentials PublishCredential[]
 }
 
@@ -515,7 +536,7 @@ model InspirationItem {
 //   评论者昵称 / 头像 / 主页链接 / 用户 ID / IP 属地 / 评论时间 / 点赞数 / 楼层回复关系 / @提及。
 // 因此本表**没有任何指向评论者个人的列**——author 存的是作品作者，见下。
 model ReaderComment {
-  id          String @id @default(cuid())
+  id          String  @id @default(cuid())
   workspaceId String
   accountId   String? // 自有作品时归属账号；竞对作品为空。空 = 工作区共享（同 InspirationItem 语义）
   platform    String
@@ -533,10 +554,10 @@ model ReaderComment {
   workKey   String  @default("unknown")
   workTitle String?
 
-  text String // 评论正文（长度上限 MAX_COMMENT_TEXT_LEN，超出在插件端截断）
+  text     String // 评论正文（长度上限 MAX_COMMENT_TEXT_LEN，超出在插件端截断）
   // 粗分类，只用于「粉丝在关心什么」的占比展示：question | demand | praise | complaint | other。
   // 是启发式判断，不是事实断言——UI 上必须说成「大致分类」。
-  kind String @default("other")
+  kind     String @default("other")
   // 正文的归一化哈希，唯一索引用。放列里而不是直接对 text 建唯一索引：
   // text 可能到 300 字，长文本索引在 Postgres 上有 btree 尺寸限制。
   textHash String
@@ -576,21 +597,21 @@ model MediaAsset {
   draftId     String?
 
   // portrait（人像/主体）| background（背景空镜）| brand（品牌元素）| cover（生成的封面）
-  kind String
-  mime String
+  kind      String
+  mime      String
   // 图片字节。portrait/background/brand 为 encryptBytes 后的密文（iv|tag|密文），cover 为明文。
-  data     Bytes
+  data      Bytes
   encrypted Boolean @default(false)
   // 原始字节数（明文长度）。配额统计用，不必解密就能算。
-  size     Int
-  width    Int?
-  height   Int?
+  size      Int
+  width     Int?
+  height    Int?
 
   // 生成参数与来源（仅 cover）：{styleKey, specKey, fontKey, decors, mainTitle, subTitle, imagePrompt, model, source, aigcProduceId}
   meta String @default("{}")
 
   // 用户给这张素材起的名字（形象库列表显示用）
-  label String?
+  label  String?
   // 用户把它钉在形象库里：钉住的不进保留期清理
   pinned Boolean @default(false)
 
@@ -615,7 +636,7 @@ model MediaAsset {
 // description 是他自己写的一句话，**原样进提示词**，不替他 AI 扩写：扩写要花钱、会走样，
 // 而且他明明已经说清楚要什么了（见 lib/cover/prompt.ts 的 customStyle）。
 model CoverStylePreset {
-  id          String @id @default(cuid())
+  id          String   @id @default(cuid())
   workspaceId String
   name        String // 用户起的名字，显示在风格网格里
   description String // 画面描述，原样进提示词
@@ -679,17 +700,35 @@ model CompetitorDailyStat {
 // F9-4 被监控账号移除申请：处理已公开个人信息的权利人拒绝权（PIPL）。
 // 全局无租户——竞对档案全局共享，申请也针对全局档案。
 model DataRemovalRequest {
-  id         String    @id @default(cuid())
-  platform   String
-  handle     String // 被监控账号主页标识/链接
-  contact    String // 申请人联系方式（邮箱/手机）
-  reason     String?
+  id       String @id @default(cuid())
+  platform String
+  handle   String // 被监控账号主页标识/链接；kind=comment 时存的是**作品链接**，见下
+  contact  String // 申请人联系方式（邮箱/手机）
+  reason   String?
+
+  // 申请人是谁 —— 决定这条申请**执行什么**，两者绝不能混（2026-08-24 加）：
+  //   · account（默认，原有全部行）—— 被监控账号的权利人。停采该账号 + 删它名下全部数据。
+  //   · comment                    —— 在别人作品下留言的**读者本人**，主张删掉自己那一条评论
+  //                                   （《个保法》第 27 条拒绝权 / 第 47 条删除权）。
+  //
+  // ⚠️ comment 类**绝不能**进停采闸（isRemovalRequested 的 BLOCKING_STATUSES 查询）。
+  // 理由：评论者填的 handle 是**作品作者**的账号，不是他自己的。放进闸里等于
+  // 「张三删掉自己在李四视频下的一条评论」→ 全平台停采李四并删光李四的档案。
+  // 这是拿一个人的权利去伤害另一个人，比不执行更坏。
+  kind String @default("account")
+
+  // kind=comment 时申请人填的评论原文，用于精确定位要删的那一行 ReaderComment。
+  // 上限与 MAX_COMMENT_TEXT_LEN 同为 300：申请人抄不出比我们存得更长的正文。
+  commentText String?
+
   status     String    @default("pending") // pending | verified | removed | rejected
   createdAt  DateTime  @default(now())
   resolvedAt DateTime?
 
   @@index([status])
   @@index([platform, handle])
+  // 停采闸按 (platform, handle, status) 查，加了 kind 过滤后走这条
+  @@index([kind, status])
 }
 
 // 租户对竞对的订阅关系
@@ -1025,6 +1064,11 @@ model Notification {
   workspaceId String
   accountId   String? // 关联账号（可空=工作区级）
   kind        String // performance_alert | review_ready | weekly_review | ...
+  // 这条只给某个人看吗（null = 工作区里人人可见，旧行为）。
+  //
+  // 【为什么需要】「等你确认」只有发起人点得动，而红点是工作区级的——
+  // 不定向的话，同事也会看到一条他推不动的通知。
+  memberId    String?
   refId       String? // 关联对象（如 publishId），用于同一对象去重
   title       String
   body        String   @default("")
@@ -1180,11 +1224,22 @@ model LlmCallLog {
   // 会让预算莫名其妙提前烧完，且越是重度 BYOK 用户越早把别人拦死。
   // 历史行一律 unknown 而不是默认 platform：不知道就说不知道，别拿猜的数当账。
   source           String   @default("unknown")
+  // 这次调用属于哪一次 AI 执行（AgentRun.id）。空 = 不是执行器发的（网页聊天、打分、生成…）。
+  //
+  // 【为什么不靠 fn 区分】fn 不只是记账字段，它还是 **BYOK 按功能路由的键**
+  // （lib/llm/gateway.ts 按 routing[fn] 选渠道、按 functions[fn] 覆盖温度）。
+  // 把执行器的调用改成 fn='agent' 会让所有只配了 'chat' 路由的存量租户静默换渠道，
+  // 没配默认渠道的直接落 Mock——而 Mock 在执行器里是硬停 failed。加一列比动路由键安全得多。
+  //
+  // 松引用不加外键：账本是只增不减的事实记录，不该被运行记录的到期清理级联带走。
+  runId            String?
   createdAt        DateTime @default(now())
 
   @@index([tenantId, createdAt])
   @@index([createdAt])
   @@index([source, createdAt])
+  // 「这次执行烧了多少次调用」——执行循环每轮按它数一次，必须走索引
+  @@index([runId])
 }
 
 // 后台任务执行记录（三轨编排的可观测性）
@@ -1227,7 +1282,16 @@ model ContentSkill {
   promptTemplate String
   // 输出形态：markdown | html | text。html 仅用于富文本排版（微信公众号粘贴）。
   outputKind     String   @default("markdown")
-  version        String   @default("1.0")
+  // 版本号。**2026-08-21 之前这是个死字段**（恒为 "1.0"，全代码库零读写）——
+  // 市场化之后它才有了含义：装的是哪一版、上游有没有新版本，全靠它比。
+  // 格式统一成三段式 semver（lib/market/pack.ts 的 compareVersion 按段比）
+  version        String   @default("1.0.0")
+  // ── 市场溯源（只有从市场/网址装进来的才有）──────────────────────────────
+  // 从哪儿装的。检查更新时回这个地址拿最新版本；**留着它也是为了能说清「这东西哪来的」**
+  sourceUrl      String?
+  // 包里声明的作者署名。它**不是身份凭证**（没有签名），只是展示——
+  // 界面上要说清楚这一点，别让用户把它当成认证过的来源
+  sourceAuthor   String?
   isBuiltin      Boolean  @default(false)
   enabled        Boolean  @default(true)
   createdAt      DateTime @default(now())
@@ -1376,7 +1440,6 @@ model WxPayRefund {
   @@index([tenantId, createdAt])
 }
 
-
 // ─────────────────────── 域15：平台运维（跨租户超管台 /ops）───────────────────────
 
 // 超管操作审计：谁、什么时候、对哪个租户做了什么。
@@ -1389,8 +1452,8 @@ model AdminAuditLog {
   action        String // 动作 key，唯一事实来源见 lib/ops/audit.ts
   targetType    String // tenant | member | provider | setting | parser
   targetId      String
-  targetLabel   String @default("")
-  detail        String @default("{}") // JSON：{before, after, note}
+  targetLabel   String   @default("")
+  detail        String   @default("{}") // JSON：{before, after, note}
   createdAt     DateTime @default(now())
 
   @@index([createdAt])
@@ -1431,7 +1494,6 @@ model PlatformSetting {
   updatedAt DateTime @updatedAt
 }
 
-
 // ─────────────────────── 域16：AI 全域调用（工具执行器）───────────────────────
 //
 // 一次「让 AI 去把这件事做了」的完整过程。messages 存整段对话（含工具调用与回灌结果），
@@ -1443,20 +1505,184 @@ model AgentRun {
   accountId   String? // 运行时所在的创作账号（工具按它取人设/数据）
   memberId    String // 发起人。**权限按他算**，不是按工作区里权限最大的人算
   goal        String // 用户那句话
-  // running=模型正在想 | awaiting_confirm=等用户点确认写操作 | done | failed | cancelled
+  // queued=排队中（这个工作区同时在跑的已经到上限了，等前面的让位）
+  // | running=模型正在想 | awaiting_confirm=等用户点确认写操作
+  // | waiting_browser=派了活给浏览器插件、停下来等它回来（见 waitingOn）
+  // | waiting_quota=今日额度用尽，等北京时间 0 点重置后自动接着跑（见 quotaResumeAt）
+  // | done | failed | cancelled
+  //
+  // 【状态只能经 lib/agent/run.ts 的 transition() 改】它用带 from 条件的 updateMany 做乐观锁迁移。
+  // 直接 update 会把并发发生的终态（最典型：用户点了「终止」）悄悄盖回去——
+  // 用户看到的是「我明明点了终止，它却变成了已完成」。
   status      String   @default("running")
   messages    String   @default("[]") // JSON: ChatMessage[]（含 tool 角色）
-  pending     String? // JSON: 等确认的那次 ToolCall
+  // JSON: **停在哪一次 ToolCall 上**。awaiting_confirm 时是「等你点头的那次」，
+  // waiting_browser 时是「等结果的那次」——两种停都要靠它在恢复时把结果回灌给模型
+  pending     String?
+  // 在等一件什么外部的事，格式 `<类型>:<id>`，目前只有 `browser:<BrowserTask.id>`。
+  // 那件事有了结果（完成/失败/过期/取消）就回来叫醒这次运行（lib/agent/wake.ts）
+  waitingOn   String?
+  // 执行租约。后台跑这次运行的那个进程持有它，到期未续=那个进程没了，别人可以接手。
+  // 没有它的话，「确认」点两下、或插件回执重投一次，同一次运行会被两个地方同时往前推
+  leaseUntil  DateTime?
+  // waiting_quota 时：什么时候可以再试（北京时间次日 0 点）。定时扫它决定叫醒谁。
+  // 只对「等一等真的会好」的日额度有意义——月度/平台预算超限一律如实判 failed，不挂在这里。
+  quotaResumeAt DateTime?
   answer      String? // 最终回答
   error       String?
-  steps       Int      @default(0) // 已消耗的模型轮数，用于封顶
+  // 【steps 与 rounds 是两个数，别再混用】
+  // steps  = 步骤流水的条数，同时是 AgentStep.seq 的来源（tool_call、tool_result、answer 各占一条）
+  // rounds = **模型真的说了几轮话**，封顶判的是它
+  // 早先只有 steps 一个数，注释写着「已消耗的模型轮数」却拿流水条数去判封顶——
+  // 一轮调一次工具就吃掉两条，写着 12 轮的上限实际约等于 6 次工具调用。
+  steps       Int      @default(0)
+  rounds      Int      @default(0)
+  // 激活段：这次运行被「叫起来跑」的第几回合。通知去重键的一部分——
+  // 同一段里同一个状态只叫一次，新的一段重新开始算。
+  // 现在恒为 0；等追问/接着跑做出来（同一条运行会 done → running → done 走第二遍），
+  // 它才会递增。**先建在这里是为了让去重键从一开始就是对的**：
+  // 只按 (runId, status) 去重的话，那时候第二次跑完就静默不通知了——
+  // 而追问的人恰恰是最想知道「又跑完了」的那个。
+  episode     Int      @default(0)
+  // 这次执行的授权档：
+  //   confirm_each（缺省）= 每个会改数据或花钱的动作都停下来问
+  //   preauthorized       = 派发时用户勾定了一批工具，那些不再逐个问（见 preauthorizedTools）
+  //   unattended          = 无人值守（只有定时/预设任务能配），但**签合约类工具照样停**
+  //
+  // 【它只能由发起人在派发时的页面动作写入】模型说什么都不算数：needsConfirm 判的是
+  // 库里这两列，不是对话里的任何声明。对外 API/MCP 建的运行一律强制回 confirm_each。
+  authMode    String   @default("confirm_each")
+  // JSON: string[]，预授权勾定的工具名。**只在 authMode=preauthorized 时有意义**
+  preauthorizedTools String @default("[]")
+  // 这次执行最多能烧多少次模型调用。**数的是调用次数不是轮数**——
+  // 一个 costly 工具内部可能一次就调十几次（十几席会诊、八条选题精排），
+  // 按轮数封顶等于没有封顶。实际用量按 LlmCallLog.runId 现算。
+  callBudget  Int      @default(30)
+  // 这次执行是谁发起的：manual=用户在页面上派的 | preset=一键任务 | schedule=定时 | api=对外调用
+  // api 那种**强制 confirm_each**（防「模型 A 起草、模型 B 代签」换个皮再来一次）
+  origin      String   @default("manual")
+  // 哪个自主智能体在跑这次执行（null = 通用助手）。松引用不加外键：
+  // 模板被删掉之后这条运行记录仍然有价值
+  agentTemplateId String?
+  // JSON string[]：这次**只许用**这些工具（自主智能体的白名单，已与用户权限求过交集）。
+  // 空串/空数组 = 不额外收窄。
+  //
+  // 【为什么必须落库】执行是后台跑的、可以挂起几小时再被叫醒——那时候
+  // 起初传进来的那个参数早就不在了。只在建行时用它拼一遍系统提示词是**假的收窄**：
+  // 提示词里没列的工具，模型照样能调（tool schema 是每轮现算的）。
+  toolAllowlist String @default("[]")
+  // 哪条定时派出来的（null = 不是定时派的）。
+  //
+  // 【为什么必须记】定时的「连败三次自动停用」闸原来靠同步返回值记账
+  //（await runWorkflow 拿到 view.status 当场写）。而派一条 AI 执行是**异步**的：
+  // 派发那一刻它还没跑，拿不到结局。不记这一列的话，failStreak 永远不累加——
+  // 一条配坏的定时会每天准点烧配额，而且永不自动停用。
+  scheduledAgentId String?
+  // 谁派出来的子运行（null = 用户自己派的）。**松引用不加外键**：
+  // 父运行被到期清理删掉之后，子运行的记录本身还是有意义的。
+  //
+  // 【嵌套只许一层】它非空就说明「我已经是子运行了」——那时再派自主智能体一律拒绝。
+  // 不拦的话一个配错的智能体可以自己派自己，几层下去就是指数级的额度消耗。
+  parentRunId String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  workspace  Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace  Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   agentSteps AgentStep[]
+  notes      AgentRunNote[]
+  artifacts  AgentArtifact[]
 
   @@index([workspaceId, createdAt])
+  // 到期清理按 (status, updatedAt) 扫全库（lib/legal/retention.ts）。
+  // 只有 workspaceId 那条索引的话，这张只增不减的表一大就是全表扫。
+  // 定时兜底（lib/agent/tick.ts）也走它：按 status 捞 waiting_quota 与租约过期的 running。
+  @@index([status, updatedAt])
+  // 叫醒时按「在等哪件事」反查（一件事可能有多次运行在等）
+  @@index([waitingOn])
+  // 并发闸数「这个工作区正在跑几个」、提拔时找「排队最久的那个」，都走它
+  @@index([workspaceId, status])
+}
+
+// 一键任务：预先设定好的「目标 + 让谁干 + 授权到什么程度」。
+//
+// 【为什么需要它】派活现在要打一段字、选一个智能体、勾一次授权范围——
+// 而绝大多数人反复要的就是那么三五件事（「看看昨天数据给建议」「按人设出 6 条选题」）。
+// 每次重打一遍不只是麻烦：**授权范围每次都要重勾，勾错了没人拦得住**。
+// 存成一张卡，点一下就派，授权也是上次定好的那份。
+//
+// 它同时是定时的载体：ScheduledAgent 现在可以指向一条预设任务而不只是流水线模板。
+model TaskPreset {
+  id          String   @id @default(cuid())
+  tenantId    String
+  workspaceId String
+  title       String
+  // 派出去的那句话
+  goal        String
+  // 让哪个智能体干（null = 通用助手）。松引用不加外键：模板被删了这张卡还在，
+  // 派的时候会如实说「那个智能体已经不在了」
+  agentTemplateId String?
+  // 授权档。**无人值守只有挂了定时的才允许**——页面上点一下的时候人就在跟前，
+  // 没有理由不问他（判定在 lib/agent/run.ts 的 resolveAuth）
+  authMode    String   @default("confirm_each")
+  // JSON string[]：预授权勾定的工具
+  preauthorizedTools String @default("[]")
+  enabled     Boolean  @default(true)
+  sort        Int      @default(0)
+  createdBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, enabled, sort])
+}
+
+// 这次执行到底做出了什么东西。
+//
+// 【为什么需要它】此前「AI 改了我哪些东西」只能从步骤流水的文本里读——
+// 那是给人扫一眼用的截断文本，点不动、也回不去。产物散落在草稿版本、发布计划、
+// 图片资产各自的表里，用户要自己一个个页面去找。
+//
+// 确认闸管的是**动作发生之前**（这一步要不要做），产物清单管的是**之后**
+//（做出来的东西对不对）。两道闸互补，不能互相替代：预授权跑完的那些没有前一道，
+// 更需要后一道。
+model AgentArtifact {
+  id     String @id @default(cuid())
+  runId  String
+  // draft | draft_version | topic | image | publish_plan | schedule | browser_task
+  kind   String
+  // 指向业务表那一行。**松引用不加外键**：产物表各式各样，
+  // 而且产物被用户删掉之后这条记录仍有价值（「它当时做了这个，现在没了」）
+  refId  String
+  // 给人看的一句话：「新建草稿《秋季开学季》」
+  label  String
+  createdAt DateTime @default(now())
+
+  run AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId, createdAt])
+}
+
+// 跑着跑着用户又说了一句话（追问、补充要求、确认时的附言）。
+//
+// 【为什么是一张表而不是 AgentRun 上的一个 JSON 列】
+// 这一列会有**两个写入方**：web 请求（用户打字）与后台循环（消费掉它）。
+// 而 JSON 列只能读-改-写，两边同时来必丢话——用户那句话消失得无声无息。
+// insert-only 的子表天然没有这个问题：追加是纯 INSERT，消费是按 id 标记。
+// 顺带还得到一件事：附言也进了审计流水，「AI 为什么这么做」能追到是谁在中途说了什么。
+model AgentRunNote {
+  id     String @id @default(cuid())
+  runId  String
+  text   String
+  // 什么时候被送进模型的对话里。空 = 还没送达（界面上要标出来，
+  // 否则用户以为说了就生效了，而它可能要等到下一轮才被读到）
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  run AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  // 排干时按「这次运行还没消费的」查，一次一批
+  @@index([runId, consumedAt])
 }
 
 // 每一步留痕：调了什么工具、参数是什么、结果是什么、用户是不是拒绝了。
@@ -1476,7 +1702,6 @@ model AgentStep {
 
   @@index([runId, seq])
 }
-
 
 // ─────────────────────── 域17：多平台一键发布 ───────────────────────
 //
@@ -1505,18 +1730,18 @@ model PublishPlan {
 }
 
 model PublishTask {
-  id             String  @id @default(cuid())
+  id             String    @id @default(cuid())
   planId         String
   platform       String
   // api=服务端调官方接口 | extension=插件在创作后台填好由用户点发布 | manual=只能人工，平台没有可用通道
   channel        String
   // pending=待处理 | ready=内容已备好（等插件/人工）| filled=插件已填好待用户点发布
   // | submitted=已提交平台（公众号草稿箱）| published=确认已发布 | failed | skipped
-  status         String  @default("pending")
+  status         String    @default("pending")
   title          String
   content        String
   // {tags:[], topics:[], firstComment:'', mentions:[], submitToPublish:false}
-  extra          String  @default("{}")
+  extra          String    @default("{}")
   coverAssetId   String?
   error          String?
   publishedUrl   String?
@@ -1532,25 +1757,42 @@ model PublishTask {
 
   @@index([planId])
   @@index([status, updatedAt])
+  // 谁领走了这条活（IngestToken.id 或 'legacy'），以及领到什么时候。
+  //
+  // 【为什么要加】这个队列曾经是**无锁广播**：任何持令牌的执行体 GET 一次就看到全部待办。
+  // 用户既装了浏览器插件、又在 Mac mini 上跑着本机执行体时，同一篇稿子会被**各填一遍**——
+  // 而如果他还开了「代点发布」，那就是发两次。
+  //
+  // 租约比 BrowserTask 那边长得多（30 分钟 vs 15 分钟）：这一步是**人在环里**的，
+  // 用户要看一眼填得对不对再点发布，按机器的节奏计时会把他正在看的那条抢走。
+  claimedBy   String?
+  leaseUntil  DateTime?
 }
 
 // 平台官方接口凭证（目前只有微信公众号用得上）。appSecret 与模型 Key 同一套加密。
 model PublishCredential {
-  id           String   @id @default(cuid())
-  accountId    String
-  platform     String // wechat
-  appId        String
-  appSecretEnc String
-  status       String   @default("untested") // untested | ok | failed
-  lastError    String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id             String    @id @default(cuid())
+  accountId      String
+  platform       String // wechat
+  appId          String
+  appSecretEnc   String
+  status         String    @default("untested") // untested | ok | failed
+  lastError      String?
+  // ── 微博 OAuth（2026-08-19）：微博的发布接口走 access_token，不像公众号那样能用 AppSecret 现换 ──
+  // token 与 appSecret 一样是密文（encryptKey），过期时刻单独存一列，好在界面上如实显示「还有多久要重授权」。
+  tokenEnc       String?
+  tokenExpiresAt DateTime?
+  // 平台侧的用户 id（微博 uid）。授权换到的是哪个号，界面上要能核对，避免授权错账号。
+  externalUid    String?
+  // 平台强制要求正文里带一条本域链接时用（微博 statuses/share 的硬规则），存用户自己填的回链
+  linkUrl        String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   account CreatorAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
 
   @@unique([accountId, platform])
 }
-
 
 // ─────────────────────── 域18：工作流模板与模板市场 ───────────────────────
 //
@@ -1566,16 +1808,46 @@ model WorkflowTemplate {
   description String   @default("")
   emoji       String   @default("🧩")
   category    String   @default("general")
-  // JSON: WorkflowStep[]，形状与解析口径见 lib/workflow/steps.ts
+  // 职责说明：这个智能体是谁、什么时候该派它上。**给人看也给模型看**——
+  // AI 助手靠它决定「用户这句话该派哪一个」，所以写「适合什么场景」比写「它很厉害」有用。
+  // 空 = 只能手动点运行，AI 不会主动派它（见 lib/workflow/agent-pick.ts）。
+  persona     String   @default("")
+  // 跑之前得先有什么（人话）。空 = 装上就能直接跑。
+  //
+  // 【为什么要有它】「小红书日更三件套」第一步是从最高分选题写初稿，而新账号一条选题都没有
+  // ——用户装上、点「跑一遍」，第一步就撞「没有可用选题」。三条内置模板里有两条是这样。
+  // 那句失败信息虽然指了路，但用户是在**花了一次点击之后**才知道的。
+  requires    String   @default("")
+  // JSON: WorkflowStep[]，形状与解析口径见 lib/workflow/steps.ts。**只有流水线形态用它**
   steps       String   @default("[]")
+  // 这个智能体是哪一种：
+  //   pipeline（缺省）—— 一串定死的步骤，跑法完全可预期，模板作者定死一切
+  //   autonomous     —— 给它目标和授权范围，它自己安排怎么做
+  //
+  // 【为什么保留流水线而不是全改成自主】确定性的日更流水线自有价值：
+  // 用户要的就是「每天照这三步来」，不需要它临场发挥。而且「模板不做自由脚本步」
+  // 是防可分享模板携带任意执行的红线——两种形态都是**纯数据**，只是数据的形状不同。
+  mode        String   @default("pipeline")
+  // JSON，**只有 autonomous 形态用它**：
+  //   { systemPrompt?: string, tools: string[], callBudget?: number, defaultAuthMode?: string }
+  //
+  // tools 是这个智能体能用的工具白名单。**它只能收窄不能放宽**——
+  // 派它的时候会与「当前用户自己有权用的工具」求交集，装了别人分享的智能体
+  // 不可能因此突破自己的权限或工作区开关。
+  agentConfig String?
   isBuiltin   Boolean  @default(false)
   enabled     Boolean  @default(true)
   createdBy   String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  installs WorkflowInstall[]
-  runs     WorkflowRun[]
+  // 与 ContentSkill 同构：内置模板 tenantId=null（全局行），自建的挂租户。
+  // ⚠️ 这条外键此前**漏了**：注销租户时靠 Cascade 删数据，没有它自建模板会留成
+  // 永远没人清的孤儿行（而 ContentSkill 一直有）。
+  tenant    Tenant?           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  installs  WorkflowInstall[]
+  runs      WorkflowRun[]
+  schedules ScheduledAgent[]
 }
 
 model WorkflowInstall {
@@ -1585,6 +1857,8 @@ model WorkflowInstall {
   enabled     Boolean  @default(true)
   installedAt DateTime @default(now())
 
+  // 同上：SkillInstall 有这条，WorkflowInstall 漏了
+  tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   template WorkflowTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, templateId])
@@ -1592,6 +1866,85 @@ model WorkflowInstall {
 
 // 一次跑模板的过程。中途失败要能看出**停在哪一步、为什么**——
 // 只记一个 failed 的话，用户唯一能做的就是整条重跑（前面几步的钱白花了）。
+model ScheduledAgent {
+  id          String   @id @default(cuid())
+  workspaceId String
+  // 到点了派什么：workflow=一条流水线模板（旧行为）| task=一条预设任务（可以是自主智能体）
+  targetKind  String   @default("workflow")
+  // targetKind='task' 时指向哪条预设任务。松引用不加外键：卡被删了这条定时会如实报错停用
+  taskPresetId String?
+  // 派它在哪个创作账号名下干活。账号删了这条也没意义了，跟着走
+  accountId   String
+  // 可空：targetKind='task' 时指的是 taskPresetId，没有模板
+  templateId  String?
+  // 北京时间的时刻（lib/beijing.ts 口径）。**不给用户写 cron**——
+  // 会写 cron 的人是少数，而写错一个字段就是每分钟跑一次 AI，账单当天就爆
+  atHour      Int      @default(9)
+  atMinute    Int      @default(0)
+  // 周几跑：JSON 数字数组（0=周日）。空数组 = 每天
+  weekdays    String   @default("[]")
+  enabled     Boolean  @default(true)
+  // 连续失败次数。达到 AUTO_PAUSE_FAILS 自动停用并告警——
+  // 没有这一条的话，一个坏模板会每天准点烧一次配额直到用户自己发现
+  failStreak  Int      @default(0)
+  // 上一次实际跑的**逻辑日**（北京时间 YYYY-MM-DD）。用它防重跑：
+  // 扫描是每 10 分钟一次，只比时刻的话一个窗口内会连开好几次
+  lastRunDay  String?
+  lastRunAt   DateTime?
+  lastStatus  String?
+  lastError   String?
+  createdBy   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  // 关系跟着 templateId 一起变可空（targetKind='task' 时没有模板）
+  template  WorkflowTemplate? @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([enabled, atHour])
+  @@index([workspaceId])
+}
+
+model BrowserTask {
+  id          String   @id @default(cuid())
+  workspaceId String
+  // 派给哪个创作账号做（collect_self 要用它决定进谁的后台）
+  accountId   String?
+  // 白名单动作，见 lib/browser-task/kinds.ts。**不许放任意指令进来**
+  kind        String
+  // JSON 参数（如 {competitorId} / {platform}）。形状由 kind 决定，服务端 zod 校验后才落库
+  payload     String   @default("{}")
+  // pending=等插件来领 | claimed=已被某个浏览器领走 | done | failed | expired | cancelled
+  status      String   @default("pending")
+  // 谁派的：agent=AI 执行器 | user=用户在页面上点 | schedule=定时智能体
+  origin      String   @default("agent")
+  // 领走它的那个浏览器（IngestToken.id）。用于「同一台机器别重复领」与排查
+  claimedBy   String?
+  claimedAt   DateTime?
+  // 领了多久没交活就放回池子（插件可能被关掉/崩了）
+  leaseUntil  DateTime?
+  // 过期就别做了：三天前让采的数据，现在采回来也没意义
+  expiresAt   DateTime
+  attempts    Int      @default(0)
+  // 给人看的一句话回执（截 500 字）
+  result      String?
+  // 插件带回来的**内容本体**（open_and_read 的页面文本等），JSON 字符串。
+  // 与 result 分开：前者是「跑成没有」给人看，这里是「拿到了什么」给服务端接着处理。
+  // 上限见 lib/browser-task/kinds.ts 的 MAX_READ_TEXT_CHARS——超了截断不打回，
+  // 且必须留在 WAF 的请求体阈值以内（超限会回一个假的 HTTP 200）
+  resultData  String?
+  error       String?
+  createdBy   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  // 插件领活的主路径：按 workspace 找 pending 且没过期的
+  @@index([workspaceId, status, expiresAt])
+  @@index([status, leaseUntil])
+}
+
 model WorkflowRun {
   id          String   @id @default(cuid())
   workspaceId String
@@ -1599,6 +1952,9 @@ model WorkflowRun {
   templateId  String
   draftId     String?
   status      String   @default("running") // running | done | failed | cancelled
+  // 谁把它跑起来的：manual=用户在页面上点的 | schedule=定时计划 | agent=AI 助手在对话里派的。
+  // 缺省 manual：这个字段是后加的，存量行全是当时唯一的那条路径（页面手点）。
+  trigger     String   @default("manual")
   stepIndex   Int      @default(0)
   // JSON: 每步的 {kind, ok, message, at}
   log         String   @default("[]")
@@ -1607,11 +1963,13 @@ model WorkflowRun {
   updatedAt   DateTime @updatedAt
 
   workspace Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  template  WorkflowTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  // 关系跟着 templateId 一起变可空（targetKind='task' 时没有模板）
+  template  WorkflowTemplate? @relation(fields: [templateId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId, createdAt])
+  // 同 AgentRun：到期清理走 (status, updatedAt)
+  @@index([status, updatedAt])
 }
-
 
 // ─────────────────────── 域19：采集自学习（解析规则自愈）───────────────────────
 //
@@ -1676,6 +2034,34 @@ model ParserRule {
 
   incident ParserIncident? @relation(fields: [incidentId], references: [id], onDelete: SetNull)
 
-  @@index([platform, status])
   @@unique([platform, field, version])
+  @@index([platform, status])
+}
+
+// ── 对外调用令牌（批 5B）────────────────────────────────────────────────────
+//
+// 【为什么不复用采集令牌】那一枚的语义是「往这个工作区回传采集数据 / 领发布任务」，
+// 它**不绑成员**（工作区级），也就没法回答「这次调用按谁的权限算」。
+// 而 AI 执行的每一步权限都是按发起人算的（lib/agent/run.ts 的 contextForRun），
+// 拿一枚不知道是谁的令牌去开执行，等于凭空造出一个没有主人的操作者。
+//
+// 【所以这一枚必须绑到人】token → Member，执行时用这个人的角色跑 RBAC。
+// 他被降权或移出团队，这枚令牌立刻跟着失效——不需要额外做什么。
+model ApiToken {
+  id        String    @id @default(cuid())
+  // 令牌明文（bck_ 前缀，与采集令牌的 bcn_ 一眼可分）。唯一约束 = 鉴权一次 findUnique 命中
+  token     String    @unique
+  // 这枚令牌代表谁在调用。**权限按他算**
+  memberId  String
+  // 用户自己起的名字，如「我的 Mac mini」「Claude Desktop」。收回时靠它认出是哪一个
+  label     String
+  createdAt DateTime  @default(now())
+  // 节流写入（同采集令牌）：每次调用都更新等于给每个请求平白加一次写库
+  lastUsedAt DateTime?
+  // 非空 = 已吊销。不删行——用户要看得到「这枚是什么时候收回的」
+  revokedAt DateTime?
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([memberId, revokedAt])
 }

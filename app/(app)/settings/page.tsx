@@ -3,10 +3,11 @@ import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { sourceHealthBoard } from '@/lib/adapters/registry';
 import { embedderInfo } from '@/lib/vector/embed';
-import { PageHead, Card, Stat } from '@/components/ui';
+import { Card, Stat } from '@/components/ui';
 import { Icon } from '@/components/icons';
 import { AutomationCard, type LastRun } from './AutomationCard';
 import { readAutomationConfig, AUTOMATION_ITEMS } from '@/lib/jobs/automation';
+import { HubHeader } from '@/components/HubHeader';
 
 export const dynamic = 'force-dynamic';
 
@@ -46,9 +47,9 @@ export default async function SettingsPage() {
 
   return (
     <>
-      <PageHead
+      <HubHeader
         title="运行设置"
-        desc="后台任务、数据源与语义向量的实况 · 所有要填 Key 的地方都在「接入与密钥」"
+        hint="后台任务、数据源与语义向量的实况 · 所有要填 Key 的地方都在「接入与密钥」"
         action={
           <Link href="/settings/keys" className="btn btn-sm btn-primary">
             <Icon.cpu size={13} /> 接入与密钥

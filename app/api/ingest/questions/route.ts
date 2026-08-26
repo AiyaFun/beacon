@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { log } from '@/lib/logger';
-import { INGEST_TOKEN_HEADER, workspaceByIngestToken } from '@/lib/ingest/competitor';
+import { INGEST_TOKEN_INVALID, INGEST_TOKEN_HEADER, workspaceByIngestToken } from '@/lib/ingest/competitor';
 import { commentQuestionsSchema, ingestCommentQuestions, commentWorkKey } from '@/lib/ingest/comment-questions';
 import { ingestReaderComments } from '@/lib/ingest/reader-comments';
 
@@ -25,7 +25,7 @@ export async function POST(req: Request) {
   const ws = await workspaceByIngestToken(req.headers.get(INGEST_TOKEN_HEADER));
   if (!ws) {
     log.warn('评论提问鉴权失败');
-    return json({ ok: false, error: '采集令牌无效或已停用——请在 设置页 重新生成并填入插件' }, 401);
+    return json({ ok: false, error: INGEST_TOKEN_INVALID }, 401);
   }
 
   let body: unknown;

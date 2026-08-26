@@ -35,7 +35,12 @@ function pick(store: Store, keys: unknown): Store {
 function loadSw(opts: { competitors: Competitor[]; wechatReply?: Record<string, unknown> }) {
   const noop = () => {};
   const listener = { addListener: noop };
-  const local: Store = {};
+  const local: Store = {
+    // 风险确认（0.9.8 起 collectWechatOne 的第一道闸）预置为已确认——本文件测的是
+    // 确认**之后**的行为。闸本身由 tests/legal/wechat-risk-ack.test.ts 与本文件末尾
+    // 那条「没确认时一个请求都不发」守着。
+    wechatRiskAck: { version: 1, at: Date.now() },
+  };
   const opened: string[] = [];
   const notified: { message?: string }[] = [];
   let context: vm.Context;

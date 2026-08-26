@@ -14,6 +14,14 @@ export const PLATFORMS = {
   // 内容不互通、算法与合规口径也不同（TikTok 侧重完播+分享，抖音侧重完播+评论互动）。
   // 合并会让「我抖音发过 = 我 TikTok 发过」这种判断全线错掉（跨平台补发、抢跑窗口都按 platform 比对）。
   tiktok: { key: 'tiktok', name: 'TikTok', color: '#ee1d52', kind: 'short_video' },
+  // ── 大陆图文/资讯平台（2026-08-19 补齐）──────────────────────────────────
+  // 加进来的判据只有一个：**用户真的在这些平台上发东西**。能不能走官方接口是另一回事，
+  // 由 lib/publish/capability.ts 逐个如实写明（微博是这批里唯一有个人可用官方接口的）。
+  weibo: { key: 'weibo', name: '微博', color: '#e6162d', kind: 'short_text' },
+  zhihu: { key: 'zhihu', name: '知乎', color: '#0084ff', kind: 'article' },
+  toutiao: { key: 'toutiao', name: '头条号', color: '#f04142', kind: 'article' },
+  baijiahao: { key: 'baijiahao', name: '百家号', color: '#2932e1', kind: 'article' },
+  kuaishou: { key: 'kuaishou', name: '快手', color: '#ff4906', kind: 'short_video' },
 } as const;
 
 export type PlatformKey = keyof typeof PLATFORMS;
@@ -42,8 +50,9 @@ export const HOT_SOURCES = [
 
 // 榜单源的品牌名（去掉「热榜/热搜/热门」后缀）。
 //
-// 存在的理由：HOT_SOURCES 的 key 与 PLATFORMS **不完全重合**——微博/知乎/百度/头条只有热榜、
-// 没有发布通道，所以 platformName 查不到它们，会原样吐回英文 key。凡是把「榜单源」写进
+// 存在的理由：HOT_SOURCES 的 key 与 PLATFORMS **不完全重合**——百度只有热榜、没有发布通道，
+// 所以 platformName 查不到它，会原样吐回英文 key。（微博/知乎/头条 2026-08-19 已进 PLATFORMS，
+// 但 baidu 仍然只是榜单源。）凡是把「榜单源」写进
 // 面向用户的句子的地方（如抢跑窗口的证据句）都必须走这里，否则会出现
 // 「该话题已在 weibo、zhihu 共 2 个平台上榜」这种半英文文案。
 export function sourceBrandName(key: string): string {
@@ -157,7 +166,16 @@ export const CONFIDENCE_LEVELS = {
 // 而配额按次计——理由写在 lib/llm/gateway.ts 的 llmVideo 上方）。
 // image = 文生图/图生图（小红书 AI 封面）。走 images/generations 端点而非 chat/completions，
 // 执行层是 lib/llm/image.ts 而非通用 provider；配额与记账仍与其它功能同一套（见 llmImage）。
-export const LLM_FUNCTIONS = ['scoring', 'generation', 'advisor', 'compliance', 'chat', 'diagnosis', 'video', 'image'] as const;
+// agent = 执行模式（任务台派活）的推理循环。它**不是**一个新的记账口径：
+// 执行器仍然按 fn='chat' 记账与走 BYOK，这一项只作为「按功能路由」里的一个**可选偏好**——
+// 配了就用它选渠道，没配就完全照旧（见 lib/llm/gateway.ts 的 preferFn）。
+//
+// 【为什么值得单列】执行模式对模型的要求与聊天完全不同：它必须稳定地发**结构化工具调用**。
+// 2026-08-23 真机实测，平台默认的 MiniMax-Text-01 会把调用写成正文
+//（「我这就去建草稿」＋一段 functions.create_draft(...) 文本），三次真跑三种表现。
+// 而同一条渠道对普通问答是够用的——所以要的不是「换掉默认模型」，
+// 是「让执行模式能单独指一条更会用工具的渠道」。
+export const LLM_FUNCTIONS = ['scoring', 'generation', 'advisor', 'compliance', 'chat', 'diagnosis', 'video', 'image', 'agent'] as const;
 
 // 连通性测试的两个判据（渠道设置用）。放这里而不是 settings/actions.ts：
 // 'use server' 文件只能导出 async 函数，同步判据放不进去；这里本来就是端点白名单的家。

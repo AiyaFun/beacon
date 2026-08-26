@@ -3,7 +3,8 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Overlay } from '@/components/Overlay';
-import { actSetTenantPlan, actSuspendTenant, actResumeTenant, actSetPlatformAdmin, ASSIGNABLE_PLANS } from './actions';
+import { actSetTenantPlan, actSuspendTenant, actResumeTenant, actSetPlatformAdmin } from './actions';
+import { ASSIGNABLE_PLANS } from './plans';
 
 type TenantView = {
   id: string;

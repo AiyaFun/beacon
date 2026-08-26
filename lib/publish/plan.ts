@@ -107,6 +107,37 @@ export type TaskView = {
   calibrated: boolean;
 };
 
+type TaskRow = {
+  id: string;
+  platform: string;
+  channel: string;
+  status: string;
+  title: string;
+  content: string;
+  extra: string;
+  error: string | null;
+  publishedUrl: string | null;
+};
+
+function toTaskView(t: TaskRow): TaskView {
+  const cap = capOf(t.platform);
+  return {
+    id: t.id,
+    platform: t.platform,
+    platformLabel: platformName(t.platform) || t.platform,
+    channel: t.channel,
+    status: t.status,
+    title: t.title,
+    content: t.content,
+    extra: parseJson<PlanTaskExtra>(t.extra, {}),
+    error: t.error,
+    publishedUrl: t.publishedUrl,
+    requires: cap.requires,
+    why: cap.why,
+    calibrated: cap.calibrated !== false,
+  };
+}
+
 export async function readPlan(workspaceId: string, planId: string) {
   const plan = await prisma.publishPlan.findFirst({
     where: { id: planId, workspaceId },
@@ -117,25 +148,59 @@ export async function readPlan(workspaceId: string, planId: string) {
     id: plan.id,
     draftId: plan.draftId,
     status: plan.status,
-    tasks: plan.tasks.map((t): TaskView => {
-      const cap = capOf(t.platform);
-      return {
-        id: t.id,
-        platform: t.platform,
-        platformLabel: platformName(t.platform) || t.platform,
-        channel: t.channel,
-        status: t.status,
-        title: t.title,
-        content: t.content,
-        extra: parseJson<PlanTaskExtra>(t.extra, {}),
-        error: t.error,
-        publishedUrl: t.publishedUrl,
-        requires: cap.requires,
-        why: cap.why,
-        calibrated: cap.calibrated !== false,
-      };
-    }),
+    tasks: plan.tasks.map(toTaskView),
   };
+}
+
+export type PlanSummary = {
+  id: string;
+  draftId: string;
+  draftTitle: string;
+  status: string;
+  createdAt: Date;
+  tasks: TaskView[];
+};
+
+/**
+ * 发布中心那一页要的清单：**当前账号**最近的发布计划，连同每条任务。
+ *
+ * 按 accountId 过滤而不是只按 workspaceId：一个工作区可以有好几个创作账号，
+ * 混在一起列出来，用户会在「我的抖音号」页面上看到给公众号排的任务
+ * （同 /data 的口径；跨账号看不见东西这个坑本项目已经踩过，页面上要写明只看当前账号）。
+ */
+export async function listPlans(
+  scope: { workspaceId: string; accountId: string },
+  opts: { status?: string; take?: number } = {},
+): Promise<PlanSummary[]> {
+  const plans = await prisma.publishPlan.findMany({
+    where: {
+      workspaceId: scope.workspaceId,
+      accountId: scope.accountId,
+      ...(opts.status ? { status: opts.status } : {}),
+    },
+    orderBy: { createdAt: 'desc' },
+    take: opts.take ?? 10,
+    include: { tasks: { orderBy: { createdAt: 'asc' } } },
+  });
+  if (plans.length === 0) return [];
+
+  // 草稿标题单独查：PublishPlan 只存 draftId（没建关系），而列表里不写标题
+  // 就成了一串 cuid，用户认不出哪条是哪篇。
+  const drafts = await prisma.draft.findMany({
+    where: { id: { in: [...new Set(plans.map((p) => p.draftId))] } },
+    select: { id: true, title: true },
+  });
+  const titleOf = new Map(drafts.map((d) => [d.id, d.title]));
+
+  return plans.map((p) => ({
+    id: p.id,
+    draftId: p.draftId,
+    // 草稿被删了就如实说，不编一个标题
+    draftTitle: titleOf.get(p.draftId) ?? '（草稿已删除）',
+    status: p.status,
+    createdAt: p.createdAt,
+    tasks: p.tasks.map(toTaskView),
+  }));
 }
 
 // ── 回执：插件/用户告诉我们这条任务走到哪一步了 ──────────────────────────────
@@ -154,6 +219,22 @@ export type ReceiptInput = {
 };
 
 export type ReceiptResult = { ok: true; warnings: string[] } | { ok: false; error: string };
+
+/**
+ * 全部任务都走到终态就把计划关掉。
+ *
+ * 终态含跳过与失败：用户可能就是不想发那个平台了，或者那条通道今天走不通——
+ * 两种都不该让计划一直挂在「进行中」。三条终态分支都要调它（少调一条就是一个
+ * 永远关不掉的计划，而这种错不报任何异常）。
+ */
+async function closePlanIfSettled(planId: string): Promise<void> {
+  const rest = await prisma.publishTask.count({
+    where: { planId, status: { notIn: ['published', 'skipped', 'failed'] } },
+  });
+  if (rest === 0) {
+    await prisma.publishPlan.update({ where: { id: planId }, data: { status: 'done' } });
+  }
+}
 
 export async function applyTaskReceipt(input: ReceiptInput): Promise<ReceiptResult> {
   const task = await prisma.publishTask.findFirst({
@@ -175,11 +256,22 @@ export async function applyTaskReceipt(input: ReceiptInput): Promise<ReceiptResu
       where: { id: task.id },
       data: { status: input.status, error: (input.error ?? '').slice(0, 300) || null },
     });
+    // 跳过/失败也是终态。少了这一句，「三个平台里跳过了最后一个」的计划会**永远**停在
+    // 进行中——发布中心那一页于是长期挂着一条其实没有任何待办的计划。
+    await closePlanIfSettled(task.planId);
     return { ok: true, warnings: [] };
   }
 
   // published：这一步才真正落进发布记录
   const url = (input.url ?? '').trim();
+
+  // 重复投递的回执要当场吃掉。插件会重试（断网/用户又点了一次「我发完了」），
+  // 而 published 这条分支带副作用：写发布记录 + 推进草稿/选题状态 + 重写发布时刻。
+  // 发布时刻被改成重试那一刻，会直接污染发布时机分析（lib/insight/timing.ts）。
+  // 例外：先报了没链接、后来才拿到链接——那条要放行，它带来的是新信息。
+  if (task.status === 'published' && (!url || url === task.publishedUrl)) {
+    return { ok: true, warnings: [] };
+  }
   const parsed = url ? resolvePlatformItemId(url, task.platform) : { platformItemId: null, warning: null };
   const draft = await prisma.draft.findUnique({
     where: { id: task.plan.draftId },
@@ -216,13 +308,7 @@ export async function applyTaskReceipt(input: ReceiptInput): Promise<ReceiptResu
     },
   });
 
-  // 全部任务都走到终态就把计划关掉（终态含跳过与失败：用户可能就是不想发那个平台了）
-  const rest = await prisma.publishTask.count({
-    where: { planId: task.planId, status: { notIn: ['published', 'skipped', 'failed'] } },
-  });
-  if (rest === 0) {
-    await prisma.publishPlan.update({ where: { id: task.planId }, data: { status: 'done' } });
-  }
+  await closePlanIfSettled(task.planId);
 
   const allWarnings = [...warnings];
   if (parsed.warning) allWarnings.push(parsed.warning);

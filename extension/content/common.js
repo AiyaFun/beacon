@@ -448,7 +448,24 @@ globalThis.beaconPageText = beaconPageText;
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   // 页面正文：popup / SidePanel 是扩展页面，够不到页面 DOM，只能向内容脚本要
   if (msg?.type === 'beacon-page-text') {
-    sendResponse({ ok: true, text: beaconPageText(msg.cap) });
+    // 【为什么这里要分两种来源】这个内容脚本挂在 <all_urls> 上，也就是**每一个网页**。
+    // 用户自己点侧栏上的按钮要正文，是他当场对着这一页发起的，理所当然。
+    // 但 2026-08-21 起服务端也能派活让插件去读网页（open_and_read），
+    // 那条路上「读哪一页」是**服务端说了算**的——两者必须分开对待。
+    //
+    // 派活来的请求带 forTask 标记，此时这一页必须落在插件端硬编码的白名单里。
+    // 不加这道闸的话，服务端下发一个 URL 就能读走用户任何一个已登录页面的全文
+    //（包括他公司的内网系统）。服务端也校验白名单，但那份不算数：
+    // 插件连的服务端地址是可配的，只信服务端等于没有防线。
+    if (msg.forTask) {
+      const ok = typeof globalThis.beaconReadAllowed === 'function'
+        && globalThis.beaconReadAllowed(location.href);
+      if (!ok) {
+        sendResponse({ ok: false, error: '这一页不在允许读取的站点清单里' });
+        return undefined;
+      }
+    }
+    sendResponse({ ok: true, text: beaconPageText(msg.cap), title: document.title, url: location.href });
     return undefined;
   }
   // 自有后台自检：解析失败时告诉用户断在哪一步（选择器？列名？），

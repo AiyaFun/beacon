@@ -2,12 +2,14 @@ import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { can } from '@/lib/rbac';
 import { platformName, COMPLIANCE_TIERS } from '@/lib/constants';
-import { PageHead, Card, Stat, TierBadge } from '@/components/ui';
+import { PageHead, Card, Stat, TierBadge, Fold } from '@/components/ui';
 import { Icon } from '@/components/icons';
 import { Checker } from './Checker';
 import { WordManager } from './WordManager';
 import { FeedbackPanel } from './FeedbackPanel';
 import type { CustomWord, FeedbackItem } from './actions';
+import { MakeTabs } from '@/components/MakeTabs';
+import { HubHeader } from '@/components/HubHeader';
 
 export const dynamic = 'force-dynamic';
 
@@ -64,9 +66,10 @@ export default async function CompliancePage() {
 
   return (
     <>
-      <PageHead
-        title="敏感词合规引擎"
-        desc="按目标平台检测并规避敏感词，四级词库：法律／平台／行业／自定义"
+      <HubHeader
+        title="做内容"
+        hint="按目标平台检测并规避敏感词，四级词库：法律／平台／行业／自定义"
+        tabs={<MakeTabs active="check" inline />}
       />
 
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
@@ -92,7 +95,7 @@ export default async function CompliancePage() {
           <Checker drafts={draftOptions} />
         </Card>
 
-        <Card title="四级词库总览" sub={`共 ${words.length} 条生效`}>
+        <Fold title="四级词库总览" sub="共几级、各拦什么" note={<span className="small muted">看一次就够</span>}>
           <div className="stack" style={{ gap: 16 }}>
             {TIER_ORDER.map((tier) => {
               const list = byTier.get(tier) ?? [];
@@ -129,14 +132,14 @@ export default async function CompliancePage() {
               );
             })}
           </div>
-        </Card>
+        </Fold>
       </div>
 
-      <Card title="自定义词库管理" sub="添加黑名单词条或白名单替代建议，立即生效于检测器" style={{ marginBottom: 16 }}>
+      <Fold title="自定义词库管理" sub="添加黑名单词条或白名单替代建议" note={<span className="small muted">要加词才翻开</span>}>
         <WordManager words={customWords} />
-      </Card>
+      </Fold>
 
-      <Card title="误报反馈" sub="认为某词在你的语境下属误报？告诉我们" style={{ marginBottom: 16 }}>
+      <Fold title="误报反馈" sub="认为某词在你的语境下属误报？告诉我们" note={<span className="small muted">偶尔用</span>}>
         <FeedbackPanel items={feedbackItems.map((f) => ({
           id: f.id,
           word: f.word,
@@ -146,7 +149,7 @@ export default async function CompliancePage() {
           status: f.status,
           createdAt: f.createdAt.toISOString(),
         }))} canResolve={can(s.role, 'compliance.resolve')} />
-      </Card>
+      </Fold>
 
       <div className="alert-gradient-brand" style={{ padding: '14px 18px', marginBottom: 16 }}>
         <div className="row" style={{ gap: 12, alignItems: 'flex-start' }}>
@@ -163,7 +166,7 @@ export default async function CompliancePage() {
         </div>
       </div>
 
-      <Card title="合规说明" sub="发布前必读">
+      <Fold title="合规说明" sub="发布前必读" note={<span className="small muted">看一次就够</span>}>
         <div className="stack" style={{ gap: 12 }}>
           <div className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
             <span style={{ color: 'var(--brand)', marginTop: 2 }}><Icon.bulb size={16} /></span>
@@ -192,7 +195,7 @@ export default async function CompliancePage() {
             </div>
           </div>
         </div>
-      </Card>
+      </Fold>
     </>
   );
 }

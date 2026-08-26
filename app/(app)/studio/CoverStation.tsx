@@ -23,14 +23,13 @@ import {
 import {
   MAX_SUBJECT_IMAGES,
   MAX_BACKGROUND_IMAGES,
-  MAX_REFERENCE_MB,
   COVER_TITLE_SOFT_MAX,
   COVER_TITLE_HARD_MAX,
   COVER_SUBTITLE_HARD_MAX,
   COVER_EXTRA_HARD_MAX,
-  IMAGE_PROCESSOR_NAME,
   MAX_COVER_IMAGES,
 } from '@/lib/cover/rules';
+import { PortraitConsentText } from '@/components/PortraitConsent';
 import { prepareReferenceImage, downloadImage } from '@/lib/cover/client-image';
 import type { MediaAssetSummary } from '@/lib/media/store';
 import {
@@ -615,12 +614,8 @@ export function CoverStation({
       {/* 单独同意：目的 / 方式 / 接收方 / 保存期 / 本人或已授权。未勾选时上传按钮置灰不隐藏。 */}
       <label className="small" style={{ display: 'flex', gap: 8, alignItems: 'flex-start', lineHeight: 1.6, color: 'var(--text-2)' }}>
         <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} style={{ marginTop: 3 }} />
-        <span>
-          我确认上传的照片中的人物是<b>我本人</b>，或我已依法取得其<b>单独同意</b>；照片会以内联方式发送给
-          {IMAGE_PROCESSOR_NAME} 用于出图，单张 ≤ {MAX_REFERENCE_MB}MB。
-          <b>默认用完即弃</b>（不落库、不落盘）；只有你勾了「存进我的形象」才会加密保存下来，随时可删。
-          不上传照片也可以直接出图。
-        </span>
+        {/* 这段字与出图工位共用一份（components/PortraitConsent.tsx）：合规文本不许有第二个版本 */}
+        <PortraitConsentText />
       </label>
 
       {/* 生成 */}

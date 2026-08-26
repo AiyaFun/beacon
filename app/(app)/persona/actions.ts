@@ -75,6 +75,12 @@ export async function actSavePersona(cardJson: string) {
   try {
     const { preinstallSkillsForPlatforms } = await import('@/lib/skills');
     await preinstallSkillsForPlatforms(s.tenantId, clean.platforms ?? []);
+    // 智能体也一并装上。技能一直有预装而智能体没有，两边口径不对称，
+    // 后果是全库 WorkflowInstall 一行都没有——产品自带的三条模板对每个用户
+    // 都是「看得见、用不上」，AI 也会永远回答「这个团队还没装任何智能体」。
+    // 装 ≠ 跑：安装只是让它出现在可派清单里，一分钱都不花
+    const { preinstallBuiltinTemplates } = await import('@/lib/workflow/market');
+    await preinstallBuiltinTemplates(s.tenantId);
   } catch (e) {
     console.warn('[persona] 按主战平台预装技能失败，已跳过:', (e as Error).message);
   }

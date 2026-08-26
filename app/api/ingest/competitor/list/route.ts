@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import {
   INGEST_TOKEN_HEADER,
+  INGEST_TOKEN_INVALID,
   workspaceByIngestToken,
   listSubscribedCompetitors,
 } from '@/lib/ingest/competitor';
@@ -31,7 +32,7 @@ export function OPTIONS() {
 
 export async function GET(req: Request) {
   const ws = await workspaceByIngestToken(req.headers.get(INGEST_TOKEN_HEADER));
-  if (!ws) return json({ ok: false, error: '采集令牌无效或已停用' }, 401);
+  if (!ws) return json({ ok: false, error: INGEST_TOKEN_INVALID }, 401);
   const competitors = await listSubscribedCompetitors(ws.id);
   return json({ ok: true, workspace: ws.name, competitors });
 }

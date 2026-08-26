@@ -4,7 +4,13 @@
     {
       "name": "beacon-dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--", "-p", "3311"],
+      "runtimeArgs": [
+        "run",
+        "dev",
+        "--",
+        "-p",
+        "3311"
+      ],
       "port": 3311
     }
   ]

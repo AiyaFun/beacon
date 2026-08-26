@@ -15,6 +15,8 @@ import { writeMemory } from '@/lib/memory/core';
 import { analyzeHotFit, type HotFitAnalysis } from '@/lib/topic/combine';
 import { requireRole, RbacError } from '@/lib/rbac';
 import { QuotaExceededError } from '@/lib/quota';
+import { isShellMode } from '@/lib/shell';
+import { isDemoTenant } from '@/lib/demo/guard';
 
 const ACCOUNT_COOKIE_OPTS = { httpOnly: true, sameSite: 'lax', maxAge: 180 * 24 * 3600, path: '/' } as const;
 
@@ -347,4 +349,31 @@ export async function actLogout() {
   await destroySession(token);
   store.delete(AUTH_COOKIE);
   redirect('/login');
+}
+
+// ── 界面外壳偏好 ────────────────────────────────────────────────────────────
+
+/**
+ * 记住用户选的外壳（工作台 / 任务台）。
+ *
+ * 【为什么 cookie 之外还要落库】切换器写 cookie 是为了**当场生效**（布局是 RSC，
+ * 客户端 localStorage 到不了服务端），但 cookie 只是「这台机器这个浏览器」的记忆。
+ * 用户说的是「我选哪种就一直用哪种」，那就得跟着人走：换电脑、清缓存之后还在。
+ *
+ * 【失败就算了，不打断切换】这是纯偏好，不参与任何鉴权。落库失败最坏的后果是
+ * 换台设备要重选一次，而把切换按钮变成一个会报错的按钮更糟。
+ */
+export async function actSetShellMode(mode: string): Promise<{ ok: boolean }> {
+  if (!isShellMode(mode)) return { ok: false };
+  try {
+    const s = await getSession();
+    // 【演示租户不落库】演示访客共用**同一行** Member（固定 id）。一个访客切到任务台，
+    // 就把所有还没有 cookie 的访客的默认一起改了——一次跨用户的偏好串台。
+    // 不落库不影响他自己：cookie 已经写好了，他这一趟看到的就是他选的那套。
+    if (isDemoTenant(s.tenantId)) return { ok: true };
+    await prisma.member.update({ where: { id: s.memberId }, data: { shellMode: mode } });
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
 }

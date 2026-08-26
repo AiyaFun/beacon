@@ -5,21 +5,32 @@ import { parseJson, type Metrics } from '@/lib/json';
 import { readPersona, personaCompleteness, isPersonaBlank } from '@/lib/persona';
 import { fmtNum, fmtDateLong } from '@/lib/format';
 import { TOPIC_DIMENSIONS, HOT_SOURCES } from '@/lib/constants';
-import { PageHead, Card, Stat, Meter, Empty } from '@/components/ui';
+import { Card, Stat, Meter, Empty } from '@/components/ui';
 import { ActionButton } from '@/components/ActionButton';
 import { TaskList } from '@/components/TaskList';
 import { AdviceCard } from '@/components/AdviceCard';
 import { TrialProgressCard } from '@/components/TrialProgressCard';
 import { Icon } from '@/components/icons';
 import { loadReadiness } from '@/lib/topic/readiness';
+import { currentShell } from '@/lib/shell-server';
+import { listRuns, KIND_LABEL } from '@/lib/runs';
+import { TaskDeckHome } from '@/components/TaskDeckHome';
+import { PresetCards } from '@/components/PresetCards';
+import { availableTools } from '@/lib/agent/run';
+import { disabledTools } from '@/lib/agent/tool-config';
 import { trialProgress } from '@/lib/pay/trial';
+import { buildBattleReport } from '@/lib/battle/report';
+import { BattleReport } from '@/components/BattleReport';
 import { actGenerateRecommendations, actCrawlCompetitors } from './actions';
+import { HubHeader } from '@/components/HubHeader';
 
 export const dynamic = 'force-dynamic';
 
 export default async function Dashboard() {
   const s = await getSession();
-  const [account, topics, tasks, publishRecords, competitors, memories, sensitiveCount, readiness, tenant, newMemories] = await Promise.all([
+  const shell = await currentShell();
+  const taskdeck = shell === 'taskdeck';
+  const [account, topics, tasks, publishRecords, competitors, memories, sensitiveCount, readiness, tenant, newMemories, recommendedCount] = await Promise.all([
     prisma.creatorAccount.findUnique({ where: { id: s.accountId } }),
     prisma.topicIdea.findMany({ where: { accountId: s.accountId, state: 'recommended' }, orderBy: { totalScore: 'desc' }, take: 3 }),
     prisma.taskItem.findMany({ where: { workspaceId: s.workspaceId }, orderBy: { createdAt: 'desc' } }),
@@ -33,10 +44,62 @@ export default async function Dashboard() {
     prisma.memoryEntry.count({
       where: { workspaceId: s.workspaceId, active: true, createdAt: { gte: new Date(Date.now() - 7 * 86_400_000) } },
     }),
+    // 本周作战入口条的条数：待起稿的高潜选题总数（topics 只取了 top3，这里要全量）
+    prisma.topicIdea.count({ where: { accountId: s.accountId, state: 'recommended' } }),
   ]);
 
   // 试用运营节奏：仅在「试用中且未过期」时得到 isTrial=true（纯函数，见 lib/pay/trial.ts）
   const trial = trialProgress(tenant?.plan, tenant?.planExpiresAt);
+
+  // 任务台首屏那条「正在办的事」。**只在任务台下查**——工作台不渲染它，
+  // 白查一次五张表只是给每个用户的首页平白加一笔开销
+  const activeRuns = taskdeck
+    ? (await listRuns(s.workspaceId, { takePerKind: 8 }))
+        .filter((r) => r.status === 'waiting' || r.status === 'running')
+        .slice(0, 8)
+        .map((r) => ({
+          id: r.id, kind: r.kind, kindLabel: KIND_LABEL[r.kind],
+          title: r.title, status: r.status as 'waiting' | 'running', detail: r.detail, href: r.href,
+          // 与 /api/runs/active 同一口径：「等你处理」只对自己发起的那条说。
+          // 首屏这份是服务端快照，轮询那份是接口——两处都要判，否则第一眼是对的、
+          // 15 秒后变了（或者反过来）
+          mine: r.memberId ? r.memberId === s.memberId : true,
+          waitingOn: r.memberId && r.memberId !== s.memberId ? r.memberName : undefined,
+        }))
+    : [];
+
+  // 派发卡要用的动作清单。与助手页同一个来源（availableTools），按角色与工作区开关过滤过。
+  // **只在任务台下算**：工作台首页不渲染派活框，白查一次工具配置没有意义。
+  const authTools = taskdeck
+    ? availableTools(s.role, disabledTools((await prisma.workspace.findUnique({
+        where: { id: s.workspaceId }, select: { agentToolConfig: true },
+      }))?.agentToolConfig))
+        .filter((t) => t.write || t.costly)
+        .map((t) => ({ name: t.name, label: t.label, costly: t.costly, contract: t.contract }))
+    : [];
+
+  // 一键任务卡。**只在任务台下查**——工作台首页不渲染派活区，白查一次没意义
+  const presetCards = taskdeck
+    ? await (async () => {
+        const rows = await prisma.taskPreset.findMany({
+          where: { workspaceId: s.workspaceId, enabled: true },
+          orderBy: [{ sort: 'asc' }, { createdAt: 'asc' }],
+          take: 8,
+        });
+        const tplIds = [...new Set(rows.map((r) => r.agentTemplateId).filter((v): v is string => !!v))];
+        const tpls = tplIds.length
+          ? await prisma.workflowTemplate.findMany({ where: { id: { in: tplIds } }, select: { id: true, name: true, emoji: true } })
+          : [];
+        const nameOf = new Map(tpls.map((t) => [t.id, `${t.emoji} ${t.name}`]));
+        return rows.map((r) => ({
+          id: r.id,
+          title: r.title,
+          goal: r.goal,
+          agentName: r.agentTemplateId ? (nameOf.get(r.agentTemplateId) ?? '（智能体已删除）') : null,
+          authorizedCount: parseJson<string[]>(r.preauthorizedTools, []).length,
+        }));
+      })()
+    : [];
 
   const persona = readPersona(account?.personaCard ?? '{}');
   const completeness = personaCompleteness(persona);
@@ -44,6 +107,10 @@ export default async function Dashboard() {
   const personaBlank = isPersonaBlank(persona);
   const totalViews = publishRecords.reduce((sum, r) => sum + (parseJson<Metrics>(r.metrics, {}).views ?? 0), 0);
   const acceptedCount = await prisma.topicIdea.count({ where: { accountId: s.accountId, state: { in: ['accepted', 'drafting'] } } });
+
+  // 任务台首页第一屏就是本周作战报告。**只在任务台下查**——工作台首页不渲染它，
+  // 白查表现/竞对四处没意义（渲染主体与 /battle 页共用 components/BattleReport）。
+  const battleReport = taskdeck ? await buildBattleReport(s.workspaceId, s.accountId) : null;
 
   const suggestions = [
     !personaBlank && completeness < 80 ? `人设卡完善度 ${completeness}%，补齐"不能做"清单能让选题更精准。` : null,
@@ -60,9 +127,38 @@ export default async function Dashboard() {
 
   return (
     <>
-      <PageHead
+      {/* 任务台：说一句话就能派活的输入框必须是**上屏第一眼**，而不是四张统计卡之后。
+          下面「今日概览」那一整套一个板块都没少——只是排在派活之后（首页形态差异，
+          不是功能差异；两种外壳的**路由级功能**仍然完全对等）。 */}
+      {taskdeck && (
+        <TaskDeckHome memberName={s.memberName} initialActive={activeRuns} authorizableTools={authTools} />
+      )}
+      {taskdeck && presetCards.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <PresetCards presets={presetCards} />
+        </div>
+      )}
+
+      {taskdeck ? (
+        <div className="row wrap" style={{ gap: 8, alignItems: 'baseline', marginBottom: 12 }}>
+          <h2 style={{ fontSize: 17, margin: 0 }}>本周作战</h2>
+          <span className="small muted">{fmtDateLong(new Date())} · 这周该做什么，每条后面就是执行入口</span>
+          <span className="row" style={{ gap: 8, marginLeft: 'auto' }}>
+            {competitors > 0 && (
+              <ActionButton action={actCrawlCompetitors} loadingText="采集中…">采集竞对</ActionButton>
+            )}
+            {/* 人设空白时这里**不再重复一个建人设按钮**：下面那条醒目横幅
+                （「AI 还不认识你」）已经带着同一个入口，同屏两个同去处的主按钮
+                只会让人以为是两件事（2026-08-26 用户指出的重复跳转）。 */}
+            {!personaBlank && (
+              <ActionButton action={actGenerateRecommendations} primary loadingText={['正在采集热榜…', '正在聚类分析…', '正在 AI 精选推荐…']}>刷新选题</ActionButton>
+            )}
+          </span>
+        </div>
+      ) : (
+      <HubHeader
         title="今日概览"
-        desc={`${fmtDateLong(new Date())} · 欢迎回来，${s.memberName}`}
+        hint={`${fmtDateLong(new Date())} · 欢迎回来，${s.memberName}`}
         action={
           <div className="row" style={{ gap: 8 }}>
             {/* 还没添加任何竞对时，「采集竞对」无事可做，不渲染 */}
@@ -77,6 +173,7 @@ export default async function Dashboard() {
           </div>
         }
       />
+      )}
 
       {/* 试用节奏卡：临期高亮 + 续费入口；非试用时组件内部返回 null，不占位 */}
       <TrialProgressCard trial={trial} />
@@ -100,6 +197,27 @@ export default async function Dashboard() {
             </Link>
           </div>
         </div>
+      )}
+
+      {/* 任务台首页第一屏 = 本周作战报告（与 /battle 共用 BattleReport）；
+          工作台保持原来的「统计格 + 今日推荐 Top3」布局，一个字不动。 */}
+      {taskdeck && battleReport ? (
+        <BattleReport report={battleReport} personaBlank={personaBlank} />
+      ) : (
+        <>
+      {/* 本周作战入口：工作台首页每天必看，放这儿提高这个新功能被用到的概率。
+          有待起稿选题才显示——没有就不占位（首页已经够满）。 */}
+      {recommendedCount > 0 && (
+        <Link href="/battle" className="battle-entry" style={{ marginBottom: 16 }}>
+          <div className="battle-entry-ic">🔥</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <b>本周作战 · {recommendedCount} 条高潜选题待起稿</b>
+            <div className="small" style={{ marginTop: 2, opacity: 0.9 }}>
+              {topics[0] ? `头一条「${topics[0].title}」` : '按人设排好优先级'}——打开就能就地起稿，一路做到发布
+            </div>
+          </div>
+          <span className="battle-entry-cta">打开本周作战 →</span>
+        </Link>
       )}
 
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
@@ -198,7 +316,13 @@ export default async function Dashboard() {
           )}
         </Card>
       </div>
+        </>
+      )}
 
+      {/* 任务清单与快速入口只给工作台：任务台首页 = 派活框 + 作战报告，
+          到此为止——快速入口和侧栏/抽屉重复，任务清单与报告的「今天该做什么」重复，
+          留着只是把第一屏往下拖（2026-08-26 用户反馈「整体页面不要太复杂」）。 */}
+      {!taskdeck && (
       <div className="grid grid-2">
         <Card title="任务清单" sub="自己加，做完打勾">
           <TaskList tasks={tasks} />
@@ -206,12 +330,13 @@ export default async function Dashboard() {
         <Card title="快速入口">
           <div className="grid grid-2" style={{ gap: 10 }}>
             <QuickLink href="/hotlists" icon="fire" label="热点聚合" desc={`${HOT_SOURCES.length} 源热榜`} />
-            <QuickLink href="/advisor" icon="users" label="选题智囊团" desc="12 人物会诊" />
+            <QuickLink href="/topics?view=advisor" icon="users" label="选题智囊团" desc="12 人物会诊" />
             <QuickLink href="/algorithm" icon="gauge" label="算法教练" desc="分平台优化" />
             <QuickLink href="/compliance" icon="shield" label="合规检测" desc={`${sensitiveCount} 词库`} />
           </div>
         </Card>
       </div>
+      )}
     </>
   );
 }

@@ -181,3 +181,78 @@ describe('公众号', () => {
     expect(wxDigest('字'.repeat(300)).length).toBe(120);
   });
 });
+
+describe('发布中心的清单：listPlans', () => {
+  it('只列当前账号的计划，并带上草稿标题', async () => {
+    const { listPlans } = await import('@/lib/publish/plan');
+    // 同一个工作区里的第二个创作账号，也开一条计划——它不该出现在第一个账号的清单里。
+    // 跨账号串数是本项目反复出现的坑（数据页全按 accountId 过滤），这里钉死。
+    const other = await prisma.creatorAccount.create({
+      data: { workspaceId: ws.id, name: '另一个号', platform: 'xiaohongshu', personaCard: '{}' },
+    });
+    const otherDraft = await prisma.draft.create({
+      data: { accountId: other.id, title: '别人的稿子', platform: 'xiaohongshu' },
+    });
+    await prisma.draftVersion.create({
+      data: { draftId: otherDraft.id, seq: 1, authorType: 'human', content: '正文' },
+    });
+    await buildPublishPlan({
+      workspaceId: ws.id,
+      accountId: other.id,
+      draftId: otherDraft.id,
+      memberId,
+      platforms: ['xiaohongshu'],
+      aigcConfirmed: true,
+    });
+    await buildPublishPlan({
+      workspaceId: ws.id,
+      accountId,
+      draftId,
+      memberId,
+      platforms: ['douyin'],
+      aigcConfirmed: true,
+    });
+
+    const mine = await listPlans({ workspaceId: ws.id, accountId });
+    expect(mine).toHaveLength(1);
+    expect(mine[0].draftTitle).toBe('原稿标题');
+    expect(mine[0].tasks.map((t) => t.platform)).toEqual(['douyin']);
+  });
+
+  it('按状态过滤：进行中与已完成分开列', async () => {
+    const { listPlans } = await import('@/lib/publish/plan');
+    const r = await buildPublishPlan({
+      workspaceId: ws.id,
+      accountId,
+      draftId,
+      memberId,
+      platforms: ['douyin'],
+      aigcConfirmed: true,
+    });
+    if (!r.ok) throw new Error('建计划失败');
+    expect(await listPlans({ workspaceId: ws.id, accountId }, { status: 'open' })).toHaveLength(1);
+    expect(await listPlans({ workspaceId: ws.id, accountId }, { status: 'done' })).toHaveLength(0);
+
+    const task = await prisma.publishTask.findFirstOrThrow({ where: { planId: r.planId } });
+    await applyTaskReceipt({ workspaceId: ws.id, taskId: task.id, status: 'skipped' });
+    // 全部任务到终态 → 计划关掉（跳过也算终态：用户就是不想发那个平台了）
+    expect(await listPlans({ workspaceId: ws.id, accountId }, { status: 'open' })).toHaveLength(0);
+    expect(await listPlans({ workspaceId: ws.id, accountId }, { status: 'done' })).toHaveLength(1);
+  });
+
+  it('草稿被删了如实说，不编一个标题', async () => {
+    const { listPlans } = await import('@/lib/publish/plan');
+    await buildPublishPlan({
+      workspaceId: ws.id,
+      accountId,
+      draftId,
+      memberId,
+      platforms: ['douyin'],
+      aigcConfirmed: true,
+    });
+    await prisma.draftVersion.deleteMany({ where: { draftId } });
+    await prisma.draft.delete({ where: { id: draftId } });
+    const rows = await listPlans({ workspaceId: ws.id, accountId });
+    expect(rows[0].draftTitle).toContain('已删除');
+  });
+});

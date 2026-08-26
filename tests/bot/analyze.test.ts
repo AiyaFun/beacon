@@ -9,7 +9,11 @@ import { handleInbound } from '@/lib/bot/router';
 // 没有数据时必须说没有，而不是让模型对着 0 篇 0 播放编一段分析。
 
 const DAY = 86_400_000;
-const NOW = Date.UTC(2026, 6, 29); // 固定时点，窗口断言才稳定
+// ⚠️ 种子必须锚**真实当前时间**：lib/bot/analyze.ts 用真实 Date.now() 算 30 天窗口，
+// 这里锚死一个日期（曾是 Date.UTC(2026,6,29)，注释还写着「固定时点才稳定」）恰好相反——
+// 真实日期一滚过「锚点+28 天」，daysAgo(2) 的种子就掉出窗口，整条用例开始必红
+// （2026-08-26 真实发生：与任何提交无关的日期滚动假红）。相对种子才是稳定的。
+const NOW = Date.now();
 
 beforeEach(async () => {
   await prisma.tenant.deleteMany({});

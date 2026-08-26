@@ -6,6 +6,12 @@ import { PUSH_TICK_MINUTES } from '../bot/push-window';
 // 用户中午才收到晨报（2026-07-28 生产实况）。改这个常量前先读 docs/机器人集成.md 的时区那一节。
 export const SCHEDULE_TZ = 'Asia/Shanghai';
 
+/**
+ * 定时智能体的扫描间隔（分钟）。与 lib/workflow/schedule.ts 的窗口宽度是**同一个数**。
+ * 必须定义在 SCHEDULES 之前：const 不提升，写在下面会在模块求值时抛 TDZ。
+ */
+export const AGENT_TICK_MINUTES = 10;
+
 // 三轨定时表（生产 worker 注册）。cron 语法：分 时 日 月 周，时区见 SCHEDULE_TZ（北京时间）。
 export const SCHEDULES: { name: JobName; cron: string; note: string }[] = [
   // 广播型：热榜高频采集（成本不随租户涨）
@@ -38,4 +44,14 @@ export const SCHEDULES: { name: JobName; cron: string; note: string }[] = [
   // 等于把「到期删除」绑在「你还在继续用」上。停止使用的工作区反而永久留着第三方数据。
   // 放在 04:00：夜间批量任务（05:00 起）之前跑完，删掉的行不会在同一轮里被别的任务读到一半。
   { name: 'purge_retention', cron: '0 4 * * *', note: '每日 04:00 全库到期数据清理（评论正文/提问/AI 封面/孤儿日志/移除申请重扫）' },
+  // 广播型：定时智能体。**间隔必须与 tickScheduledAgents 的 tickMinutes 一致**——
+  // 那个函数用「到点后 tickMinutes 分钟内」当窗口，两者不一致要么漏跑要么一天跑两次。
+  { name: 'run_scheduled_agents', cron: `*/${AGENT_TICK_MINUTES} * * * *`, note: `每 ${AGENT_TICK_MINUTES} 分钟扫到点的定时智能体` },
+  // 广播型：AI 执行的兜底巡检。**与上面那条是两件事**——上面是「到点了发起新的」，
+  // 这条是「已经在跑的那些卡住了没有」（等额度等到重置了、跑它的进程没了）。
+  // 错开 5 分钟：0 点整那一下，定时智能体与额度重置恢复会一起涌上来。
+  // **写成分钟列表而不是 `5-59/10`**：整机版的本地调度器（lib/jobs/local-scheduler.ts）
+  // 不认 range-step 语法，写了它这条任务在整机版上永远不跑，且没有任何报错
+  //（tests/jobs/local-scheduler.test.ts 就是为拦这个存在的，这次正是它抓到的）。
+  { name: 'tick_agent_runs', cron: '5,15,25,35,45,55 * * * *', note: `每 ${AGENT_TICK_MINUTES} 分钟巡检卡住的 AI 执行（等额度到点的接着跑、跑飞的接手）` },
 ];

@@ -1,0 +1,23 @@
+-- 18 · 让插件替我读一个网页：内容回执通道 + 默认关的开关（2026-08-21）
+--
+-- 【这次加的能力是什么】此前服务端能派给插件的只有两件事：采一个已订阅的竞对、
+-- 回填用户本人的创作后台。两件都是「插件本来就会做、目标也是固定的」。
+-- 这次多了 open_and_read——**由服务端指定 URL**，让用户已登录的浏览器去打开并读回正文。
+-- 它是这条链上第一个「目标不固定」的动作，所以三样东西必须同时到位：
+--   ① 域名白名单（lib/browser-task/read-allowlist.ts，且插件端另有一份硬编码的）；
+--   ② 工作区级开关，**默认关**（下面这一列）；
+--   ③ 三份隐私政策同步撤改（原文里写着「服务端不能下发任意指令（例如「打开某个网址」）」）。
+--
+-- BrowserTask.resultData：插件带回来的**内容本体**，与 result（给人看的一句话回执）分开。
+--   不复用 result 的原因：那一列截 500 字，是「跑成没有」的说明；页面正文是给服务端
+--   接着做结构化抽取的原料，两者混在一列，日后想改任一个的长度上限都会误伤另一个。
+--   上限在应用层（MAX_READ_TEXT_CHARS=60000，截断不打回），且必须留在 WAF 的
+--   client_body_buffer_size 阈值以内——超限时宝塔会回一个「HTTP 200 + HTML 错误页」，
+--   插件那边看到的是一次假成功（视频拆解上传曾因此在生产一直是坏的）。
+--
+-- Workspace.browserReadEnabled：默认 false。与 agentToolConfig 里那些「缺省全开」的
+--   工具开关刻意不同——这一项是用户得知道自己开了什么的那一类，不能靠默认值替他决定。
+--
+-- 两列都幂等：IF NOT EXISTS。
+ALTER TABLE "BrowserTask" ADD COLUMN IF NOT EXISTS "resultData" TEXT;
+ALTER TABLE "Workspace" ADD COLUMN IF NOT EXISTS "browserReadEnabled" BOOLEAN NOT NULL DEFAULT false;

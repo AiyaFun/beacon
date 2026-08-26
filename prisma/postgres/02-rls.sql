@@ -15,9 +15,19 @@
 -- 现象是「定时任务时灵时不灵、支付回调偶尔查不到订单」，取决于抽到哪条连接，极难定位。
 -- 归一化放在这一个函数里，所有策略的 `IS NULL` 判断一次性全部修好。
 -- 实测矩阵见 VERIFICATION.md。
+-- ⚠️ 三个辅助函数必须 pin search_path（2026-08-26 生产事故）：
+-- 应用连接的 search_path 是 "$user",public（Prisma 的 ?schema= 只限定它自己生成的 SQL，
+-- 从不 SET search_path），而这几个函数体里是**未限定**的 FROM "Workspace"/"CreatorAccount"——
+-- 函数体按调用时的会话 search_path 解析，于是所有走 lib/tenant-rls.ts 的事务
+-- （账号清单/合并/删除预览）一评估策略就报「The table CreatorAccount does not exist」。
+-- 平时不炸是因为没设租户上下文时策略在 IS NULL 处短路，函数根本不执行；
+-- 本地测试库对象建在默认 schema 里，本地也永远绿——「本地全绿生产炸」的又一个形状。
+-- `SET search_path FROM CURRENT` 把**执行本文件时**的 search_path 固化进函数
+-- （执行本文件的前置本来就是 search_path 指对了库，否则上面的 ALTER TABLE 早炸了），
+-- 生产=beacon、本地测试库=public，两边都对；重跑本文件也不会把 pin 冲掉。
 CREATE OR REPLACE FUNCTION app_current_tenant() RETURNS text AS $$
   SELECT nullif(current_setting('app.current_tenant', true), '');
-$$ LANGUAGE sql STABLE;
+$$ LANGUAGE sql STABLE SET search_path FROM CURRENT;
 
 -- 直接带 tenantId 的表
 -- FORCE：表 owner（beacon_app）也必须过 RLS，不再默认绕过。
@@ -57,11 +67,11 @@ END $$;
 -- 在函数内外是同一个口径。
 CREATE OR REPLACE FUNCTION app_tenant_workspaces() RETURNS SETOF text AS $$
   SELECT id FROM "Workspace" WHERE "tenantId" = app_current_tenant();
-$$ LANGUAGE sql STABLE;
+$$ LANGUAGE sql STABLE SET search_path FROM CURRENT;
 
 CREATE OR REPLACE FUNCTION app_tenant_accounts() RETURNS SETOF text AS $$
   SELECT id FROM "CreatorAccount" WHERE "workspaceId" IN (SELECT app_tenant_workspaces());
-$$ LANGUAGE sql STABLE;
+$$ LANGUAGE sql STABLE SET search_path FROM CURRENT;
 
 -- ── 第二批：其余租户表（2026-07-22 补齐）──────────────────────────────────────
 -- 此前只有上面 9 张表有策略，其余租户数据（选题/草稿/发布/复盘/智囊团/素材/通知…）全部裸奔。
@@ -89,7 +99,7 @@ END $$;
 DO $$
 DECLARE t text;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['BotIntegration','BotConversation','InspirationItem','ReaderComment','MediaAsset','CoverStylePreset','Notification','CollectionRun','IngestToken','AgentRun','PublishPlan','WorkflowRun','ParserIncident'] LOOP
+  FOREACH t IN ARRAY ARRAY['BotIntegration','BotConversation','InspirationItem','ReaderComment','MediaAsset','CoverStylePreset','Notification','CollectionRun','IngestToken','AgentRun','PublishPlan','WorkflowRun','ParserIncident','ScheduledAgent','BrowserTask','TaskPreset'] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY;', t);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY;', t);
     EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON %I;', t);
@@ -118,7 +128,8 @@ END $$;
 DO $$
 DECLARE t text;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['AuthSession','TopicVote'] LOOP
+  -- ApiToken：对外调用令牌，与 AuthSession 同一类——归属靠 memberId 反查 Member.tenantId
+  FOREACH t IN ARRAY ARRAY['AuthSession','TopicVote','ApiToken'] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY;', t);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY;', t);
     EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON %I;', t);
@@ -176,6 +187,26 @@ BEGIN
   EXECUTE 'ALTER TABLE "AgentStep" FORCE ROW LEVEL SECURITY';
   EXECUTE 'DROP POLICY IF EXISTS tenant_isolation ON "AgentStep"';
   EXECUTE 'CREATE POLICY tenant_isolation ON "AgentStep" FOR ALL USING (app_current_tenant() IS NULL OR "runId" IN (SELECT id FROM "AgentRun" WHERE "workspaceId" IN (SELECT app_tenant_workspaces())))';
+END $$;
+
+-- AgentRunNote → AgentRun（二级归属，2026-08-22 加）
+-- 它只有 runId，没有 workspaceId，所以走的是与 AgentStep 同一套「查上一级」的策略，
+-- 而不是上面那批按列名生成的工作区数组。
+DO $$
+BEGIN
+  EXECUTE 'ALTER TABLE "AgentRunNote" ENABLE ROW LEVEL SECURITY';
+  EXECUTE 'ALTER TABLE "AgentRunNote" FORCE ROW LEVEL SECURITY';
+  EXECUTE 'DROP POLICY IF EXISTS tenant_isolation ON "AgentRunNote"';
+  EXECUTE 'CREATE POLICY tenant_isolation ON "AgentRunNote" FOR ALL USING (app_current_tenant() IS NULL OR "runId" IN (SELECT id FROM "AgentRun" WHERE "workspaceId" IN (SELECT app_tenant_workspaces())))';
+END $$;
+
+-- AgentArtifact → AgentRun（二级归属，2026-08-22 加）
+DO $$
+BEGIN
+  EXECUTE 'ALTER TABLE "AgentArtifact" ENABLE ROW LEVEL SECURITY';
+  EXECUTE 'ALTER TABLE "AgentArtifact" FORCE ROW LEVEL SECURITY';
+  EXECUTE 'DROP POLICY IF EXISTS tenant_isolation ON "AgentArtifact"';
+  EXECUTE 'CREATE POLICY tenant_isolation ON "AgentArtifact" FOR ALL USING (app_current_tenant() IS NULL OR "runId" IN (SELECT id FROM "AgentRun" WHERE "workspaceId" IN (SELECT app_tenant_workspaces())))';
 END $$;
 
 -- PublishTask → PublishPlan（二级归属，2026-08-18 加）

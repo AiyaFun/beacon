@@ -18,6 +18,7 @@ const FN_LABEL: Record<LlmFunction, string> = {
   diagnosis: '算法教练诊断',
   video: '视频理解',
   image: '封面生图',
+  agent: '执行模式（可选）',
 };
 
 // 全域 AI：平台级渠道 + 每功能参数 + 预算闸 + 用量账本。

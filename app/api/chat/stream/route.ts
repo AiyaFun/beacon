@@ -2,20 +2,63 @@ import { getSessionOrNull } from '@/lib/session';
 import { prisma } from '@/lib/db';
 import { readPersona, personaPromptBlock } from '@/lib/persona';
 import { buildMemoryContext } from '@/lib/memory/core';
-import { llmCompleteStream } from '@/lib/llm/gateway';
+import { llmCompleteStream, llmVision } from '@/lib/llm/gateway';
 import { can } from '@/lib/rbac';
-import type { ChatMessage } from '@/lib/llm/types';
+import type { ChatMessage, ContentPart } from '@/lib/llm/types';
 
 export const runtime = 'nodejs';
+
+/**
+ * 一次最多带几张图。
+ *
+ * 【为什么是 3】每张内联图都要整段进请求体与模型上下文，四五张就是几 MB——
+ * 生产的 WAF 对超过 client_body_buffer_size 的请求体会回一个**假的 HTTP 200 + HTML 错误页**
+ *（视频拆解上传曾因此在生产一直是坏的）。3 张既够用又留足余量。
+ */
+const MAX_IMAGES = 3;
+
+/** 把一段整文本包成与流式接口一模一样的 SSE 形状——前端不用为「带图」写第二套解析。 */
+function sse(text: string): Response {
+  const encoder = new TextEncoder();
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(text)}\n\n`));
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        controller.close();
+      },
+    }),
+    { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache' } },
+  );
+}
 
 export async function POST(req: Request) {
   const s = await getSessionOrNull();
   if (!s) return new Response('Unauthorized', { status: 401 });
   if (!can(s.role, 'content.create')) return new Response('Forbidden', { status: 403 });
 
-  const body = await req.json() as { question: string; history: { role: string; content: string }[] };
+  const body = await req.json() as {
+    question: string;
+    history: { role: string; content: string }[];
+    /** 用户贴/传的参考图（data: URI，客户端已经压过）。最多几张见 MAX_IMAGES */
+    images?: string[];
+    /**
+     * 用户在输入框下选的模型（ModelProvider.id / 'platform' / 'auto'）。
+     *
+     * 不做白名单校验是安全的，因为**归属校验在网关里**：resolveWithSource 只在
+     * 「按 tenantId 查出来的那批 provider」里找这个 id，填别人租户的 id 落空后
+     * 按原有次序继续（不报错，也拿不到别人的 Key）。'auto' 同理——找不到就是原行为。
+     */
+    modelId?: string;
+  };
   const q = (body.question ?? '').trim();
-  if (!q) return new Response('Empty question', { status: 400 });
+  const images = (body.images ?? [])
+    // 只收 data: 内联图。**不接受 http(s) 地址**：那等于让服务端去拉一个用户给的 URL，
+    // 是一条新的 SSRF 面，而客户端本来就已经把图读进内存了
+    .filter((u) => typeof u === 'string' && u.startsWith('data:image/'))
+    .slice(0, MAX_IMAGES);
+  // 只有图没有字也算数：「这张图怎么样」是很自然的问法
+  if (!q && images.length === 0) return new Response('Empty question', { status: 400 });
 
   const account = await prisma.creatorAccount.findUnique({ where: { id: s.accountId } });
   const persona = readPersona(account?.personaCard ?? '{}');
@@ -36,14 +79,40 @@ export async function POST(req: Request) {
     (t): ChatMessage => ({ role: t.role as 'user' | 'assistant', content: t.content }),
   );
 
+  // 带图的那一条走多模态形状：文字 + 每张图各一个 image_url 片段
+  const userContent: string | ContentPart[] = images.length
+    ? [
+        { type: 'text' as const, text: q || '看看这张图，结合我的账号说说能怎么用。' },
+        ...images.map((url) => ({ type: 'image_url' as const, image_url: { url } })),
+      ]
+    : q;
+
   const messages: ChatMessage[] = [
     { role: 'system', content: system },
     ...trimmed,
-    { role: 'user', content: q },
+    { role: 'user', content: userContent },
   ];
 
+  // 【带图时走视觉模型，且不流式】流式接口在多数兼容端点上不支持图片输入；
+  // 硬走流式的结果是「一个字都不出来」还不报错。带图就整段返回，
+  // 再包装成同一个 SSE 形状——前端那侧一行都不用改。
+  if (images.length > 0) {
+    const r = await llmVision(s.tenantId, messages, { temperature: 0.5 });
+    const text = r.ok
+      ? r.text
+      : r.reason === 'not_configured'
+        // 说清楚是「没配」而不是「看不懂这张图」——用户要做的事完全不同
+        ? '这台实例还没有配置能看图的模型，所以我看不到你发的图片。让管理员在「接入与密钥」里配一个视觉模型就可以了。'
+        : `看图时出了点问题：${r.error}`;
+    return sse(text);
+  }
+
   try {
-    const stream = await llmCompleteStream(s.tenantId, 'chat', messages, { temperature: 0.7 });
+    const stream = await llmCompleteStream(s.tenantId, 'chat', messages, {
+      temperature: 0.7,
+      // 'auto' 不是真 id，透传下去只会落空——语义上等同不传，这里直接不传更清楚
+      providerId: body.modelId && body.modelId !== 'auto' ? body.modelId : undefined,
+    });
     const encoder = new TextEncoder();
     const sseStream = new ReadableStream({
       async start(controller) {

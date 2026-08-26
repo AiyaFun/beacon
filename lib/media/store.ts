@@ -202,6 +202,25 @@ export async function listDraftIllustrations(workspaceId: string, draftId: strin
   return rows.map(toSummary);
 }
 
+/**
+ * 这个工作区最近生成的图（封面 + 配图，含不绑草稿的自由出图）。
+ *
+ * 出图工位（/images）要的就是这一份：按草稿列的两个函数在那儿用不了——
+ * 自由出图根本没有 draftId，只按 draftId 查等于「刚出的图一张都看不见」。
+ */
+export async function listGenerated(
+  workspaceId: string,
+  opts: { take?: number; kind?: MediaKind } = {},
+): Promise<MediaAssetSummary[]> {
+  const rows = await prisma.mediaAsset.findMany({
+    where: { workspaceId, kind: opts.kind ? opts.kind : { in: GENERATED_KINDS } },
+    orderBy: { createdAt: 'desc' },
+    take: opts.take ?? 24,
+    select: SUMMARY_SELECT,
+  });
+  return rows.map(toSummary);
+}
+
 /** 每篇草稿有没有封面（一稿多平台家族列表用）。 */
 export async function coverCountsByDraft(workspaceId: string, draftIds: string[]): Promise<Record<string, number>> {
   if (draftIds.length === 0) return {};

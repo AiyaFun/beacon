@@ -2,12 +2,14 @@ import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { fmtDate } from '@/lib/format';
 import { can, ROLE_LABEL, ROLE_DESC, ROLES, assignableRoles, type Role } from '@/lib/rbac';
-import { PageHead, Card, Stat, Empty } from '@/components/ui';
+import { Card, Stat, Empty } from '@/components/ui';
 import { Icon } from '@/components/icons';
 import { InviteForm } from './InviteForm';
 import { InviteRow } from './InviteRow';
 import { MemberRow } from './MemberRow';
 import { maskPhone } from './util';
+import { edition } from '@/lib/edition';
+import { HubHeader } from '@/components/HubHeader';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,7 +30,7 @@ export default async function MembersPage() {
 
     return (
       <>
-        <PageHead title="成员与权限" desc="团队协作与角色管理" />
+        <HubHeader title="成员与权限" hint="团队协作与角色管理" />
         <Card>
           <Empty
             icon="🔒"
@@ -62,11 +64,14 @@ export default async function MembersPage() {
 
   // 可授予角色按形态算：企业版只留管理员/编辑两档（lib/rbac.ts 的 assignableRoles）
   const roles = assignableRoles();
+  // 本机一次性登录链接：企业版才有。SaaS 有短信/微信登录，
+  // 多一条「拿到链接就能进」的通道只是多一个可被钓鱼的入口（落地路由也各判一次）
+  const canIssueLoginLink = edition() !== 'saas';
   return (
     <>
-      <PageHead
+      <HubHeader
         title="成员与权限"
-        desc="邀请协作者并按角色分权 · 所有者不可被移除或降级，权限变更即刻生效"
+        hint="邀请协作者并按角色分权 · 所有者不可被移除或降级，权限变更即刻生效"
         action={<span className="badge badge-brand"><Icon.users size={13} /> 我的角色：{ROLE_LABEL[s.role as Role] ?? s.role}</span>}
       />
 
@@ -116,6 +121,7 @@ export default async function MembersPage() {
                     <td>
                       {canManage ? (
                         <MemberRow
+                          canIssueLoginLink={canIssueLoginLink}
                           roles={roles}
                           id={m.id}
                           name={m.name}

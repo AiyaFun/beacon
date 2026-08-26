@@ -8,6 +8,8 @@ import { PageHead, Card, Empty } from '@/components/ui';
 import { ActionButton } from '@/components/ActionButton';
 import { HotFitAnalyzer } from './HotFitAnalyzer';
 import { actIngestHot } from '@/app/(app)/actions';
+import { IntelTabs } from '@/components/IntelTabs';
+import { HubHeader } from '@/components/HubHeader';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,11 +35,14 @@ export default async function HotlistsPage() {
 
   return (
     <>
-      <PageHead
-        title="热点聚合中心"
-        // 数字现算：手写的「9 个平台」在 HOT_SOURCES 只有 7 项时就是错的，
-        // 而下面渲染的正是这个列表，用户数得出来。
-        desc={`${HOT_SOURCES.length} 个平台的热榜一站看全 · 主源断了自动切备用，不开天窗`}
+      {/* 紧凑头（2026-08-26 用户「占了比较大的篇幅、每次都像重刷」）：
+          标题/页签/新鲜度/采集按钮收进一行；原副标题与两枚说明徽章降为悬停提示。
+          三页共用同款头 + loading 骨架，切页签时头部纹丝不动。 */}
+      <HubHeader
+        title="看情报"
+        hint={`${HOT_SOURCES.length} 个平台的热榜一站看全 · 主源断了自动切备用 · 公开榜单 60 秒更新 · 部分榜单需另接数据源`}
+        tabs={<IntelTabs active="hot" inline />}
+        meta={<span className="small muted hide-mobile">新鲜度：{lastFetch ? relTime(lastFetch) : '未采集'}</span>}
         action={
           isGuest ? (
             <Link href="/login" className="btn btn-primary btn-sm">登录后可采集</Link>
@@ -46,12 +51,6 @@ export default async function HotlistsPage() {
           )
         }
       />
-
-      <div className="row" style={{ gap: 12, marginBottom: 16 }}>
-        <span className="small muted">数据新鲜度：{lastFetch ? relTime(lastFetch) : '未采集'}</span>
-        <span className="badge badge-gray">公开榜单 60 秒更新</span>
-        <span className="badge badge-amber">部分榜单需另接数据源</span>
-      </div>
 
       <Card
         title="账号 × 热点 结合分析"

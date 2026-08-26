@@ -85,7 +85,7 @@ export function DraftAdvisorCard({
           <Icon.arrow size={13} /> 按已采纳意见改一版（{adoptedCount}）
         </button>
         {sessionCount > 0 && (
-          <Link className="small" href="/advisor">
+          <Link className="small" href="/topics?view=advisor">
             已开 {sessionCount} 场草稿会诊 →
           </Link>
         )}

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { log } from '@/lib/logger';
-import { INGEST_TOKEN_HEADER, workspaceByIngestToken } from '@/lib/ingest/competitor';
+import { INGEST_TOKEN_INVALID, INGEST_TOKEN_HEADER, workspaceByIngestToken } from '@/lib/ingest/competitor';
 import { analyzeVideo, CHANNEL_BASIS } from '@/lib/video/analyze';
 
 // 插件「一键拆解这条作品」的入口（authorized 通道，与竞对/自有/灵感并列的第四条）。
@@ -79,7 +79,7 @@ export async function POST(req: Request) {
   const ws = await workspaceByIngestToken(req.headers.get(INGEST_TOKEN_HEADER));
   if (!ws) {
     log.warn('作品拆解鉴权失败');
-    return json({ ok: false, error: '采集令牌无效或已停用——请在 设置页 重新生成并填入插件' }, 401);
+    return json({ ok: false, error: INGEST_TOKEN_INVALID }, 401);
   }
 
   let body: unknown;

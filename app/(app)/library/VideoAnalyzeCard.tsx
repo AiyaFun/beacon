@@ -137,8 +137,8 @@ export function VideoAnalyzeCard({ hasArkChannel }: { hasArkChannel: boolean }) 
                 视频拆解需使用<b>你自己配置的火山方舟 API Key</b>（画面推理消耗较大，平台不统一垫付）。
               </span>
             </div>
-            <a href="/settings" className="btn btn-sm" style={{ padding: '2px 10px' }}>
-              去设置渠道 →
+            <a href="/settings/keys" className="btn btn-sm" style={{ padding: '2px 10px' }}>
+              去配渠道 →
             </a>
           </div>
           <div style={{ marginTop: 8, fontSize: '0.85rem', lineHeight: 1.6 }} className="muted">

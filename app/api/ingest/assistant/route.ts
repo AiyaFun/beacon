@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { log } from '@/lib/logger';
-import { INGEST_TOKEN_HEADER, workspaceByIngestToken } from '@/lib/ingest/competitor';
+import { INGEST_TOKEN_INVALID, INGEST_TOKEN_HEADER, workspaceByIngestToken } from '@/lib/ingest/competitor';
 import { llmComplete } from '@/lib/llm/gateway';
 import type { ChatMessage } from '@/lib/llm/types';
 
@@ -35,7 +35,7 @@ export async function POST(req: Request) {
   const token = req.headers.get(INGEST_TOKEN_HEADER);
   const ws = await workspaceByIngestToken(token);
   if (!ws) {
-    return json({ ok: false, error: '采集令牌无效或已停用——请在 烽火台设置页 重新生成并填入插件' }, 401);
+    return json({ ok: false, error: INGEST_TOKEN_INVALID }, 401);
   }
 
   let body: {

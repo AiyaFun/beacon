@@ -95,18 +95,53 @@ RESTORED_TABLES="$(printf '%s\n' "$RESTORED_COUNTS" | wc -l | tr -d ' ')"
 log "还原库：$RESTORED_TABLES 张表"
 
 if [ -f "$COUNTS_FILE" ]; then
+  # ── 对账口径：严一处、松一处 ──────────────────────────────────────────────
+  #
+  # 【为什么不能要求逐表完全相等】基准是在 pg_dump **之后**记的（见 backup.sh），
+  # 而热榜、话题簇这些全局表在这几十秒里一直被 cron 写入和清理。
+  # 于是每周都会冒出一两张表差个几行——2026-08-23 就是 HotItem 1907→1913 让整场演练判红。
+  # **一个每周都喊狼来了的守卫，最后只会被无视**，而那时它就真的不设防了。
+  #
+  # 严的那一处一点不松：这场演练存在的理由是发现「RLS 静默过滤 → 备份是空壳」，
+  # 那种失败长这样：本来有数据的表还原后是 0，或者少掉一大截。这两种照样判死。
+  TOL_PCT="${BEACON_DRILL_TOLERANCE_PCT:-1}"   # 允许的相对漂移
+  TOL_MIN="${BEACON_DRILL_TOLERANCE_MIN:-5}"   # 小表按绝对条数放行，不然 3→4 就是 33%
   MISMATCH=0
+  DRIFT=0
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     t="${line%%=*}"; want="${line#*=}"
     got="$(printf '%s\n' "$RESTORED_COUNTS" | sed -n "s/^${t}=//p")"
-    if [ "$want" != "${got:-缺表}" ]; then
-      printf '  ⚠️  %s：备份时 %s 行 → 还原后 %s\n' "$t" "$want" "${got:-缺这张表}"
+
+    if [ -z "$got" ]; then
+      printf '  ❌ %s：备份时 %s 行 → 还原后**缺这张表**\n' "$t" "$want"
+      MISMATCH=$((MISMATCH + 1)); continue
+    fi
+    [ "$want" = "$got" ] && continue
+
+    # 本来有数据、还原后一条不剩 —— 这正是 RLS 空壳的样子，永远判死
+    if [ "$want" -gt 0 ] && [ "$got" = 0 ]; then
+      printf '  ❌ %s：备份时 %s 行 → 还原后 0 行（空壳）\n' "$t" "$want"
+      MISMATCH=$((MISMATCH + 1)); continue
+    fi
+
+    diff=$(( got > want ? got - want : want - got ))
+    allow=$(( want * TOL_PCT / 100 ))
+    [ "$allow" -lt "$TOL_MIN" ] && allow="$TOL_MIN"
+    if [ "$diff" -le "$allow" ]; then
+      printf '  ·  %s：%s → %s（差 %s 行，在容差内；备份期间 cron 还在写）\n' "$t" "$want" "$got" "$diff"
+      DRIFT=$((DRIFT + 1))
+    else
+      printf '  ❌ %s：备份时 %s 行 → 还原后 %s（差 %s 行，超出容差 %s）\n' "$t" "$want" "$got" "$diff" "$allow"
       MISMATCH=$((MISMATCH + 1))
     fi
   done < "$COUNTS_FILE"
   [ "$MISMATCH" = 0 ] || die "行数对账有 $MISMATCH 张表对不上——这份备份不可信。"
-  log "✅ 行数对账全表一致（基准 $COUNTS_FILE）"
+  if [ "$DRIFT" -gt 0 ]; then
+    log "✅ 行数对账通过（$DRIFT 张表有容差内的漂移，是备份期间 cron 在写，不是丢数据）"
+  else
+    log "✅ 行数对账全表一致（基准 $COUNTS_FILE）"
+  fi
 else
   log "⚠️  没有 .counts 基准（旧备份），跳过对账——只能证明「能还原」，不能证明「还原全」。"
 fi

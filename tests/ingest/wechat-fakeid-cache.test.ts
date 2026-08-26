@@ -37,7 +37,13 @@ type Reply = Record<string, unknown>;
 function loadSw(opts: { local?: Store; reply?: Reply | ((n: number) => Reply) } = {}) {
   const noop = () => {};
   const listener = { addListener: noop };
-  const local: Store = { ...(opts.local ?? {}) };
+  const local: Store = {
+    // 风险确认（0.9.8 起 collectWechatOne 的第一道闸）预置为已确认——本文件测的是
+    // 确认**之后**的行为。闸本身由 tests/legal/wechat-risk-ack.test.ts 与本文件末尾
+    // 那条「没确认时一个请求都不发」守着。
+    wechatRiskAck: { version: 1, at: Date.now() },
+    ...(opts.local ?? {}),
+  };
   const sent: Msg[] = [];
   let asked = 0;
 

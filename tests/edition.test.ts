@@ -274,7 +274,21 @@ describe('企业版登录页不泄漏 SaaS 内容', () => {
     const src = fs.readFileSync('app/api/auth/oa/magic/route.ts', 'utf-8');
     expect(src).toMatch(/if \(!can\('oaLogin'\)\) return new NextResponse\('Not Found', \{ status: 404 \}\)/);
     // 票据不能留在地址栏：换到 cookie 后必须 302 到不带查询串的地址
-    expect(src).toMatch(/NextResponse\.redirect\(siteUrl\(\) \+ '\/'\)/);
+    expect(src).toMatch(/NextResponse\.redirect\(new URL\('\/', req\.url\)\)/);
+    // 【为什么必须相对 req.url，而不是 siteUrl()】整机版的安装脚本写的是
+    // BEACON_SITE_URL=http://localhost:<端口>。装机那台机器上的人没事，
+    // 但局域网上的同事打开 http://192.168.1.20:3070/api/auth/…/magic?t=… 之后
+    // 会被 302 到 http://localhost:3070——那是他自己的电脑，上面没有烽火台。
+    // 而这条链接在企业版里是唯一的登录通道，等于除装机者外没人登得进来。
+    expect(src, '一次性登录链接不能跳到配置里的站点地址').not.toMatch(/redirect\(siteUrl\(\)/);
+  });
+
+  it('本机一次性登录链接同样相对访问地址跳转', async () => {
+    const fs = await import('node:fs');
+    const src = fs.readFileSync('app/api/auth/local/magic/route.ts', 'utf-8');
+    expect(src).toMatch(/NextResponse\.redirect\(new URL\('\/', req\.url\)\)/);
+    expect(src, '失败回登录页也要相对访问地址').toMatch(/new URL\(`\/login\?err=/);
+    expect(src).not.toMatch(/redirect\(siteUrl\(\)/);
   });
 });
 

@@ -82,7 +82,7 @@ test('冷启动引导：新账号能看到「哪些来源在沉默、怎么解�
 
 test('灵感收集箱：手动记一条 → 出现在待用里；从评论挖问题能挖出提问句', async ({ page }) => {
   await login(page);
-  await page.goto('/inspiration');
+  await page.goto('/topics?view=inspiration');
   await expect(page.getByRole('heading', { name: '灵感收集箱' })).toBeVisible();
 
   // 手动记一条

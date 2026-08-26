@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { INGEST_TOKEN_HEADER, workspaceByIngestToken } from '@/lib/ingest/competitor';
+import { INGEST_TOKEN_INVALID, INGEST_TOKEN_HEADER, workspaceByIngestToken } from '@/lib/ingest/competitor';
 import { recordParserIncident, activeRulePack, MAX_SKELETON_CHARS } from '@/lib/ingest/parser-learn';
 import { log } from '@/lib/logger';
 
@@ -28,7 +28,7 @@ export function OPTIONS() {
 
 export async function GET(req: Request) {
   const ws = await workspaceByIngestToken(req.headers.get(INGEST_TOKEN_HEADER));
-  if (!ws) return NextResponse.json({ ok: false, error: '采集令牌无效或已停用' }, { status: 401, headers: CORS });
+  if (!ws) return NextResponse.json({ ok: false, error: INGEST_TOKEN_INVALID }, { status: 401, headers: CORS });
   const pack = await activeRulePack();
   return NextResponse.json({ ok: true, ...pack }, { headers: CORS });
 }
@@ -44,7 +44,7 @@ const schema = z.object({
 
 export async function POST(req: Request) {
   const ws = await workspaceByIngestToken(req.headers.get(INGEST_TOKEN_HEADER));
-  if (!ws) return NextResponse.json({ ok: false, error: '采集令牌无效或已停用' }, { status: 401, headers: CORS });
+  if (!ws) return NextResponse.json({ ok: false, error: INGEST_TOKEN_INVALID }, { status: 401, headers: CORS });
 
   const raw = await req.text();
   if (raw.length > MAX_SKELETON_CHARS * 3) {

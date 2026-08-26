@@ -24,7 +24,7 @@ export async function actConvene(seed?: string) {
   const s = await getSession();
   requireRole(s, 'topic.manage'); // 会诊即选题构思，且多人物并行烧 LLM
   const sessionId = await convene(s.accountId, s.workspaceId, seed?.trim() || undefined);
-  revalidatePath('/advisor');
+  revalidatePath('/topics');
   return { ok: true, sessionId };
 }
 
@@ -34,7 +34,7 @@ export async function actConveneDraft(draftId: string, seed?: string) {
   const s = await getSession();
   requireRole(s, 'content.create');
   const sessionId = await convene(s.accountId, s.workspaceId, seed?.trim() || undefined, draftId);
-  revalidatePath('/advisor');
+  revalidatePath('/topics');
   revalidatePath('/studio');
   return { ok: true, sessionId };
 }
@@ -152,7 +152,7 @@ export async function actVerdict(opinionId: string, adopted: boolean) {
 
   if (isDraftAdvice) {
     // 草稿会诊：到此为止。采纳的意见由创作工坊「按会诊意见改一版」消费（actReviseByAdvice）。
-    revalidatePath('/advisor');
+    revalidatePath('/topics');
     revalidatePath('/studio');
     return { ok: true, adopted };
   }
@@ -175,7 +175,7 @@ export async function actVerdict(opinionId: string, adopted: boolean) {
     }
   }
 
-  revalidatePath('/advisor');
+  revalidatePath('/topics');
   revalidatePath('/topics');
   return { ok: true, adopted };
 }
@@ -227,7 +227,7 @@ export async function actUpsertAdvisorPersona(input: PersonaInput) {
       },
     });
   }
-  revalidatePath('/advisor');
+  revalidatePath('/topics');
   return { ok: true };
 }
 
@@ -248,7 +248,7 @@ export async function actToggleAdvisorPersona(id: string, enabled: boolean) {
     data: { enabled },
   });
   if (r.count === 0) return { ok: false, error: '人物不存在' };
-  revalidatePath('/advisor');
+  revalidatePath('/topics');
   return { ok: true };
 }
 
@@ -263,6 +263,6 @@ export async function actDeleteAdvisorPersona(id: string) {
   } else {
     await prisma.advisorPersona.update({ where: { id: persona.id }, data: { enabled: false } });
   }
-  revalidatePath('/advisor');
+  revalidatePath('/topics');
   return { ok: true };
 }

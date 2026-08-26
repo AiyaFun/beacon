@@ -1,3 +1,4 @@
+import { parseJson } from '@/lib/json';
 import { prisma } from '@/lib/db';
 import { LEGAL_VERSION } from '@/lib/legal';
 import { dataInventory, inventoryToCounts, resolveTenantScope, type TenantScope } from './inventory';
@@ -93,6 +94,11 @@ export async function buildAccountExport(opts: { tenantId: string; memberId: str
     bots,
     skillInstalls,
     customSkills,
+    customWorkflows,
+    workflowInstalls,
+    schedules,
+    taskPresets,
+    coverStyles,
     orders,
     complianceFeedback,
   ] = await Promise.all([
@@ -148,6 +154,23 @@ export async function buildAccountExport(opts: { tenantId: string; memberId: str
     }),
     prisma.skillInstall.findMany({ where: { tenantId }, include: { skill: { select: { slug: true, name: true, platform: true, category: true, isBuiltin: true } } } }),
     prisma.contentSkill.findMany({ where: { tenantId } }),
+    // 用户自建的智能体：steps 是他配出来的流水线、persona 是他写的职责，
+    // 这两样都是「带得走才叫可携带」的核心
+    prisma.workflowTemplate.findMany({ where: { tenantId }, orderBy: { createdAt: 'asc' } }),
+    prisma.workflowInstall.findMany({
+      where: { tenantId },
+      include: { template: { select: { slug: true, name: true, emoji: true, category: true, isBuiltin: true } } },
+    }),
+    prisma.scheduledAgent.findMany({
+      where: byWorkspace,
+      orderBy: { createdAt: 'asc' },
+      include: { template: { select: { slug: true, name: true } } },
+    }),
+    // 一键任务：和定时、自建智能体一样是**用户自己配出来的资产**——
+    // 不导的话他搬到别处要凭记忆把每张卡的目标与授权范围重配一遍
+    prisma.taskPreset.findMany({ where: byWorkspace, orderBy: [{ sort: 'asc' }, { createdAt: 'asc' }] }),
+    // 封面风格库：名字与画面描述都是用户自己写的（存量漏项，2026-08-22 上线前排查补上）
+    prisma.coverStylePreset.findMany({ where: byWorkspace, orderBy: { createdAt: 'asc' } }),
     prisma.paymentOrder.findMany({ where: { tenantId }, orderBy: { createdAt: 'asc' } }),
     prisma.complianceFeedback.findMany({ where: { tenantId }, orderBy: { createdAt: 'asc' } }),
   ]);
@@ -263,6 +286,40 @@ export async function buildAccountExport(opts: { tenantId: string; memberId: str
     skills: {
       installs: skillInstalls.map((i) => ({ id: i.id, enabled: i.enabled, createdAt: i.createdAt, skill: i.skill })),
       custom: customSkills,
+    },
+    // 智能体 = 工作流模板。与 skills 同构：装了哪些 + 自己建了哪些。
+    // custom 里的 steps/persona 是用户自己配的流水线与职责说明——「带得走」主要指这两样。
+    agents: {
+      // WorkflowInstall 的时间字段叫 installedAt（不是 createdAt，与 SkillInstall 不同名）
+      installs: workflowInstalls.map((i) => ({ id: i.id, enabled: i.enabled, installedAt: i.installedAt, template: i.template })),
+      custom: customWorkflows,
+      // 定时计划：跟着智能体一起导，否则用户搬到别处要凭记忆重配一遍几点几分跑哪个
+      schedules: schedules.map((r) => ({
+        id: r.id,
+        template: r.template,
+        atHour: r.atHour,
+        atMinute: r.atMinute,
+        weekdays: r.weekdays,
+        enabled: r.enabled,
+        lastRunAt: r.lastRunAt,
+        lastStatus: r.lastStatus,
+        createdAt: r.createdAt,
+      })),
+      // 封面风格库：他写的名字与画面描述
+      coverStyles: coverStyles.map((c) => ({
+        id: c.id, name: c.name, description: c.description, createdAt: c.createdAt,
+      })),
+      // 一键任务：目标、让谁干、授权到什么程度——三样都是他配的，缺一样搬过去就得重想一遍
+      taskPresets: taskPresets.map((p) => ({
+        id: p.id,
+        title: p.title,
+        goal: p.goal,
+        agentTemplateId: p.agentTemplateId,
+        authMode: p.authMode,
+        preauthorizedTools: parseJson<string[]>(p.preauthorizedTools, []),
+        enabled: p.enabled,
+        createdAt: p.createdAt,
+      })),
     },
     complianceFeedback,
     payments: orders.map((o) => ({

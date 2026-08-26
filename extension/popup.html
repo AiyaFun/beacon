@@ -537,6 +537,33 @@
       </div>
     </div>
 
+    <!-- 公众号采集的风险确认。首次点「后台采集」时由 popup.js 显示（默认隐藏）。
+         内容与 extension/store/privacy.md 第 4 条 ⑦、站内服务条款 3.3（三）同源，改一处要改三处。 -->
+    <div id="wechatRisk" class="card" style="display:none; padding:12px; margin-bottom:8px; border:1px solid var(--amber, #f59e0b)">
+      <div style="font-size:12.5px; font-weight:600; color:var(--amber, #f59e0b)">⚠️ 开启公众号采集前，请先了解风险</div>
+      <div style="margin-top:8px; font-size:11.5px; line-height:1.75; color:var(--text-2)">
+        公众号没有公开主页，所以这项功能是用<b>你自己已登录的公众号后台</b>去查对标公众号的文章列表，
+        调用的是后台自带的两个查询接口。它们<b>不是微信官方开放的数据接口</b>：
+        <div style="margin-top:6px">
+          · 这样使用<b>可能违反《微信公众平台服务协议》</b>中「不得使用非官方接口」「不得以自动化方式访问」的约定；<br>
+          · 一旦踩线，被限制接口、被封功能的是<b>你自己的公众号账号</b>，烽火台无法代为申诉或恢复；<br>
+          · 插件已内置保守节流（同号 12 小时一次、单轮最多 5 个号、请求间隔 3–6 秒、撞频控即停 30 分钟），
+            这些只能<b>降低概率</b>，不能消除风险；<br>
+          · 只读取标题、链接、发布时间与摘要，不取阅读量、不下载正文、不动你的任何内容；
+            登录态只用于当次请求，不上传、不保存。
+        </div>
+        <div style="margin-top:6px">不想承担这个风险就别开——公众号竞对数据也可以在烽火台网页端改用第三方数据源获取。</div>
+      </div>
+      <label style="display:flex; align-items:flex-start; gap:6px; margin-top:10px; font-size:11.5px; cursor:pointer">
+        <input type="checkbox" id="wechatRiskCheck" style="margin-top:2px">
+        <span>我已阅读并知悉上述风险，自愿使用该功能，并自行承担我的公众号账号可能因此受到的影响。</span>
+      </label>
+      <div style="display:flex; gap:8px; margin-top:10px">
+        <button id="wechatRiskOk" class="btn-primary" style="flex:1; font-size:11.5px; padding:6px 10px" disabled>确认并开始采集</button>
+        <button id="wechatRiskCancel" class="btn-secondary" style="font-size:11.5px; padding:6px 10px">先不用</button>
+      </div>
+    </div>
+
     <div id="clist" class="clist"></div>
   </div>
 

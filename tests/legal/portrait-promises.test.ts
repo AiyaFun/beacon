@@ -25,6 +25,10 @@ const read = (p: string) => readFileSync(resolve(process.cwd(), p), 'utf8');
 const PRIVACY = read('app/(public)/legal/privacy/page.tsx');
 const TERMS = read('app/(public)/legal/terms/page.tsx');
 const STATION = read('app/(app)/studio/CoverStation.tsx');
+// 同意文案本体抽成了共用组件（合规文本不许有第二个版本），断言跟着搬到它头上；
+// 两个上传入口（封面工位、出图工位）则各自断言「未勾选就不许传」那道闸。
+const CONSENT = read('components/PortraitConsent.tsx');
+const IMAGE_STUDIO = read('app/(app)/images/ImageStudio.tsx');
 const IMAGE_TS = read('lib/llm/image.ts');
 const RUN_TS = read('lib/cover/run.ts');
 
@@ -73,15 +77,60 @@ describe('AI 封面参考图：隐私政策文本 ↔ 常量', () => {
 
 describe('AI 封面参考图：UI 勾选文案 ↔ 常量', () => {
   it('🔒 上传处的同意文案写清 本人/单独同意/接收方/不保存/单张上限', () => {
-    expect(STATION).toContain('本人');
-    expect(STATION).toContain('单独同意');
-    expect(STATION).toContain('IMAGE_PROCESSOR_NAME');
-    expect(STATION).toContain('不保存');
-    expect(STATION).toContain('MAX_REFERENCE_MB');
+    expect(CONSENT).toContain('本人');
+    expect(CONSENT).toContain('单独同意');
+    // 「默认不保存」这句承诺认语义不认字面：用完即弃 / 不保存 都算，但必须有一种说法
+    expect(CONSENT).toMatch(/默认用完即弃|默认不保存/);
+
+    // 【接收方与单张上限要逐个组件验】原来是 toContain('IMAGE_PROCESSOR_NAME')，
+    // 而这个名字光 import 那一行就占一处——把两个组件里的插值全删掉它照样绿。
+    // 而这里有**两个**导出组件（一次性上传 / 存进形象库），漏掉任一个就是一处没披露接收方。
+    const parts = CONSENT.split(/export function /).slice(1);
+    expect(parts.length, '一个同意文案组件都没扫到，正则大概坏了').toBe(2);
+    for (const body of parts) {
+      const who = body.slice(0, 40).split('(')[0];
+      expect(body, `${who} 没写接收方`).toMatch(/\{IMAGE_PROCESSOR_NAME\}/);
+      expect(body, `${who} 没写单张上限`).toMatch(/\{MAX_REFERENCE_MB\}/);
+    }
   });
 
-  it('🔒 未勾选时上传按钮置灰（disabled={!consent}），而不是隐藏', () => {
-    expect(STATION).toContain('disabled={!consent}');
+  // 两处上传的**留存口径不同**，文案就必须不同：封面工位是一次性上传（默认用完即弃），
+  // 出图工位是直接存进形象库。用同一句话糊过去，就有一处在骗用户。
+  it('🔒 两种口径各有各的文案：一次性上传说「用完即弃」，存进形象库说「加密保存」', () => {
+    expect(CONSENT).toContain('默认用完即弃');
+    expect(CONSENT).toContain('加密保存');
+  });
+
+  it('🔒 两个上传入口都渲染共用文案，没人再内联写一份', () => {
+    // 【比对组件名必须带定界】原来这两条是 toContain('PortraitConsentText') /
+    // toContain('PortraitConsentTextForLibrary')，而前者是后者的**严格前缀**：
+    // 把封面工位整个换成渲染形象库那一份（它承诺「加密保存」，而封面工位是一次性上传、
+    // 口径应该是「默认用完即弃」——正好相反），这一组用例**全绿**。
+    // 而「两处口径不同就必须是两份文案」恰恰是这一组存在的唯一理由。
+    expect(STATION).toContain('<PortraitConsentText />');
+    expect(STATION, '封面工位是一次性上传，挂不得形象库那份「加密保存」的文案')
+      .not.toContain('PortraitConsentTextForLibrary');
+    expect(IMAGE_STUDIO).toContain('<PortraitConsentTextForLibrary />');
+    // 内联重写会绕过上面所有断言：这两个文件里不许再出现同意文案的原文
+    expect(STATION).not.toContain('我确认上传的照片');
+    expect(IMAGE_STUDIO).not.toContain('我确认上传的照片');
+  });
+
+  it('🔒 未勾选时上传按钮置灰，而不是隐藏（两个入口都要）', () => {
+    // 【封面工位有两个上传口（人像、背景），要逐个验】只断 toContain 的话，
+    // 把人像那个的闸删掉、背景那个还在，它照样绿——而人像正是要拦的那一个。
+    const buttons = STATION.split('<UploadButton').slice(1);
+    expect(buttons.length, '一个上传口都没扫到，选择器大概过时了').toBeGreaterThanOrEqual(2);
+    for (const b of buttons) {
+      expect(b.slice(0, 400), `有个上传口没挂同意闸：${b.slice(0, 60).replace(/\s+/g, ' ')}`)
+        .toContain('disabled={!consent}');
+    }
+
+    // 出图工位可以传背景/品牌元素（不涉及人脸），所以闸是「选了人像且没勾同意」。
+    // 【必须断在 disabled 上】这个条件在这个文件里出现两次：一次是真闸，一次只是
+    // 鼠标悬停的提示语。把 disabled 那半删掉、只留提示，用户照样传得上去，而守卫不动声色。
+    expect(IMAGE_STUDIO, '同意闸没挂在 disabled 上（只剩一句提示语拦不住任何人）')
+      .toMatch(/disabled=\{[^}]*uploadKind === 'portrait' && !consent/);
   });
 });
 
@@ -106,8 +155,10 @@ describe('AI 封面：代码形状守卫', () => {
   it('🔒 存人像进形象库必须带同意：store 里有服务端重算的那道闸', () => {
     const STORE = read('lib/media/store.ts');
     expect(STORE).toMatch(/kind === 'portrait' && !input\.consented/);
-    // 人像加密落库，封面明文（封面本来就要给用户下载）
-    expect(STORE).toContain('encryptBytes');
+    // 人像加密落库，封面明文（封面本来就要给用户下载）。
+    // 【断在调用上，不是名字上】名字光 import 就占一处，把真正加密那一行删掉照样绿——
+    // 而那一行删掉的后果就是人像明文落库。
+    expect(STORE, '没有真的加密，只是 import 了').toMatch(/isLibrary \? encryptBytes\(/);
   });
 
   it('🔒 服务端重算同意：run.ts 在带参考图时校验 portraitConsent', () => {

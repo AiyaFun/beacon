@@ -166,12 +166,14 @@ describe('🔒 增长追踪：没有独立页，且两页各管一侧', () => {
   });
 
   it('🔒 竞对页只取竞对增长，不许掺自有', () => {
-    expect(COMP).toContain('loadRivalGrowth');
+    // 断在调用上：只验名字的话 import 那一行就够绿了（否定的那条断名字是对的——
+    // 连 import 都不该有）
+    expect(COMP, '只 import 了没调用').toMatch(/await loadRivalGrowth\(/);
     expect(COMP).not.toContain('loadSelfGrowth');
   });
 
   it('🔒 数据看板只取自有增长，不许掺竞对', () => {
-    expect(DATA).toContain('loadSelfGrowth');
+    expect(DATA, '只 import 了没调用').toMatch(/await loadSelfGrowth\(/);
     expect(DATA).not.toContain('loadRivalGrowth');
   });
 

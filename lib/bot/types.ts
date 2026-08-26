@@ -88,7 +88,8 @@ export type PushEventType =
   | 'learning_summary'
   | 'performance_alert'
   | 'review_ready'
-  | 'plan_expiry';
+  | 'plan_expiry'
+  | 'agent_done';
 
 export const PUSH_EVENTS: { key: PushEventType; name: string; desc: string }[] = [
   { key: 'daily_recommend', name: '每日选题推荐', desc: '每天推荐生成后，把今日 Top 选题推到群' },
@@ -100,6 +101,9 @@ export const PUSH_EVENTS: { key: PushEventType; name: string; desc: string }[] =
   { key: 'review_ready', name: 'AI 复盘就绪', desc: '单篇复盘或周度复盘生成后推送要点' },
   // 计费类提醒**默认订阅也该保留**：手动续费模式下，漏看到期 = 第二天自动化任务全停。
   { key: 'plan_expiry', name: '到期与续费提醒', desc: '套餐/试用到期前 7、3、1 天与到期当天各提醒一次' },
+  // 定时智能体是**用户不在场时**跑的：不推的话他第二天得自己想起来去翻运行中心，
+  // 那这个功能的价值就少了一半（「早上打开手机就看到稿子备好了」才是它的样子）
+  { key: 'agent_done', name: '定时智能体跑完', desc: '定时计划跑完后把结果推到群（失败与自动停用也推）' },
 ];
 
 // ── 推送消息（provider 无关，adapter 各自渲染成平台格式）──

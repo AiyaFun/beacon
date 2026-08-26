@@ -72,7 +72,9 @@ describe('🔒 采集通道必须留下时点（增长曲线的原料）', () =>
   });
 
   it('两条通道都要记账号级当日快照', () => {
-    expect(COMPETITOR).toContain('recordCompetitorDaily');
-    expect(PIPELINE).toContain('recordCompetitorDaily');
+    // 【断在调用上】只验名字的话，`import { recordCompetitorDaily }` 那一行就够它绿了——
+    // 把两处 await 调用删掉，快照一条不写，守卫毫无反应。
+    expect(COMPETITOR, '只 import 了没调用').toMatch(/await recordCompetitorDaily\(/);
+    expect(PIPELINE, '只 import 了没调用').toMatch(/await recordCompetitorDaily\(/);
   });
 });

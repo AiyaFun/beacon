@@ -13,6 +13,11 @@ import { parseCompetitorUrl } from '../competitor-url';
 //   · rejected —— 核验为无效申请（如冒用他人身份主张他人账号），恢复采集。
 const BLOCKING_STATUSES = ['pending', 'verified', 'removed'];
 
+// 申请人类型。account = 被监控账号的权利人；comment = 在别人作品下留言的读者本人。
+// 两者执行的动作完全不同，见 isRemovalRequested 与 resolveRemovalRequest 里的分叉。
+export const ACCOUNT_KIND = 'account';
+export const COMMENT_KIND = 'comment';
+
 // ── handle 的「同一个号」口径 ──────────────────────────────────────────────
 //
 // 申请页写的是「主页链接**或标识**」。贴链接那条路早就归一了，**手打标识**那条路却是原样存的，
@@ -80,10 +85,32 @@ export async function isRemovalRequested(platform: string, handle: string): Prom
   // 变体匹配同时兜住两件事：申请人写法不同，以及**本次修复之前**存进去的历史申请行
   // （那些行没归一过，形状就是申请人当时敲的样子）。
   const hit = await prisma.dataRemovalRequest.findFirst({
-    where: { platform, handle: { in: removalHandleVariants(platform, handle) }, status: { in: BLOCKING_STATUSES } },
+    where: {
+      platform,
+      handle: { in: removalHandleVariants(platform, handle) },
+      status: { in: BLOCKING_STATUSES },
+      // ⚠️ 只有账号权利人的申请能停采。评论者本人那类（kind='comment'）填的 handle 是
+      // **作品作者**的账号，不是他自己的——放进这道闸，就成了「张三删掉自己在李四视频下的
+      // 一条评论」→ 全平台停采李四并删光李四的档案。拿一个人的权利去伤害另一个人，
+      // 比不执行这个权利更坏。测试：tests/legal/removal-comment.test.ts
+      kind: ACCOUNT_KIND,
+    },
     select: { id: true },
   });
   return hit !== null;
+}
+
+/** 只删申请人自己写的那一条评论正文。返回真实删除行数。 */
+export async function purgeOneComment(
+  platform: string,
+  commentText: string,
+): Promise<{ readerComments: number }> {
+  const text = commentText.trim();
+  // 空串会匹配到**全平台每一条**评论：`{ text: '' }` 在 Prisma 里是精确等于空串没错，
+  // 但一旦哪天有人改成 contains，空串就成了「删光」。在入口挡住，不依赖下游写法。
+  if (!text) return { readerComments: 0 };
+  const { count } = await prisma.readerComment.deleteMany({ where: { platform, text } });
+  return { readerComments: count };
 }
 
 /**
@@ -189,6 +216,15 @@ export async function resolveRemovalRequest(
     data: { status, resolvedAt: new Date() },
   });
   if (status === 'rejected') return { ok: true };
+
+  // 评论者本人那类：只删他写的那一句，**不碰**作品作者的档案、作品、订阅与台账。
+  if (req.kind === COMMENT_KIND) {
+    const { readerComments } = await purgeOneComment(req.platform, req.commentText ?? '');
+    return {
+      ok: true,
+      purged: { accounts: 0, posts: 0, watchlistItems: 0, runs: 0, commentQuestions: 0, readerComments },
+    };
+  }
 
   const purged = await purgeRemovedAccountData(req.platform, req.handle);
   return { ok: true, purged };

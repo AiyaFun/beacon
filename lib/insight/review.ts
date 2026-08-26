@@ -8,6 +8,7 @@ import { notify } from '../notify';
 import { pushEvent, beaconUrl } from '../bot';
 import { toDailySeries, dailyDeltas, coverage7d, type DaySeriesPoint } from './timeseries';
 import { automationAllows } from '../jobs/automation';
+import { buildBattleDigest } from '../battle/report';
 import { DEMO_WORKSPACE_ID } from '../demo/guard';
 import { calibrateAdvisorPersona } from './learn';
 
@@ -467,6 +468,14 @@ export async function generateWeeklyReview(params: { tenantId: string | null; ac
 
   await prisma.reviewReport.create({ data: { accountId, kind: 'weekly', period, content: toJson(review), mocked } });
 
+  // 往前看的一句：这条周一推送本来只讲「上周怎么样」，顺手把「本周该做什么」带上——
+  // 有几条高潜选题待起稿、头一条是什么。让「本周作战」这一页每周主动露一次面，
+  // 而不是等用户想起来去点侧栏。没有待起稿的选题就不追加（没事硬推是打扰）。
+  // ⚠️ 局限：generateWeeklyReview 在「上周无发布」时直接 return null 不推送，
+  // 所以这条 nudge 只到达上周有更新的账号；每天没发也想被提醒的，走 push_daily_brief 那条。
+  const battle = await buildBattleDigest(accountId).catch(() => null);
+  const battleLine = battle ? `🔥 本周作战：${battle.count} 条高潜选题待起稿，头一条「${battle.topTitle}」` : null;
+
   // 触达：站内通知 + 外部机器人（订阅了 review_ready 的）
   const title = `📅 ${account?.name ?? '账号'} 本周复盘（${period}）`;
   const body = `发布 ${thisWeek.length} 篇 · 均播 ${avgViews}${deltaPct === null ? '' : `（环比${deltaPct >= 0 ? '+' : ''}${deltaPct}%）`}｜${conclusions[0] ?? ''}`;
@@ -481,8 +490,12 @@ export async function generateWeeklyReview(params: { tenantId: string | null; ac
       ...(learned.length
         ? [`烽火台这周记住了你的 ${learned.length} 件事：`, ...learned.map((l) => `🧠 ${l.content}${l.isNew ? '' : `（第 ${l.hitCount} 次验证）`}`)]
         : []),
+      ...(battleLine ? ['', battleLine, '→ 打开「本周作战」把它起成稿'] : []),
     ],
-    link: { text: '看数据看板', url: beaconUrl('/data') },
+    // 有待起稿选题时，主按钮改成更可行动的「本周作战」；没有就还回数据看板
+    link: battle
+      ? { text: '打开本周作战', url: beaconUrl('/battle') }
+      : { text: '看数据看板', url: beaconUrl('/data') },
   });
   return review;
 }

@@ -1,8 +1,14 @@
 // 烽火台 · 发布填充脚本（半自动发布）。
 //
-// ⚠️ 这个脚本**永远不点发布按钮**。它只做一件事：把烽火台里备好的标题/正文/标签填进
-// 你自己的创作后台表单，然后停下来。发布是对外的意思表示，必须由你亲手点——
-// 这既是各平台创作者协议的要求，也是「填错了还能改」和「已经发出去了」之间唯一的分界。
+// ⚠️ 这个脚本**默认不点发布按钮**：只把烽火台里备好的标题/正文/标签填进你自己的创作后台表单，
+// 然后停下来。发布是对外的意思表示，「填错了还能改」和「已经发出去了」之间就靠这一下分界。
+//
+// 用户可以在插件设置里**显式打开「代点发布」**（autoClickPublish，默认关）。打开之后：
+//   · 只有**标题与正文都填成功**才会去找发布按钮——半填状态绝不点；
+//   · 点之前有 **5 秒倒计时 + 取消按钮**，这是不可逆动作前的最后一道刹车；
+//   · 找不到明确的发布按钮就**不点**，如实报 filled，绝不乱点页面上别的按钮；
+//   · 一旦点了，回执报 published 但**不带链接**（拿不到作品地址），由用户回填。
+// 平台创作者协议普遍不欢迎自动化发布，风险由打开开关的人自己承担——设置页和这里都写明了。
 //
 // ⚠️ 选择器**尚未真机校准**（2026-08-18）。平台后台改版频繁，填不进去是预期内的情况，
 // 所以每一步都有诚实降级：找不到输入框就把内容复制到剪贴板并如实告诉你「没填进去，已复制」，
@@ -17,6 +23,12 @@
     'creator.xiaohongshu.com': 'xiaohongshu',
     'member.bilibili.com': 'bilibili',
     'channels.weixin.qq.com': 'shipinhao',
+    // ── 大陆图文平台（0.9.5）：这几家都没有对个人开放的发布接口，只能走这条半自动的路 ──
+    'zhuanlan.zhihu.com': 'zhihu',
+    'www.zhihu.com': 'zhihu',
+    'mp.toutiao.com': 'toutiao',
+    'baijiahao.baidu.com': 'baijiahao',
+    'cp.kuaishou.com': 'kuaishou',
   };
 
   const platform = PLATFORM_BY_HOST[location.hostname];
@@ -41,7 +53,42 @@
       title: ['input[placeholder*="标题"]', '.post-title input'],
       body: ['div[contenteditable="true"]', 'textarea[placeholder*="描述"]'],
     },
+    zhihu: {
+      title: ['textarea[placeholder*="标题"]', '.WriteIndex-titleInput textarea', 'input[placeholder*="标题"]'],
+      body: ['div[contenteditable="true"]', '.public-DraftEditor-content', '.Editable-unstyled'],
+    },
+    toutiao: {
+      title: ['input[placeholder*="标题"]', 'textarea[placeholder*="标题"]', '.article-title input'],
+      body: ['div[contenteditable="true"]', '.ProseMirror', '.ql-editor'],
+    },
+    baijiahao: {
+      title: ['input[placeholder*="标题"]', 'textarea[placeholder*="标题"]', '.cheetah-input'],
+      body: ['div[contenteditable="true"]', '.editor-content', '.ql-editor'],
+    },
+    kuaishou: {
+      title: ['input[placeholder*="标题"]', '.title-input input'],
+      body: ['div[contenteditable="true"]', 'textarea[placeholder*="描述"]', 'textarea[placeholder*="简介"]'],
+    },
   };
+
+  // 发布按钮。**宁可找不到，也不许找错**：错点一个别的按钮（存草稿/删除/退出）比不点严重得多。
+  // 所以这里只认「文字里带发布且不带草稿/预览/定时」的按钮，且必须可见、可点。
+  const PUBLISH_BUTTON_TEXT = /^(发布|立即发布|发表|确认发布|发布视频|发布笔记|发布文章)$/;
+  const PUBLISH_BUTTON_DENY = /(草稿|预览|定时|设置|取消|返回|删除)/;
+
+  function findPublishButton() {
+    const cands = [...document.querySelectorAll('button, [role="button"], a.btn, div[class*="publish"]')];
+    for (const el of cands) {
+      const txt = (el.innerText || el.textContent || '').replace(/\s+/g, '');
+      if (!txt || txt.length > 8) continue;
+      if (PUBLISH_BUTTON_DENY.test(txt)) continue;
+      if (!PUBLISH_BUTTON_TEXT.test(txt)) continue;
+      if (el.offsetParent === null) continue; // 不可见的不算
+      if (el.disabled || el.getAttribute('aria-disabled') === 'true') continue;
+      return el;
+    }
+    return null;
+  }
 
   function pick(list) {
     for (const sel of list || []) {
@@ -93,6 +140,35 @@
       return { ok: false, reason: `只填进了${titleEl ? '标题' : '正文'}，另一半没找到输入框，请手动补。` };
     }
     return { ok: true };
+  }
+
+  /** 不可逆动作前的最后一道刹车：n 秒倒计时，点「取消」就不点了。返回 true = 用户取消。 */
+  function countdown(statusEl, seconds) {
+    return new Promise((resolve) => {
+      let left = seconds;
+      const cancel = document.createElement('button');
+      cancel.textContent = '取消';
+      cancel.style.cssText = 'margin-left:8px;padding:2px 8px;border-radius:6px;border:1px solid #c4841d;background:#fff;color:#c4841d;cursor:pointer';
+      statusEl.after(cancel);
+      const tick = () => {
+        statusEl.textContent = `${left} 秒后自动点发布…`;
+        statusEl.style.color = '#c4841d';
+        if (left <= 0) {
+          clearInterval(timer);
+          cancel.remove();
+          resolve(false);
+          return;
+        }
+        left -= 1;
+      };
+      cancel.onclick = () => {
+        clearInterval(timer);
+        cancel.remove();
+        resolve(true);
+      };
+      tick();
+      const timer = setInterval(tick, 1000);
+    });
   }
 
   async function copyFallback(task) {
@@ -152,14 +228,49 @@
         btn.disabled = true;
         status.textContent = '填充中…';
         const r = await fillTask(task);
-        status.textContent = r.ok ? '已填好，检查无误后你自己点发布' : r.reason;
-        status.style.color = r.ok ? '#12a150' : '#c4841d';
-        // 回执如实报：填不进去就是 failed，绝不因为「点过按钮了」就报 filled
-        await send('publish:receipt', {
-          taskId: task.id,
-          status: r.ok ? 'filled' : 'failed',
-          error: r.ok ? undefined : r.reason,
-        });
+        if (!r.ok) {
+          status.textContent = r.reason;
+          status.style.color = '#c4841d';
+          await send('publish:receipt', { taskId: task.id, status: 'failed', error: r.reason });
+          btn.disabled = false;
+          return;
+        }
+
+        // 填成功了。默认到此为止；开了代点才继续，且要先走完倒计时。
+        const cfg = await chrome.storage.sync.get(['autoClickPublish']);
+        if (cfg.autoClickPublish !== true) {
+          status.textContent = '已填好，检查无误后你自己点发布';
+          status.style.color = '#12a150';
+          await send('publish:receipt', { taskId: task.id, status: 'filled' });
+          btn.disabled = false;
+          return;
+        }
+
+        const target = findPublishButton();
+        if (!target) {
+          // 找不到就**不点**。这是刻意的：乱点比不点危险得多。
+          status.textContent = '已填好，但没认出发布按钮（可能是后台改版）——请你自己点一下发布';
+          status.style.color = '#c4841d';
+          await send('publish:receipt', { taskId: task.id, status: 'filled' });
+          btn.disabled = false;
+          return;
+        }
+
+        const cancelled = await countdown(status, 5);
+        if (cancelled) {
+          status.textContent = '已取消代点，内容还在表单里，你可以自己检查后再发';
+          status.style.color = '#c4841d';
+          await send('publish:receipt', { taskId: task.id, status: 'filled' });
+          btn.disabled = false;
+          return;
+        }
+
+        target.click();
+        // 点了就是点了：如实报 published。但**没有作品链接**——平台跳转与审核都要时间，
+        // 这里拿不到地址，回执不带 url，由用户之后在发布中心回填。
+        status.textContent = '已代你点了发布。去平台确认一下，然后把作品链接贴回发布中心';
+        status.style.color = '#12a150';
+        await send('publish:receipt', { taskId: task.id, status: 'published' });
         btn.disabled = false;
       };
       row.appendChild(btn);

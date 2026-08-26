@@ -348,6 +348,14 @@ describe('publicItemUrl · platformItemId → 作品详情页链接', () => {
     //    于是「改坏 TIKTOK_ID、或把 publicItemUrl 的 tiktok 分支改回 @author/video/ 形态」
     //    这两种破坏都不会红，而用户在 /data 上点 TikTok 记录会得到 404。
     ['tiktok', 'https://www.tiktok.com/embed/v2/7123456789012345678'],
+    // ── 2026-08-19 补齐的大陆平台 ──
+    ['weibo', 'https://weibo.com/detail/5012345678901234'],
+    // 知乎三种形态各测一条：ID 带前缀（p_/answer_/pin_），逆运算要分回三种地址。
+    // 只测文章那条的话，回答与想法的分支坏了不会红。
+    ['zhihu', 'https://zhuanlan.zhihu.com/p/1234567890'],
+    ['toutiao', 'https://www.toutiao.com/article/7234567890123456789/'],
+    ['baijiahao', 'https://baijiahao.baidu.com/s?id=1712345678901234567'],
+    ['kuaishou', 'https://www.kuaishou.com/short-video/3xabcdefg12345'],
   ];
 
   // 手抄的清单会漏——这条把它钉死在 PLATFORMS 上：新加一个平台而不补往返用例，直接红。
@@ -366,6 +374,22 @@ describe('publicItemUrl · platformItemId → 作品详情页链接', () => {
       expect(parsed.platform).toBe(platform);
       // 解析出 ID → 再算回链接，必须回到原地；对不上就说明两边口径漂了
       expect(publicItemUrl(platform, parsed.platformItemId)).toBe(url);
+    }
+  });
+
+  it('知乎的回答与想法也要能往返（三种形态的 ID 前缀各走各的分支）', () => {
+    for (const url of [
+      'https://www.zhihu.com/question/123456789/answer/987654321',
+      'https://www.zhihu.com/pin/1798765432109876543',
+    ]) {
+      const parsed = parsePublishUrl(url);
+      expect(parsed.ok, url).toBe(true);
+      if (!parsed.ok) continue;
+      expect(parsed.platform).toBe('zhihu');
+      const back = publicItemUrl('zhihu', parsed.platformItemId);
+      expect(back, `${url} 逆运算落空`).toBeTruthy();
+      // 回答只留 answer id（知乎单独打开也能自动补问题），所以比对 ID 而不是整串
+      expect(back).toContain(parsed.platformItemId.replace(/^(p|answer|pin)_/, ''));
     }
   });
 

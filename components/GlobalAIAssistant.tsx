@@ -3,6 +3,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { usePathname } from 'next/navigation';
 import { Icon } from './icons';
+import { looksActionable } from '@/lib/agent/intent';
+import { prepareReferenceImage } from '@/lib/cover/client-image';
+
+/** 与助手页、服务端同一个数：3 张（超大请求体会被 WAF 回一个假的 200）。 */
+const MAX_PICS = 3;
 
 type ChatTurn = { role: 'user' | 'assistant'; content: string };
 type Msg = { role: 'user' | 'assistant'; content: string; mocked?: boolean; error?: boolean };
@@ -12,6 +17,14 @@ export const PAGE_INFOS: Record<string, { name: string; desc: string }> = {
   '/': {
     name: '今日概览',
     desc: '工作区核心看板，包含全平台总播放量、今日推荐Top3选题、今日运营建议、待办任务清单和快速入口。',
+  },
+  '/battle': {
+    name: '本周作战',
+    desc: '本周内容作战报告：把自有表现指标、高潜选题、低表现作品诊断、竞对本周动向拼成一页操作台，每条选题后面就是起稿入口，可直接进创作工坊起草并发布。',
+  },
+  '/runs': {
+    name: '运行中心',
+    desc: 'AI 执行、工作流、采集、发布四类运行记录汇总。「等你处理」是停下来等人的（等确认写操作、等去平台点发布），不是系统还在跑；AI 执行那条可展开看它调了哪些工具。跨账号全收，每条标明归属账号。',
   },
   '/competitors': {
     name: '竞对监控',
@@ -23,11 +36,7 @@ export const PAGE_INFOS: Record<string, { name: string; desc: string }> = {
   },
   '/topics': {
     name: '选题引擎',
-    desc: '基于你的账号人设与平台热点分析生成的推荐选题，提供选题切入点与六维评分。',
-  },
-  '/advisor': {
-    name: '选题智囊团',
-    desc: '12 位不同背景的人物专家组成智囊团，针对你的选题提供多视角的打分、建议和交叉质询。',
+    desc: '基于你的账号人设与平台热点分析生成的推荐选题，提供选题切入点与六维评分。页内含三个标签：挑选题（候选与六维评分）、灵感箱（随手存的点子与读者提问）、找角度（12 位人物智囊团会诊）。',
   },
   '/studio': {
     name: '创作工坊',
@@ -44,6 +53,14 @@ export const PAGE_INFOS: Record<string, { name: string; desc: string }> = {
   '/material': {
     name: '素材库',
     desc: '创作者自建的经历、案例、观点和金句素材库，作为生成差异化选题和文案的专属原料。',
+  },
+  '/publish': {
+    name: '发布中心',
+    desc: '把稿子发出去的那一段：进行中的发布计划与每个平台的任务状态、等你去点发布的任务、平台通道能力矩阵（公众号可接口直发/插件填好你来点/只能手动）、最近发布记录与缺链接提醒。按当前账号过滤。',
+  },
+  '/images': {
+    name: 'AI 出图',
+    desc: '不绑草稿的出图工位：自己写画面描述批量出图（一律不上字）、我的形象与素材库上传管理、最近生成图片的画廊与钉住/删除。封面上字在创作工坊「标题与封面」。',
   },
   '/data': {
     name: '数据看板',
@@ -91,10 +108,6 @@ export const PAGE_INFOS: Record<string, { name: string; desc: string }> = {
   '/hotlists': {
     name: '热点聚合中心',
     desc: '八大平台热榜聚合与跨源话题聚类，可选一个实时热点做「账号 × 热点」结合分析。部分平台没有真实采集通道时会显示带「示例」标的占位词条，那些词条不参与选题推荐。',
-  },
-  '/inspiration': {
-    name: '灵感收集箱',
-    desc: '随手存下的选题灵感、刷到的内容和评论区挖到的问题，会作为候选源参与每日选题推荐。',
   },
   '/library': {
     name: '内容资讯库',
@@ -182,6 +195,33 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
   const abortRef = useRef<AbortController | null>(null);
   const msgsRef = useRef(messages);
   msgsRef.current = messages;
+  /**
+   * 待发送的参考图（data: URI，客户端已压过）。
+   *
+   * 用 ref 同步一份是因为 send 是 useCallback([streaming])——只读 state 的话
+   * 闭包里永远是第一次渲染时的空数组，表现为「传了图但发出去的还是没有图」，
+   * 不报错，只是图白传了。
+   */
+  const [pics, setPics] = useState<string[]>([]);
+  const [picErr, setPicErr] = useState('');
+  const picsRef = useRef<string[]>([]);
+  picsRef.current = pics;
+
+  /** 选了图：客户端先压一遍（复用封面工位那一份，不另写第二套）。 */
+  async function addPics(files: File[]) {
+    setPicErr('');
+    const room = MAX_PICS - picsRef.current.length;
+    if (room <= 0) { setPicErr(`最多 ${MAX_PICS} 张`); return; }
+    const next: string[] = [];
+    for (const f of files.slice(0, room)) {
+      try {
+        next.push((await prepareReferenceImage(f)).dataUrl);
+      } catch (e) {
+        setPicErr(`${f.name}：${(e as Error).message}`);
+      }
+    }
+    if (next.length) setPics((list) => [...list, ...next]);
+  }
 
   // ── 自由位置/尺寸/字号 State ──
   // triggerPosMode: 'top' (页面上方，默认) | 'bottom' (页面下方)
@@ -390,15 +430,22 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
   const send = useCallback(
     async (text: string, displayUserText?: string) => {
       const q = text.trim();
-      if (!q || streaming) return;
+      // 只发图不打字也算数
+      if ((!q && picsRef.current.length === 0) || streaming) return;
 
       const userTextToShow = displayUserText || q;
       const history: ChatTurn[] = msgsRef.current
         .filter((m) => m.role === 'user' || m.role === 'assistant')
         .map((m) => ({ role: m.role, content: m.content }));
 
-      setMessages((prev) => [...prev, { role: 'user', content: userTextToShow }]);
+      setMessages((prev) => [
+        ...prev,
+        { role: 'user', content: userTextToShow || `（发了 ${picsRef.current.length} 张图）` },
+      ]);
       setInput('');
+      const sendingPics = picsRef.current;
+      setPics([]); // 图只跟这一次提问走：进历史会让后面每一轮都重发几 MB
+      picsRef.current = [];
       setStreaming(true);
 
       const controller = new AbortController();
@@ -408,7 +455,7 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
         const res = await fetch('/api/chat/stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ question: q, history }),
+          body: JSON.stringify({ question: q, history, images: sendingPics }),
           signal: controller.signal,
         });
 
@@ -464,6 +511,12 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
     },
     [streaming]
   );
+
+  // 最后一句用户说的话，答完之后才判。带上它去执行那一侧——
+  // 只带一句话是刻意的：浮标里的铺垫在执行模式下用不上（那边不是聊天），
+  // 而把整段对话塞进 URL 会撞长度上限
+  const lastUser = [...messages].reverse().find((m) => m.role === 'user');
+  const handoffGoal = !streaming && lastUser && looksActionable(lastUser.content) ? lastUser.content : '';
 
   const handleAnalyzePage = () => {
     if (streaming) return;
@@ -767,6 +820,43 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
           border: 1px solid var(--red);
         }
 
+        /* 「让它直接去做」条：贴在输入框上方，与助手页的移交条同一个位置感 */
+        .fap-handoff {
+          padding: 8px 14px;
+          border-top: 1px solid var(--border);
+          background: var(--amber-soft, var(--surface));
+          display: flex;
+          gap: 10px;
+          align-items: center;
+          justify-content: space-between;
+        }
+
+        /* 参考图预览条 */
+        .fap-pics {
+          padding: 8px 14px 0;
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+          align-items: center;
+        }
+        /* max-width 要显式给死：globals.css 里有一条针对卡片内图片的 max-width 100% 规则，
+           它会让图片的宽度反过来依赖父容器，而父容器又靠内容撑开——解出来是 2px。
+           注意这段在 style jsx 的模板串里，注释里不能出现花括号，会破坏 JSX 解析 */
+        .fap-pic { width: 46px; height: 46px; max-width: 46px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); display: block; }
+        .fap-pic-x {
+          position: absolute; top: -6px; right: -6px;
+          width: 18px; height: 18px; line-height: 1; padding: 0;
+          border-radius: 50%; border: 1px solid var(--border);
+          background: var(--surface); color: var(--text-2); cursor: pointer;
+        }
+        .fap-pic-btn {
+          display: flex; align-items: center; justify-content: center;
+          width: 34px; height: 34px; flex-shrink: 0;
+          border: 1px solid var(--border); border-radius: 8px;
+          background: var(--surface); color: var(--text-2); cursor: pointer;
+        }
+        .fap-pic-btn:hover { color: var(--brand); border-color: var(--brand); }
+
         /* 底部输入框 */
         .fap-footer {
           padding: 10px 14px;
@@ -994,6 +1084,45 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
           )}
         </div>
 
+        {/* 「让它直接去做」：这个浮标此前只能聊天——在任意页面上说「帮我建个草稿」，
+            它会热心地告诉你该怎么做，然后没有然后。而「先答后做」的移交此前只活在
+            /assistant 一页，浮标是全站常驻的那个入口，缺了这一步等于说了不算。
+
+            判据用本地规则（looksActionable），不让模型吐控制标记——模型会把标记原样
+            抄给用户（提示词泄漏那三次），而这里的收益只是一个按钮显不显示。
+
+            ⚠️ 只**预填**不自动跑：URL 参数带着就开跑的话，任意站点放一个链接就能让
+            登录用户发起一次付费执行；用户刷新或分享这个地址也会重复开跑。 */}
+        {handoffGoal && (
+          <div className="fap-handoff">
+            <span className="small">这件事我可以直接去做</span>
+            <a
+              className="btn btn-sm btn-primary"
+              href={`/assistant?goal=${encodeURIComponent(handoffGoal)}`}
+            >
+              让它直接去做 →
+            </a>
+          </div>
+        )}
+
+        {(pics.length > 0 || picErr) && (
+          <div className="fap-pics">
+            {pics.map((src, i) => (
+              <span key={i} style={{ position: 'relative', display: 'inline-block', width: 46, height: 46, flexShrink: 0 }}>
+                <img src={src} alt={`参考图 ${i + 1}`} className="fap-pic" />
+                <button
+                  className="fap-pic-x"
+                  aria-label="移除这张图"
+                  onClick={() => setPics((l) => l.filter((_, j) => j !== i))}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            {picErr && <span className="small" style={{ color: 'var(--red)' }}>{picErr}</span>}
+          </div>
+        )}
+
         {/* 输入框 */}
         <div className="fap-footer">
           <textarea
@@ -1005,9 +1134,23 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
             onKeyDown={onKey}
             rows={1}
           />
+          <label
+            className="fap-pic-btn"
+            title={pics.length >= MAX_PICS ? `最多 ${MAX_PICS} 张` : '带一张参考图问'}
+          >
+            <Icon.upload size={15} />
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              disabled={streaming || pics.length >= MAX_PICS}
+              onChange={(e) => { const fs = Array.from(e.target.files ?? []); e.target.value = ''; void addPics(fs); }}
+            />
+          </label>
           <button
             className="fap-send-btn"
-            disabled={streaming || !input.trim()}
+            disabled={streaming || (!input.trim() && pics.length === 0)}
             onClick={() => send(input)}
           >
             <Icon.arrow size={16} />

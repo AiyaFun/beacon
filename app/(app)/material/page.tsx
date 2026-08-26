@@ -4,6 +4,8 @@ import { parseJson } from '@/lib/json';
 import { PageHead, Card, Stat } from '@/components/ui';
 import { MaterialEditor } from './MaterialEditor';
 import type { MaterialItem, MaterialType } from './types';
+import { AssetTabs } from '@/components/AssetTabs';
+import { HubHeader } from '@/components/HubHeader';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,9 +29,10 @@ export default async function MaterialPage() {
 
   return (
     <>
-      <PageHead
-        title="经历/素材库"
-        desc="录入个人经历、案例、观点、口头禅与文风样本——热点人人可抄，经历与语感不可复制"
+      <HubHeader
+        title="记忆与素材"
+        hint="录入个人经历、案例、观点、口头禅与文风样本——热点人人可抄，经历与语感不可复制"
+        tabs={<AssetTabs active="material" inline />}
       />
 
       <div className="grid grid-5" style={{ marginBottom: 16 }}>

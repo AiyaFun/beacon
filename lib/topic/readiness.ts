@@ -194,7 +194,7 @@ export function computeReadiness(input: ReadinessInput, now: Date = new Date()):
       : {
           key: 'inspiration', name: label('inspiration'), state: 'dormant',
           reason: '收集箱是空的',
-          action: { text: '存一条刷到的内容，或从评论里挖问题', href: '/inspiration' },
+          action: { text: '存一条刷到的内容，或从评论里挖问题', href: '/topics?view=inspiration' },
         },
   );
 

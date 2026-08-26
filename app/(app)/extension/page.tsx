@@ -1,5 +1,6 @@
 import Link from 'next/link';
-import { PageHead, Card, Stat, Empty } from '@/components/ui';
+import { Card, Stat, Empty, Fold } from '@/components/ui';
+import { AGENT_ROLES } from '@/lib/agent/roles';
 import { Icon } from '@/components/icons';
 import { BROWSER_CARDS, storeLinks, storeVersion, storeIsBehind, readDownloadsManifest, type BrowserCard } from '@/lib/downloads';
 import { prisma } from '@/lib/db';
@@ -7,6 +8,7 @@ import { getSession } from '@/lib/session';
 import { IngestTokenCard } from '../settings/IngestTokenCard';
 import { ExtAutoConfig } from './ExtAutoConfig';
 import { listIngestTokens } from '@/lib/ingest/token';
+import { HubHeader } from '@/components/HubHeader';
 
 export const dynamic = 'force-dynamic';
 
@@ -89,7 +91,10 @@ function BrowserCardView({
 export default async function ExtensionPage() {
   const s = await getSession();
   const [workspace, tokens] = await Promise.all([
-    prisma.workspace.findUnique({ where: { id: s.workspaceId }, select: { ingestToken: true } }),
+    prisma.workspace.findUnique({
+      where: { id: s.workspaceId },
+      select: { ingestToken: true, agentToolConfig: true, browserReadEnabled: true },
+    }),
     listIngestTokens(s.workspaceId),
   ]);
   const legacyToken = workspace?.ingestToken ?? null;
@@ -104,9 +109,9 @@ export default async function ExtensionPage() {
 
   return (
     <>
-      <PageHead
+      <HubHeader
         title="下载采集助手"
-        desc="装上浏览器插件，浏览竞对公开主页时顺手回传公开数据、在自己作品页一键回填表现数据 · 只采你在页面上亲眼可见的公开数据"
+        hint="装上浏览器插件，浏览竞对公开主页时顺手回传公开数据、在自己作品页一键回填表现数据 · 只采你在页面上亲眼可见的公开数据"
         action={<Link href="/help" className="btn btn-sm btn-ghost"><Icon.help size={13} /> 使用帮助</Link>}
       />
 
@@ -201,27 +206,10 @@ export default async function ExtensionPage() {
         )}
       </Card>
 
-      <div className="grid grid-2" style={{ marginBottom: 16 }}>
-        <Card title="开发者模式加载（zip 通用步骤）" sub="商店审核期 / 企业内网走这条">
-          {zipHref ? (
-            <ol className="stack" style={{ gap: 10, paddingLeft: 18, margin: 0 }}>
-              <li className="small" style={{ lineHeight: 1.7 }}>
-                <a href={zipHref} download style={{ color: 'var(--brand)', fontWeight: 600 }}>下载 zip 安装包 ↓</a>
-                ，解压到一个<b>不会被删</b>的固定文件夹。
-              </li>
-              <li className="small" style={{ lineHeight: 1.7 }}>
-                地址栏进扩展页：Chrome <code className="mono">chrome://extensions</code> · Edge <code className="mono">edge://extensions</code> · 360 在「扩展中心」。
-              </li>
-              <li className="small" style={{ lineHeight: 1.7 }}>右上角打开<b>开发者模式</b>。</li>
-              <li className="small" style={{ lineHeight: 1.7 }}>点<b>「加载已解压的扩展程序」</b>，选择刚解压的文件夹。</li>
-              <li className="small" style={{ lineHeight: 1.7 }}>装好后在右侧填入采集令牌，即可开始使用。</li>
-            </ol>
-          ) : (
-            <Empty icon="📦" text="还没打包安装包。在项目根目录执行 npm run pack:ext 生成 zip 后刷新本页。" />
-          )}
-        </Card>
-
-        <Card title="填入采集令牌" sub="装好插件后这一步才能回传数据">
+      {/* 填令牌是**所有人必经**的一步（不填插件认不出工作区），所以独占一行、排在前面。
+          「开发者模式加载」只有走 zip 的人需要，折进 Fold——这一页此前 8 张卡平铺，
+          新用户第一眼分不出哪几步是自己必须做的。 */}
+      <Card title="填入采集令牌" sub="装好插件后这一步才能回传数据" style={{ marginBottom: 16 }}>
           <div className="stack" style={{ gap: 10 }}>
             <p className="small muted" style={{ lineHeight: 1.7 }}>
               插件本身不含你的身份——它靠<b>采集令牌</b>认工作区。安装后：
@@ -240,57 +228,82 @@ export default async function ExtensionPage() {
               <ExtAutoConfig host={process.env.NEXT_PUBLIC_APP_URL || 'https://beacon.iyunci.cn'} />
             </div>
           </div>
-        </Card>
-      </div>
+      </Card>
 
-      <div className="grid grid-2">
-        <Card title="合规边界" sub="只采你在页面上亲眼可见的公开数据">
-          <div className="stack" style={{ gap: 10 }}>
-            <div className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
-              <span style={{ color: 'var(--green)', flexShrink: 0 }}><Icon.check size={16} /></span>
-              <span className="small" style={{ lineHeight: 1.7 }}>
-                <b>采的永远是公开主页上已渲染、你亲眼可见的 DOM，不碰登录态接口。</b>除了你当场点击，还有一处是自动的：<b>每日定时采集默认开启</b>，插件会在你设定的时间（默认 09:00）用<b>后台标签页</b>逐个打开你自己已订阅的竞对公开主页，采完立即关闭，可在插件设置里关掉。范围与手动采集完全相同，不因自动化而扩大。
-              </span>
-            </div>
-            <div className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
-              <span style={{ color: 'var(--green)', flexShrink: 0 }}><Icon.check size={16} /></span>
-              <span className="small" style={{ lineHeight: 1.7 }}>
-                <b>最小主机权限。</b>0.8.2 起申请 8 条路径，全部是 B站/抖音/小红书/X/YouTube/TikTok 的<b>公开作品页</b>——为了让「读评论提问」在页内侧栏上也能用（activeTab 只在你点扩展自己的界面时授予，点页内按钮拿不到）。<b>不含任何创作者后台域名</b>。回传本身不依赖主机权限，走服务端 CORS + 令牌头，令牌只授权「向本工作区订阅的竞对补充公开数据」。
-              </span>
-            </div>
-            <div className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
-              <span style={{ color: 'var(--green)', flexShrink: 0 }}><Icon.check size={16} /></span>
-              <span className="small" style={{ lineHeight: 1.7 }}>
-                <b>他人/竞对：只采各平台已公开发布的账号与作品信息</b>，不碰任何非公开数据。<b>你自己的作品另算</b>：在你本人已登录的创作者后台里，插件会读你自己作品的表现数字（含公开页拿不到的完播率/完读率）——那是你自己的数据，只回传到你自己的工作区。两种情况都<b>不托管、不上传任何平台凭证</b>。若你是被监控账号主体，可
-                <a href="/legal/data-request" target="_blank" style={{ color: 'var(--brand)', fontWeight: 600 }}>申请移除监控 →</a>
-              </span>
-            </div>
-          </div>
-        </Card>
+      <Fold
+        title="开发者模式加载（zip 通用步骤）"
+        sub="商店审核期 / 企业内网走这条"
+        note={<span className="small muted">装商店版可跳过</span>}
+      >
+          {zipHref ? (
+          <ol className="stack" style={{ gap: 10, paddingLeft: 18, margin: 0 }}>
+            <li className="small" style={{ lineHeight: 1.7 }}>
+              <a href={zipHref} download style={{ color: 'var(--brand)', fontWeight: 600 }}>下载 zip 安装包 ↓</a>
+              ，解压到一个<b>不会被删</b>的固定文件夹。
+            </li>
+            <li className="small" style={{ lineHeight: 1.7 }}>
+              地址栏进扩展页：Chrome <code className="mono">chrome://extensions</code> · Edge <code className="mono">edge://extensions</code> · 360 在「扩展中心」。
+            </li>
+            <li className="small" style={{ lineHeight: 1.7 }}>右上角打开<b>开发者模式</b>。</li>
+            <li className="small" style={{ lineHeight: 1.7 }}>点<b>「加载已解压的扩展程序」</b>，选择刚解压的文件夹。</li>
+            <li className="small" style={{ lineHeight: 1.7 }}>装好后在右侧填入采集令牌，即可开始使用。</li>
+          </ol>
+        ) : (
+          <Empty icon="📦" text="还没打包安装包。在项目根目录执行 npm run pack:ext 生成 zip 后刷新本页。" />
+        )}
+      </Fold>
 
-        <Card title="数据源机制" sub="双源冗余保障，高稳定性采集保障">
+
+      {/* 合规边界与数据源机制是**看一次就够**的参考说明，折起来——
+          它们此前和「等浏览器做的活」「AI 能力」并排铺在 grid 里，
+          让这一页看上去有八件事要做，而真正要做的只有装插件、填令牌两件。 */}
+      <Fold title="合规边界" sub="只采你在页面上亲眼可见的公开数据" note={<span className="small muted">看一次就够</span>}>
           <div className="stack" style={{ gap: 10 }}>
-            <div className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
-              <span style={{ color: 'var(--brand)', flexShrink: 0 }}><Icon.sparkles size={16} /></span>
-              <span className="small" style={{ lineHeight: 1.7 }}>
-                <b>开源自建为主</b>：热榜聚合与基础公开数据优先走<b>自建 DailyHotApi 实例</b>，性能轻量稳定，对第三方商业依赖极低。
-              </span>
-            </div>
-            <div className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
-              <span style={{ color: 'var(--brand)', flexShrink: 0 }}><Icon.sparkles size={16} /></span>
-              <span className="small" style={{ lineHeight: 1.7 }}>
-                <b>商业 API 兜底</b>：如小红书、抖音等风控极严的公开页面，提供<b>商业数据源（如 TikHub/天行等）作为熔断备份通道</b>。
-              </span>
-            </div>
-            <div className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
-              <span style={{ color: 'var(--brand)', flexShrink: 0 }}><Icon.sparkles size={16} /></span>
-              <span className="small" style={{ lineHeight: 1.7 }}>
-                <b>双源冗余切换</b>：系统将实时监测主通道风控阻断状态。一旦开源接口失效，将<b>自动在秒级切入备份通道</b>，双源冗余不削弱。
-              </span>
-            </div>
+          <div className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
+            <span style={{ color: 'var(--green)', flexShrink: 0 }}><Icon.check size={16} /></span>
+            <span className="small" style={{ lineHeight: 1.7 }}>
+              <b>采的永远是公开主页上已渲染、你亲眼可见的 DOM，不碰登录态接口。</b>除了你当场点击，还有一处是自动的：<b>每日定时采集默认开启</b>，插件会在你设定的时间（默认 09:00）用<b>后台标签页</b>逐个打开你自己已订阅的竞对公开主页，采完立即关闭，可在插件设置里关掉。范围与手动采集完全相同，不因自动化而扩大。
+            </span>
           </div>
-        </Card>
-      </div>
+          <div className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
+            <span style={{ color: 'var(--green)', flexShrink: 0 }}><Icon.check size={16} /></span>
+            <span className="small" style={{ lineHeight: 1.7 }}>
+              <b>最小主机权限。</b>0.8.2 起申请 8 条路径，全部是 B站/抖音/小红书/X/YouTube/TikTok 的<b>公开作品页</b>——为了让「读评论提问」在页内侧栏上也能用（activeTab 只在你点扩展自己的界面时授予，点页内按钮拿不到）。<b>不含任何创作者后台域名</b>。回传本身不依赖主机权限，走服务端 CORS + 令牌头，令牌只授权「向本工作区订阅的竞对补充公开数据」。
+            </span>
+          </div>
+          <div className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
+            <span style={{ color: 'var(--green)', flexShrink: 0 }}><Icon.check size={16} /></span>
+            <span className="small" style={{ lineHeight: 1.7 }}>
+              <b>他人/竞对：只采各平台已公开发布的账号与作品信息</b>，不碰任何非公开数据。<b>你自己的作品另算</b>：在你本人已登录的创作者后台里，插件会读你自己作品的表现数字（含公开页拿不到的完播率/完读率）——那是你自己的数据，只回传到你自己的工作区。两种情况都<b>不托管、不上传任何平台凭证</b>。若你是被监控账号主体，可
+              <a href="/legal/data-request" target="_blank" style={{ color: 'var(--brand)', fontWeight: 600 }}>申请移除监控 →</a>
+            </span>
+          </div>
+        </div>
+      </Fold>
+
+      <Fold title="数据源机制" sub="双源冗余保障，高稳定性采集保障" note={<span className="small muted">看一次就够</span>}>
+          <div className="stack" style={{ gap: 10 }}>
+          <div className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
+            <span style={{ color: 'var(--brand)', flexShrink: 0 }}><Icon.sparkles size={16} /></span>
+            <span className="small" style={{ lineHeight: 1.7 }}>
+              <b>开源自建为主</b>：热榜聚合与基础公开数据优先走<b>自建 DailyHotApi 实例</b>，性能轻量稳定，对第三方商业依赖极低。
+            </span>
+          </div>
+          <div className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
+            <span style={{ color: 'var(--brand)', flexShrink: 0 }}><Icon.sparkles size={16} /></span>
+            <span className="small" style={{ lineHeight: 1.7 }}>
+              <b>商业 API 兜底</b>：如小红书、抖音等风控极严的公开页面，提供<b>商业数据源（如 TikHub/天行等）作为熔断备份通道</b>。
+            </span>
+          </div>
+          <div className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
+            <span style={{ color: 'var(--brand)', flexShrink: 0 }}><Icon.sparkles size={16} /></span>
+            <span className="small" style={{ lineHeight: 1.7 }}>
+              <b>双源冗余切换</b>：系统将实时监测主通道风控阻断状态。一旦开源接口失效，将<b>自动在秒级切入备份通道</b>，双源冗余不削弱。
+            </span>
+          </div>
+        </div>
+      </Fold>
+
     </>
   );
 }

@@ -80,7 +80,8 @@ describe('守卫2 · 订阅关系（全局档案防污染）', () => {
 
 describe('守卫3 · 形状校验（zod）', () => {
   it('未知平台拒绝；posts 超 50 条拒绝', () => {
-    expect(ingestPayloadSchema.safeParse({ platform: 'kuaishou', handle: 'x', posts: [] }).success).toBe(false);
+    // 'kuaishou' 2026-08-19 进了 PLATFORMS，不再是未知平台；举例改用确实不存在的 key
+    expect(ingestPayloadSchema.safeParse({ platform: 'douban', handle: 'x', posts: [] }).success).toBe(false);
     const posts = Array.from({ length: 51 }, (_, i) => ({ platformItemId: String(i), title: 't' }));
     expect(ingestPayloadSchema.safeParse({ platform: 'douyin', handle: 'x', posts }).success).toBe(false);
   });

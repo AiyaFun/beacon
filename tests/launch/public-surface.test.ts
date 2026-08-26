@@ -30,6 +30,17 @@ describe('未登录可达的公开路径', () => {
     }
   });
 
+  it('技能市场的目录免登可读——整机版取它时按定义没有本站会话', () => {
+    // 这条是真机验证抓出来的：目录放进 public/ 就以为能访问了，
+    // 结果中间件把它 307 到了登录页。而取目录的客户端里有一类是整机版：
+    // 客户那台机器连的是自己的服务端、目录指向官网，它没有本站的 cookie。
+    // 拦了就等于市场只对已登录用户存在，整机版装完永远是个离线快照。
+    for (const p of ['/market/index.json', '/market/packs/x.json']) {
+      const res = middleware(req(p));
+      expect(res.headers.get('location'), `${p} 不该被跳转`).toBeNull();
+    }
+  });
+
   it('受保护页面仍然跳登录（放行不等于全站敞开）', () => {
     const res = middleware(req('/studio'));
     expect(res.headers.get('location')).toContain('/login');

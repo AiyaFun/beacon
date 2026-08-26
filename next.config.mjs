@@ -10,6 +10,15 @@ const nextConfig = {
   output: 'standalone',
   // Prisma 引擎在服务端外置，避免被打进 serverless bundle
   serverExternalPackages: ['@prisma/client', 'prisma', 'bullmq', 'ioredis'],
+  // 2026-08-25 定选题三合一：/inspiration 与 /advisor 并进 /topics。老地址必须**永久**保留重定向——
+  // 机器人推送里已持久化 beaconUrl('/inspiration') 链接（lib/bot/router.ts 存档回执），用户书签同理。
+  // 用 redirects() 而不是留桩 page.tsx：孤儿页守卫会把无侧栏入口的 page.tsx 判红。
+  async redirects() {
+    return [
+      { source: '/inspiration', destination: '/topics?view=inspiration', permanent: false },
+      { source: '/advisor', destination: '/topics?view=advisor', permanent: false },
+    ];
+  },
   eslint: { ignoreDuringBuilds: true },
   typescript: { ignoreBuildErrors: false },
 };

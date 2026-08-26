@@ -126,7 +126,7 @@ describe('schema 闸门在真实调用路径上 · LLM 返回垃圾时不进库'
       tone: '接地气，像朋友聊天',
       canDo: ['工具实测', '流程拆解'],
       cantDo: ['承诺收入', '荐股'],
-      platforms: ['抖音', '快手'], // 快手不在白名单
+      platforms: ['抖音', '豆瓣'], // 豆瓣不在白名单（快手 2026-08-19 已进白名单，不能再拿它举例）
     }));
     const r = await actExpandPersona(SENTENCE, answers());
     spy.mockRestore();
@@ -195,7 +195,7 @@ describe('保存路径 · 入库前最后一道清洗', () => {
   it('脏数据从保存口也进不来：平台白名单 + 长度截断', async () => {
     await actSavePersona(JSON.stringify({
       identity: '啊'.repeat(500),
-      platforms: ['douyin', '快手', '<script>alert(1)</script>'],
+      platforms: ['douyin', '豆瓣', '<script>alert(1)</script>'],
       canDo: Array.from({ length: 50 }, (_, i) => `条${i}`),
     }));
     const acc = await prisma.creatorAccount.findUnique({ where: { id: 'a1' } });

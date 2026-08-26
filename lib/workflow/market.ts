@@ -20,15 +20,34 @@ export type TemplateSummary = {
   category: string;
   isBuiltin: boolean;
   installed: boolean;
+  /** 职责说明：什么时候该派它上。空串 = 没写，AI 不会主动派它 */
+  persona: string;
+  /** 跑之前得先有什么。空串 = 装上就能直接跑 */
+  requires: string;
   steps: WorkflowStep[];
   stepLabels: string[];
   /** 跑一次会花钱的步数（界面上先把账说清楚） */
   costlySteps: number;
+  /** pipeline（步骤定死）| autonomous（给它目标，自己安排怎么做） */
+  mode: string;
+  /** 自主型的配置（JSON，见 lib/agent/autonomous.ts）。流水线型为 null */
+  agentConfig: string | null;
 };
 
 /**
  * 内置模板落库（幂等）。**在读的时候顺手做**，不依赖任何一次性种子脚本——
  * 生产库不会跑 prisma/seed.ts，靠脚本的话新装的实例就是一个空市场。
+ *
+ * 【每个读路径都该调它，别怕成本】三次 upsert 是几毫秒，而调用方
+ *（页面渲染、AI 工具）本身动辄几十毫秒到几秒。不调的代价才是真的：
+ * 2026-08-19 给内置模板补 persona 之后，只有 /workflows 页会同步，
+ * AI 的 list_agents 在有人访问过那一页之前一直读到空职责——它一个内置智能体
+ * 都派不动，而且不报错。
+ *
+ * 【曾经加过进程内「已同步」标记，撤了】收益是省掉那三次 upsert，代价是
+ * 一个隐藏的跨调用状态：测试 beforeEach 清库之后标记还在，于是从第二个用例起
+ * 内置模板永远不再落库（tests/workflow/market.test.ts 当场变红）。
+ * 为几毫秒引入这种耦合不划算——真要优化，优化的是调用频率，不是给函数加记忆。
  */
 export async function ensureBuiltinTemplates(): Promise<void> {
   for (const w of BUILTIN_WORKFLOWS) {
@@ -41,13 +60,22 @@ export async function ensureBuiltinTemplates(): Promise<void> {
           description: w.description,
           emoji: w.emoji,
           category: w.category,
+          persona: w.persona,
+          requires: w.requires ?? '',
           steps: toJson(w.steps),
           isBuiltin: true,
           tenantId: null,
         },
         // 内置模板的步骤以代码为准：用户改不了内置模板（要改就复制一份成自建的），
         // 所以这里覆盖是安全的，且能让下一版内置模板自动生效。
-        update: { name: w.name, description: w.description, emoji: w.emoji, steps: toJson(w.steps) },
+        // persona 也要进 update：只写 create 的话，**已经存在**的内置模板永远补不上职责
+        // ——而所有现存部署的内置模板都是在加这个字段之前建的
+        // requires 也要进 update：只写 create 的话，**已经存在**的内置模板永远补不上前置条件
+        //（与 persona 当初栽的是同一个跟头）
+        update: {
+          name: w.name, description: w.description, emoji: w.emoji,
+          persona: w.persona, requires: w.requires ?? '', steps: toJson(w.steps),
+        },
       });
     } catch (err) {
       log.warn('内置模板落库失败', { slug: w.slug, error: (err as Error).message });
@@ -76,11 +104,15 @@ export async function listTemplates(tenantId: string): Promise<TemplateSummary[]
       emoji: r.emoji,
       category: r.category,
       isBuiltin: r.isBuiltin,
+      persona: r.persona,
+      requires: r.requires,
       // 自建模板天然可用（是自己建的），内置的要装
       installed: r.isBuiltin ? installed.has(r.id) : true,
       steps,
       stepLabels: steps.map(stepLabel),
       costlySteps: steps.filter(stepCostly).length,
+      mode: r.mode,
+      agentConfig: r.agentConfig,
     };
   });
 }
@@ -108,6 +140,8 @@ export type CreateTemplateInput = {
   description?: string;
   emoji?: string;
   category?: string;
+  /** 职责说明：什么时候该派它上。写了 AI 才会在对话里主动派它 */
+  persona?: string;
   steps: unknown;
 };
 
@@ -140,6 +174,9 @@ export async function createTemplate(
       slug,
       name,
       description: (input.description ?? '').slice(0, 200),
+      // 职责说明会进模型上下文（AI 靠它决定派谁），截断而不是打回——
+      // 用户写长了不该整个创建失败，那是「截断不打回」那条规矩
+      persona: (input.persona ?? '').slice(0, 300),
       emoji: (input.emoji ?? '🧩').slice(0, 4),
       category: (input.category ?? 'custom').slice(0, 20),
       steps: toJson(parsed.data),
@@ -148,6 +185,32 @@ export async function createTemplate(
     },
   });
   return { ok: true, id: row.id };
+}
+
+/**
+ * 给智能体写职责说明：什么时候该派它上。
+ *
+ * **内置模板也允许改**（不像删除只限自建）：内置的职责是平台写的通用说法，
+ * 而「什么时候该派它」高度依赖这个团队自己的活法。改动只落在这个租户的那一行吗？
+ * ——不，内置模板是全租户共用一行，所以这里**只允许改自建的**。
+ * 内置的想改，先「另存为自己的」再改（导出/导入已有这条路）。
+ */
+export async function setTemplatePersona(
+  tenantId: string,
+  templateId: string,
+  persona: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const t = await prisma.workflowTemplate.findUnique({ where: { id: templateId }, select: { tenantId: true, isBuiltin: true } });
+  if (!t) return { ok: false, error: '智能体不存在' };
+  if (t.isBuiltin || t.tenantId !== tenantId) {
+    return { ok: false, error: '内置智能体的职责由平台维护；想改成你团队的说法，先导出成自己的再改' };
+  }
+  await prisma.workflowTemplate.update({
+    where: { id: templateId },
+    // 截断不打回：写长了不该整个保存失败
+    data: { persona: persona.trim().slice(0, 300) },
+  });
+  return { ok: true };
 }
 
 export async function deleteTemplate(tenantId: string, templateId: string): Promise<{ ok: boolean; error?: string }> {
@@ -197,4 +260,38 @@ export async function importTemplate(
     category: data.category,
     steps: data.steps,
   });
+}
+
+/**
+ * 建人设时把内置智能体装上。
+ *
+ * 【为什么要有这个】技能一直有预装（lib/skills 的 preinstallSkillsForPlatforms，
+ * 建人设时按主战平台装上），智能体却没有——两边口径不对称，而后果是单向的：
+ * 全库 WorkflowInstall 一行都没有，也就是说**没有任何租户装过智能体**。
+ * 于是产品自带的三条开箱即用模板，对每一个用户都是「看得见、用不上」，
+ * 而 AI 的 list_agents 只列已装的，它会永远回答「这个团队还没装任何智能体」。
+ *
+ * 【装 ≠ 跑，所以这件事是安全的】安装只是让它出现在可派清单里，一分钱都不花。
+ * 真正花钱的是用户点「跑一遍」或 AI 派活（那一步另有确认闸）。
+ *
+ * 【只在「一条都没装过」时做】与技能预装同一条判据：用户手工卸载过之后，
+ * 不该在他下次改人设时又给装回来——那是替他做决定。
+ */
+export async function preinstallBuiltinTemplates(tenantId: string): Promise<number> {
+  const already = await prisma.workflowInstall.count({ where: { tenantId } });
+  if (already > 0) return 0;
+
+  await ensureBuiltinTemplates();
+  const rows = await prisma.workflowTemplate.findMany({
+    where: { isBuiltin: true, enabled: true },
+    select: { id: true },
+  });
+  if (rows.length === 0) return 0;
+
+  // 不用 skipDuplicates：上面的 already>0 已经保证这个租户一条安装记录都没有
+  //（而且 sqlite 不支持这个参数，写了本地就跑不起来——与技能预装同一个坑）
+  await prisma.workflowInstall.createMany({
+    data: rows.map((r) => ({ tenantId, templateId: r.id, enabled: true })),
+  });
+  return rows.length;
 }

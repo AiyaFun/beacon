@@ -1,0 +1,14 @@
+-- 16 · 成员记住自己选的界面外壳（2026-08-20）
+--
+-- 【为什么要落库，cookie 不够】外壳是「按阶段排」还是「按我要什么排」，这是用户对
+-- 整个产品长什么样的选择。只存 cookie 的话，那其实是「这台机器这个浏览器的默认」——
+-- 换台电脑、换个浏览器、清一次缓存，用户就被拉回他没选的那一套，而他多半以为
+-- 设置丢了或者功能没了。
+--
+-- 读的次序是 cookie → 这一列 → DEFAULT_SHELL（见 lib/shell-server.ts 的 currentShell）：
+-- cookie 在最前面是为了切换当场生效，不等一次落库往返。
+--
+-- 可空、无默认：NULL 表示「还没选过」，与「选了工作台」是两件事——
+-- 写死 DEFAULT 'workbench' 的话，将来改默认值就再也影响不到任何存量用户了。
+-- 幂等：IF NOT EXISTS。
+ALTER TABLE "Member" ADD COLUMN IF NOT EXISTS "shellMode" TEXT;

@@ -126,7 +126,12 @@ describe('🔒 页面不许把算不出来的比率渲染成 0.0%', () => {
   });
 
   it('竞对榜：源码里要有「算不出来就显示占位」的处理', () => {
-    expect(TOP).toContain('NA_TEXT');
+    // 【别只验这个常量名还在】NA_TEXT 在这个文件里有八处。把播放量那一格换回无条件
+    // fmtNum（也就是「缺席被印成 0」——这一组用例存在的全部理由），其余七处照样让它绿。
+    // 要断就断在三处兜底分支各自的形状上。
+    expect(TOP, '播放量缺席时没兜底').toMatch(/p\.views > 0 \? fmtNum\(p\.views\) :[\s\S]{0,120}NA_TEXT/);
+    expect(TOP, '单项指标缺席时没兜底').toMatch(/has \? fmtNum\(v\) :[\s\S]{0,120}NA_TEXT/);
+    expect(TOP, '互动率算不出来时没兜底').toMatch(/pctOrNull\(p\.rate\) \?\?[\s\S]{0,120}NA_TEXT/);
   });
 
   it('竞对页平均互动率：只对算得出来的作品求均值', () => {

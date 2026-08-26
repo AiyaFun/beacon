@@ -25,7 +25,7 @@ export async function accountInventory(tx: TxClient, accountId: string): Promise
   const [
     topics, drafts, publishes, ownPosts, dailyStats, audience,
     materials, memories, reviews, advisorSessions, advisorPersonas,
-    personaVersions, inspirations, readerComments, mediaAssets, notifications, runs,
+    personaVersions, inspirations, readerComments, mediaAssets, notifications, runs, schedules,
   ] = await Promise.all([
     tx.topicIdea.count({ where: byAccount }),
     tx.draft.count({ where: byAccount }),
@@ -44,6 +44,9 @@ export async function accountInventory(tx: TxClient, accountId: string): Promise
     tx.mediaAsset.count({ where: byAccount }),
     tx.notification.count({ where: byAccount }),
     tx.collectionRun.count({ where: { scope: 'self', targetId: accountId } }),
+    // 清单是删除确认页上给用户看的那份「会连带什么」。定时智能体不列出来的话，
+    // 用户删完才发现「每天 9 点那条计划怎么没了」——而那是他自己配的、最有存在感的东西之一
+    tx.scheduledAgent.count({ where: byAccount }),
   ]);
   return [
     { key: 'topicIdea', label: '选题', count: topics },
@@ -63,6 +66,7 @@ export async function accountInventory(tx: TxClient, accountId: string): Promise
     { key: 'mediaAsset', label: '封面与形象素材', count: mediaAssets },
     { key: 'notification', label: '通知', count: notifications },
     { key: 'collectionRun', label: '采集台账', count: runs },
+    { key: 'scheduledAgent', label: '定时智能体', count: schedules },
   ];
 }
 
@@ -233,6 +237,12 @@ export async function mergeAccounts(
   addMoved('群绑定', (await tx.botConversation.updateMany({ where: { accountId: sourceId }, data: { accountId: targetId } })).count);
   // 采集台账：targetId 搬，targetName 保持采集当时的快照（台账是「什么时候采了谁」的凭证，不能事后改写）
   addMoved('采集台账', (await tx.collectionRun.updateMany({ where: { scope: 'self', targetId: sourceId }, data: { targetId } })).count);
+  // 定时智能体：**搬**（删账号那条路是删掉，这里不一样）。合并的语义是「这两条本来就是同一个号」，
+  // 用户配好的「每天 9 点跑」不该因为合并而消失。accountId 没有外键，不搬就是每天用一个
+  // 已删除的 id 去干活——**还在动的**僵尸行。
+  addMoved('定时智能体', (await tx.scheduledAgent.updateMany({ where: { accountId: sourceId }, data: { accountId: targetId } })).count);
+  // 排队中的浏览器任务跟着搬：合并的语义是「本来就是同一个号」，已派的活不该作废
+  addMoved('浏览器任务', (await tx.browserTask.updateMany({ where: { accountId: sourceId }, data: { accountId: targetId } })).count);
 
   // ── ⑥ 空壳删除。人设版本历史随之而去（见函数头注释）──
   const versions = await tx.personaVersion.count({ where: { accountId: sourceId } });
@@ -291,6 +301,13 @@ export async function deleteAccount(
   // 一张都查不到，却仍占着工作区配额——不是删了，是变成谁都看不见还占地方的僵尸行。
   // 解绑而不是删：形象库是工作区级的素材，用户删的是账号不是他存的那些照片。
   await tx.mediaAsset.updateMany({ where: { accountId }, data: { accountId: null } });
+  // 定时智能体：**删掉，不解绑**。它的语义是「按时替这个账号干活」，账号没了它就没有意义了；
+  // 而 accountId 同样没有外键，留着的话 worker 每天照常把它捡起来跑，
+  // 用一个已删除的账号 id 去建草稿/发布计划——不是僵尸行，是**还在动的**僵尸。
+  await tx.scheduledAgent.deleteMany({ where: { accountId } });
+  // 浏览器任务：accountId 同样没有外键。留着的话插件下次醒来会领到一个
+  // 「去这个已删除账号的后台回填」的活——同 ScheduledAgent，是**还在动的**僵尸
+  await tx.browserTask.deleteMany({ where: { accountId } });
   // 其余（选题/草稿/发布记录/作品/日数据/画像/素材/复盘/智囊团/人设版本）由外键 Cascade 带走
   await tx.creatorAccount.delete({ where: { id: accountId } });
 

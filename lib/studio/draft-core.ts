@@ -66,6 +66,20 @@ export async function resolveDraftTarget(input: {
   accountId: string;
   draftId: string | null;
   topicId?: string;
+  /**
+   * 新建草稿时指定平台。只有**调用方明确知道要写给哪个平台**时才传——
+   * 工作流模板就是这种：「小红书日更三件套」的第一步写死了 xiaohongshu。
+   *
+   * 【不传会怎样】退回人设的主战平台，人设没填就是 douyin。
+   * 这不只是标签错：初稿提示词第一句是「为「抖音」平台创作一篇初稿文案」，
+   * 还会带上抖音的内容形态——于是「小红书日更三件套」的第一步
+   * **写出来的是一篇抖音文案**，第二步再拿小红书排版技能去排它。
+   *
+   * 【为什么不能覆盖已有草稿的平台】用户在创作工坊里把一篇稿子定成公众号，
+   * 工作流不该因为模板写了别的就把它改掉。所以下面的取值顺序是
+   * 「已有草稿 > 调用方指定 > 人设默认」。
+   */
+  platform?: PlatformKey;
 }): Promise<{ ok: true; target: DraftTarget } | { ok: false; error: string }> {
   const account = await prisma.creatorAccount.findUnique({ where: { id: input.accountId } });
   if (!account) return { ok: false, error: '未找到账号' };
@@ -77,7 +91,10 @@ export async function resolveDraftTarget(input: {
 
   let topicTitle = draft?.topic?.title ?? draft?.title ?? '';
   let topicAngle = draft?.topic?.angle ?? '';
-  const platform = (draft?.platform ?? (persona.platforms[0] as PlatformKey | undefined) ?? 'douyin') as PlatformKey;
+  const platform = (draft?.platform ??
+    input.platform ??
+    (persona.platforms[0] as PlatformKey | undefined) ??
+    'douyin') as PlatformKey;
 
   if (!draft) {
     const topic = input.topicId

@@ -56,6 +56,7 @@ describe('RLS 生效路径', () => {
   it('withSession 的事务里不许有 LLM / 嵌入 / 外部抓取（会独占数据库连接）', () => {
     const banned = /(llmComplete|llmCompleteStream|embedText|getEmbedder|safeFetch|upsertMemoryEmbedding)\s*\(/;
     const offenders: string[] = [];
+    let scopes = 0;
     const walk = (dir: string) => {
       for (const name of readdirSync(dir)) {
         const p = join(dir, name);
@@ -68,6 +69,7 @@ describe('RLS 生效路径', () => {
             const window = src.slice(i, i + 2000);
             const end = window.indexOf('\n  });');
             const scope = end > 0 ? window.slice(0, end) : window;
+            scopes++;
             if (banned.test(scope)) offenders.push(`${p.replace(process.cwd() + '/', '')}`);
             i = src.indexOf('withSession(', i + 1);
           }
@@ -76,5 +78,8 @@ describe('RLS 生效路径', () => {
     };
     walk(APP);
     expect(offenders, `这些文件把慢调用写进了 withSession 事务：${offenders.join(', ')}`).toEqual([]);
+    // 【没有这句它可以永远绿】遍历失败、或者 withSession( 这个字面量被改名，
+    // 一个作用域都切不出来时 offenders 恒为空——而那正是这条守卫最该报警的时候。
+    expect(scopes, '一个 withSession 作用域都没切出来，扫描坏了').toBeGreaterThan(5);
   });
 });

@@ -13,6 +13,9 @@ import { VersionHistory, type VersionRow } from './VersionHistory';
 import { AccountManager } from './AccountManager';
 import { StyleAnalyzeButton } from './StyleAnalyzeButton';
 import { OptimizeMemoryButton } from './OptimizeMemoryButton';
+import { PageTabs } from '@/components/PageTabs';
+import { AssetTabs } from '@/components/AssetTabs';
+import { HubHeader } from '@/components/HubHeader';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,8 +28,13 @@ function confColor(c: number): string {
   return 'var(--muted, #94a3b8)';
 }
 
-export default async function PersonaPage() {
+export default async function PersonaPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ [k: string]: string | string[] | undefined }>;
+}) {
   const s = await getSession();
+  const sp = await searchParams; // ?tab=… 深链：通知/其它页面可以直接指到某个页签
   const [account, memories, allAccounts] = await Promise.all([
     s.accountId ? prisma.creatorAccount.findUnique({ where: { id: s.accountId } }) : null,
     // 记忆按账号隔离：当前账号的记忆 + 工作区级共享记忆（accountId 为空）
@@ -99,30 +107,23 @@ export default async function PersonaPage() {
 
   return (
     <>
-      <PageHead
-        title="人设与记忆"
-        desc="记忆越用越懂你的账号；数据只提议，人设你说了算"
+      <HubHeader
+        title="记忆与素材"
+        hint="记忆越用越懂你的账号；数据只提议，人设你说了算"
+        tabs={<AssetTabs active="persona" inline />}
       />
 
-      {/* 多账号管理 */}
-      <Card title="我的账号" sub={`${allAccounts.filter((a) => a.status === 'active').length} 个活跃账号`} style={{ marginBottom: 16 }}>
-        <AccountManager
-          accounts={allAccounts.map((a) => ({
-            id: a.id,
-            name: a.name,
-            platform: a.platform,
-            platformLabel: platformName(a.platform),
-            handle: a.handle,
-            status: a.status,
-            isCurrent: a.id === s.accountId,
-            draftCount: a._count.drafts,
-            publishCount: a._count.publishRecords,
-            personaScore: personaCompleteness(readPersona(a.personaCard)),
-          }))}
-        />
-      </Card>
 
-      {/* 人设卡 */}
+      <PageTabs
+        variant="sub"
+        initial={typeof sp.tab === 'string' ? sp.tab : undefined}
+        tabs={[
+          {
+            key: 'persona',
+            label: '人设',
+            hint: '这个账号是谁、说话什么味道——推荐与初稿都以它为准',
+            node: (
+              <>
       <Card
         title="人设卡"
         sub={account ? account.name : undefined}
@@ -190,6 +191,84 @@ export default async function PersonaPage() {
       </Card>
 
       {/* F3-9 账号成长小结：规则聚合、零 LLM 成本，支撑试用留存 */}
+              </>
+            ),
+          },
+          {
+            key: 'memory',
+            label: '记忆',
+            hint: '系统从你的修改与数据里记住的东西：记住了什么、这周新记了什么、怎么优化',
+            node: (
+              <>
+      <Card
+        title="长期记忆"
+        sub={`共 ${memories.length} 条 · ${activeCount} 条已生效`}
+      >
+        <p className="small muted" style={{ marginTop: -6, marginBottom: 14 }}>
+          全程可见、可编辑、可删除。按置信度分级注入；推断类记忆需同类行为累计多次才会「生效」，单次观察只记录、不影响推荐。
+        </p>
+
+        {memories.length === 0 ? (
+          <Empty icon="🧠" text="还没有记忆——采纳/拒绝选题、改稿、登记数据都会沉淀成记忆" />
+        ) : (
+          <div className="stack" style={{ gap: 18 }}>
+            {memoryTypeKeys.map((k) => {
+              const list = grouped.get(k) ?? [];
+              const meta = MEMORY_TYPES[k];
+              return (
+                <div key={k}>
+                  <div className="row" style={{ gap: 8, marginBottom: 8, alignItems: 'baseline' }}>
+                    <b className="small">{meta.name}</b>
+                    <span className="small muted">{meta.desc}</span>
+                    <span className="badge badge-gray">{list.length}</span>
+                  </div>
+                  {list.length === 0 ? (
+                    <div className="small muted" style={{ paddingLeft: 2 }}>暂无</div>
+                  ) : (
+                    <div className="stack" style={{ gap: 8 }}>
+                      {list.map((m) => (
+                        <div
+                          key={m.id}
+                          className="card"
+                          style={{
+                            padding: 12,
+                            boxShadow: 'none',
+                            background: 'var(--surface-2)',
+                            opacity: m.active ? 1 : 0.62,
+                          }}
+                        >
+                          <div className="row-between" style={{ alignItems: 'flex-start', gap: 10 }}>
+                            <div style={{ flex: 1 }}>
+                              <div className="row" style={{ gap: 8, alignItems: 'center', marginBottom: 6 }}>
+                                <span className={`dot ${m.active ? 'dot-green' : 'dot-amber'}`} />
+                                {m.active ? (
+                                  <span className="badge badge-green">已生效</span>
+                                ) : (
+                                  <span className="badge badge-gray">观察中，未生效</span>
+                                )}
+                                <span className="small muted">命中 {m.hitCount} 次</span>
+                                <span className="small muted">· {relTime(m.updatedAt)}</span>
+                              </div>
+                            </div>
+                          </div>
+                          <MemoryEditor id={m.id} content={m.content} />
+                          <div className="row" style={{ gap: 8, alignItems: 'center', marginTop: 10 }}>
+                            <span className="small muted" style={{ minWidth: 44 }}>置信度</span>
+                            <div style={{ flex: 1, maxWidth: 180 }}>
+                              <Meter value={m.confidence} max={1} color={confColor(m.confidence)} />
+                            </div>
+                            <span className="small mono">{Math.round(m.confidence * 100)}%</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Card>
       <Card
         title="账号成长小结"
         sub={`本周系统新记住 ${memThisWeek} 件事 · 规则聚合，不烧 AI 额度`}
@@ -269,75 +348,40 @@ export default async function PersonaPage() {
       </Card>
 
       {/* 长期记忆 */}
-      <Card
-        title="长期记忆"
-        sub={`共 ${memories.length} 条 · ${activeCount} 条已生效`}
-      >
-        <p className="small muted" style={{ marginTop: -6, marginBottom: 14 }}>
-          全程可见、可编辑、可删除。按置信度分级注入；推断类记忆需同类行为累计多次才会「生效」，单次观察只记录、不影响推荐。
-        </p>
-
-        {memories.length === 0 ? (
-          <Empty icon="🧠" text="还没有记忆——采纳/拒绝选题、改稿、登记数据都会沉淀成记忆" />
-        ) : (
-          <div className="stack" style={{ gap: 18 }}>
-            {memoryTypeKeys.map((k) => {
-              const list = grouped.get(k) ?? [];
-              const meta = MEMORY_TYPES[k];
-              return (
-                <div key={k}>
-                  <div className="row" style={{ gap: 8, marginBottom: 8, alignItems: 'baseline' }}>
-                    <b className="small">{meta.name}</b>
-                    <span className="small muted">{meta.desc}</span>
-                    <span className="badge badge-gray">{list.length}</span>
-                  </div>
-                  {list.length === 0 ? (
-                    <div className="small muted" style={{ paddingLeft: 2 }}>暂无</div>
-                  ) : (
-                    <div className="stack" style={{ gap: 8 }}>
-                      {list.map((m) => (
-                        <div
-                          key={m.id}
-                          className="card"
-                          style={{
-                            padding: 12,
-                            boxShadow: 'none',
-                            background: 'var(--surface-2)',
-                            opacity: m.active ? 1 : 0.62,
-                          }}
-                        >
-                          <div className="row-between" style={{ alignItems: 'flex-start', gap: 10 }}>
-                            <div style={{ flex: 1 }}>
-                              <div className="row" style={{ gap: 8, alignItems: 'center', marginBottom: 6 }}>
-                                <span className={`dot ${m.active ? 'dot-green' : 'dot-amber'}`} />
-                                {m.active ? (
-                                  <span className="badge badge-green">已生效</span>
-                                ) : (
-                                  <span className="badge badge-gray">观察中，未生效</span>
-                                )}
-                                <span className="small muted">命中 {m.hitCount} 次</span>
-                                <span className="small muted">· {relTime(m.updatedAt)}</span>
-                              </div>
-                            </div>
-                          </div>
-                          <MemoryEditor id={m.id} content={m.content} />
-                          <div className="row" style={{ gap: 8, alignItems: 'center', marginTop: 10 }}>
-                            <span className="small muted" style={{ minWidth: 44 }}>置信度</span>
-                            <div style={{ flex: 1, maxWidth: 180 }}>
-                              <Meter value={m.confidence} max={1} color={confColor(m.confidence)} />
-                            </div>
-                            <span className="small mono">{Math.round(m.confidence * 100)}%</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
+              </>
+            ),
+          },
+          {
+            key: 'accounts',
+            label: '账号管理',
+            hint: '这个工作区里的创作账号：新建、切换、合并、归档',
+            node: (
+              <>
+      {/* 多账号管理 */}
+      <Card title="我的账号" sub={`${allAccounts.filter((a) => a.status === 'active').length} 个活跃账号`} style={{ marginBottom: 16 }}>
+        <AccountManager
+          accounts={allAccounts.map((a) => ({
+            id: a.id,
+            name: a.name,
+            platform: a.platform,
+            platformLabel: platformName(a.platform),
+            handle: a.handle,
+            status: a.status,
+            isCurrent: a.id === s.accountId,
+            draftCount: a._count.drafts,
+            publishCount: a._count.publishRecords,
+            personaScore: personaCompleteness(readPersona(a.personaCard)),
+          }))}
+        />
       </Card>
+
+      {/* 人设卡 */}
+              </>
+            ),
+          },
+        ]}
+      />
+
     </>
   );
 }

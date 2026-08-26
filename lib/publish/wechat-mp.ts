@@ -34,7 +34,7 @@ function humanizeWxError(errcode: number | undefined, errmsg: string | undefined
       return '公众号拒绝了这次调用：服务器 IP 不在白名单里。到公众号后台「设置与开发 → 基本配置 → IP 白名单」把服务器出口 IP 加进去。';
     case 40001:
     case 40125:
-      return 'AppSecret 不对（或刚重置过）。到公众号后台重新复制一次，在「设置 · 发布通道」更新。';
+      return 'AppSecret 不对（或刚重置过）。到公众号后台重新复制一次，在「接入与密钥 · 发布通道」更新。';
     case 40013:
       return 'AppID 不对，检查是不是填成了开放平台/小程序的 AppID。';
     case 45009:
@@ -141,7 +141,7 @@ export async function publishToWechat(input: WxPublishInput): Promise<WxResult<W
     where: { accountId_platform: { accountId: input.accountId, platform: 'wechat' } },
   });
   if (!cred) {
-    return { ok: false, error: '这个账号还没配置公众号接口凭证。到「设置 · 发布通道」填 AppID / AppSecret。' };
+    return { ok: false, error: '这个账号还没配置公众号接口凭证。到「接入与密钥 · 发布通道」填 AppID / AppSecret。' };
   }
   const secret = decryptKey(cred.appSecretEnc);
   const tokenRes = await wxAccessToken(cred.appId, secret);

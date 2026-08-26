@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "烽火台采集助手",
-  "version": "0.9.4",
+  "version": "0.9.8",
   "description": "烽火台 AI 智能采集助手：竞对公开数据自动采集回传、全站 AI 爆款拆解与选题灵感、网页侧栏与 SidePanel 控制台。",
   "permissions": [
     "storage",
@@ -147,6 +147,7 @@
         "<all_urls>"
       ],
       "js": [
+        "content/read-allowlist.js",
         "content/common.js",
         "content/sidebar.js"
       ],
@@ -165,6 +166,18 @@
         "content/bridge.js"
       ],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://zhuanlan.zhihu.com/*",
+        "https://www.zhihu.com/creator*",
+        "https://mp.toutiao.com/*",
+        "https://baijiahao.baidu.com/builder/*",
+        "https://cp.kuaishou.com/*"
+      ],
+      "js": [
+        "content/publish-fill.js"
+      ]
     }
   ]
 }

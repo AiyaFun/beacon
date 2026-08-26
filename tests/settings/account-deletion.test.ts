@@ -113,6 +113,31 @@ describe('executeAccountDeletion（所有者注销）', () => {
     expect(await prisma.authSession.count({ where: { memberId: owner.id } })).toBe(0);
   });
 
+  it('自建智能体与定时计划也要随注销消失——内置模板（全局行）不能被连累', async () => {
+    const { tenant, workspace, owner, account } = await seedTenant();
+    // 内置模板：tenantId=null 的全局行，全租户共用，注销**不许**动它
+    const builtin = await prisma.workflowTemplate.create({
+      data: { slug: `builtin-${tenant.id}`, name: '内置', steps: '[]', isBuiltin: true, tenantId: null },
+    });
+    const own = await prisma.workflowTemplate.create({
+      data: { tenantId: tenant.id, slug: `own-${tenant.id}`, name: '我建的', steps: '[]', isBuiltin: false },
+    });
+    await prisma.workflowInstall.create({ data: { tenantId: tenant.id, templateId: builtin.id } });
+    await prisma.scheduledAgent.create({
+      data: { workspaceId: workspace.id, accountId: account.id, templateId: own.id, createdBy: owner.id },
+    });
+
+    const r = await executeAccountDeletion({ memberId: owner.id, tenantId: tenant.id, role: 'owner' });
+    expect(r.ok).toBe(true);
+
+    // WorkflowTemplate / WorkflowInstall 的租户外键此前**漏了**，没有它这两条会留成孤儿行
+    expect(await prisma.workflowTemplate.count({ where: { id: own.id } })).toBe(0);
+    expect(await prisma.workflowInstall.count({ where: { tenantId: tenant.id } })).toBe(0);
+    expect(await prisma.scheduledAgent.count({ where: { workspaceId: workspace.id } })).toBe(0);
+    // 全局行还在：删一个租户不该把别人的内置模板带走
+    expect(await prisma.workflowTemplate.count({ where: { id: builtin.id } })).toBe(1);
+  });
+
   it('凭证即时销毁：BYOK 密钥与机器人密钥一并消失', async () => {
     const { tenant, workspace, owner } = await seedTenant();
     await executeAccountDeletion({ memberId: owner.id, tenantId: tenant.id, role: 'owner' });
@@ -218,6 +243,38 @@ describe('buildAccountExport（全量导出）', () => {
     expect((accounts[0].materials as unknown[])).toHaveLength(1);
     expect((bundle.memories as unknown[])).toHaveLength(1);
     expect((bundle.payments as unknown[])).toHaveLength(1);
+  });
+
+  it('用户自己攒的智能体与定时计划要能带走——不然「可携带」就是半句话', async () => {
+    const { tenant, workspace, owner, account } = await seedTenant();
+    const t = await prisma.workflowTemplate.create({
+      data: {
+        tenantId: tenant.id,
+        slug: `own-${tenant.id}`,
+        name: '我的日更流水线',
+        persona: '每天早上派我写小红书',
+        steps: '[{"kind":"topic","count":3}]',
+        isBuiltin: false,
+      },
+    });
+    await prisma.workflowInstall.create({ data: { tenantId: tenant.id, templateId: t.id } });
+    await prisma.scheduledAgent.create({
+      data: { workspaceId: workspace.id, accountId: account.id, templateId: t.id, atHour: 7, atMinute: 30, createdBy: owner.id },
+    });
+
+    const bundle = await buildAccountExport({ tenantId: tenant.id, memberId: owner.id });
+    const agents = bundle.agents as { custom: Record<string, unknown>[]; installs: unknown[]; schedules: Record<string, unknown>[] };
+
+    // 这三条同时钉住了 Promise.all 的**解构顺序**：错位的话拿到的会是别的表的行，
+    // 而 tsc 看不出来（几张表的形状都能过类型）
+    expect(agents.custom).toHaveLength(1);
+    expect(agents.custom[0].name).toBe('我的日更流水线');
+    expect(agents.custom[0].persona).toContain('每天早上');
+    expect(agents.custom[0].steps).toContain('topic');
+    expect(agents.installs).toHaveLength(1);
+    expect(agents.schedules).toHaveLength(1);
+    expect(agents.schedules[0].atHour).toBe(7);
+    expect(agents.schedules[0].atMinute).toBe(30);
   });
 
   it('凭证类字段一个都不出现在导出包里', async () => {

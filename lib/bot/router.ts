@@ -196,7 +196,7 @@ export function describeClip(r: Awaited<ReturnType<typeof import('../clip').clip
     r.points.length ? `【${isRival ? '它凭什么跑起来' : '要点'}】\n${r.points.map((p, i) => `${i + 1}. ${p}`).join('\n')}` : '',
     r.analysis ? `【${r.accountName ? `「${r.accountName}」` : '你'}${isRival ? '能借鉴什么' : '的用处'}】${r.analysis}` : '',
     r.degraded ? '\n⚠️ AI 当前降级，上面这段是示例文本，别当结论用。' : '',
-    `\n原文 ${r.chars} 字已存档 → ${beaconUrl('/inspiration')}`,
+    `\n原文 ${r.chars} 字已存档 → ${beaconUrl('/topics?view=inspiration')}`,
     '（存的是他人作品，仅供你分析参考，别直接复用其文字）',
   ];
   return lines.filter(Boolean).join('\n');
@@ -255,7 +255,7 @@ async function cmdCompetitor(workspaceId: string, name: string): Promise<string>
 async function cmdOptimize(workspaceId: string): Promise<string> {
   const { optimizeWorkspaceMemory } = await import('../memory/optimize');
   const r = await optimizeWorkspaceMemory(workspaceId);
-  return `🧠 记忆优化完成：\n${r.summaryText}\n人设与记忆 → ${beaconUrl('/persona')}`;
+  return `🧠 记忆优化完成：\n${r.summaryText}\n人设与记忆 → ${beaconUrl('/persona?tab=memory')}`;
 }
 
 // /分析 [账号名]：账号体检。归属必须在回执里说清楚——群里没人知道机器人心里选了哪个号。

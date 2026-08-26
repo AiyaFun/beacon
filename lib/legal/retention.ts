@@ -1,4 +1,5 @@
 import { prisma } from '../db';
+import { expireStaleTasks } from '../browser-task';
 import { purgeExpiredCovers } from '../media/store';
 import { purgeExpiredComments } from '../ingest/reader-comments';
 import { pruneStaleQuestions } from '../ingest/comment-questions';
@@ -33,6 +34,22 @@ import { purgeRemovedAccountData, type PurgeResult } from './removal';
  */
 export const ORPHANED_LLM_LOG_RETENTION_DAYS = 190;
 
+/**
+ * AI 执行 / 工作流的运行记录留多久。
+ *
+ * 【为什么要有】AgentRun 存的是整段对话（含工具返回的结构化数据），AgentStep 一步一行，
+ * WorkflowRun 存每步日志。它们此前**没有任何清理路径**——只增不减。
+ * 手动跑的时候增长还算温和；2026-08-19 加了定时智能体之后，一个工作区可以
+ * 每天自动产生 5 条（MAX_RUNS_PER_DAY），一年就是 1800 多条，而且没人会回头看半年前的。
+ *
+ * 【为什么是 90 天而不是更短】运行中心与「最近运行」列表本身只看最近几条，
+ * 但用户排查「上个月那次为什么失败」是真实需求。取与读者原声同一档（90 天），
+ * 少一个需要记的数字。
+ *
+ * AgentStep 靠 AgentRun 的外键 Cascade 带走，不用单独扫。
+ */
+export const RUN_LOG_RETENTION_DAYS = 90;
+
 export type RetentionSweep = {
   /** 到期物理删除的读者原声正文条数（ReaderComment） */
   readerComments: number;
@@ -42,6 +59,10 @@ export type RetentionSweep = {
   commentQuestions: { archived: number; deleted: number };
   /** 注销时摘了租户归属、且已过法定留存期的生成日志 */
   orphanedLlmLogs: number;
+  /** 到期删除的运行记录（AI 执行 / 工作流；AgentStep 随外键级联） */
+  runLogs: { agentRuns: number; workflowRuns: number; staleQueued: number };
+  /** 浏览器任务：标记为过期的 / 到期清掉的 */
+  browserTasks: { expired: number; purged: number };
   /** 已核验移除申请的重扫：扫了几条申请，以及这一趟补删掉了什么 */
   removals: { swept: number; purged: PurgeResult };
   /**
@@ -89,6 +110,48 @@ export async function sweepRetention(): Promise<RetentionSweep> {
     return r.count;
   }, 0);
 
+  // ③.5 运行记录到期清理。只增不减的表迟早会变成库里最大的那张——
+  //      定时智能体让它从「用户点一次涨一条」变成「每天自动涨几条」。
+  const runLogs = await step(
+    'run_logs',
+    async () => {
+      const cutoff = new Date(Date.now() - RUN_LOG_RETENTION_DAYS * 86_400_000);
+      // 只删**已经结束**的：running / awaiting_confirm 那些还等着用户回来点确认，
+      // 按时间删会把一个还活着的会话从中间截断
+      // 排太久没轮上的先取消掉（queued 不是终态，下面那句 deleteMany 碰不到它——
+      // 一条排在别人后面、而前面那些又都挂了的运行会**永久**占着排队名额）。
+      // 顺序要紧：先取消再删，这样刚被取消的那些下一轮就能被清掉。
+      const { cancelStaleQueued } = await import('../agent/tick');
+      const staleQueued = await cancelStaleQueued();
+
+      const [a, w] = await Promise.all([
+        prisma.agentRun.deleteMany({
+          where: { updatedAt: { lt: cutoff }, status: { in: ['done', 'failed', 'cancelled'] } },
+        }),
+        prisma.workflowRun.deleteMany({
+          where: { updatedAt: { lt: cutoff }, status: { in: ['done', 'failed', 'cancelled'] } },
+        }),
+      ]);
+      return { agentRuns: a.count, workflowRuns: w.count, staleQueued };
+    },
+    { agentRuns: 0, workflowRuns: 0, staleQueued: 0 },
+  );
+
+  // ③.6 浏览器任务：过期的标 expired（不是删——用户要能看见「那次没跑成，因为插件一直没打开」），
+  //      同时把留在库里过久的已结束任务按运行记录同一档清掉。
+  const browserTasks = await step(
+    'browser_tasks',
+    async () => {
+      const expired = await expireStaleTasks();
+      const cutoff = new Date(Date.now() - RUN_LOG_RETENTION_DAYS * 86_400_000);
+      const purged = await prisma.browserTask.deleteMany({
+        where: { updatedAt: { lt: cutoff }, status: { in: ['done', 'failed', 'expired', 'cancelled'] } },
+      });
+      return { expired, purged: purged.count };
+    },
+    { expired: 0, purged: 0 },
+  );
+
   // ④ 已核验移除申请的重扫。resolveRemovalRequest 在流转那一刻已经删过一遍，这是**第二道**：
   //    停采闸只挂在两条竞对通道上（lib/pipeline.ts、lib/ingest/competitor.ts），
   //    评论回传那条（app/api/ingest/questions）没过闸，被移除账号作品下的评论正文仍可能重新写进来。
@@ -114,5 +177,5 @@ export async function sweepRetention(): Promise<RetentionSweep> {
     return { swept: reqs.length, purged };
   }, { swept: 0, purged: { ...EMPTY_PURGE } });
 
-  return { readerComments, covers, commentQuestions, orphanedLlmLogs, removals, errors };
+  return { readerComments, covers, commentQuestions, orphanedLlmLogs, runLogs, browserTasks, removals, errors };
 }

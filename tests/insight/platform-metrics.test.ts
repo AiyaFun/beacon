@@ -126,7 +126,11 @@ describe('🔒 补齐详情：上限、串行、以及不许被下次采集抹�
   });
 
   it('🔒 超出上限的条数必须报出来，不许悄悄截断', () => {
-    expect(SW).toContain('skipped');
+    // 【别只验这个词在文件里出现过】原来这条是 `toContain('skipped')`，而 sw.js 里
+    // `skipped` 出现十几次，**绝大多数属于另一件事**（后端回填响应里的「认出作品但没读到指标」）。
+    // 把这里截断的那几行整个删掉，那些用法照样让它绿。要断就断在这一段的形状上。
+    expect(SW, '没算出被截掉多少条').toMatch(/skipped\s*=\s*all\.length\s*-\s*targets\.length/);
+    expect(SW, '算了却没报给用户——那就是悄悄截断').toMatch(/type: 'detail-done'[^}]*skipped/);
   });
 
   it('页间有等待，且逐条串行（不并发打 20 个页面）', () => {
@@ -172,7 +176,10 @@ describe('🔒 矩阵必须与解析器的真机结论对得上', () => {
   });
 
   it('X 确实采了书签（矩阵里 collects=yes）', () => {
-    expect(X_JS).toContain('bookmark');
+    // 【裸词满足不了这条】原来是 `toContain('bookmark')`，而 x.js 里除了真正读数的选择器，
+    // 还有一份给主页解析器用的词表 `collects: ['bookmark', …]`——
+    // 把真正读数的那一行删掉，词表照样让它绿，而矩阵里 collects 仍然印着 yes。
+    expect(X_JS, '没有真正去读书签按钮上的数').toContain('data-testid="bookmark"');
   });
 
   // ── 'yes' 与 'detail' 的分界必须由主页解析器说了算 ──

@@ -32,7 +32,7 @@ export async function actAddInspiration(input: {
   // （插件回传没有账号上下文，落 null = 工作区共享，两种都能被推荐取到。）
   const r = await ingestInspiration(s.workspaceId, parsed.data, s.accountId);
   if (!r.ok) return { ok: false, error: r.error };
-  revalidatePath('/inspiration');
+  revalidatePath('/topics');
   revalidatePath('/library');
   return { ok: true };
 }
@@ -70,7 +70,7 @@ export async function actMineQuestions(
     const r = await ingestInspiration(s.workspaceId, { title, note, source }, s.accountId);
     if (r.ok && !r.duplicate) created++;
   }
-  revalidatePath('/inspiration');
+  revalidatePath('/topics');
   revalidatePath('/library');
   return { ok: true, created, found: questions.length };
 }
@@ -83,7 +83,7 @@ export async function actArchiveInspiration(id: string): Promise<{ ok: boolean }
     where: { id, workspaceId: s.workspaceId },
     data: { state: 'archived' },
   });
-  revalidatePath('/inspiration');
+  revalidatePath('/topics');
   revalidatePath('/library');
   return { ok: true };
 }
@@ -95,7 +95,7 @@ export async function actRestoreInspiration(id: string): Promise<{ ok: boolean }
     where: { id, workspaceId: s.workspaceId },
     data: { state: 'open', usedAt: null },
   });
-  revalidatePath('/inspiration');
+  revalidatePath('/topics');
   revalidatePath('/library');
   return { ok: true };
 }
@@ -105,7 +105,7 @@ export async function actDeleteInspiration(id: string): Promise<{ ok: boolean }>
   requireRole(s, 'topic.manage');
   // workspaceId 同时入 where：防止拿到别的工作区的 id 就能删
   await prisma.inspirationItem.deleteMany({ where: { id, workspaceId: s.workspaceId } });
-  revalidatePath('/inspiration');
+  revalidatePath('/topics');
   revalidatePath('/library');
   return { ok: true };
 }

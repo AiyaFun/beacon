@@ -58,11 +58,15 @@ describe('裸 SQL 不许写未限定 schema 的表名', () => {
     // 只要没写成 "schema"."Table" 或 ${qualifiedTable(...)}，在多 schema 生产上就是定时炸弹。
     const bad: string[] = [];
     const pattern = /\b(?:FROM|JOIN|UPDATE|INTO)\s+"([A-Za-z_][A-Za-z0-9_]*)"/g;
+    let scanned = 0;
+    let withRawSql = 0;
 
     for (const file of tsFiles(join(process.cwd(), 'lib'))) {
+      scanned++;
       const src = readFileSync(file, 'utf8');
       // 只看确实出现裸 SQL 的文件，避免把普通字符串误判
       if (!/\$query(Raw|RawUnsafe)|\$execute(Raw|RawUnsafe)/.test(src)) continue;
+      withRawSql++;
       src.split('\n').forEach((line, i) => {
         if (!/\$query(Raw|RawUnsafe)|\$execute(Raw|RawUnsafe)/.test(line)) return;
         for (const m of line.matchAll(pattern)) {
@@ -75,5 +79,14 @@ describe('裸 SQL 不许写未限定 schema 的表名', () => {
     }
 
     expect(bad, `以下裸 SQL 的表名没带 schema 限定，生产（schema=beacon）会 42P01：\n${bad.join('\n')}`).toEqual([]);
+
+    // 【这条守卫自己坏了会静默全过】上面那句断言的是「违规清单为空」——
+    // 而遍历失败、过滤条件写反、正则失效，任何一种都会让清单**恒为空**，
+    // 于是它一直绿着，直到某天生产上又来一次 42P01（那次是付了钱发不出货）。
+    expect(scanned, 'lib/ 下一个 .ts 都没扫到，遍历坏了').toBeGreaterThan(100);
+    expect(withRawSql, '一个用裸 SQL 的文件都没找到——过滤条件大概写反了').toBeGreaterThan(0);
+    // 正则本身也要证明它抓得住：喂一行已知违规的进去
+    const probe = 'await prisma.$queryRaw`SELECT * FROM \"Tenant\" WHERE id = 1`';
+    expect([...probe.matchAll(pattern)].length, '正则连明显违规的都抓不住').toBeGreaterThan(0);
   });
 });

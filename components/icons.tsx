@@ -44,6 +44,7 @@ export const Icon = {
   zoomOut: (p: P) => (<svg {...base(p.size, p.style)} className={p.className}><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /><line x1="8" y1="11" x2="14" y2="11" /></svg>),
   eye: (p: P) => (<svg {...base(p.size, p.style)} className={p.className}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></svg>),
   chevron: (p: P) => (<svg {...base(p.size, p.style)} className={p.className}><path d="M6 9l6 6 6-6" /></svg>),
+  image: (p: P) => (<svg {...base(p.size, p.style)} className={p.className}><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="8.5" cy="9.5" r="1.5" /><path d="m3 17 5-4.5 4 3.5 3-2.5 6 5" /></svg>),
   video: (p: P) => (<svg {...base(p.size, p.style)} className={p.className}><path d="m22 8-6 4 6 4V8Z" /><rect x="2" y="6" width="14" height="12" rx="2" /></svg>),
   link: (p: P) => (<svg {...base(p.size, p.style)} className={p.className}><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></svg>),
   file: (p: P) => (<svg {...base(p.size, p.style)} className={p.className}><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" /><polyline points="14 2 14 8 20 8" /></svg>),

@@ -21,7 +21,9 @@
     "pack:ext": "tsx scripts/pack-extension.ts",
     "db:reset": "rm -f prisma/dev.db && prisma db push --skip-generate && tsx prisma/seed.ts",
     "setup": "prisma generate && prisma db push --skip-generate && tsx prisma/seed.ts",
-    "connector": "tsx connector.ts"
+    "connector": "tsx connector.ts",
+    "publisher": "tsx publisher.ts",
+    "mcp": "tsx mcp-server.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

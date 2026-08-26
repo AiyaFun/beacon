@@ -28,7 +28,26 @@ vi.mock('@/lib/llm/gateway', () => ({
 // 人设/记忆是旁路，桩成空避免牵进一堆 DB 依赖
 vi.mock('@/lib/memory/core', () => ({ buildMemoryContext: async () => '' }));
 
-const { startAgentRun, decidePendingCall, MAX_STEPS } = await import('@/lib/agent/run');
+const { startAgentRun, decidePendingCall, getAgentRunView, MAX_ROUNDS } = await import('@/lib/agent/run');
+const { settleAgentKicks } = await import('@/lib/agent/kick');
+
+// 【执行已经改成后台跑了】startAgentRun / decidePendingCall 现在**立刻返回**一个
+// status=running 的快照，真正的推理在后台继续（lib/agent/kick.ts）。
+// 所以用例要的「跑完之后是什么样」得等一下再读回来——settleAgentKicks 就是为此存在的
+//（生产的请求路径绝不该调它，那等于把异步又变回同步）。
+//
+// 这两个小包装刻意**不放宽任何断言**：等的是同一次运行，读的是同一张表。
+async function runToEnd(c: typeof ctx, goal: string) {
+  const started = await startAgentRun(c, goal);
+  await settleAgentKicks();
+  return getAgentRunView(c, started.runId);
+}
+
+async function decideToEnd(c: typeof ctx, runId: string, approve: boolean) {
+  await decidePendingCall(c, runId, approve);
+  await settleAgentKicks();
+  return getAgentRunView(c, runId);
+}
 
 let ctx: {
   tenantId: string; workspaceId: string; accountId: string; memberId: string; role: string;
@@ -55,7 +74,7 @@ const call = (name: string, args: unknown, id = 'c1') => ({ id, name, arguments:
 describe('Mock 模型下一律不许假装执行', () => {
   it('没接真模型 → 整次运行判失败，并说清楚原因', async () => {
     h.script = [{ text: '好的，我已经帮你建好草稿了！', mocked: true }];
-    const turn = await startAgentRun(ctx, '帮我建个草稿');
+    const turn = await runToEnd(ctx, '帮我建个草稿');
     expect(turn.status).toBe('failed');
     expect(turn.error).toContain('模型');
     expect(turn.answer).toBeUndefined();
@@ -65,7 +84,7 @@ describe('Mock 模型下一律不许假装执行', () => {
 
   it('真模型调用失败被 Mock 兜底（degraded）同样中止，而不是把示例内容当结果', async () => {
     h.script = [{ text: '（示例）已完成', mocked: true, degraded: true }];
-    const turn = await startAgentRun(ctx, '随便做点什么');
+    const turn = await runToEnd(ctx, '随便做点什么');
     expect(turn.status).toBe('failed');
     expect(turn.error).toContain('调用失败');
   });
@@ -77,7 +96,7 @@ describe('读工具直接执行，写工具必须先问人', () => {
       { toolCalls: [call('list_topics', { limit: 5 })] },
       { text: '你现在还没有选题，我建议先跑一轮推荐。' },
     ];
-    const turn = await startAgentRun(ctx, '我有哪些选题');
+    const turn = await runToEnd(ctx, '我有哪些选题');
     expect(turn.status).toBe('done');
     expect(turn.answer).toContain('选题');
     expect(turn.steps.map((s) => s.kind)).toEqual(['tool_call', 'tool_result', 'answer']);
@@ -85,7 +104,7 @@ describe('读工具直接执行，写工具必须先问人', () => {
 
   it('写工具停在确认前，**此时数据库不许有任何变化**', async () => {
     h.script = [{ toolCalls: [call('create_draft', { title: 'AI 建的稿', platform: 'douyin', content: '正文' })] }];
-    const turn = await startAgentRun(ctx, '帮我建一篇草稿');
+    const turn = await runToEnd(ctx, '帮我建一篇草稿');
 
     expect(turn.status).toBe('awaiting_confirm');
     expect(turn.pending?.tool).toBe('create_draft');
@@ -98,10 +117,10 @@ describe('读工具直接执行，写工具必须先问人', () => {
       { toolCalls: [call('create_draft', { title: 'AI 建的稿', platform: 'douyin', content: '正文' })] },
       { text: '已经建好《AI 建的稿》了。' },
     ];
-    const first = await startAgentRun(ctx, '帮我建一篇草稿');
+    const first = await runToEnd(ctx, '帮我建一篇草稿');
     expect(first.status).toBe('awaiting_confirm');
 
-    const second = await decidePendingCall(ctx, first.runId, true);
+    const second = await decideToEnd(ctx, first.runId, true);
     expect(second.status).toBe('done');
     const drafts = await prisma.draft.findMany();
     expect(drafts).toHaveLength(1);
@@ -118,8 +137,8 @@ describe('读工具直接执行，写工具必须先问人', () => {
       { toolCalls: [call('create_draft', { title: '不想要的稿', platform: 'douyin' })] },
       { text: '好的，那我不建了。' },
     ];
-    const first = await startAgentRun(ctx, '建草稿');
-    const second = await decidePendingCall(ctx, first.runId, false);
+    const first = await runToEnd(ctx, '建草稿');
+    const second = await decideToEnd(ctx, first.runId, false);
 
     expect(second.status).toBe('done');
     expect(await prisma.draft.count()).toBe(0);
@@ -139,7 +158,7 @@ describe('读工具直接执行，写工具必须先问人', () => {
         ],
       },
     ];
-    const turn = await startAgentRun(ctx, '建稿并看看选题');
+    const turn = await runToEnd(ctx, '建稿并看看选题');
     expect(turn.status).toBe('awaiting_confirm');
     // c2 是只读的，但它排在待确认那步后面 —— 不能已经执行过
     expect(turn.steps.filter((s) => s.kind === 'tool_result')).toHaveLength(0);
@@ -148,12 +167,15 @@ describe('读工具直接执行，写工具必须先问人', () => {
 
 describe('权限与越权', () => {
   it('viewer 拿不到写工具，模型硬要调也执行不了', async () => {
-    const viewerCtx = { ...ctx, role: 'viewer' };
+    // 成员在库里就得是 viewer：执行循环的权限**按库里发起人的角色算**，
+    // 不认调用方随手传进来的 role（见下面那条守卫用例，那是一条安全性质）
+    const viewer = await prisma.member.create({ data: { tenantId: ctx.tenantId, name: '看客', role: 'viewer' } });
+    const viewerCtx = { ...ctx, memberId: viewer.id, role: 'viewer' };
     h.script = [
       { toolCalls: [call('create_draft', { title: 'X', platform: 'douyin' })] },
       { text: '看来我没有这个权限。' },
     ];
-    const turn = await startAgentRun(viewerCtx, '建草稿');
+    const turn = await runToEnd(viewerCtx, '建草稿');
 
     // 工具清单里就不该有写工具
     const toolNames = h.calls[0].tools.map((t) => t.name);
@@ -164,9 +186,26 @@ describe('权限与越权', () => {
     expect(turn.steps.some((s) => s.kind === 'tool_result' && !s.ok)).toBe(true);
   });
 
+  it('权限按库里发起人的角色算，传进来的 role 说了不算', async () => {
+    // 执行改成后台跑之后，循环是从库里把上下文重建出来的（叫它的地方——队列 worker、
+    // 插件回执——手上没有会话）。这条守的是重建时**不能信任调用方给的角色**：
+    // 信了的话，一个降权前发起、降权后才被叫醒的运行，就成了绕过权限的通道。
+    const viewer = await prisma.member.create({ data: { tenantId: ctx.tenantId, name: '看客', role: 'viewer' } });
+    h.script = [
+      { toolCalls: [call('create_draft', { title: '越权稿', platform: 'douyin' })] },
+      { text: '我没有这个权限。' },
+    ];
+    // 谎报成 owner：库里这个人是 viewer
+    const turn = await runToEnd({ ...ctx, memberId: viewer.id, role: 'owner' }, '建草稿');
+
+    expect(h.calls[0].tools.map((t) => t.name), '给模型的清单要按库里的角色过滤').not.toContain('create_draft');
+    expect(await prisma.draft.count(), '谎报角色不该建出草稿').toBe(0);
+    expect(turn.status).toBe('done');
+  });
+
   it('别人不能替发起人点确认', async () => {
     h.script = [{ toolCalls: [call('create_draft', { title: 'X', platform: 'douyin' })] }];
-    const first = await startAgentRun(ctx, '建草稿');
+    const first = await runToEnd(ctx, '建草稿');
     await expect(decidePendingCall({ ...ctx, memberId: 'someone-else' }, first.runId, true)).rejects.toThrow(/发起/);
     expect(await prisma.draft.count()).toBe(0);
   });
@@ -176,7 +215,7 @@ describe('权限与越权', () => {
       { toolCalls: [call('delete_everything', {})] },
       { text: '没有这个能力。' },
     ];
-    const turn = await startAgentRun(ctx, '删掉所有东西');
+    const turn = await runToEnd(ctx, '删掉所有东西');
     expect(turn.status).toBe('done');
     expect(turn.steps.some((s) => s.kind === 'tool_result' && !s.ok)).toBe(true);
   });
@@ -193,7 +232,7 @@ describe('权限与越权', () => {
       { toolCalls: [call('read_draft', { draftId: otherDraft.id })] },
       { text: '读不到这篇。' },
     ];
-    const turn = await startAgentRun(ctx, '读那篇稿');
+    const turn = await runToEnd(ctx, '读那篇稿');
     const result = turn.steps.find((s) => s.kind === 'tool_result');
     expect(result?.ok).toBe(false);
     expect(result?.result).toContain('不属于');
@@ -201,11 +240,51 @@ describe('权限与越权', () => {
 });
 
 describe('封顶', () => {
-  it('模型来回打转时步数封顶，如实说没做完', async () => {
+  it('模型来回打转时轮数封顶，如实说没做完', async () => {
     // 每轮都调一个只读工具，永不给答案
-    h.script = Array.from({ length: MAX_STEPS + 5 }, (_, i) => ({ toolCalls: [call('list_topics', { limit: 1 }, `c${i}`)] }));
-    const turn = await startAgentRun(ctx, '一直查');
+    h.script = Array.from({ length: MAX_ROUNDS + 5 }, (_, i) => ({ toolCalls: [call('list_topics', { limit: 1 }, `c${i}`)] }));
+    const turn = await runToEnd(ctx, '一直查');
     expect(turn.status).toBe('failed');
     expect(turn.error).toContain('上限');
+  }, 20_000);
+
+  // 到顶了不直接判死，先让它把话说完：原来用户拿到的是一句「跑到上限了」外加一片空白，
+  // 而它可能已经查了五样东西、写好了一半。多花一次调用换一段「我做到哪儿了」，
+  // 这次执行才对用户有价值。**仍然判 failed**——没做完就是没做完。
+  it('到顶时强制一轮收尾：给出阶段性成果，且那一轮不许再带工具', async () => {
+    h.script = [
+      ...Array.from({ length: MAX_ROUNDS }, (_, i) => ({ toolCalls: [call('list_topics', { limit: 1 }, `c${i}`)] })),
+      { text: '我查了三轮选题，挑出两条可用的，但还没来得及写稿。' },
+    ];
+    const turn = await runToEnd(ctx, '一直查');
+
+    expect(turn.status).toBe('failed');
+    expect(turn.answer, '收尾那段话要带给用户').toContain('挑出两条');
+    expect(turn.error).toContain('上限');
+
+    // 收尾那一轮**不给工具**：给了它又会接着干活，那就不叫收尾了
+    const lastCall = h.calls[h.calls.length - 1];
+    expect(lastCall.tools.length, '收尾轮不该带工具').toBe(0);
+    // 前面每一轮都是带工具的正常干活轮
+    expect(h.calls[0].tools.length).toBeGreaterThan(0);
+  }, 20_000);
+
+  // 【这条守的是「上限数的到底是什么」】原先封顶判的是**步骤流水条数**，而一轮调一次工具
+  // 就记两条（tool_call + tool_result）——写着 12 轮的上限实际约等于 6 次工具调用，
+  // 用户看到的是「才做了几步就说到上限了」。
+  //
+  // 断言写成「模型真的被调满了 MAX_ROUNDS 次」：改回按 steps 判的话，
+  // 模型只会被调 6 次左右，这条当场变红。
+  it('封顶数的是模型轮数，不是步骤流水条数', async () => {
+    h.script = Array.from({ length: MAX_ROUNDS + 5 }, (_, i) => ({ toolCalls: [call('list_topics', { limit: 1 }, `c${i}`)] }));
+    const turn = await runToEnd(ctx, '一直查');
+    expect(turn.status).toBe('failed');
+
+    // MAX_ROUNDS 轮干活 + 1 轮收尾（那一轮不带工具，只让它说清做到哪儿了）
+    expect(h.calls.length).toBe(MAX_ROUNDS + 1);
+    const row = await prisma.agentRun.findUnique({ where: { id: turn.runId }, select: { rounds: true, steps: true } });
+    expect(row?.rounds).toBe(MAX_ROUNDS);
+    // 流水条数远多于轮数（每轮两条），正是它不能拿来当轮数用的原因
+    expect(row!.steps).toBeGreaterThan(MAX_ROUNDS);
   }, 20_000);
 });

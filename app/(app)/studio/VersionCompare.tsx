@@ -1,6 +1,8 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
+import { actRestoreDraftVersion } from './actions';
 import { Overlay } from '@/components/Overlay';
 import { diffSentences, diffStats } from '@/lib/studio/diff';
 
@@ -20,7 +22,10 @@ export type CompareVersion = {
   timeLabel: string;
 };
 
-export function VersionCompare({ versions }: { versions: CompareVersion[] }) {
+export function VersionCompare({ versions, draftId }: { versions: CompareVersion[]; draftId?: string }) {
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [err, setErr] = useState('');
   const [open, setOpen] = useState(false);
   // 默认对比「最新两版」——这是十次里有九次想看的那一对
   const [left, setLeft] = useState(() => versions[versions.length - 2]?.seq ?? versions[0]?.seq ?? 0);
@@ -112,6 +117,31 @@ export function VersionCompare({ versions }: { versions: CompareVersion[] }) {
                 <div className="small muted" style={{ marginTop: 10, lineHeight: 1.6 }}>
                   绿色是新版加的，红色删除线是旧版被去掉的，其余是两版都有的原话。按句比对。
                 </div>
+
+                {/* 【看出旧那版更好之后】此前只能自己把正文复制粘贴回去。
+                    回滚**存成新版本而不是删掉后面的**——历史本身是审计证据，
+                    「谁在什么时候回滚过」同样要查得到（与人设版本同一个口径）。 */}
+                {draftId && a && a.seq !== versions[versions.length - 1]?.seq && (
+                  <div className="row wrap" style={{ gap: 8, marginTop: 12, alignItems: 'center' }}>
+                    <button
+                      className="btn btn-sm"
+                      disabled={pending}
+                      onClick={() => {
+                        setErr('');
+                        start(async () => {
+                          const r = await actRestoreDraftVersion(draftId, a.seq);
+                          if (!r.ok) { setErr(r.error ?? '没能回滚'); return; }
+                          setOpen(false);
+                          router.refresh();
+                        });
+                      }}
+                    >
+                      {pending ? '回滚中…' : `回到左边这一版（v${a.seq}）`}
+                    </button>
+                    <span className="small muted">会存成新版本，历史不会被删掉。</span>
+                    {err && <span className="small" style={{ color: 'var(--red)' }}>{err}</span>}
+                  </div>
+                )}
               </>
             )}
           </div>

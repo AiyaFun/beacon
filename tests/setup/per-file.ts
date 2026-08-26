@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterAll, beforeEach } from 'vitest';
+import { afterAll, afterEach, beforeEach } from 'vitest';
 
 // 每个测试文件跑一次，且**在被测模块被 import 之前**——这点是关键：
 // lib/db.ts 在模块加载时就 new PrismaClient()，DATABASE_URL 必须此刻已经就位。
@@ -66,6 +66,13 @@ const PAID_ENV = [
   'BEACON_IMAGE_LLM_BASE_URL',
   'BEACON_VISION_LLM_API_KEY',  // lib/llm/gateway.ts:38（视频/封面分析）
   'BEACON_VISION_LLM_BASE_URL',
+  // ⚠️ 2026-08-23 补：执行模式可以单独指一条渠道（fromEnv 的 preferFn 分支）。
+  // 它三样各自独立回落到 DEFAULT，所以**只擦 DEFAULT 挡不住**——同 IMAGE/VISION 那两条的形状。
+  // MODEL 不是凭据，但也要擦：留着它会让 tests/llm/agent-route.test.ts 的
+  //「没配就完全照旧」那条在配过这台机器的人身上变红，而那是一条假红。
+  'BEACON_AGENT_LLM_API_KEY',
+  'BEACON_AGENT_LLM_BASE_URL',
+  'BEACON_AGENT_LLM_MODEL',
   // ⚠️ 短信比上面几条更要紧：打到真接口不只是烧钱，是**真的给真实手机号发出去**，
   //    而且撤不回来。之前一直不在这份清单里。
   'BEACON_VOLC_SMS_AK',
@@ -99,6 +106,20 @@ beforeEach(scrubPaidEnv);
 beforeEach(async () => {
   const { invalidateDfaCache } = await import('../../lib/compliance/engine');
   invalidateDfaCache();
+});
+
+// 后台任务（AI 执行循环、工作流）是 fire-and-forget 派出去的：
+// 用例跑完时它们可能还在飞，**落地时机会落在下一个测试文件的 beforeEach 清库之后**——
+// 表现成一个跟那个文件毫无关系的诡异失败（这一轮撞过两次，两次都花了不少时间才定位）。
+//
+// 放在这里而不是每个文件各写一遍 afterEach：新写的测试文件不会「忘了收」。
+afterEach(async () => {
+  const [{ settleAgentKicks }, { settleWorkflowKicks }] = await Promise.all([
+    import('../../lib/agent/kick'),
+    import('../../lib/workflow/kick'),
+  ]);
+  await settleWorkflowKicks().catch(() => {});
+  await settleAgentKicks().catch(() => {});
 });
 
 afterAll(() => {

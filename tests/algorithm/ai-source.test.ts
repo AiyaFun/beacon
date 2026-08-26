@@ -12,7 +12,9 @@ import {
 } from '@/lib/algorithm/ai-source';
 
 const SRC = readFileSync(resolve(process.cwd(), 'lib/algorithm/ai-source.ts'), 'utf8');
-const PAGE = readFileSync(resolve(process.cwd(), 'app/(app)/algorithm/page.tsx'), 'utf8');
+// 2026-08-25「看效果」三合一后，算法教练的渲染从 app/(app)/algorithm/page.tsx 搬到了
+// components/insight/AlgorithmPanel.tsx（作为 /data 的一个标签）。这个源码级守卫跟着指向新文件。
+const PAGE = readFileSync(resolve(process.cwd(), 'components/insight/AlgorithmPanel.tsx'), 'utf8');
 
 describe('🔒 引擎信源表：一格 no 都不许有', () => {
   // 这是全文件最重要的守卫。手上的证据只有一份「哪些平台**被统计到**进了引用池」的第三方报告，
@@ -81,7 +83,9 @@ describe('aiSourceOf / shouldHintWechatAiSource', () => {
   it('认不出来的键返回 null，让调用方整块不渲染', () => {
     // 返回一行 unknown 会让页面看起来像「我们查过了，不知道」——伪平台压根不该进这张表。
     expect(aiSourceOf('multi')).toBeNull();
-    expect(aiSourceOf('weibo')).toBeNull();
+    // ⚠️ 2026-08-19 之前这里写的是 'weibo'——那天微博进了 PLATFORMS，它就不再是「认不出来的键」了。
+    // 举例子要挑一个**确实不在 PLATFORMS 里**的，否则这条断言测的是「表漏配」而不是「兜底」。
+    expect(aiSourceOf('douban')).toBeNull();
     expect(aiSourceOf('')).toBeNull();
     expect(aiSourceOf('wechat')?.engine).toBe('腾讯元宝');
   });
@@ -99,7 +103,7 @@ describe('aiSourceOf / shouldHintWechatAiSource', () => {
 
   it('提示文案只有一处定义，页面引用它而不是抄一遍', () => {
     const derive = readFileSync(resolve(process.cwd(), 'app/(app)/studio/DeriveCard.tsx'), 'utf8');
-    expect(derive).toContain('WECHAT_DERIVE_HINT');
+    expect(derive, '只 import 了没渲染').toMatch(/\{WECHAT_DERIVE_HINT\}/);
     expect(derive).not.toContain(WECHAT_DERIVE_HINT);
   });
 });
@@ -156,7 +160,8 @@ describe('🔒 页面只读渲染：AI 信源不许进提示词，也不许进 C
   });
 
   it('unknown 的解释文案只有一处定义，页面引用常量而不是抄一遍', () => {
-    expect(PAGE).toContain('AI_SOURCE_UNKNOWN_NOTE');
+    // 断在插值上：光 import 就占一处，两处渲染删光照样绿
+    expect(PAGE, '只 import 了没渲染').toMatch(/\{AI_SOURCE_UNKNOWN_NOTE\}/);
     expect(PAGE).not.toContain(AI_SOURCE_UNKNOWN_NOTE);
   });
 });

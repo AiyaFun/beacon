@@ -64,7 +64,17 @@ export async function platformProviderRows(): Promise<PlatformProviderRow[]> {
  */
 export async function pickPlatformProvider(
   fn: string,
-  opts: { allowOverseas?: boolean; vendorFilter?: (vendor: string) => boolean } = {},
+  opts: {
+    allowOverseas?: boolean;
+    vendorFilter?: (vendor: string) => boolean;
+    /**
+     * 只认**显式指到这个功能**的渠道，不要回落到「跟随默认渠道」。
+     *
+     * 给 gateway 的 preferFn 用：它会先问一次「有没有专门配给执行模式的渠道」，
+     * 那一问必须允许落空——否则默认渠道会把它兜住，偏好等于没写。
+     */
+    explicitOnly?: boolean;
+  } = {},
 ): Promise<PlatformProviderRow | null> {
   const rows = await platformProviderRows();
   if (rows.length === 0) return null;
@@ -75,6 +85,7 @@ export async function pickPlatformProvider(
     const routing = parseJson<Record<string, string>>(p.routing, {});
     if (routing[fn] === p.id) return p;
   }
+  if (opts.explicitOnly) return null;
   return usable.find((p) => p.isDefault) ?? null;
 }
 

@@ -1,4 +1,6 @@
 import { prisma } from '../db';
+import { tickScheduledAgents } from '../workflow/schedule';
+import { AGENT_TICK_MINUTES } from './schedule-config';
 import { ingestHot, clusterHotTopics, crawlCompetitors, generateRecommendations } from '../pipeline';
 import { toJson, parseJson, type Metrics } from '../json';
 import { realCompetitorAdapter } from '../adapters/competitor-real';
@@ -111,6 +113,7 @@ export const HANDLERS: Record<JobName, JobHandler> = {
       });
       let posts = 0;
       let failed = 0;
+      let handed = 0;
       for (const w of workspaces) {
         // 单个工作区的采集失败（数据源超时/限流）不该让其余工作区这一轮也没有数据
         try {
@@ -120,8 +123,13 @@ export const HANDLERS: Record<JobName, JobHandler> = {
           console.warn(`[job:crawl_competitors] workspace ${w.id} failed:`, (e as Error).message);
           failed++;
         }
+        // 服务端够不着的平台，转手派给插件
+        handed += await handOffUncrawlable(w.id);
       }
-      return { detail: `${workspaces.length} 工作区 / ${posts} 条作品${failed ? ` / 失败 ${failed} 个` : ''}` };
+      return {
+        detail: `${workspaces.length} 工作区 / ${posts} 条作品`
+          + `${handed ? ` / 转派插件 ${handed} 条` : ''}${failed ? ` / 失败 ${failed} 个` : ''}`,
+      };
     }),
 
   // 批租户型：为每个活跃账号生成今日推荐（夜间批处理）
@@ -217,7 +225,10 @@ export const HANDLERS: Record<JobName, JobHandler> = {
             const r = await pushEvent(
               workspaceId,
               'daily_recommend',
-              { kind: 'card', title: brief.title, lines: brief.lines, link: { text: '去选题引擎', url: beaconUrl('/topics') } },
+              // 落地页指「本周作战」而不是「选题引擎」：晨报的意图是「今天动手做一条」，
+              // 而 /battle 是那个能**就地起稿**的行动面（/topics 只能看不能就地起）。
+              // 选题看全了要用完整队列分组时，/battle 里有「看全部选题」回到 /topics。
+              { kind: 'card', title: brief.title, lines: brief.lines, link: { text: '打开本周作战 · 直接起稿', url: beaconUrl('/battle') } },
               { integrationIds },
             );
             sent += r.sent;
@@ -394,7 +405,7 @@ export const HANDLERS: Record<JobName, JobHandler> = {
             kind: 'card',
             title: '🧠 记忆学习小结',
             lines: [r.summaryText],
-            link: { text: '看人设与记忆', url: beaconUrl('/persona') },
+            link: { text: '看人设与记忆', url: beaconUrl('/persona?tab=memory') },
           });
         }
       }
@@ -497,10 +508,107 @@ export const HANDLERS: Record<JobName, JobHandler> = {
       const r = await sweepRetention();
       const detail =
         `评论正文 ${r.readerComments} 条 / 提问归档 ${r.commentQuestions.archived} 删除 ${r.commentQuestions.deleted}` +
-        ` / 孤儿日志 ${r.orphanedLlmLogs} / 移除申请重扫 ${r.removals.swept} 条`;
+        ` / 孤儿日志 ${r.orphanedLlmLogs}` +
+        ` / 运行记录 AI ${r.runLogs.agentRuns} 工作流 ${r.runLogs.workflowRuns}` +
+        ` / 浏览器任务 过期 ${r.browserTasks.expired} 清理 ${r.browserTasks.purged}` +
+        ` / 移除申请重扫 ${r.removals.swept} 条`;
       if (r.errors.length > 0) {
         throw new Error(`${detail}；失败步骤：${r.errors.map((e) => `${e.step}(${e.message})`).join('，')}`);
       }
       return { detail };
     }),
+
+  // 定时智能体：扫到点的用户自定义计划并跑。
+  // 三道闸（每日上限 / 连续失败自动停 / 同日不重跑）都在 tickScheduledAgents 里，
+  // 这里只负责把结果如实记进 JobRun——skipped 与 paused 不算失败，但必须出现在 detail 里，
+  // 否则用户看到「跑了 0 条」却不知道是没到点还是被闸拦了。
+  run_scheduled_agents: async () =>
+    withRun('run_scheduled_agents', undefined, async () => {
+      const r = await tickScheduledAgents(new Date(), AGENT_TICK_MINUTES);
+      return {
+        detail: `扫 ${r.scanned} 条 · 跑 ${r.ran} · 跳过 ${r.skipped}（到上限）· 失败 ${r.failed} · 自动停用 ${r.paused}`,
+      };
+    }),
+
+  /**
+   * 把一次 AI 执行往前推（用户开了一次执行 / 点了确认 / 等的事有结果了）。
+   *
+   * 【为什么刻意不 withRun】JobRun 是**系统体检**表：13 条定时任务各自的健康度。
+   * AI 执行是用户级的跑动记录，它有自己的表（AgentRun/AgentStep）也有自己的页
+   *（/runs 运行中心）。混进 JobRun 会让运维台被用户行为淹没，而 /ops/health
+   * 上「今天跑了多少次」的判读从此失真。
+   *
+   * 失败也刻意不往外抛：runAgentLoop 自己会把失败写进 AgentRun.error，用户在
+   * 运行中心看得到。抛出去只会让 BullMQ 记一条谁也不会看的红，还触发运维告警。
+   */
+  run_agent_loop: async (payload) => {
+    const runId = typeof payload.runId === 'string' ? payload.runId : '';
+    if (!runId) return { detail: '缺少 runId' };
+    const { runAgentLoop } = await import('../agent/run');
+    await runAgentLoop(runId);
+    return { detail: `agent run ${runId}` };
+  },
+
+  /**
+   * AI 执行的兜底巡检。与 run_agent_loop 同理**不记 JobRun**（那是用户级跑动，
+   * 不是平台作业），但它是广播型的：扫的是全表里卡住的那几行。
+   *
+   * 【为什么要有它】此前两种自愈都挂在「用户打开页面看这次运行」上。执行改成
+   * 可以挂起几小时之后这条就不够用了——等额度的运行是在半夜重置的，那时候
+   * 没有任何人在看页面。
+   */
+  tick_agent_runs: async () => {
+    const { tickAgentRuns } = await import('../agent/tick');
+    const r = await tickAgentRuns();
+    return { detail: `恢复 ${r.resumed} 接手 ${r.rekicked}` };
+  },
 };
+
+/**
+ * 服务端采不到的竞对，转手派给浏览器插件。
+ *
+ * 【为什么必须有这一步】生产实测：竞对作品按平台是
+ * douyin 622 / xiaohongshu 194 / x 63 / bilibili 37 / youtube 24，而
+ * **wechat 与 shipinhao 都是 0**——同时这两个平台上有 10 个竞对订阅。
+ * 也就是说有人订阅了竞对、一条数据都没拿到过，而系统一声不吭。
+ *
+ * 根因不是 bug 而是**没有路**：公众号要 NewRank 之类的商业源（生产没配 key），
+ * 视频号根本没有官方内容接口。这两条路服务端永远走不通，但**插件走得通**——
+ * 它在用户自己已登录的浏览器里读公开页面，`collect_competitor` 早就实现好了，
+ * 只是定时任务从来没把活交给它。
+ *
+ * 三道闸，少一道都会变成骚扰：
+ *   ① 只派服务端确实够不着的（serverCanCrawl 说了算，补了 key 会自动停手）
+ *   ② 这个工作区得真装了插件（没装的话任务只会堆到过期，白占队列还吓人）
+ *   ③ 每个工作区每轮封顶——采集是用户浏览器在出力，一次塞十几个活等于占着他的机器
+ */
+const HANDOFF_PER_WORKSPACE = 3;
+
+async function handOffUncrawlable(workspaceId: string): Promise<number> {
+  const { serverCanCrawl } = await import('../adapters/registry');
+  const { hasCollector, enqueueBrowserTask } = await import('../browser-task');
+
+  const items = await prisma.watchlistItem.findMany({
+    where: { workspaceId },
+    select: { competitorId: true, competitor: { select: { platform: true } } },
+  });
+  const stuck = items.filter((i) => i.competitor && !serverCanCrawl(i.competitor.platform));
+  if (stuck.length === 0) return 0;
+
+  // 闸②放在这里而不是循环外：没有竞对卡住的工作区不必白查一次令牌表
+  if (!(await hasCollector(workspaceId))) return 0;
+
+  let n = 0;
+  for (const it of stuck.slice(0, HANDOFF_PER_WORKSPACE)) {
+    // enqueueBrowserTask 自带去重（同一个 pending 的活不会排两遍），
+    // 所以每两小时跑一次也不会越堆越多——插件没来领的那条会被复用
+    const r = await enqueueBrowserTask({
+      workspaceId,
+      payload: { kind: 'collect_competitor', competitorId: it.competitorId, limit: 20 },
+      origin: 'schedule',
+      createdBy: 'job:crawl_competitors',
+    });
+    if (r.ok) n++;
+  }
+  return n;
+}

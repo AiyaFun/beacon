@@ -58,7 +58,7 @@ export function StudioTabs({ tabs, initialTab }: { tabs: StudioTab[]; initialTab
 
   return (
     <div>
-      <div className="tabs" role="tablist">
+      <div className="tabs tabs-sub" role="tablist">
         {tabs.map((t) => (
           <button
             key={t.key}

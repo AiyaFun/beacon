@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { platformName, platformColor } from '@/lib/constants';
@@ -30,6 +31,8 @@ import { StudioTabs, type StudioTab } from './StudioTabs';
 import { VersionCompare } from './VersionCompare';
 import { draftFamily } from '@/lib/studio/family';
 import { shouldHintWechatAiSource } from '@/lib/algorithm/ai-source';
+import { MakeTabs } from '@/components/MakeTabs';
+import { HubHeader } from '@/components/HubHeader';
 
 export const dynamic = 'force-dynamic';
 
@@ -234,6 +237,7 @@ export default async function StudioPage({
         <>
           从正文拆出一组画面，风格统一地出图——小红书组图、公众号内页插图都用它。
           先拆画面给你改，确认后再出图（出图按张计费）。配图<b>不上字</b>，文字排版走「标题与封面」。
+          手头没有稿子、就是想要几张图，去 <Link href="/images">AI 出图</Link>（同一套额度与保留期）。
         </>
       ),
       node: (
@@ -278,19 +282,16 @@ export default async function StudioPage({
 
   return (
     <>
-      <PageHead
-        title="创作工坊"
-        desc="AI 起草 · 版本留痕 · 多平台改写 · 发布前合规。AI 初稿和你改后终稿的差异，系统会从中学你的口味，越用越懂你。"
+      <HubHeader
+        title="做内容"
+        hint="AI 起草 · 版本留痕 · 多平台改写 · 发布前合规。AI 初稿和你改后终稿的差异，系统会从中学你的口味。"
+        tabs={<MakeTabs active="write" inline />}
         action={
-          // 页头只留「开一篇新的」这两个入口。复制/导出/登记发布都跟着**某一份草稿**走，
-          // 已经下移到下面的「当前草稿」条——挂在页头时它们既和标题抢位置，
-          // 展开后（图文卡缩略图、新建表单）还会在页头里长出一整块面板。
-          <div className="row wrap" style={{ gap: 8, justifyContent: 'flex-end' }}>
+          // 页头只留「开一篇新的」这两个入口。复制/导出/登记发布都跟着**某一份草稿**走（在「当前草稿」条）
+          <span className="row wrap" style={{ gap: 8, justifyContent: 'flex-end' }}>
             <NewDraftDialog defaultPlatform={selected?.platform} />
-            {/* 带着选题进来且还没起过稿时，起草按钮下移到那条横幅里（动作跟着上下文走），
-                这里就不再出一个——两个同名按钮做的还是不同的事，是最容易点错的那种布局。 */}
             {!pendingTopic && <DraftButton draftId={selectedId ?? null} />}
-          </div>
+          </span>
         }
       />
 
@@ -347,7 +348,7 @@ export default async function StudioPage({
               latest ? (
                 <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
                   <span className="small muted">共 {selected!.versions.length} 版</span>
-                  <VersionCompare versions={compareVersions} />
+                  <VersionCompare versions={compareVersions} draftId={selected?.id} />
                 </div>
               ) : undefined
             }

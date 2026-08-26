@@ -1,17 +1,48 @@
 import { getSession } from '@/lib/session';
 import { can } from '@/lib/rbac';
 import { listSkillsForTenant } from '@/lib/skills';
-import { PageHead, Stat } from '@/components/ui';
+import { PageHead, Stat, Card } from '@/components/ui';
 import { SkillCenter } from './SkillCenter';
+import { Market } from './Market';
+import { RoleTabs } from '@/components/RoleTabs';
+import { AGENT_ROLES } from '@/lib/agent/roles';
+import { prisma } from '@/lib/db';
+import { toolCatalog } from '@/lib/agent/tool-config';
+// 能力清单的渲染与开关仍住在 extension 目录（它与那边的 server action 同居，
+// 搬目录要一起搬 action，风险大于收益）。这里只是**换个地方渲染它**：
+// 2026-08-26 用户指出「能力」点进去跳到「下载采集助手」页，语义不对——
+// 能力是 AI 的工具集，跟装浏览器插件是两件事。
+import { AgentTools } from '../extension/AgentTools';
+import { BrowserReadSwitch } from '../extension/BrowserReadSwitch';
+import { readAllowlistLabels } from '@/lib/browser-task/read-allowlist';
+import { fetchCatalog } from '@/lib/market/catalog';
+import { HubHeader } from '@/components/HubHeader';
 
 export const dynamic = 'force-dynamic';
 
 // 技能中心：内置技能全租户可见、按租户安装；自定义技能（提示词模板）归属本租户。
 // 装好的技能在创作工坊对草稿/终稿一键生成平台成品。
 
-export default async function SkillsPage() {
+export default async function SkillsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ view?: string }>;
+}) {
   const s = await getSession();
+  const sp = await searchParams;
+
+  // 「能力」标签：同一页的第三个视角（技能 / 智能体 / 能力）。
+  // 服务端 view 参数、只渲染当前 tab —— 与 /data、/topics 同一个模式。
+  if (sp.view === 'abilities') return <AbilitiesView />;
+
   const skills = await listSkillsForTenant(s.tenantId);
+  // 【为什么服务端先探一次】市场目录现在是空的（生产 /market/index.json 的 entries: []），
+  // 而那张卡照样渲染出「技能市场 · 装上就能用」+「看看市场里有什么」按钮——
+  // 点下去转一圈告诉你一条都没有。用户 2026-08-26 原话：「没有技能市场，就去掉」。
+  // 有内容时它会自己回来，不是把功能删了。探测失败（网络不通）也当作没有：
+  // 一个点了必然报错的入口，不如不出现。
+  const catalog = await fetchCatalog().catch(() => null);
+  const marketHasEntries = !!catalog?.ok && catalog.entries.length > 0;
   const readOnly = !can(s.role, 'content.create');
 
   const installed = skills.filter((k) => k.installed).length;
@@ -19,10 +50,12 @@ export default async function SkillsPage() {
 
   return (
     <>
-      <PageHead
-        title="技能中心"
-        desc="技能 = 教 AI 按某个平台的规矩出成品。装上后在创作工坊一键使用。"
+      <HubHeader
+        title="技能 · 连接器"
+        hint={`${AGENT_ROLES.skill.oneLine} · 装上后创作工坊一键用，AI 助手也会自己挑着用`}
+        tabs={<RoleTabs active="skill" inline />}
       />
+
 
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
         <Stat label="可用技能" value={skills.length} foot="内置 + 本团队自定义" />
@@ -37,7 +70,64 @@ export default async function SkillsPage() {
         </div>
       )}
 
+      {/* 市场排在最前：新用户唯一问得出口的问题是「有哪些现成的可以装」，
+          而不是「怎么自己写一个」。下面那些是已经装好的与自建入口。
+          ⚠️ 目录为空时整张卡不渲染（见上面 marketHasEntries）——空市场是个死入口 */}
+      {marketHasEntries && (
+        <Card
+          id="market"
+          title="技能市场"
+          sub="现成的技能与智能体，装上就能用。都是提示词模板与步骤配置，不含可执行代码"
+          style={{ marginBottom: 16 }}
+        >
+          <Market readOnly={readOnly} />
+        </Card>
+      )}
+
       <SkillCenter skills={skills} readOnly={readOnly} />
+    </>
+  );
+}
+
+/**
+ * 「能力」视角：AI 一次只做一个动作的那批工具（33 项左右），逐项可关。
+ *
+ * 2026-08-26 从 /extension#abilities 搬到这里。原来它住在「下载采集助手」页，
+ * 于是侧栏点「能力」会跳到一个讲怎么装浏览器扩展的页面——**用户当场问「为什么
+ * 能力是跳转到插件去了」**。能力是 AI 的工具集，跟装扩展是两件事；
+ * 它和技能、智能体本来就是同一个问题的三个答案，理应在同一页的三个标签里。
+ */
+async function AbilitiesView() {
+  const s = await getSession();
+  const [ws, workspace] = await Promise.all([
+    prisma.workspace.findUnique({ where: { id: s.workspaceId }, select: { agentToolConfig: true } }),
+    prisma.workspace.findUnique({ where: { id: s.workspaceId }, select: { browserReadEnabled: true } }),
+  ]);
+  const rows = toolCatalog(s.role, ws?.agentToolConfig);
+  // 开关要 byok.manage 权限：能力关掉会影响整个工作区，不是个人偏好
+  const canManageTools = can(s.role, 'byok.manage');
+
+  return (
+    <>
+      <HubHeader
+        title="技能 · 连接器"
+        hint={`${AGENT_ROLES.ability.oneLine} · ${AGENT_ROLES.ability.decidedBy} · 这里可以整个关掉`}
+        tabs={<RoleTabs active="ability" inline />}
+      />
+      <Card
+        id="abilities"
+        title={`AI ${AGENT_ROLES.ability.name}`}
+        sub="关掉之后 AI 既看不到它，也调不动它"
+      >
+        <AgentTools tools={rows} readOnly={!canManageTools} />
+        {/* 这一个开关刻意不混进上面那张表：那些缺省全开（「默认能用，你可以关」），
+            这一个缺省是关的（「默认不能用，你得知道自己在开什么」）。 */}
+        <BrowserReadSwitch
+          enabled={workspace?.browserReadEnabled ?? false}
+          allowlist={readAllowlistLabels()}
+          readOnly={!canManageTools}
+        />
+      </Card>
     </>
   );
 }

@@ -38,6 +38,11 @@ import { readerQuestionsByWork } from '@/lib/insight/reader-questions';
 import { readerVoice, readerCommentsByWork } from '@/lib/insight/reader-voice';
 import { COMMENT_TEXT_PURGE_DAYS } from '@/lib/comment-collect-rules';
 import { ReaderVoice } from '@/components/ReaderVoice';
+import { PageTabs } from '@/components/PageTabs';
+import { EffectTabs } from '@/components/insight/EffectTabs';
+import { GenesPanel } from '@/components/insight/GenesPanel';
+import { AlgorithmPanel } from '@/components/insight/AlgorithmPanel';
+import { HubHeader } from '@/components/HubHeader';
 
 export const dynamic = 'force-dynamic';
 
@@ -50,6 +55,28 @@ export default async function DataPage({
 }) {
   const s = await getSession();
   const sp = await searchParams;
+
+  // 「看效果」三合一（2026-08-25）：爆款基因 /genes、平台算法教练 /algorithm 并进本页。
+  // 顶层用 view 参数切换，**只渲染当前 tab**——「平台怎么想」会调 LLM，全渲染会白烧调用，
+  // 所以走早返回：view=genes/algorithm 时直接出对应 Panel（各自取数），不跑下面 /data 的重取数。
+  const view = sp.view === 'genes' || sp.view === 'algorithm' ? sp.view : 'data';
+  if (view !== 'data') {
+    return (
+      <>
+        <HubHeader
+          title="看效果"
+          hint="发完之后回答三件事：跑得怎么样、什么样的跑得动、平台为什么这么推"
+          tabs={<EffectTabs active={view} inline />}
+        />
+        {view === 'genes' ? (
+          <GenesPanel />
+        ) : (
+          <AlgorithmPanel platform={typeof sp.platform === 'string' ? sp.platform : undefined} />
+        )}
+      </>
+    );
+  }
+
   const range = parseRange(typeof sp.range === 'string' ? sp.range : undefined);
   const platformFilter = typeof sp.platform === 'string' ? sp.platform : 'all';
   const page = Math.max(1, parseInt(typeof sp.page === 'string' ? sp.page : '1', 10) || 1);
@@ -101,7 +128,9 @@ export default async function DataPage({
   // 在服务端算好三条链接再传下去。GrowthBoard 是客户端组件，**不能收函数**
   // （Next 会在渲染时抛 "Functions cannot be passed directly to Client Components"）。
   const windowHrefs = Object.fromEntries(
-    WINDOW_KEYS.map((k) => [k, `/data?${qsBase ? qsBase + '&' : ''}window=${k}#growth`]),
+    // 带上 tab=growth：本页分了页签之后，不带它会切完时间窗跳回「总览」，
+    // 用户看到的是「我点了 30 天，怎么又回去了」。
+    WINDOW_KEYS.map((k) => [k, `/data?${qsBase ? qsBase + '&' : ''}window=${k}&tab=growth#growth`]),
   );
 
   const dq = await decisionQuality(s.accountId, s.workspaceId);
@@ -250,9 +279,10 @@ export default async function DataPage({
 
   return (
     <>
-      <PageHead
-        title="数据看板与效果追踪"
-        desc="发布登记 + 多通道数据回流，看清每篇内容前 7 天的真实增长"
+      <HubHeader
+        title="看效果"
+        hint="发布登记 + 多通道数据回流，看清每篇内容前 7 天的真实增长"
+        tabs={<EffectTabs active="data" inline />}
         action={<ExportButton range={range} platform={platformFilter} />}
       />
 
@@ -315,6 +345,19 @@ export default async function DataPage({
         <Stat label="采纳并发布" value={adoptedPublished} foot="来自 AI 推荐的篇数" />
       </div>
 
+
+      {/* 次级：这一页顶上已经有「数据看板 / 什么跑得动 / 平台怎么想」那一层了，
+          两条一模一样的标签条叠着分不出层级（2026-08-26 用户说的「重复」的一种） */}
+      <PageTabs
+        variant="sub"
+        initial={typeof sp.tab === 'string' ? sp.tab : undefined}
+        tabs={[
+          {
+            key: 'overview',
+            label: '总览',
+            hint: '一个核心指标 + 三条安全线，下面是每篇作品的真实表现',
+            node: (
+              <>
       <div className="grid-asym-left" style={{ marginBottom: 16 }}>
         <Card title="核心指标与安全线" sub="一个核心指标 + 三条不能踩的安全线">
           <div className="stat" style={{ background: 'var(--surface-2)', borderRadius: 10, padding: 14 }}>
@@ -480,7 +523,7 @@ export default async function DataPage({
                               <div style={{ marginTop: 6 }}>
                                 {cs?.length ? (
                                   <a
-                                    href="#voice"
+                                    href="?tab=audience#voice"
                                     className="small"
                                     style={{ color: 'var(--text-2)', display: 'block', marginTop: 2 }}
                                     title="这条作品下采到的读者评论，在本页「读者原声」里可以逐条读"
@@ -576,7 +619,15 @@ export default async function DataPage({
           </>
         )}
       </Card>
-
+              </>
+            ),
+          },
+          {
+            key: 'audience',
+            label: '受众与原声',
+            hint: '粉丝画像说「他们是谁」，读者原声说「他们在关心什么、原话怎么说」',
+            node: (
+              <>
       {/* 账号级数据：粉丝曲线 + 受众画像（只有创作者后台给得到） */}
       <AudienceCard platform={audiencePlatform} series={followerPoints} audience={audienceBuckets} />
 
@@ -604,7 +655,47 @@ export default async function DataPage({
           emptyHint="还没采到评论。在插件设置里打开「评论提问采集」，然后到自己的作品详情页点侧栏的「读评论提问」——插件只读当前屏幕上已经显示的评论，不翻页。"
         />
       </Card>
-
+              </>
+            ),
+          },
+          {
+            key: 'growth',
+            label: '增长',
+            hint: '账号涨粉与单条作品在同一时间窗下的净增（竞对增长在竞对监控页）',
+            node: (
+              <>
+      {/* 发布时段分析 */}
+      {/* 自有增长。竞对增长在竞对监控页那边（用户 2026-08-10 定的分工：各页只管自己的域）。
+          与本页其它卡的分工：它们答「现在是多少」，这里答「这段时间涨了多少、什么时候涨的」。 */}
+      <div id="growth" />
+      <Card title="📈 我的增长" sub="账号涨粉与单条作品在同一时间窗下的净增，以及每次采集的时点曲线" style={{ marginBottom: 16 }}>
+        {growthRows.length === 0 ? (
+          <Empty text="还没有可用于算增长的数据——增长需要至少两次采集。用插件在你的作品页点两次「这是我的作品」（或等定时回填跑过两轮）后，这里就会出现曲线。" />
+        ) : (
+          <>
+            {!hasGrowth && (
+              <div className="small muted" style={{ marginBottom: 10 }}>
+                这个时间窗内还没有回流记录。换一个更长的时间窗，或者去回填一次。
+              </div>
+            )}
+            <GrowthBoard
+              windowKey={windowKey}
+              rows={growthRows}
+              windowHrefs={windowHrefs}
+              empty="这个时间窗内没有自有数据回流。"
+            />
+          </>
+        )}
+      </Card>
+              </>
+            ),
+          },
+          {
+            key: 'review',
+            label: '复盘',
+            hint: '这一周做得怎么样、AI 的判断准不准、什么时段发更好、账号画像学到了什么',
+            node: (
+              <>
       {/* 周度运营复盘 + R7「记住了你的 N 件事」 */}
       <WeeklyReviewCard review={weekly} />
 
@@ -632,31 +723,6 @@ export default async function DataPage({
           这些数字来自你自己的采纳/拒绝与发布后真实数据——AI 建议准不准，用你的行为和结果说话，而不是我们自说自话。
         </div>
       </Card>
-
-      {/* 发布时段分析 */}
-      {/* 自有增长。竞对增长在竞对监控页那边（用户 2026-08-10 定的分工：各页只管自己的域）。
-          与本页其它卡的分工：它们答「现在是多少」，这里答「这段时间涨了多少、什么时候涨的」。 */}
-      <div id="growth" />
-      <Card title="📈 我的增长" sub="账号涨粉与单条作品在同一时间窗下的净增，以及每次采集的时点曲线" style={{ marginBottom: 16 }}>
-        {growthRows.length === 0 ? (
-          <Empty text="还没有可用于算增长的数据——增长需要至少两次采集。用插件在你的作品页点两次「这是我的作品」（或等定时回填跑过两轮）后，这里就会出现曲线。" />
-        ) : (
-          <>
-            {!hasGrowth && (
-              <div className="small muted" style={{ marginBottom: 10 }}>
-                这个时间窗内还没有回流记录。换一个更长的时间窗，或者去回填一次。
-              </div>
-            )}
-            <GrowthBoard
-              windowKey={windowKey}
-              rows={growthRows}
-              windowHrefs={windowHrefs}
-              empty="这个时间窗内没有自有数据回流。"
-            />
-          </>
-        )}
-      </Card>
-
       <Card title="⏰ 发布时段分析" sub="哪个时段发的内容平均播放更高 · 满 3 条/时段才下结论" style={{ marginBottom: 16 }}>
         {!timing.conclusive ? (
           <Empty icon="⏳" text="样本积累中——同一时段满 3 条发布后，这里给出「几点发效果好」的结论" />
@@ -740,7 +806,15 @@ export default async function DataPage({
           </div>
         )}
       </Card>
-
+              </>
+            ),
+          },
+          {
+            key: 'input',
+            label: '录入数据',
+            hint: '数据从哪来：插件一键回填 / 补链接 / 导入历史作品 / 手动登记',
+            node: (
+              <>
       <Card title="🔌 插件一键回填" sub="装上「烽火台采集助手」，打开自己的作品页一键回填，省去手动填数" style={{ marginBottom: 16 }}>
         <div className="small muted" style={{ lineHeight: 1.8 }}>
           在 B站视频页 / 抖音视频页 / 小红书笔记页打开<b>你自己已发布的作品</b>，点插件里的
@@ -759,7 +833,7 @@ export default async function DataPage({
           任何平台的 Cookie 或登录凭证，更不会代你登录。必须由你手动点击触发——这些页面不参与「访问即采」。
           <br />
           还没装插件？<a href="/extension" style={{ color: 'var(--brand)', fontWeight: 600 }}>去下载采集助手 →</a>（Chrome / Edge / 360 / Brave）；
-          装好后在 <a href="/settings" style={{ color: 'var(--brand)' }}>设置 · 插件采集令牌</a> 生成令牌并填入插件（与竞对采集共用同一令牌）。
+          装好后在 <a href="/settings/keys" style={{ color: 'var(--brand)' }}>接入与密钥 · 插件采集令牌</a> 生成令牌并填入插件（与竞对采集共用同一令牌）。
           本产品不代发、不托管平台 Cookie，只回传你本人可见的公开数据。
         </div>
       </Card>
@@ -792,6 +866,11 @@ export default async function DataPage({
         </div>
         <Backfill />
       </Card>
+              </>
+            ),
+          },
+        ]}
+      />
     </>
   );
 }

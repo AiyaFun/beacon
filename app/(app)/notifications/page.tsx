@@ -5,9 +5,10 @@ import { getSession } from '@/lib/session';
 import { parseJson } from '@/lib/json';
 import { maskKey } from '@/lib/crypto';
 import { readBotSecrets } from '@/lib/bot';
-import { PageHead, Card, Stat } from '@/components/ui';
+import { Card, Stat } from '@/components/ui';
 import { Icon } from '@/components/icons';
 import { BotIntegrationCard, type BotRow } from '../settings/BotIntegrationCard';
+import { HubHeader } from '@/components/HubHeader';
 
 export const dynamic = 'force-dynamic';
 
@@ -59,9 +60,9 @@ export default async function NotificationsPage() {
 
   return (
     <>
-      <PageHead
+      <HubHeader
         title="机器人与消息通知"
-        desc="推送什么、什么时候推、群里能用哪些命令 · 机器人的密钥填在「接入与密钥」"
+        hint="推送什么、什么时候推、群里能用哪些命令 · 机器人的密钥填在「接入与密钥」"
         action={
           <span className="row" style={{ gap: 8 }}>
             <Link href="/settings/keys" className="btn btn-sm btn-primary"><Icon.cpu size={13} /> 接入与密钥</Link>

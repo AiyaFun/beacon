@@ -73,11 +73,25 @@ export function quotaEnabled(): boolean {
   return process.env.NODE_ENV === 'production' || process.env.BEACON_ENV === 'prod';
 }
 
+/**
+ * 撞的是哪一道闸。**调用方据此决定「等一等能不能好」**：
+ *   daily    → 北京时间次日 0 点重置，后台执行可以挂起等它（lib/agent/run.ts 的 waiting_quota）
+ *   monthly  → 要等到下月，挂一个月的僵尸比如实失败更糟，一律判死
+ *   platform → 平台垫付预算烧完了，等下去也不会自己好（要么用户 BYOK、要么运维加预算）
+ *   image    → 图像日上限，与 daily 同周期但走的是另一个计数器
+ *
+ * 【为什么默认 monthly】未知来源的配额错误按「不能自动重试」处理：
+ * 猜错方向的代价不对称——把 monthly 当 daily 会让一次运行每天醒来撞一次墙，撞满一个月。
+ */
+export type QuotaScope = 'daily' | 'monthly' | 'platform' | 'image';
+
 export class QuotaExceededError extends Error {
   readonly code = 'QUOTA_EXCEEDED';
-  constructor(message: string) {
+  readonly scope: QuotaScope;
+  constructor(message: string, scope: QuotaScope = 'monthly') {
     super(message);
     this.name = 'QuotaExceededError';
+    this.scope = scope;
   }
 }
 
@@ -297,7 +311,7 @@ export async function assertLlmQuota(tenantId: string | null, source: QuotaSourc
   try {
     month = await reserveQuota(mk, monthlySeed, tier.monthly, msUntil(endOfMonth()));
     if (!month.ok) {
-      throw new QuotaExceededError(monthlyExceededMsg(plan, source, tier));
+      throw new QuotaExceededError(monthlyExceededMsg(plan, source, tier), 'monthly');
     }
     monthReserved = true;
     day = await reserveQuota(dk, dailySeed, tier.daily, msUntil(endOfDay()));
@@ -315,17 +329,17 @@ export async function assertLlmQuota(tenantId: string | null, source: QuotaSourc
     // 有界的多花几次 vs 无界的功能下线 —— 取前者。
     log.error('配额准入计数器异常，降级为账本直读（并发窗口重新出现）', { err, tenantId, plan });
     if (monthlySeed >= tier.monthly) {
-      throw new QuotaExceededError(monthlyExceededMsg(plan, source, tier));
+      throw new QuotaExceededError(monthlyExceededMsg(plan, source, tier), 'monthly');
     }
     if (dailySeed >= tier.daily) {
-      throw new QuotaExceededError(dailyExceededMsg(plan, source, tier));
+      throw new QuotaExceededError(dailyExceededMsg(plan, source, tier), 'daily');
     }
     return;
   }
 
   if (!day.ok) {
     await releaseQuota(mk); // 日度拦下了，月度那个名额得还回去
-    throw new QuotaExceededError(dailyExceededMsg(plan, source, tier));
+    throw new QuotaExceededError(dailyExceededMsg(plan, source, tier), 'daily');
   }
 }
 
@@ -390,12 +404,12 @@ export async function assertImageDailyCap(tenantId: string | null, source: Quota
       : `今日 AI 出图额度已用完（${cap} 张/天）。可在「接入与密钥」配置自己的火山方舟 Key 后按自带 Key 额度出图。`;
   try {
     const r = await reserveQuota(imageDayKey(tenantId), seed, cap, msUntil(endOfDay()));
-    if (!r.ok) throw new QuotaExceededError(msg);
+    if (!r.ok) throw new QuotaExceededError(msg, 'image');
   } catch (err) {
     if (err instanceof QuotaExceededError) throw err;
     // 计数器故障 → 账本直读（与 assertLlmQuota 同一取舍：有界的多花几张 vs 功能下线，取前者）
     log.error('图像日上限计数器异常，降级为账本直读', { err, tenantId, plan });
-    if (seed >= cap) throw new QuotaExceededError(msg);
+    if (seed >= cap) throw new QuotaExceededError(msg, 'image');
   }
 }
 

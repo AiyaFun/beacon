@@ -5,7 +5,7 @@ import { log } from '@/lib/logger';
 import { toJson } from '@/lib/json';
 import { emptyPersona } from '@/lib/persona';
 import { PLATFORMS } from '@/lib/constants';
-import { INGEST_TOKEN_HEADER, workspaceByIngestToken } from '@/lib/ingest/competitor';
+import { INGEST_TOKEN_INVALID, INGEST_TOKEN_HEADER, workspaceByIngestToken } from '@/lib/ingest/competitor';
 import { looksLikeSameAccount } from '@/lib/account/duplicate';
 
 // 自有账号清单 · 插件读取「本工作区有哪些创作账号」（authorized 通道，只读）。
@@ -40,7 +40,7 @@ export function OPTIONS() {
 
 export async function GET(req: Request) {
   const ws = await workspaceByIngestToken(req.headers.get(INGEST_TOKEN_HEADER));
-  if (!ws) return json({ ok: false, error: '采集令牌无效或已停用' }, 401);
+  if (!ws) return json({ ok: false, error: INGEST_TOKEN_INVALID }, 401);
 
   const accounts = await prisma.creatorAccount.findMany({
     where: { workspaceId: ws.id },
@@ -77,7 +77,7 @@ const createSchema = z.object({
 
 export async function POST(req: Request) {
   const ws = await workspaceByIngestToken(req.headers.get(INGEST_TOKEN_HEADER));
-  if (!ws) return json({ ok: false, error: '采集令牌无效或已停用' }, 401);
+  if (!ws) return json({ ok: false, error: INGEST_TOKEN_INVALID }, 401);
 
   let body: unknown;
   try {

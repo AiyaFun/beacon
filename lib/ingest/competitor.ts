@@ -12,6 +12,16 @@ import { resolveIngestToken } from './token';
 
 export const INGEST_TOKEN_HEADER = 'x-beacon-ingest-token';
 
+// 令牌无效时**唯一**的那句话。
+//
+// 为什么收成一个常量：这句话出现在 14 个 ingest 路由里，此前有三种写法——一半只说
+// 「无效或已停用」（用户看到的是个死胡同：他不知道该去哪儿换一枚），另一半指向
+// 「设置页」，而 2026-08-19 把密钥类全搬进了「接入与密钥」之后，产品里同时存在
+// 三个设置页，这句指路等于没指。插件里弹出来的就是这段字符串，它是用户在那一刻
+// 拿得到的全部信息。
+export const INGEST_TOKEN_INVALID =
+  '采集令牌无效或已停用——到烽火台「接入与密钥 → 插件采集令牌」重新生成一枚，再填进插件设置页。';
+
 // 令牌的签发/吊销/解析都在 lib/ingest/token.ts。这里只保留 7 条 ingest 路由用的这个入口名，
 // 免得为了「按设备签发」这一件事去改七个路由文件——它们要的一直只是「这串令牌属于哪个工作区」。
 export { generateIngestToken } from './token';

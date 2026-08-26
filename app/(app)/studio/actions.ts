@@ -836,6 +836,54 @@ export async function actSkillSaveAsSibling(
   return { ok: true, draftId: child.id, platform: skillPlatform };
 }
 
+/**
+ * 回到某一版：把旧版内容**存成新版本**，不改写历史。
+ *
+ * 【为什么是新增而不是删除后面的版本】历史本身是审计证据——「谁在什么时候回滚过」
+ * 同样要查得到。人设那边（app/(app)/persona/VersionHistory.tsx）早就是这个口径，
+ * 这里跟它一致。
+ *
+ * 【为什么现在才有】此前草稿域只有版本**对比**，没有恢复动作：
+ * 用户看出第 3 版比第 5 版好，只能自己把正文复制粘贴回去。
+ * AI 执行的产物清单让这件事更常见了——它一次能存好几版。
+ */
+export async function actRestoreDraftVersion(
+  draftId: string,
+  seq: number,
+): Promise<{ ok: boolean; error?: string; seq?: number }> {
+  const s = await getSession();
+  requireRole(s, 'content.create');
+
+  // 归属校验：draftId 是客户端给的
+  const draft = await prisma.draft.findFirst({
+    where: { id: draftId, account: { workspaceId: s.workspaceId } },
+    select: { id: true, title: true },
+  });
+  if (!draft) return { ok: false, error: '这篇草稿不存在或不属于当前工作区' };
+
+  const [target, last] = await Promise.all([
+    prisma.draftVersion.findFirst({ where: { draftId, seq }, select: { content: true, seq: true } }),
+    prisma.draftVersion.findFirst({ where: { draftId }, orderBy: { seq: 'desc' }, select: { seq: true } }),
+  ]);
+  if (!target) return { ok: false, error: '找不到那一版' };
+  if (last && target.seq === last.seq) return { ok: false, error: '这已经是当前版本了' };
+
+  const nextSeq = (last?.seq ?? 0) + 1;
+  await prisma.draftVersion.create({
+    data: {
+      draftId,
+      seq: nextSeq,
+      // 作者记 human：这一版的内容是**用户选的**，不是 AI 这次生成的。
+      // 记成 ai 会污染「AI 初稿 vs 人工终稿」的偏好学习
+      authorType: 'human',
+      content: target.content,
+      diffFromPrev: `回到第 ${target.seq} 版`,
+    },
+  });
+  revalidatePath('/studio');
+  return { ok: true, seq: nextSeq };
+}
+
 // 把技能产出存成该草稿的一个新版本（AI 作者、seq 顺延），方便直接走登记发布/导出流程
 export async function actSkillSaveVersion(
   draftId: string,

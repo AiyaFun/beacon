@@ -35,6 +35,45 @@ beforeEach(async () => {
   tgtId = await makeAccount('Aiya哎呀', 'x', 'Aiyafun');
 });
 
+/** 建一条定时智能体（需要一个模板：ScheduledAgent.templateId 有外键） */
+async function makeSchedule(accountId: string) {
+  const t = await prisma.workflowTemplate.create({
+    data: { slug: `s-${accountId}`, name: '测试模板', steps: '[]', isBuiltin: false, tenantId: null },
+  });
+  return prisma.scheduledAgent.create({
+    data: { workspaceId: wsId, accountId, templateId: t.id, createdBy: 'm1' },
+  });
+}
+
+describe('定时智能体的归属：accountId 没有外键，不显式处理就是「还在动的僵尸」', () => {
+  it('合并时**搬走**——用户配的「每天 9 点」不该因为合并而消失', async () => {
+    await makeSchedule(srcId);
+    await mergeAccounts(tx, wsId, srcId, tgtId);
+    expect(await prisma.scheduledAgent.count({ where: { accountId: srcId } })).toBe(0);
+    expect(await prisma.scheduledAgent.count({ where: { accountId: tgtId } })).toBe(1);
+  });
+
+  it('删账号时**删掉**——留着的话 worker 每天照常用一个已删除的 id 去建草稿', async () => {
+    const before = await makeSchedule(srcId);
+    // 删除前必须先归档（deleteAccount 的前置闸），不然拿到的是「只有已归档的账号能删除」
+    await prisma.creatorAccount.update({ where: { id: srcId }, data: { status: 'archived' } });
+    const r = await deleteAccount(tx, wsId, srcId, 'aiyafun');
+    expect(r.ok, 'error' in r ? r.error : '').toBe(true);
+    expect(await prisma.scheduledAgent.findUnique({ where: { id: before.id } })).toBeNull();
+    // 另一个账号的计划不许被连带删掉
+    const keep = await makeSchedule(tgtId);
+    expect(await prisma.scheduledAgent.findUnique({ where: { id: keep.id } })).not.toBeNull();
+  });
+
+  it('删除前的清单里要列出它——不然用户删完才发现自己的计划没了', async () => {
+    await makeSchedule(srcId);
+    const rows = await accountInventory(tx, srcId);
+    const row = rows.find((r) => r.key === 'scheduledAgent');
+    expect(row, '清单里没有定时智能体这一项').toBeTruthy();
+    expect(row!.count).toBe(1);
+  });
+});
+
 describe('合并账号', () => {
   it('数据全部搬到保留账号名下，来源账号不留空壳', async () => {
     await prisma.draft.create({ data: { accountId: srcId, title: '稿', platform: 'x' } });

@@ -1,64 +1,17 @@
-import dns from 'node:dns/promises';
-import net from 'node:net';
+import { assertPublicUrl } from './ssrf';
+import { checkRobots } from './robots';
 
 // 带 SSRF 护栏的网页抓取 —— 全站唯一入口。
 //
 // 原本长在 lib/skills/import.ts 里（「从网址导入技能」用），现在群里发链接也要抓正文，
-// 抽到这里共用。**不要再写第二份**：SSRF 护栏这种东西一旦有两份实现，
-// 迟早有一份会漏掉重定向复验或 IPv4-mapped IPv6 这类边角，而漏的那份不会有任何报错。
+// 抽到这里共用。**不要再写第二份**。
+// SSRF 护栏本身在 ./ssrf.ts（robots.ts 也要用它，留在这里会成循环 import）；
+// 下面这行 re-export 保留原来的入口，lib/skills/import.ts 等处不用改。
+export { assertPublicUrl, isPrivateIp } from './ssrf';
 
 const FETCH_TIMEOUT_MS = 10_000;
 const MAX_BYTES = 2_000_000; // 2MB 上限
 const MAX_REDIRECTS = 3;
-
-// ── SSRF 护栏 ────────────────────────────────────────────
-// 只允许 http/https + 公网地址。域名解析到内网、IP 字面量在私有段、localhost/.local 一律拒。
-// 手动跟随重定向并逐跳复验（防「重定向到内网」绕过）。不是防 DNS rebinding 的银弹，
-// 但挡住了直连内网/回环/云元数据（169.254.169.254）这类常见 SSRF 面。
-
-const PRIVATE_V4 = [/^10\./, /^127\./, /^169\.254\./, /^192\.168\./, /^172\.(1[6-9]|2\d|3[01])\./, /^0\./, /^100\.6[4-9]\./, /^100\.[7-9]\d\./, /^100\.1[01]\d\./, /^100\.12[0-7]\./];
-
-export function isPrivateIp(ip: string): boolean {
-  if (net.isIPv4(ip)) return PRIVATE_V4.some((r) => r.test(ip));
-  if (net.isIPv6(ip)) {
-    const lower = ip.toLowerCase();
-    if (lower === '::1' || lower === '::') return true;
-    if (lower.startsWith('fe80') || lower.startsWith('fc') || lower.startsWith('fd')) return true;
-    // IPv4-mapped ::ffff:a.b.c.d
-    const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-    if (mapped) return isPrivateIp(mapped[1]);
-    return false;
-  }
-  return false;
-}
-
-export async function assertPublicUrl(raw: string): Promise<URL> {
-  let u: URL;
-  try {
-    u = new URL(raw.trim());
-  } catch {
-    throw new Error('网址格式不合法');
-  }
-  if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('只支持 http/https 链接');
-  const host = u.hostname.toLowerCase();
-  if (host === 'localhost' || host.endsWith('.local') || host.endsWith('.internal') || host.endsWith('.localhost')) {
-    throw new Error('不允许访问内网 / 本机地址');
-  }
-  if (net.isIP(host)) {
-    if (isPrivateIp(host)) throw new Error('不允许访问内网 / 本机地址');
-    return u;
-  }
-  let addrs: { address: string }[];
-  try {
-    addrs = await dns.lookup(host, { all: true });
-  } catch {
-    throw new Error('无法解析该网址的域名');
-  }
-  if (addrs.length === 0 || addrs.some((a) => isPrivateIp(a.address))) {
-    throw new Error('不允许访问内网 / 本机地址');
-  }
-  return u;
-}
 
 /** GitHub 网页版 blob 链接 → raw 直链（避免拿到 HTML 外壳而非原文）。 */
 function normalizeGithubUrl(u: URL): URL {
@@ -74,10 +27,21 @@ export type FetchedPage = { finalUrl: URL; contentType: string; text: string };
 // 抓取抽象：默认走 safeFetch；单测注入假实现验证解析逻辑（不碰网络/DNS）。
 export type FetchPage = (url: string) => Promise<FetchedPage>;
 
-export async function safeFetch(startUrl: string, opts: { userAgent?: string } = {}): Promise<FetchedPage> {
+export async function safeFetch(
+  startUrl: string,
+  opts: { userAgent?: string; respectRobots?: boolean } = {},
+): Promise<FetchedPage> {
   const ua = opts.userAgent ?? 'BeaconBot/1.0 (+https://beacon.iyunci.cn)';
+  // 默认遵守 robots。关掉它必须是**显式**的一次决定，不能靠忘了传参数悄悄绕过
+  // （理由见 lib/web/robots.ts 文件头：违反 robots 会成为反法诉讼里对我们不利的事实）。
+  const respectRobots = opts.respectRobots !== false;
   let current = normalizeGithubUrl(await assertPublicUrl(startUrl));
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    // 每一跳都验：重定向可能落到另一个域，只验起点等于给「用跳转绕开 robots」开了门
+    if (respectRobots) {
+      const verdict = await checkRobots(current);
+      if (!verdict.allowed) throw new Error(`抓取被拒绝：${verdict.reason}`);
+    }
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
     let res: Response;

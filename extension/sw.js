@@ -1,4 +1,14 @@
 // 烽火台采集助手 · 后台 service worker。
+
+// 域名白名单与内容脚本共用**同一个文件**，不在这里再抄一份。
+// 抄一份的下场是确定的：改一处漏一处，而漏掉的那处正好是防线所在
+//（服务端也有一份同款清单，由 tests/ingest/read-allowlist-sync.test.ts 三方对账）。
+//
+// 【为什么要判一下 typeof】单测把这个文件当普通脚本求值，那里没有 importScripts。
+// 拿不到白名单时 openAndRead 会当场拒绝执行（它自己判 typeof beaconReadAllowed）——
+// **fail-closed**：宁可这条能力不可用，也不能在没有白名单的情况下去打开一个网址。
+if (typeof importScripts === 'function') importScripts('content/read-allowlist.js');
+
 const DEFAULT_HOST = 'https://beacon.iyunci.cn';
 const LIST_TTL_MS = 60 * 60 * 1000;
 
@@ -61,6 +71,9 @@ const LOCAL_KEYS_ON_UNLINK = [
   'lastSelfAutoLog',                           // 最近一次公众号自动回填结果
   'wechatThrottle',                            // 公众号采集节流记录
   'wechatFakeids',                             // 公众号名 → fakeid 缓存
+  // 公众号采集的风险确认。**要清**：确认是「这个人对这次使用」作出的意思表示，
+  // 换了工作区/换了人还沿用上一个人的确认，等于没告知过就开始采。
+  'wechatRiskAck',
   'authFail',
 ];
 
@@ -771,6 +784,13 @@ async function finishSelfAuto(note) {
   selfAutoRun = null;
   if (!run) return;
   clearTimeout(run.timer);
+  // 服务端派的活在这里交回真实结果。判据用「有没有真的写进数据」而不是「有没有报错」：
+  // 卡在登录页会走超时分支，那条路上一条数据都没采到，不能算成功。
+  if (run.taskId) {
+    const got = run.updated + run.created;
+    reportBrowserTask(run.taskId, got > 0, got > 0 ? `更新 ${run.updated} 新增 ${run.created}` : (note || '没采到数据'))
+      .catch(() => {});
+  }
   // 切到前台等用户登录的那一页**归用户了**，不许自动关掉——他可能正在扫码，
   // 或者刚登录完想留着这一页。「采完立即关闭」只对始终在后台的那种情形成立。
   if (run.tabId != null && !run.surfaced) await chrome.tabs.remove(run.tabId).catch(() => {});
@@ -794,10 +814,16 @@ async function runSelfAuto(opts = {}) {
   const { on } = await selfAutoSettings();
   // force = 用户在插件里**主动点**了「一键采集我的数据」。定时那条路仍然受开关约束，
   // 但主动点击不该被一个「每天自动回填」的开关挡住——那是两件事。
-  if (!on && !opts.force) return;
-  if (selfAutoRun) return; // 上一轮还没收尾，不叠加
+  // opts.platform = 服务端派下来的「去这个平台的后台回填」（BrowserTask），
+  // 它同样属于「有人明确要求」，不该被自动回填的开关挡住。
+  const requested = opts.force || !!opts.platform;
+  if (!on && !requested) return { ok: false, message: '自动回填开关是关着的' };
+  if (selfAutoRun) return { ok: false, message: '上一轮回填还没收尾' }; // 不叠加
   const { token } = await getConfig();
-  if (!token) { notifySelfAuto('自动回填没执行：插件设置里还没填采集令牌'); return; }
+  if (!token) {
+    notifySelfAuto('自动回填没执行：插件设置里还没填采集令牌');
+    return { ok: false, message: '还没填采集令牌' };
+  }
   // 入口只给裸地址：公众号会用会话 Cookie 302 到带 token 的地址，
   // **重定向会把我们自己加的查询参数丢掉**，所以「这是不是自动回填的标签页」
   // 绝不能靠 URL 上的标记来传递——由 SW 按 tabId 认，内容脚本每次加载问一句。
@@ -814,6 +840,10 @@ async function runSelfAuto(opts = {}) {
   selfAutoRun = {
     tabId: tab.id, step: 0, hops: 0, updated: 0, created: 0, skipped: 0,
     interactive: !!(opts.force || opts.interactive), surfaced: false,
+    // 服务端派下来的活：真正的结果要等 finishSelfAuto 才知道（这个函数开完标签页就返回，
+    // 采集是内容脚本一步步回消息推进的）。把 taskId 带在 run 状态上，收尾时再交活——
+    // 在这里交等于「开了个标签页」就报成功，而它可能卡在登录页直到超时。
+    taskId: opts.taskId || null,
   };
   // 兜底：内容脚本任何一步没回话（页面改版、卡在登录页、跳转成环），都不能把标签页留在那儿
   selfAutoRun.timer = setTimeout(() => { finishSelfAuto('自动回填超时：后台页没能在 90 秒内给出数据'); }, SELF_AUTO_TIMEOUT_MS);
@@ -1251,6 +1281,7 @@ function armUpdateAlarm() {
 }
 
 chrome.runtime.onInstalled.addListener(() => {
+  armTaskPollAlarm();
   setupContextMenus();
   armDailyAlarm();
   armSelfAutoAlarm();
@@ -1258,13 +1289,188 @@ chrome.runtime.onInstalled.addListener(() => {
   armUpdateAlarm();
   getCompetitors(true).then((r) => updateBadge(r.competitors));
 });
+// ── 领活的时机 ────────────────────────────────────────────────────────────
+//
+// 【为什么要提速】此前领活只顺着两个**每日**闹钟做，也就是 AI 派完活之后，
+// 用户最长要等将近一天才会有人去执行。而「说一句话 → 它去查 → 接着回答」
+// 这条闭环里，等一天等于这条路不存在。
+//
+// 【但也不能一直轮】每一次领活都是一次带令牌的请求。取 10 分钟是个折中：
+// 对话里等得起（多数任务在用户还在看这一页时就回来了），一天也只有百来次请求。
+// 用户可以在设置页关掉它——关掉之后仍然会在浏览器启动、打开侧栏时各领一次。
+const TASK_POLL_ALARM = 'beacon-task-poll';
+const TASK_POLL_MINUTES = 10;
+
+async function armTaskPollAlarm() {
+  const { taskPoll } = await chrome.storage.sync.get(['taskPoll']);
+  // 默认开：不开的话「AI 派了活」这件事对用户就是个永远不动的待办
+  if (taskPoll === false) {
+    await chrome.alarms.clear(TASK_POLL_ALARM);
+    return;
+  }
+  await chrome.alarms.create(TASK_POLL_ALARM, { periodInMinutes: TASK_POLL_MINUTES });
+}
+
 chrome.runtime.onStartup.addListener(() => {
+  armTaskPollAlarm();
+  // 浏览器一开就先领一次：用户昨晚派的活，今早打开浏览器就该开始跑，
+  // 而不是再等到下一个闹钟点
+  drainBrowserTasks().catch(() => {});
   chrome.alarms.get('beacon-daily', (a) => { if (!a) armDailyAlarm(); });
   armSelfAutoAlarm();
   armScheduledCollectAlarm();
   chrome.alarms.get(UPDATE_ALARM, (a) => { if (!a) armUpdateAlarm(); });
   getCompetitors(true).then((r) => updateBadge(r.competitors));
 });
+
+// ── 领服务端派下来的活 ─────────────────────────────────────────────────────
+//
+// 【为什么是插件来领，不是服务端推】扩展没有可被服务端主动唤醒的通道，
+// 用户的浏览器还可能整天关着。所以方向只能反过来：服务端把活排进队列（BrowserTask），
+// 插件醒来时（已有的那几个闹钟）顺手问一句「有我的活吗」。
+//
+// 【一次只做一个】领到就做、做完再领下一个，最多连做 MAX_TASKS_PER_WAKE 个。
+// 不一次性领一批：插件这边本来就是串行的（开标签页→等加载→解析→关页），
+// 而且用户随时可能关浏览器——领多了只会让它们卡在 claimed 上等租约过期。
+//
+// 【失败要如实交回】交回 ok:false 服务端会按可重试性决定放回池子还是判死。
+// 静默吞掉的话，那条活会一直卡到租约过期再被别人领走，反复失败三次才判死。
+const MAX_TASKS_PER_WAKE = 3;
+
+async function claimBrowserTask() {
+  const { host, token } = await getConfig();
+  if (!host || !token) return null;
+  try {
+    const res = await apiFetch(`${host}/api/ingest/tasks`, { headers: { 'x-beacon-ingest-token': token } });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data && data.ok ? data.task : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function reportBrowserTask(taskId, ok, note, data) {
+  const { host, token } = await getConfig();
+  if (!host || !token) return;
+  try {
+    await apiFetch(`${host}/api/ingest/tasks`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-beacon-ingest-token': token },
+      body: JSON.stringify({
+        taskId,
+        ok,
+        [ok ? 'result' : 'error']: String(note || '').slice(0, 300),
+        // data = 带回来的**内容本体**（目前只有 open_and_read 的页面正文）。
+        // 与 result 分开：那一句是「跑成没有」给人看的，这里是给服务端接着处理的原料
+        ...(data ? { data } : {}),
+      }),
+    });
+  } catch (e) {
+    /* 交活失败不影响已经采到的数据：那部分走 ingest 自己的通道，早就回传过了 */
+  }
+}
+
+// 每种 kind 怎么做。**这张表就是插件认识的全部动作**——
+// 服务端排了这里没有的 kind，会立刻交回失败而不是傻等，用户能在运行中心看见原因。
+async function runBrowserTask(task) {
+  if (task.kind === 'collect_competitor') {
+    const r = await batchCollect(null, { onlyCompetitorId: task.payload.competitorId, limit: task.payload.limit });
+    if (r && r.busy) return { ok: false, note: '插件正忙着别的采集，稍后重试' };
+    return { ok: true, note: `更新 ${(r && r.collected) || 0}/${(r && r.total) || 0}` };
+  }
+  if (task.kind === 'collect_self') {
+    // 这一支**不在这里交活**：runSelfAuto 开完标签页就返回，真正的结果要等内容脚本
+    // 一步步回消息、最后由 finishSelfAuto 汇总。taskId 传下去，让它收尾时交。
+    const r = await runSelfAuto({ platform: task.payload.platform, taskId: task.id });
+    // 只有「压根没启动」（开关关着/没令牌/上一轮没收尾）才在这里交回失败——
+    // 那种情况 finishSelfAuto 永远不会被调用，不交的话这条活会一直挂到租约过期
+    if (r && r.ok === false) return { ok: false, note: r.message || '回填没启动', reported: false };
+    return { ok: true, note: '', deferred: true };
+  }
+  if (task.kind === 'open_and_read') return openAndRead(task.payload);
+  return { ok: false, note: `这个版本的插件还不认识「${task.kind}」，请更新插件` };
+}
+
+/**
+ * 打开一个网页、把正文读回来。**这是唯一一个由服务端指定 URL 的动作**，所以闸最多。
+ *
+ * 三道校验缺一不可：
+ *   ① 派单时的 URL 必须在插件端硬编码的白名单里（服务端也校验，但那份不算数——
+ *      插件连的服务端地址是可配的，只信服务端等于没有防线）；
+ *   ② 页面加载完成后按**最终 URL** 再验一次（白名单域里到处是跳转口：
+ *      b23.tv、t.cn、youtube.com/redirect，派单时合法的 URL 落地可以是任意站点）；
+ *   ③ 只读文字，不点、不填、不滚动、不调平台接口——与其它采集动作同一条口径。
+ *
+ * 一律后台标签页、读完立即关闭，不抢占用户正在看的页面。
+ */
+async function openAndRead(payload) {
+  const url = (payload && payload.url) || '';
+  if (typeof beaconReadAllowed !== 'function' || !beaconReadAllowed(url)) {
+    return { ok: false, note: '这个网址不在允许打开的站点清单里' };
+  }
+
+  let tab = null;
+  try {
+    tab = await chrome.tabs.create({ url, active: false });
+    // 【怎么知道页面好了】不用 chrome.tabs.onUpdated，也不去读 tab.url——那两样都要
+    // "tabs" 权限（一个会显著扩大商店审核面的宽泛权限）。改成反复问内容脚本：
+    // 它答得上来就说明页面已经加载到能取正文了。这也是本文件里其它采集一直用的模式。
+    const res = await askPageText(tab.id, 25_000);
+    if (!res) return { ok: false, note: '页面加载超时，没读到内容' };
+    if (!res.ok) return { ok: false, note: res.error || '这一页不让读' };
+    if (!res.text) return { ok: false, note: '这一页没读到正文（可能要登录，或内容是图片/视频）' };
+
+    // 【最终 URL 的复验在内容脚本那侧做，不在这里】它跑在**落地后的那一页**上，
+    // 拿的是自己的 location.href——比服务工作者事后去读 tab.url 更准，也不需要额外权限。
+    // 跳转到白名单以外时，它会直接回 ok:false，上面那一行就拦住了。
+    return {
+      ok: true,
+      note: `读到 ${res.text.length} 字`,
+      data: { url, finalUrl: res.url || url, title: res.title || '', text: res.text },
+    };
+  } catch (e) {
+    return { ok: false, note: (e && e.message) || '打开页面时出错' };
+  } finally {
+    // 一律读完就关：后台标签页不抢占用户正在看的页面，也不留下痕迹
+    if (tab && tab.id != null) chrome.tabs.remove(tab.id).catch(() => {});
+  }
+}
+
+/** 反复问内容脚本要正文，直到它答得上来或超时。超时返回 null。 */
+async function askPageText(tabId, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const res = await chrome.tabs
+      .sendMessage(tabId, { type: 'beacon-page-text', cap: 60000, forTask: true })
+      .catch(() => null);
+    // 内容脚本还没注入时 sendMessage 直接 reject（catch 成 null），继续等；
+    // 它明确回了 ok:false（不在白名单）就别再问了，那是**结论**不是「还没好」
+    if (res && res.ok === false) return res;
+    if (res && res.ok && res.text) return res;
+    await new Promise((r) => setTimeout(r, 800));
+  }
+  return null;
+}
+
+async function drainBrowserTasks() {
+  for (let i = 0; i < MAX_TASKS_PER_WAKE; i++) {
+    const task = await claimBrowserTask();
+    if (!task) return;
+    let outcome;
+    try {
+      outcome = await runBrowserTask(task);
+    } catch (e) {
+      outcome = { ok: false, note: (e && e.message) || '执行时出错' };
+    }
+    // deferred = 这条活的结果由别的回调交（collect_self 走 finishSelfAuto）。
+    // 在这儿再交一次会把「刚启动」记成最终结果，把真实结果覆盖掉。
+    if (!outcome.deferred) await reportBrowserTask(task.id, outcome.ok, outcome.note, outcome.data);
+    // 异步收尾的那条已经占住了插件（selfAutoRun 不叠加），这一轮别再领下一个
+    if (outcome.deferred) return;
+  }
+}
+
 chrome.alarms.onAlarm.addListener((a) => {
   // 顺着已有的每日闹钟拉一次解析规则包（不新开一个闹钟：多一个定时器就多一处会忘的状态）。
   // 拉失败保留上一份缓存，见 refreshParserRules。
@@ -1273,11 +1479,16 @@ chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === 'beacon-self-auto') runSelfAuto();
   if (a.name === 'beacon-scheduled-collect') runScheduledCollect();
   if (a.name === UPDATE_ALARM) checkForUpdate(true);
+  // 顺着已有的两个采集闹钟领一次服务端派的活：不新开闹钟（多一个定时器就多一处会忘的状态，
+  // 同 refreshParserRules 挂在 beacon-daily 上的理由）。
+  if (a.name === 'beacon-daily' || a.name === 'beacon-scheduled-collect') drainBrowserTasks().catch(() => {});
+  if (a.name === TASK_POLL_ALARM) drainBrowserTasks().catch(() => {});
 });
 // 设置页改了开关/时间点就立刻重排闹钟——否则要等下次浏览器重启才生效
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'sync' && ('selfAutoCollect' in changes || 'selfAutoHour' in changes)) armSelfAutoAlarm();
   if (area === 'sync' && ('scheduledCollect' in changes || 'scheduledCollectHour' in changes)) armScheduledCollectAlarm();
+  if (area === 'sync' && 'taskPoll' in changes) armTaskPollAlarm();
   // 评论开关一改，右键菜单立刻跟上（菜单只在 onInstalled 建一次，不重建就要等下次装插件才生效）
   if (area === 'sync' && ('commentCollectOwn' in changes || 'commentCollectRival' in changes)) setupContextMenus();
 });
@@ -1326,7 +1537,13 @@ async function batchCollect(reportTabId, opts = {}) {
   startKeepAlive();
   try {
     const { competitors } = await getCompetitors(true);
-    const collectable = (competitors || []).filter((c) => c.collectable);
+    let collectable = (competitors || []).filter((c) => c.collectable);
+    // opts.onlyCompetitorId：服务端派下来的「去采这一个」（BrowserTask）。
+    // 缺了这一段，派活会静默变成**采全部**——用户以为只刷新了一个号，实际跑了一整轮，
+    // 还会撞平台频控。找不到那个 id 就采空集合，让上层如实报「没找到」，而不是退回全量。
+    if (opts.onlyCompetitorId) {
+      collectable = collectable.filter((c) => String(c.id) === String(opts.onlyCompetitorId));
+    }
     // 公众号没有公开主页（url 为 null），走后台接口那条路，且每轮有上限——单独分流。
     const wechatAll = collectable.filter((c) => c.platform === 'wechat');
     const wechatTargets = wechatAll.slice(0, WECHAT_RULES.maxAccountsPerRun);
@@ -1585,6 +1802,39 @@ async function readWechatThrottle() {
     : { perAccount: {}, blockedUntil: 0 };
 }
 
+// ── 公众号采集的风险确认闸（0.9.8 起）──────────────────────────────
+//
+// 【为什么要有这道闸】这条通道与插件其它所有采集**性质不同**：其它的都是读用户屏幕上
+// 已经渲染出来的公开页面，而这一条是用**用户自己的公众平台登录态**去调 `searchbiz` /
+// `appmsgpublish` 这两个**非官方**后台接口，查的还是**别人的**公众号。
+// 它可能违反《微信公众平台服务协议》，而踩线的后果落在**用户自己的公众号账号**上
+// （限接口、封功能），我们既挡不住也申诉不了。
+//
+// 代码里一直知道这件事（见 lib/wechat-collect-rules.ts 文件头「踩线的后果由用户自己的号
+// 承担，所以一律往保守取」），但**从没告诉过用户**——节流规则降低的是概率，
+// 不能代替告知。2026-08-24 合规审查把这个缺口补上：首次使用必须显式确认。
+//
+// 【为什么闸在这里而不在 UI】UI 有三个入口（弹窗、侧栏、网页派下来的任务），
+// 挂在任何一个上都会漏掉另外两个。collectWechatOne 是所有入口的**唯一咽喉**。
+const WECHAT_RISK_KEY = 'wechatRiskAck';
+// 告知内容实质变化时升这个版本号 → 用户需要重新确认一次。
+const WECHAT_RISK_VERSION = 1;
+
+async function wechatRiskAcked() {
+  const { [WECHAT_RISK_KEY]: ack } = await chrome.storage.local.get(WECHAT_RISK_KEY);
+  return !!ack && Number(ack.version) >= WECHAT_RISK_VERSION;
+}
+
+async function ackWechatRisk() {
+  await chrome.storage.local.set({
+    [WECHAT_RISK_KEY]: { version: WECHAT_RISK_VERSION, at: Date.now() },
+  });
+}
+
+async function revokeWechatRisk() {
+  await chrome.storage.local.remove(WECHAT_RISK_KEY);
+}
+
 // 放行返回 null，拦下返回**给用户看的理由**。静默跳过是不行的：用户点了没反应，
 // 会以为功能坏了然后猛点——那正是我们要避免的行为。
 async function wechatGate(name) {
@@ -1765,6 +2015,15 @@ async function activeWechatBackendTab() {
 // 只有这种时候才允许把标签页切到前台等他登录：定时/后台那轮多半人不在，
 // 弹一个前台页出来既打断不了别人也帮不到自己，只会在他回来时看到一堆莫名其妙的窗口。
 async function collectWechatOne(name, opts = {}) {
+  // 风险确认在最前面：还没告知过用户，就一个请求都不该发出去。
+  // 定时那轮（interactive=false）同样拦——用户没确认过，自动跑更不能开始。
+  if (!(await wechatRiskAcked())) {
+    return {
+      ok: false,
+      code: 'risk_unacked',
+      error: '公众号采集使用你自己的公众号后台登录态调用非官方接口，可能违反微信平台协议、导致你的号被限。请先在插件里确认知悉该风险。',
+    };
+  }
   const blocked = await wechatGate(name);
   if (blocked) return { ok: false, code: 'throttled', error: blocked };
 
@@ -1963,6 +2222,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === 'batch-collect') {
     batchCollect(_sender?.tab?.id, { interactive: true }); // 用户此刻就在等着，未登录可以把登录页摆给他
     sendResponse({ ok: true, started: true });
+    return true;
+  }
+  if (msg?.type === 'wechat-risk-status') {
+    wechatRiskAcked().then((acked) => sendResponse({ ok: true, acked, version: WECHAT_RISK_VERSION }));
+    return true;
+  }
+  if (msg?.type === 'wechat-risk-ack') {
+    // 只认 true。前端传别的（undefined、'false' 字符串）一律当作撤回——
+    // 这道闸宁可多问一次，也不能因为一个手滑的参数就默认放行。
+    const p = msg.acked === true ? ackWechatRisk() : revokeWechatRisk();
+    p.then(() => sendResponse({ ok: true, acked: msg.acked === true }));
     return true;
   }
   if (msg?.type === 'wechat-collect-one') {

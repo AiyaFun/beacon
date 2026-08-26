@@ -1,7 +1,7 @@
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { can } from '@/lib/rbac';
-import { PageHead, Card, Stat, Empty, Meter } from '@/components/ui';
+import { Card, Stat, Empty, Meter } from '@/components/ui';
 import { Icon } from '@/components/icons';
 import { tierFor, getUsageBill } from '@/lib/quota';
 import { beijingStartOfMonth } from '@/lib/beijing';
@@ -12,6 +12,7 @@ import { payVendorConfigured } from '@/lib/pay/provider';
 import { Checkout } from './Checkout';
 import { RefundButton } from './RefundButton';
 import { fmtDateFull, fmtDateTime } from '@/lib/format';
+import { HubHeader } from '@/components/HubHeader';
 
 export const dynamic = 'force-dynamic';
 
@@ -92,9 +93,9 @@ export default async function BillingPage() {
 
   return (
     <>
-      <PageHead
+      <HubHeader
         title="套餐与计费"
-        desc={`新用户注册即送 ${TRIAL_DAYS} 天标准版 · 微信扫码支付 · 手动续费`}
+        hint={`新用户注册即送 ${TRIAL_DAYS} 天标准版 · 微信扫码支付 · 手动续费`}
         action={<span className="badge badge-gradient-brand">{PLAN_LABEL[current]}</span>}
       />
 

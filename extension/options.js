@@ -16,6 +16,8 @@ const selfAutoEl = document.getElementById('selfAutoCollect');
 const selfAutoHourEl = document.getElementById('selfAutoHour');
 
 const commentCollectOwnEl = document.getElementById('commentCollectOwn');
+const wechatRiskAckEl = document.getElementById('wechatRiskAck');
+const autoClickPublishEl = document.getElementById('autoClickPublish');
 const commentCollectRivalEl = document.getElementById('commentCollectRival');
 
 // Populate hour dropdowns (00:00 - 23:00)
@@ -82,6 +84,7 @@ chrome.storage.sync
     'selfAutoCollect',
     'selfAutoHour',
     'commentCollectOwn',
+    'autoClickPublish',
     'commentCollectRival',
   ])
   .then((s) => {
@@ -99,11 +102,20 @@ chrome.storage.sync
     selfAutoHourEl.value = String(Number.isInteger(s.selfAutoHour) ? s.selfAutoHour : 9);
 
     commentCollectOwnEl.checked = s.commentCollectOwn === true;
+    // 默认关：只有显式存过 true 才算开（=== true，不是真值判断）
+    autoClickPublishEl.checked = s.autoClickPublish === true;
     commentCollectRivalEl.checked = s.commentCollectRival === true;
 
     renderScheduledStatusLog();
     renderSelfAutoLog();
   });
+
+// 公众号采集的风险确认。**不走 storage.sync**：它是「这台设备上这个人」作出的意思表示，
+// 不该跨设备同步；而且它带版本号（告知内容改了要重新确认），判定逻辑只有 sw.js 一份。
+// 这里只问 sw.js 要状态、把结果反映到开关上。
+chrome.runtime.sendMessage({ type: 'wechat-risk-status' })
+  .then((r) => { if (wechatRiskAckEl) wechatRiskAckEl.checked = r?.acked === true; })
+  .catch(() => {});
 
 // ── 回填归属：绑定一个创作账号 ──
 // 不绑定就由服务端按平台猜（同平台第一个活跃账号）。一个工作区经营两个抖音号时这必然错一半，
@@ -189,6 +201,29 @@ commentCollectOwnEl.addEventListener('change', () => {
   chrome.storage.sync.set({ commentCollectOwn: commentCollectOwnEl.checked });
   show(commentCollectOwnEl.checked ? '已开启自有作品评论提问采集' : '已关闭自有作品评论提问采集', true);
 });
+wechatRiskAckEl?.addEventListener('change', async () => {
+  const on = wechatRiskAckEl.checked;
+  const r = await chrome.runtime.sendMessage({ type: 'wechat-risk-ack', acked: on }).catch(() => null);
+  // 以 sw.js 回的结果为准再回写一次开关：写失败时开关不能停在用户以为生效的那个位置，
+  // 那会让人觉得「我明明关了」而它还在采。
+  wechatRiskAckEl.checked = r?.acked === true;
+  show(
+    wechatRiskAckEl.checked
+      ? '已开启公众号竞对采集：风险由你自己的公众号账号承担'
+      : '已关闭公众号竞对采集：插件不再发起任何公众号后台请求',
+    true,
+  );
+});
+autoClickPublishEl.addEventListener('change', () => {
+  chrome.storage.sync.set({ autoClickPublish: autoClickPublishEl.checked });
+  show(
+    autoClickPublishEl.checked
+      ? '已开启代点发布：填完会有 5 秒倒计时，随时可取消'
+      : '已关闭代点发布：只填内容，发布按钮由你自己点',
+    true,
+  );
+});
+
 commentCollectRivalEl.addEventListener('change', () => {
   chrome.storage.sync.set({ commentCollectRival: commentCollectRivalEl.checked });
   show(commentCollectRivalEl.checked ? '已开启竞对作品评论提问采集' : '已关闭竞对作品评论提问采集', true);

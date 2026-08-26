@@ -5,6 +5,8 @@ import { PageHead, Stat, Fold } from '@/components/ui';
 import { Icon } from '@/components/icons';
 import { LibraryBoard, type LibraryItem } from './LibraryBoard';
 import { VideoAnalyzeCard } from './VideoAnalyzeCard';
+import { IntelTabs } from '@/components/IntelTabs';
+import { HubHeader } from '@/components/HubHeader';
 
 export const dynamic = 'force-dynamic';
 
@@ -60,9 +62,10 @@ export default async function LibraryPage() {
 
   return (
     <>
-      <PageHead
-        title="内容资讯库"
-        desc="跨平台阅读存档 · 全文结构化摘要 · 核心要点提炼 · 账号定制洞察"
+      <HubHeader
+        title="看情报"
+        hint="跨平台阅读存档 · 全文结构化摘要 · 核心要点提炼 · 账号定制洞察"
+        tabs={<IntelTabs active="library" inline />}
       />
 
       {/* 核心指标与概览 - 紧凑型单行横栏 */}

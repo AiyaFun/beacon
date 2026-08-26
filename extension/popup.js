@@ -277,7 +277,13 @@ function filterAndRenderList() {
       // 都要说出来——静默失败会让用户以为坏了然后猛点。
       go.disabled = true;
       go.textContent = '采集中…';
-      const r = await ask({ type: 'wechat-collect-one', name: c.handle });
+      let r = await ask({ type: 'wechat-collect-one', name: c.handle });
+      // 还没确认过风险：把告知摆出来让用户读完再决定，确认了才重试这一次采集。
+      // 不确认就到此为止——一个请求都没发出去过（闸在 sw.js 的 collectWechatOne 最前面）。
+      if (r?.code === 'risk_unacked') {
+        const agreed = await askWechatRisk();
+        r = agreed ? await ask({ type: 'wechat-collect-one', name: c.handle }) : { ok: false, error: '已取消——未确认风险，公众号采集保持关闭' };
+      }
       go.disabled = false;
       go.textContent = '后台采集';
       const sub = row.querySelector('.csub');
@@ -293,6 +299,44 @@ function filterAndRenderList() {
     row.appendChild(go);
     clistEl.appendChild(row);
   }
+}
+
+// 摆出风险告知，等用户勾选并点确认。resolve(true) 才算同意。
+//
+// 用就地面板而不是 window.confirm：扩展 popup 里的原生弹窗行为在各版本 Chrome 上不一致
+// （有的直接被吞掉），而这是一次**必须让用户真的看见**的告知——被吞掉等于没告知。
+// 勾选框与确认按钮分开：只点按钮不算，必须先勾。
+function askWechatRisk() {
+  const panel = document.getElementById('wechatRisk');
+  const check = document.getElementById('wechatRiskCheck');
+  const ok = document.getElementById('wechatRiskOk');
+  const cancel = document.getElementById('wechatRiskCancel');
+  if (!panel || !check || !ok || !cancel) return Promise.resolve(false);
+
+  check.checked = false;
+  ok.disabled = true;
+  panel.style.display = '';
+  panel.scrollIntoView({ block: 'nearest' });
+
+  return new Promise((resolve) => {
+    const cleanup = () => {
+      panel.style.display = 'none';
+      check.removeEventListener('change', onCheck);
+      ok.removeEventListener('click', onOk);
+      cancel.removeEventListener('click', onCancel);
+    };
+    const onCheck = () => { ok.disabled = !check.checked; };
+    const onOk = async () => {
+      if (!check.checked) return; // 双保险：按钮 disabled 之外再挡一次
+      await ask({ type: 'wechat-risk-ack', acked: true });
+      cleanup();
+      resolve(true);
+    };
+    const onCancel = () => { cleanup(); resolve(false); };
+    check.addEventListener('change', onCheck);
+    ok.addEventListener('click', onOk);
+    cancel.addEventListener('click', onCancel);
+  });
 }
 
 document.getElementById('searchComp')?.addEventListener('input', filterAndRenderList);

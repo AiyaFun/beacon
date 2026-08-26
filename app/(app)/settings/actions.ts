@@ -18,6 +18,7 @@ import { checkRateLimit, getClientIp, ipKey, retryHint } from '@/lib/ratelimit';
 import { isProd } from '@/lib/env';
 import { getSmsProvider } from '@/lib/sms/provider';
 import { encryptKey, decryptKey } from '@/lib/crypto';
+import { channelOf } from '@/lib/publish/capability';
 import { OpenAICompatibleProvider } from '@/lib/llm/openai-compatible';
 import { checkVendorEndpoint, canUseOverseas, LLM_FUNCTIONS, looksNonChatModel } from '@/lib/constants';
 import { pingProvider } from '@/lib/llm/connectivity';
@@ -282,18 +283,45 @@ export async function actSavePublishCredential(data: {
   platform: string;
   appId: string;
   appSecret: string;
+  /** 仅微博：正文必须带的那条回链（微博强制要求在应用安全域名之下） */
+  linkUrl?: string;
 }): Promise<{ ok: boolean; error?: string }> {
   const s = await getSession();
   requireRole(s, 'byok.manage');
-  if (data.platform !== 'wechat') return { ok: false, error: '目前只支持微信公众号' };
+  // 能填凭证的平台 = 能力矩阵里 channel==='api' 的那些。写死清单会漂：
+  // 加了一个接口直发平台却忘了改这里，用户填不进去，还以为是自己填错了。
+  if (channelOf(data.platform) !== 'api') return { ok: false, error: '这个平台没有官方接口直发通道，填了也用不上' };
   const appId = data.appId.trim();
   const appSecret = data.appSecret.trim();
-  if (!appId || !appSecret) return { ok: false, error: 'AppID 与 AppSecret 都要填' };
+  if (!appId || !appSecret) return { ok: false, error: '两个凭证字段都要填' };
+  const linkUrl = (data.linkUrl ?? '').trim();
+  // 微博的硬要求：正文必须带一条安全域名下的链接。填错格式当场拦下，
+  // 别等到发的时候被微博 20032 打回来（那时用户已经以为发出去了）。
+  if (data.platform === 'weibo' && linkUrl && !/^https?:\/\/[^\s]+$/.test(linkUrl)) {
+    return { ok: false, error: '回链地址要是完整链接（http(s):// 开头），且必须在你微博应用的「安全域名」之下' };
+  }
 
   await prisma.publishCredential.upsert({
-    where: { accountId_platform: { accountId: s.accountId, platform: 'wechat' } },
-    create: { accountId: s.accountId, platform: 'wechat', appId, appSecretEnc: encryptKey(appSecret), status: 'untested' },
-    update: { appId, appSecretEnc: encryptKey(appSecret), status: 'untested', lastError: null },
+    where: { accountId_platform: { accountId: s.accountId, platform: data.platform } },
+    create: {
+      accountId: s.accountId,
+      platform: data.platform,
+      appId,
+      appSecretEnc: encryptKey(appSecret),
+      status: 'untested',
+      linkUrl: linkUrl || null,
+    },
+    // 改了 AppKey/Secret 就把旧 token 作废：那把 token 是用旧应用换的，留着只会发到别的号上去
+    update: {
+      appId,
+      appSecretEnc: encryptKey(appSecret),
+      status: 'untested',
+      lastError: null,
+      linkUrl: linkUrl || null,
+      tokenEnc: null,
+      tokenExpiresAt: null,
+      externalUid: null,
+    },
   });
   revalidatePath('/settings/keys');
   return { ok: true };
@@ -311,11 +339,23 @@ export async function actDeletePublishCredential(platform: string): Promise<{ ok
 export async function actTestPublishCredential(platform: string): Promise<{ ok: boolean; error?: string; detail?: string }> {
   const s = await getSession();
   requireRole(s, 'byok.manage');
-  if (platform !== 'wechat') return { ok: false, error: '目前只支持微信公众号' };
   const cred = await prisma.publishCredential.findUnique({
-    where: { accountId_platform: { accountId: s.accountId, platform: 'wechat' } },
+    where: { accountId_platform: { accountId: s.accountId, platform } },
   });
-  if (!cred) return { ok: false, error: '还没配置公众号凭证' };
+  if (!cred) return { ok: false, error: '还没配置这个平台的凭证' };
+
+  // 微博没有「不发内容也能验一次」的接口：换 token 要用户授权、发一条就是真发出去了。
+  // 所以这里**如实说测不了**，而不是假装测过（一键检测那条铁律：不发测试消息、不真出图）。
+  if (platform === 'weibo') {
+    if (!cred.tokenEnc) return { ok: false, error: '还没授权微博账号，点上面的「授权微博」走一次授权' };
+    const left = cred.tokenExpiresAt ? Math.floor((cred.tokenExpiresAt.getTime() - Date.now()) / 86_400_000) : null;
+    if (left !== null && left <= 0) return { ok: false, error: '微博授权已过期，需要重新授权' };
+    return {
+      ok: true,
+      detail: `已授权${cred.externalUid ? `（微博 uid ${cred.externalUid}）` : ''}${left !== null ? `，约 ${left} 天后过期` : ''}。微博没有无副作用的测试接口，这里只核对授权状态，不发测试内容。`,
+    };
+  }
+  if (platform !== 'wechat') return { ok: false, error: '这个平台还没有可测的接口' };
 
   const { wxAccessToken, resetWxTokenCache } = await import('@/lib/publish/wechat-mp');
   resetWxTokenCache(); // 测试要打真实请求，不能被上一枚缓存的 token 蒙混过关

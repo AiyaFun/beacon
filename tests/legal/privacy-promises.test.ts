@@ -110,8 +110,17 @@ describe('承诺兑现在代码里，不只在文本里', () => {
   // 真正守住它的是行为测试：tests/legal/removal-resolve.test.ts
   // 「正文只删被申请那个账号的」「自有作品的正文不受影响」「从没进过竞对库也要删得掉」三条。
   it('🔒 移除承诺由行为测试守着，不是靠这里的源码扫描', () => {
+    // 【要断的是那三条用例还在，不是那个词还在】原来断的是 `toContain('readerComments')`，
+    // 而那个词在别处也有（readerCommentsByWork 之类），三条用例被删光它照样绿——
+    // 一条守着「别的守卫还在」的守卫，自己失效是最不容易发现的。
     const behavior = read('tests/legal/removal-resolve.test.ts');
-    expect(behavior).toContain('readerComments');
+    for (const must of [
+      '正文只删被申请那个账号的',
+      '自有作品的正文（scope=own）不受影响',
+      '账号从没进过竞对库，也要删得掉它名下的正文',
+    ]) {
+      expect(behavior, `行为测试里「${must}」这条没了——移除承诺就没人守了`).toContain(must);
+    }
     expect(behavior).toContain('prisma.readerComment.count()');
   });
 
@@ -264,6 +273,77 @@ describe('内容脚本清单：manifest 里有的，政策清单里不许漏', (
     for (const file of declared) {
       expect(STORE_MD, `政策的内容脚本清单里没有 ${file}——那句「manifest 里可逐条核对」就成了假话`)
         .toContain(file);
+    }
+  });
+});
+
+describe('「打开指定网址并读取正文」：政策与代码必须对得上（0.9.6 新增）', () => {
+  it('🔒 三份政策都写明了它、且都说明「默认关闭」', async () => {
+    for (const [name, text] of ALL_POLICIES) {
+      expect(text, `${name} 完全没提这条能力——而它是唯一一件「读哪一页由服务端决定」的动作`)
+        .toMatch(/打开指定网址并读取正文/);
+      expect(text, `${name} 没说清它默认是关的`).toMatch(/默认关闭|默认即为关闭/);
+    }
+  });
+
+  it('🔒 站点清单：政策里列出的，与代码里的白名单逐条对得上', async () => {
+    // 这条守的是最容易漂的地方：代码里加一个域名，政策忘了改——
+    // 那就是「实际能打开的站点比公示的多」，属于下架级问题而不是文案问题
+    const { BROWSER_READ_ALLOWED_ORIGINS } = await import('@/lib/browser-task/read-allowlist');
+    const nameOf: Record<string, string> = {
+      'https://www.douyin.com': '抖音',
+      'https://www.bilibili.com': 'B站',
+      'https://www.kuaishou.com': '快手',
+      'https://www.tiktok.com': 'TikTok',
+      'https://www.xiaohongshu.com': '小红书',
+      'https://www.zhihu.com': '知乎',
+      'https://zhuanlan.zhihu.com': '知乎',
+      'https://weibo.com': '微博',
+      'https://www.weibo.com': '微博',
+      'https://mp.weixin.qq.com': '公众号',
+      'https://www.toutiao.com': '头条',
+      'https://baijiahao.baidu.com': '百家号',
+      'https://x.com': 'X',
+      'https://twitter.com': 'X',
+      'https://www.youtube.com': 'YouTube',
+    };
+    // 代码里出现了清单里没登记名字的域名 = 加域名时漏了这一步，先在这里拦下
+    for (const origin of BROWSER_READ_ALLOWED_ORIGINS) {
+      expect(nameOf[origin], `白名单里的 ${origin} 还没在这条用例里登记中文名，政策也多半没写`).toBeTruthy();
+    }
+    const needed = Array.from(new Set(BROWSER_READ_ALLOWED_ORIGINS.map((o) => nameOf[o])));
+    for (const [name, text] of ALL_POLICIES) {
+      for (const label of needed) {
+        expect(text, `${name} 的站点清单里没有「${label}」——实际能打开的比公示的多`).toContain(label);
+      }
+    }
+  });
+
+  it('🔒 那句「服务端不能下发任意指令」已经撤掉——它现在是假话', () => {
+    // 撤改而不是补充：open_and_read 字面上就是「打开某个网址」。
+    // 留着原话 = 政策与行为直接相反，这正是 08-13 那批缺陷的形状
+    expect(STORE_MD, '旧的否定承诺还在，而代码已经能下发网址了')
+      .not.toMatch(/服务端不能下发任意指令（例如「打开某个网址」/);
+    // 但边界仍然要说清楚：不能点击、不能填表、不能执行任意脚本
+    expect(STORE_MD, '撤了旧话却没给出新的边界，等于什么都没说')
+      .toMatch(/不能让插件点击按钮|不能让扩展点击按钮/);
+  });
+
+  it('🔒 领活时机变了，政策里那句「不新增定时器、不常驻轮询」也要撤', () => {
+    // 0.9.6 起加了「每 10 分钟问一次有没有我的活」。留着原话就是又一条与行为相反的承诺
+    expect(STORE_MD, '加了轮询闹钟，政策却还写着不新增定时器')
+      .not.toMatch(/\*\*不新增定时器、不常驻轮询\*\*/);
+    for (const [name, text] of ALL_POLICIES) {
+      expect(text, `${name} 没说明新增的轮询频率`).toMatch(/每 10 分钟/);
+    }
+    // 频率必须与代码里的常量一致
+    const sw = SW.replace(/^\s*\/\/.*$/gm, '');
+    expect(sw, 'sw 里的轮询间隔与政策写的对不上').toMatch(/TASK_POLL_MINUTES = 10/);
+  });
+
+  it('🔒 明说不回传截图（这是与「读正文」最容易被混淆的一件事）', () => {
+    for (const [name, text] of ALL_POLICIES) {
+      expect(text, `${name} 没说清不回传截图`).toMatch(/不含截图|不回传截图/);
     }
   });
 });

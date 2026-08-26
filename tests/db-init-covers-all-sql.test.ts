@@ -24,11 +24,30 @@ describe('db-init 覆盖全部 SQL', () => {
   });
 
   it('每份 SQL 都是幂等的（重复跑安全）—— 否则「重跑安装脚本」会炸', () => {
+    // 【逐条判，不是整份判】原来只要文件里**任何一处**出现 IF NOT EXISTS 就算过，
+    // 于是一份十条语句、只有第一条幂等的 SQL 照样绿——而重跑时炸的是后面那九条。
+    // 这条守卫存在的理由（安装脚本会被重跑、02-rls 每次加表都要重跑）恰恰要求逐条成立。
     const files = fs.readdirSync('prisma/postgres').filter((f) => f.endsWith('.sql'));
+    expect(files.length, '一份 SQL 都没扫到，这条守卫自己坏了').toBeGreaterThanOrEqual(9);
+
     for (const f of files) {
-      const sql = fs.readFileSync(`prisma/postgres/${f}`, 'utf-8');
-      const idempotent = /IF NOT EXISTS|IF EXISTS|CREATE OR REPLACE|DROP POLICY IF EXISTS/i.test(sql);
-      expect(idempotent, `${f} 看不出幂等写法（IF NOT EXISTS / DROP ... IF EXISTS / CREATE OR REPLACE）`).toBe(true);
+      const sql = fs.readFileSync(`prisma/postgres/${f}`, 'utf-8')
+        .replace(/--[^\n]*/g, '')
+        .replace(/\/\*[\s\S]*?\*\//g, '');
+      const bad: string[] = [];
+      for (const kw of [
+        [/CREATE\s+TABLE\s+(?!IF\s+NOT\s+EXISTS)/gi, 'CREATE TABLE 少了 IF NOT EXISTS'],
+        [/CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?!IF\s+NOT\s+EXISTS)/gi, 'CREATE INDEX 少了 IF NOT EXISTS'],
+        [/ADD\s+COLUMN\s+(?!IF\s+NOT\s+EXISTS)/gi, 'ADD COLUMN 少了 IF NOT EXISTS'],
+      ] as const) {
+        if ((sql.match(kw[0] as RegExp) ?? []).length > 0) bad.push(kw[1] as string);
+      }
+      // 策略没有 CREATE POLICY IF NOT EXISTS 这种写法，只能靠前面先 DROP
+      const created = (sql.match(/CREATE\s+POLICY\s/gi) ?? []).length;
+      const dropped = (sql.match(/DROP\s+POLICY\s+IF\s+EXISTS/gi) ?? []).length;
+      if (created > dropped) bad.push(`${created} 条 CREATE POLICY 只配了 ${dropped} 条 DROP POLICY IF EXISTS`);
+
+      expect(bad, `${f} 有不幂等的语句：${bad.join('；')}`).toEqual([]);
     }
   });
 });

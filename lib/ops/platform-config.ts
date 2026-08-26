@@ -147,14 +147,20 @@ export async function assertPlatformBudget(): Promise<void> {
     if (spent >= monthlyUsdCap) {
       throw new QuotaExceededError(
         '平台本月的模型预算已用尽。在「接入与密钥」配置你自己的 API Key 即可继续使用（不占平台预算）。',
+        'platform',
       );
     }
   }
   if (dailyUsdCap !== null) {
     const spent = await platformSpendUsd('day');
     if (spent >= dailyUsdCap) {
+      // scope 是 platform 而不是 daily：这道闸虽然也按日重置，但它是**全平台共享**的一个池子。
+      // 标成 daily 会让所有撞墙的后台执行都挂起等 0 点，然后在 0 点集中醒来、瞬间把新预算
+      // 再烧光一次（踩踏）。而用户手上有一条当场就能走通的路（配自己的 Key），
+      // 如实判死并把这条路说出来，比挂一夜再失败一次强。
       throw new QuotaExceededError(
         '平台今日的模型预算已用尽，明日 0 点（北京时间）重置。在「接入与密钥」配置你自己的 API Key 即可立即继续使用。',
+        'platform',
       );
     }
   }

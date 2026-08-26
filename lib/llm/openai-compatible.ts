@@ -23,6 +23,28 @@ export const DEFAULT_TIMEOUT_MS = 30_000;
 const JSON_NUDGE ='只输出合法的 JSON 本身，不要用 markdown 代码块（```）包裹，也不要任何解释性文字。';
 
 /** 剥掉模型偶尔加的 ```json ... ``` 代码块围栏，返回可被严格 JSON.parse 的裸文本。 */
+/**
+ * 剥掉推理模型的思考块。
+ *
+ * 【为什么必须在出口做】MiniMax M 系（M2.5 / M3）、以及多数「推理模型」，会把整段
+ * 内心独白放进 `message.content` 再接正式回答：
+ *   <think>用户要建草稿。但我没有他的人设信息……我决定先问他。</think>
+ *   在创建之前，我需要先确认一下你的写作偏好……
+ * 不剥的话，用户看到的答案里就带着模型的自言自语——本项目在提示词泄漏上栽过三次，
+ * 结论一直是同一条：**提示词只降概率，出口清洗才是保证**。
+ *
+ * 做在这里而不是执行器里：所有功能（打分/生成/会诊/助手）共用这一个出口，
+ * 挂在这儿就不会出现「换个入口又漏出来」。
+ *
+ * 只剥成对的标签。**落单的开标签一律不动**——那多半是用户自己的正文里写了
+ * 「<think> 是什么意思」，剥到最后会把人家半篇稿子吃掉。
+ */
+export function stripThinking(text: string): string {
+  if (!text || !text.includes('<think')) return text;
+  const out = text.replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '');
+  return out.trim() === '' ? text.trim() : out.trim();
+}
+
 export function stripJsonFences(text: string): string {
   const t = text.trim();
   const fence = t.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i);
@@ -185,7 +207,7 @@ export class OpenAICompatibleProvider implements LlmProvider {
       usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
     const message = data.choices?.[0]?.message;
-    let text = message?.content ?? '';
+    let text = stripThinking(message?.content ?? '');
     // json 模式下剥掉可能的代码块围栏，交给上层 parseJson（严格解析）时不至于兜底失败
     if (wantJson) text = stripJsonFences(text);
     // 工具调用：名字为空的条目直接丢弃——没有名字的调用请求没法执行，

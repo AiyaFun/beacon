@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import { prisma } from '@/lib/db';
 import { parseSteps, stepsSchema, stepLabel, stepCostly } from '@/lib/workflow/steps';
 import {
@@ -10,7 +12,10 @@ import {
   exportTemplate,
   importTemplate,
 } from '@/lib/workflow/market';
+
+const ROOT = path.resolve(__dirname, '../..');
 import { BUILTIN_WORKFLOWS } from '@/lib/workflow/builtin';
+import { BUILTIN_SKILLS } from '@/prisma/system-data';
 
 // 模板市场。要钉住的是「别人给的模板不可信」这条：导入的 JSON 必须过同一套 schema，
 // 且步骤类型是白名单——否则模板就成了一个可以被分享的任意执行通道。
@@ -53,6 +58,16 @@ describe('步骤 schema', () => {
   });
 });
 
+describe('内置模板落库不许带进程内记忆', () => {
+  it('连着调两次、中间清空库，第二次仍然要把模板写回去', () => {
+    // 曾经给它加过「本进程已同步」的标记省那三次 upsert，结果 beforeEach 清库之后
+    // 标记还在，从第二个用例起内置模板永远不再落库。这条用例就是当时红掉的那批的浓缩版：
+    // 它跑在**别的用例已经调过 ensureBuiltinTemplates 之后**，能落库就说明没有残留记忆。
+    const src = fs.readFileSync(path.join(ROOT, 'lib/workflow/market.ts'), 'utf8');
+    expect(src, '又给 ensureBuiltinTemplates 加缓存标记了').not.toMatch(/builtinsSynced/);
+  });
+});
+
 describe('内置模板', () => {
   it('落库是幂等的（读的时候顺手做，不依赖种子脚本）', async () => {
     await ensureBuiltinTemplates();
@@ -64,6 +79,23 @@ describe('内置模板', () => {
   it('内置模板的步骤全部合法（写错了会在市场里变成空模板）', () => {
     for (const w of BUILTIN_WORKFLOWS) {
       expect(stepsSchema.safeParse(w.steps).success, `${w.slug} 步骤不合法`).toBe(true);
+    }
+  });
+
+  it('内置模板引用的技能 slug 必须真实存在（schema 合法 ≠ 跑得起来）', () => {
+    // 「小红书日更三件套」的第二步曾经写着 slug 'xhs-note'，而内置技能表里只有 'xhs-format'。
+    // 步骤 schema 照过（slug 只要是字符串就合法），模板在市场里看着一切正常，
+    // 但每次跑到第二步都停在「找不到技能」——开箱即用的第一条模板一直是坏的。
+    // 内置技能的 slug 是全局唯一键，自建技能恒为 custom-* 不可能补上这个洞。
+    const builtinSkillSlugs = new Set(BUILTIN_SKILLS.map((s) => s.slug));
+    for (const w of BUILTIN_WORKFLOWS) {
+      for (const step of w.steps) {
+        if (step.kind !== 'skill') continue;
+        expect(
+          builtinSkillSlugs.has(step.slug),
+          `内置模板 ${w.slug} 引用了不存在的内置技能「${step.slug}」（现有：${[...builtinSkillSlugs].join(' / ')}）`,
+        ).toBe(true);
+      }
     }
   });
 

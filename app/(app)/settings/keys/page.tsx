@@ -8,15 +8,16 @@ import { readBotSecrets } from '@/lib/bot';
 import { can } from '@/lib/rbac';
 import { LLM_FUNCTIONS, type LlmFunction, looksNonChatModel } from '@/lib/constants';
 import { listIngestTokens } from '@/lib/ingest/token';
-import { PageHead, Card, Stat, Empty } from '@/components/ui';
+import { Card, Stat, Empty } from '@/components/ui';
 import { Icon } from '@/components/icons';
 import { ProviderForm } from '../ProviderForm';
 import { ProviderRow } from '../ProviderRow';
 import { FunctionRouting } from '../FunctionRouting';
 import { IngestTokenCard } from '../IngestTokenCard';
-import { PublishChannelCard } from '../PublishChannelCard';
+import { PublishChannelCard, type CredView } from '../PublishChannelCard';
 import { BotIntegrationCard, type BotRow } from '../BotIntegrationCard';
 import { CheckAllCard } from './CheckAllCard';
+import { HubHeader } from '@/components/HubHeader';
 
 export const dynamic = 'force-dynamic';
 
@@ -50,10 +51,14 @@ const FN_META: Record<LlmFunction, { name: string; tier: string; desc: string; o
   generation: { name: '内容生成', tier: '强模型', desc: '各平台变体生成，质量优先，用旗舰模型', overridable: true },
   advisor: { name: '智囊团会诊', tier: '强模型', desc: '12 人物多视角推理，低频高价值', overridable: true },
   compliance: { name: '合规复检', tier: '跟随生成', desc: '并入生成调用；出口过滤始终由平台侧执行', overridable: false },
-  chat: { name: 'AI 助手对话', tier: '中档模型', desc: '交互式问答与「执行模式」的工具调用', overridable: true },
+  chat: { name: 'AI 助手对话', tier: '中档模型', desc: '交互式问答；执行模式不单独配的话也走这条', overridable: true },
   diagnosis: { name: '算法教练诊断/优化', tier: '中档模型', desc: '创作工坊实时诊断的 LLM 优化与教练点评', overridable: true },
   video: { name: '视频理解', tier: '仅火山方舟', desc: '视频拆解只走你自己的豆包渠道（平台不垫付：一次视频抵几十次文本）', overridable: true },
   image: { name: '封面生图', tier: '火山方舟即梦', desc: 'AI 封面与正文配图走即梦，自动复用你的任一豆包渠道的 Key，无需单独配置', overridable: true },
+  // 【不配也能跑，配了才更稳】执行模式必须稳定地发**结构化工具调用**，而这件事各家模型
+  // 差别很大：会把调用写成正文的模型，用户看到的是「它说做了，其实没做」。
+  // 不指这一项就沿用「AI 助手对话」那条，行为与以前完全一致。
+  agent: { name: '执行模式（任务台派活）', tier: '会用工具的模型', desc: '不配就跟随「AI 助手对话」。派活时它要连续调用工具，模型对 function calling 的支持越稳越好', overridable: true },
 };
 
 export default async function KeysPage() {
@@ -65,16 +70,31 @@ export default async function KeysPage() {
   const host = h.get('host');
   const callbackBase = (host ? `${proto}://${host}` : process.env.BEACON_PUBLIC_URL || 'https://beacon.iyunci.cn').replace(/\/$/, '');
 
-  const [providers, workspace, ingestTokens, wxCred, botIntegrations] = await Promise.all([
+  const [providers, workspace, ingestTokens, pubCreds, botIntegrations] = await Promise.all([
     prisma.modelProvider.findMany({ where: { tenantId: s.tenantId }, orderBy: { createdAt: 'asc' } }),
     prisma.workspace.findUnique({ where: { id: s.workspaceId }, select: { ingestToken: true } }),
     listIngestTokens(s.workspaceId),
-    prisma.publishCredential.findUnique({
-      where: { accountId_platform: { accountId: s.accountId, platform: 'wechat' } },
-      select: { platform: true, appId: true, status: true, lastError: true },
+    // 走官方接口的平台都在这一张表里（公众号 / 微博），一次取回来按平台分
+    prisma.publishCredential.findMany({
+      where: { accountId: s.accountId },
+      select: {
+        platform: true,
+        appId: true,
+        status: true,
+        lastError: true,
+        linkUrl: true,
+        externalUid: true,
+        tokenExpiresAt: true,
+      },
     }),
     prisma.botIntegration.findMany({ where: { workspaceId: s.workspaceId }, orderBy: { createdAt: 'asc' } }),
   ]);
+  const credOf = (platform: string): CredView => {
+    const c = pubCreds.find((x) => x.platform === platform);
+    return c ? { ...c, tokenExpiresAt: c.tokenExpiresAt ? c.tokenExpiresAt.toISOString() : null } : null;
+  };
+  const wxCred = credOf('wechat');
+  const wbCred = credOf('weibo');
 
   const botRows: BotRow[] = botIntegrations.map((b) => {
     const secrets = readBotSecrets(b.secretsEnc);
@@ -119,16 +139,20 @@ export default async function KeysPage() {
 
   return (
     <>
-      <PageHead
+      <HubHeader
         title="接入与密钥"
-        desc="模型 Key、生图、发布通道、采集令牌、机器人——所有要填 Key 的地方都在这一页"
+        hint="模型 Key、生图、发布通道、采集令牌、机器人——所有要填 Key 的地方都在这一页"
         action={<Link href="/settings" className="btn btn-sm btn-ghost"><Icon.settings size={13} /> 运行设置</Link>}
       />
 
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
         <Stat label="模型渠道" value={providers.length} foot={`${okCount} 条连通正常`} />
         <Stat label="生图能力" value={arkCount > 0 ? '已就绪' : '未配'} foot={arkCount > 0 ? '复用你的方舟 Key' : '需要一条火山方舟渠道'} />
-        <Stat label="发布通道" value={wxCred ? '公众号已配' : '未配'} foot="公众号可直发草稿箱" />
+        <Stat
+          label="发布通道"
+          value={[wxCred && '公众号', wbCred && '微博'].filter(Boolean).join(' · ') || '未配'}
+          foot="公众号写草稿箱 · 微博直接发出"
+        />
         <Stat label="机器人" value={botRows.filter((b) => b.enabled).length} foot={`共 ${botRows.length} 个`} />
       </div>
 
@@ -220,7 +244,7 @@ export default async function KeysPage() {
         </div>
       </Card>
 
-      <PublishChannelCard cred={wxCred} readOnly={!canManage} />
+      <PublishChannelCard wechat={wxCred} weibo={wbCred} readOnly={!canManage} />
 
       <Card
         title="插件采集令牌"

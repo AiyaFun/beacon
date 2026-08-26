@@ -100,7 +100,8 @@ describe('平台白名单 · 模型幻觉出来的平台不许进库', () => {
   });
 
   it('白名单外的平台被丢弃，其余字段照常可用', () => {
-    const r = validatePersonaCard({ ...good, platforms: ['抖音', '知乎', '快手'] });
+    // 知乎/快手 2026-08-19 已进白名单，反例改用真的不在册的平台
+    const r = validatePersonaCard({ ...good, platforms: ['抖音', '豆瓣', '贴吧'] });
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.card.platforms).toEqual(['douyin']);
   });
@@ -154,7 +155,7 @@ describe('入库清洗 sanitizePersonaCard · 手填与 AI 两条路径共用的
   });
 
   it('平台白名单化', () => {
-    const c = sanitizePersonaCard({ platforms: ['douyin', '快手', 'evil'] });
+    const c = sanitizePersonaCard({ platforms: ['douyin', '豆瓣', 'evil'] });
     expect(c.platforms).toEqual(['douyin']);
   });
 

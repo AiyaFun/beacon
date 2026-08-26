@@ -27,6 +27,8 @@ import { PLUGIN_COLLECTABLE } from '@/lib/ingest/competitor';
 import { readerVoice } from '@/lib/insight/reader-voice';
 import { COMMENT_TEXT_PURGE_DAYS } from '@/lib/comment-collect-rules';
 import { ReaderVoice } from '@/components/ReaderVoice';
+import { IntelTabs } from '@/components/IntelTabs';
+import { HubHeader } from '@/components/HubHeader';
 
 export const dynamic = 'force-dynamic';
 
@@ -193,9 +195,10 @@ export default async function CompetitorsPage({
 
   return (
     <>
-      <PageHead
-        title="竞对监控"
-        desc="多平台对标账号统一视图 · 全局共享采集，同一竞对只采一次"
+      <HubHeader
+        title="看情报"
+        hint="多平台对标账号统一视图 · 全局共享采集，同一竞对只采一次"
+        tabs={<IntelTabs active="rivals" inline />}
         action={
           <span className="row wrap" style={{ gap: 8, justifyContent: 'flex-end' }}>
             {collectableCount > 0 && <BatchCollectButton count={collectableCount} />}
@@ -228,7 +231,9 @@ export default async function CompetitorsPage({
         />
       </div>
 
-      <div className="tabs">
+      {/* 次级：页顶已有「看热点/看同行/我存的资料」导航标签，这条是页内平台筛选——
+          两条同款样式叠着分不出层级（与 /data 的处理一致） */}
+      <div className="tabs tabs-sub">
         <Link href="/competitors" className={`tab${!platformFilter ? ' active' : ''}`}>
           全部 {allWatchlist.length}
         </Link>

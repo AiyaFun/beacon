@@ -42,3 +42,6 @@ docs/方案-*.md
 .vscode
 *.swp
 *.swo
+
+# 本机排查用的一次性 repro 脚本（写死了绝对路径），不进仓库
+.repro-check.mjs

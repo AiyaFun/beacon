@@ -7,6 +7,7 @@ import { logAdminAction, isBootstrapAdmin, PLATFORM_ADMIN_ENV } from '@/lib/ops/
 import { invalidatePlanCache } from '@/lib/quota';
 import { isDemoTenant } from '@/lib/demo/guard';
 import { beijingEndOfDay } from '@/lib/beijing';
+import { ASSIGNABLE_PLANS } from './plans';
 
 // 平台侧租户运维动作。三条硬规矩：
 //   ① 每个动作先 requirePlatformAdmin()——它同时挡住「演示租户身份」和「已停用成员」；
@@ -16,8 +17,6 @@ import { beijingEndOfDay } from '@/lib/beijing';
 
 // 运营可手工写入的档位。与 lib/quota.ts 的 PLATFORM_TIERS 同源：
 // 写一个那里没有的字符串，用户会被静默按 free 档限流（PLATFORM_FALLBACK），且看不出原因。
-export const ASSIGNABLE_PLANS = ['free', 'trial', 'personal', 'byok', 'enterprise'] as const;
-export type AssignablePlan = (typeof ASSIGNABLE_PLANS)[number];
 
 export async function actSetTenantPlan(
   tenantId: string,

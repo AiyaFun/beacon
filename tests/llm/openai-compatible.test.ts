@@ -141,3 +141,44 @@ describe('OpenAICompatibleProvider · response_format 优雅兼容', () => {
     expect(stripJsonFences('  {"a":1}  ')).toBe('{"a":1}');
   });
 });
+
+// ── 推理模型的思考块不许漏给用户 ────────────────────────────────────────────
+//
+// MiniMax M 系（M2.5 / M3）以及多数推理模型，会把整段内心独白放进 message.content
+// 再接正式回答。2026-08-23 真机实测原样返回：
+//   <think>用户要建草稿。但我没有他的人设信息……我决定先问他。</think>
+//   在创建之前，我需要先确认一下你的写作偏好……
+// 本项目在提示词泄漏上栽过三次，结论一直是同一条：**提示词只降概率，出口清洗才是保证**。
+describe('剥掉推理模型的思考块', () => {
+  it('成对的 <think> 整段剥掉，正式回答留下', async () => {
+    const { stripThinking } = await import('@/lib/llm/openai-compatible');
+    const raw = '<think>用户要建草稿。我决定先问他。</think>\n\n在创建之前，我需要确认你的写作偏好。';
+    const out = stripThinking(raw);
+    expect(out, '内心独白漏给用户了').not.toContain('我决定先问他');
+    expect(out).toBe('在创建之前，我需要确认你的写作偏好。');
+  });
+
+  it('<thinking> 这种写法也认', async () => {
+    const { stripThinking } = await import('@/lib/llm/openai-compatible');
+    expect(stripThinking('<thinking>想一想</thinking>答案')).toBe('答案');
+  });
+
+  it('🔒 落单的开标签一律不动（不然会把人家半篇稿子吃掉）', async () => {
+    const { stripThinking } = await import('@/lib/llm/openai-compatible');
+    // 用户自己的正文里写了这个词，没有闭合标签——剥到底会把后面全吞了
+    const raw = '这篇讲讲 <think> 标签在推理模型里是干什么的，以及为什么要剥掉它。';
+    expect(stripThinking(raw), '把用户正文吃掉了').toBe(raw);
+  });
+
+  it('🔒 剥完什么都不剩时退回原文（宁可多一点也不能给空白）', async () => {
+    const { stripThinking } = await import('@/lib/llm/openai-compatible');
+    const raw = '<think>只有思考没有回答</think>';
+    expect(stripThinking(raw), '用户拿到一片空白').not.toBe('');
+  });
+
+  it('没有思考块的正常回答一个字都不改', async () => {
+    const { stripThinking } = await import('@/lib/llm/openai-compatible');
+    const raw = '你有 2 条选题，我建议先做第一条。';
+    expect(stripThinking(raw)).toBe(raw);
+  });
+});

@@ -5,6 +5,10 @@ import { revalidatePath } from 'next/cache';
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { requireRole, assignableRoles, ROLE_LABEL, isRole } from '@/lib/rbac';
+import { issueLocalLoginTicket } from '@/lib/auth/local-link';
+import { edition } from '@/lib/edition';
+import { assertNotDemo } from '@/lib/demo/guard';
+import { siteUrl } from '@/lib/site-url';
 
 // 成员与权限：邀请 / 撤销 / 改角色 / 停用 / 移除。
 // 权限类校验用 requireRole 直接 throw（越权是异常，不是可展示的业务分支）；
@@ -113,4 +117,38 @@ export async function actRemoveMember(memberId: string) {
   await prisma.member.delete({ where: { id: target.id } });
   revalidatePath('/members');
   return { ok: true };
+}
+
+/**
+ * 给某个成员生成一条**一次性本机登录链接**（5 分钟有效）。
+ *
+ * 【它解决的问题】企业版关掉了短信通道，登录的唯一通路是私聊企业应用机器人。
+ * 客户没配飞书/钉钉/企微时，整台机器只有装机那个人靠向导种下的会话能用——
+ * 会话一过期他自己也进不去，同事从头到尾没进去过。
+ *
+ * 【为什么不拿装机口令当登录凭据】那是一次性装机凭证，明文写在 .env、
+ * 装机时打印在终端、还抄进了桌面的《安装说明》。延伸成登录口令 = 桌面上一张纸变永久门钥匙。
+ * 这里的权力来源是「**已经登录的管理员**」，与机器人那条路同一口径。
+ *
+ * 【SaaS 上不给】那边有短信与微信登录，多一条「拿到链接就能进」的通道
+ * 只是多一个可被钓鱼的入口。形态闸在这里和落地路由各判一次。
+ */
+export async function actIssueLoginLink(memberId: string): Promise<{ ok: boolean; error?: string; url?: string; memberName?: string }> {
+  const s = await getSession();
+  // 与「改角色/停用成员」同一档权限：能签发别人的登录凭据，本身就是成员管理动作
+  requireRole(s, 'member.invite');
+
+  if (edition() === 'saas') {
+    return { ok: false, error: 'SaaS 版用短信或微信登录，不提供本机登录链接' };
+  }
+  assertNotDemo(s.tenantId);
+
+  const r = await issueLocalLoginTicket(s.tenantId, memberId);
+  if (!r.ok) return { ok: false, error: r.message };
+
+  return {
+    ok: true,
+    memberName: r.memberName,
+    url: `${siteUrl()}/api/auth/local/magic?t=${r.ticket}`,
+  };
 }

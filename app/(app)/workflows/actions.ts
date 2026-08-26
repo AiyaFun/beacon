@@ -12,6 +12,7 @@ import {
   deleteTemplate,
   exportTemplate,
   importTemplate,
+  setTemplatePersona,
 } from '@/lib/workflow/market';
 import { runWorkflow, readWorkflowRun, type WorkflowRunView } from '@/lib/workflow/run';
 
@@ -36,7 +37,16 @@ export async function actUninstallWorkflow(templateId: string) {
   return r;
 }
 
-export async function actCreateWorkflow(input: { name: string; description?: string; emoji?: string; steps: unknown }) {
+// 职责说明决定「AI 会不会在对话里主动派这个智能体」，所以它是内容级配置而非只读展示
+export async function actSetWorkflowPersona(templateId: string, persona: string) {
+  const s = await getSession();
+  requireRole(s, 'content.create');
+  const r = await setTemplatePersona(s.tenantId, templateId, persona);
+  revalidatePath('/workflows');
+  return r;
+}
+
+export async function actCreateWorkflow(input: { name: string; description?: string; emoji?: string; persona?: string; steps: unknown }) {
   const s = await getSession();
   requireRole(s, 'content.create');
   const r = await createTemplate(s.tenantId, s.memberId, input);

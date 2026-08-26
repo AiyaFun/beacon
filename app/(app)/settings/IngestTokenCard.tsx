@@ -80,7 +80,8 @@ export function IngestTokenCard({
   }
 
   function revokeLegacy() {
-    if (!window.confirm('这是所有设备共用的旧版令牌，吊销后**每一台**还在用它的插件都会停止回传。继续？')) return;
+    // confirm 弹的是纯文本，markdown 的 ** 会原样印出来。要强调就用标点，别用记号
+    if (!window.confirm('这是所有设备共用的旧版令牌，吊销后「每一台」还在用它的插件都会停止回传。继续？')) return;
     start(async () => {
       await actRevokeLegacyIngestToken();
       flash('旧版令牌已吊销');

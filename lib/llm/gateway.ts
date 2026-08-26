@@ -22,12 +22,29 @@ import { can } from '../edition';
 
 const mock = new MockProvider();
 
-function fromEnv(): LlmProvider | null {
-  const base = process.env.BEACON_DEFAULT_LLM_BASE_URL;
-  const key = process.env.BEACON_DEFAULT_LLM_API_KEY;
-  const model = process.env.BEACON_DEFAULT_LLM_MODEL || 'deepseek-chat';
+/**
+ * env 兜底渠道。
+ *
+ * 【为什么它也要认 preferFn】按功能路由是库里的能力（PlatformProvider / ModelProvider 的
+ * routing 列），而**一台什么都没在库里配的机器全靠这里**——生产就是这样：
+ * PlatformProvider 表是空的，一切走 env。那样的话「执行模式单独指一条渠道」这个能力
+ * 在最常见的部署形态下等于不存在。
+ *
+ * 所以给它一个同形状的出口：`BEACON_AGENT_LLM_*` 配了就用，没配完全照旧。
+ * 只覆盖 model / base / key 三样，其余（重试、超时、解析）与默认渠道同一套实现。
+ */
+function fromEnv(fn?: LlmFunction): LlmProvider | null {
+  const agent = fn === 'agent';
+  // 三样各自独立回落：只想换模型（同一个账号、同一个端点）是最常见的用法，
+  // 逼人把 base/key 也抄一遍只会抄错
+  const base = (agent && process.env.BEACON_AGENT_LLM_BASE_URL) || process.env.BEACON_DEFAULT_LLM_BASE_URL;
+  const key = (agent && process.env.BEACON_AGENT_LLM_API_KEY) || process.env.BEACON_DEFAULT_LLM_API_KEY;
+  const model = (agent && process.env.BEACON_AGENT_LLM_MODEL)
+    || process.env.BEACON_DEFAULT_LLM_MODEL || 'deepseek-chat';
   if (base && key) {
-    return new OpenAICompatibleProvider({ name: 'platform-default', baseUrl: base, apiKey: key, model });
+    // 名字带上 -agent：账本里一眼看得出这次执行走的是哪条，不然排查时两条混在一起
+    const name = agent && process.env.BEACON_AGENT_LLM_MODEL ? 'platform-agent' : 'platform-default';
+    return new OpenAICompatibleProvider({ name, baseUrl: base, apiKey: key, model });
   }
   return null;
 }
@@ -149,22 +166,55 @@ export const VIDEO_TIMEOUT_MS = 300_000;
 // provider 来源：byok=租户自带 key（自付 token 费）；platform=平台垫付；mock=不花钱
 type ProviderSource = QuotaSource | 'mock';
 
+/**
+ * 模型选择器里「平台渠道（外接入）」那一档的伪 id。
+ *
+ * 它不是某一行 ModelProvider——平台渠道是超管在 /ops/ai 配的、按套餐计费的公共通道，
+ * 租户库里没有对应记录。用一个不可能与 cuid 撞车的字面量表示「我要走平台那条」。
+ */
+export const PLATFORM_PROVIDER_ID = 'platform';
+
 // 选择 provider（含按功能路由），并标明来源 —— 配额分档要靠它区分谁在花钱
 async function resolveWithSource(
   tenantId: string | null,
   fn: LlmFunction,
-  opts?: { allowOverseas?: boolean },
+  opts?: { allowOverseas?: boolean; preferFn?: LlmFunction; providerId?: string },
 ): Promise<{ provider: LlmProvider; source: ProviderSource }> {
-  if (tenantId) {
+  // 【选路可以多一个偏好，但绝不能少一条退路】preferFn 让调用方说
+  //「如果专门给这件事配了渠道就用它」，没配就原样回落到 fn。
+  // 顺序写死成 [preferFn, fn] 而不是让调用方改 fn 本身，是因为 fn 同时还是
+  // **记账口径**与 BYOK 的既有路由键：直接改成 'agent' 会让所有只配了 chat 路由的
+  // 存量租户静默换渠道，没配默认渠道的直接落 Mock——而 Mock 在执行器里是硬停 failed。
+  const fnOrder: LlmFunction[] = opts?.preferFn && opts.preferFn !== fn ? [opts.preferFn, fn] : [fn];
+
+  // 用户显式选了「平台渠道」（外接入）：跳过自己的 BYOK 段，直接落到下面平台那一段。
+  // 不这么做的话他选了平台、系统还是用他自己的 Key——那就是选项没生效。
+  const forcePlatform = opts?.providerId === PLATFORM_PROVIDER_ID;
+
+  if (tenantId && !forcePlatform) {
     const providers = await prisma.modelProvider.findMany({
       where: { tenantId, status: { not: 'failed' } },
     });
+    // 【最优先：用户在这次派活里当场选的那个模型】(2026-08-26 新任务页模型选择器)
+    //
+    // ⚠️ 查询必须带 tenantId —— providerId 是**前端传上来的**，不校验归属就成了
+    // 「填别人租户的 provider id 就能用别人的 Key 花别人的钱」。这里靠 providers
+    // 本身已经是按 tenantId 查出来的，只在这个集合里找，跨租户的 id 自然落空。
+    // 落空时**不报错、按原有次序继续**：模型被删/被停用后用户的旧选择不该让他发不出消息。
+    if (opts?.providerId) {
+      const picked = providers.find((p) => p.id === opts.providerId);
+      if (picked && (picked.region !== 'overseas' || opts?.allowOverseas)) {
+        return { provider: build(picked), source: 'byok' };
+      }
+    }
     // 优先：routing 指定了该功能的 provider
-    for (const p of providers) {
-      const routing = parseJson<Record<string, string>>(p.routing, {});
-      if (routing[fn] === p.id) {
-        if (p.region === 'overseas' && !opts?.allowOverseas) continue;
-        return { provider: build(p), source: 'byok' };
+    for (const want of fnOrder) {
+      for (const p of providers) {
+        const routing = parseJson<Record<string, string>>(p.routing, {});
+        if (routing[want] === p.id) {
+          if (p.region === 'overseas' && !opts?.allowOverseas) continue;
+          return { provider: build(p), source: 'byok' };
+        }
       }
     }
     // 次选：默认 provider
@@ -181,14 +231,22 @@ async function resolveWithSource(
   // appliance / private 交付出去之后没有"平台"这个主体：机器上既没有 /ops/ai 运维台，
   // 也没有谁替客户垫钱。留着它，客户机器上的每次调用都会去撞一个不存在的预算闸。
   if (can('platformLlmChannel')) {
-    const platform = await pickPlatformProvider(fn, { allowOverseas: opts?.allowOverseas === true });
-    if (platform) return { provider: build(platform), source: 'platform' };
+    for (const want of fnOrder) {
+      const platform = await pickPlatformProvider(want, {
+        allowOverseas: opts?.allowOverseas === true,
+        // 只认**显式指到这个功能**的渠道；「跟随默认渠道」那一档留给 fnOrder 的最后一轮，
+        // 否则第一轮就会被默认渠道兜住，preferFn 等于没写
+        explicitOnly: want !== fnOrder[fnOrder.length - 1],
+      });
+      if (platform) return { provider: build(platform), source: 'platform' };
+    }
   }
 
   // env 兜底。**企业版里这把 Key 写在客户自己的 .env 里、烧的是客户自己的钱**，
   // 所以标成 byok 而不是 platform —— 标错的后果是它被送进平台预算闸，
   // 而那个闸在客户机器上根本没有配置来源，行为全看默认值。
-  const env = fromEnv();
+  // env 兜底也认偏好：fnOrder[0] 是 preferFn（没传就是 fn 本身）
+  const env = fromEnv(fnOrder[0]);
   if (env) return { provider: env, source: can('platformLlmChannel') ? 'platform' : 'byok' };
   return { provider: mock, source: 'mock' };
 }
@@ -197,7 +255,7 @@ async function resolveWithSource(
 export async function resolveProvider(
   tenantId: string | null,
   fn: LlmFunction,
-  opts?: { allowOverseas?: boolean },
+  opts?: { allowOverseas?: boolean; preferFn?: LlmFunction; providerId?: string },
 ): Promise<LlmProvider> {
   return (await resolveWithSource(tenantId, fn, opts)).provider;
 }
@@ -229,10 +287,20 @@ export async function llmComplete(
   messages: ChatMessage[],
   // tools：工具调用（lib/agent/run.ts 用）。Mock provider 不支持，执行器据 result.mocked 硬停，
   // 绝不让示例模型编出「我已经帮你做好了」——那在执行器里是谎报，不是无害的占位文案。
-  opts?: { temperature?: number; json?: boolean; allowOverseas?: boolean; timeoutMs?: number; tools?: ToolDef[] },
+  //
+  // runId：这次调用属于哪一次 AI 执行，只用于记账归因（LlmCallLog.runId）。
+  // **不影响选路**——选路的键是 fn，动它会让存量租户的 BYOK 路由静默失效（见 schema 里那段注释）。
+  //
+  // preferFn：选路时**先问一句**「有没有专门指给这件事的渠道」，没有就照旧用 fn。
+  // 记账与配额仍然按 fn 走，所以它对存量租户是零影响的（没配 = 完全照旧）。
+  opts?: { temperature?: number; json?: boolean; allowOverseas?: boolean; timeoutMs?: number; tools?: ToolDef[]; runId?: string; preferFn?: LlmFunction; providerId?: string },
 ): Promise<LlmCompleteResult> {
   assertNotDemo(tenantId); // 演示租户不烧 token（viewer 已挡住绝大多数入口，这里再兜一道）
-  const { provider, source } = await resolveWithSource(tenantId, fn, { allowOverseas: opts?.allowOverseas });
+  const { provider, source } = await resolveWithSource(tenantId, fn, {
+    allowOverseas: opts?.allowOverseas,
+    preferFn: opts?.preferFn,
+    providerId: opts?.providerId,
+  });
   // 平台垫付的调用先过平台预算闸（BYOK 烧的是用户自己的钱，不受它约束）。
   if (source === 'platform') await assertPlatformBudget();
   // 真实调用才校验配额；Mock 不花钱不占额度。故意放在下面 try 之外，让超限错误直达调用方。
@@ -265,7 +333,7 @@ export async function llmComplete(
     if (source !== 'mock') await releaseLlmQuota(tenantId);
     result = { ...(await mock.complete(messages, opts)), degraded: true };
   }
-  await recordUsage(tenantId, fn, result, source); // 记账（cheap，内部已 try/catch 不抛）
+  await recordUsage(tenantId, fn, result, source, opts?.runId); // 记账（cheap，内部已 try/catch 不抛）
   return result;
 }
 
@@ -284,10 +352,13 @@ export async function llmCompleteStream(
   tenantId: string | null,
   fn: LlmFunction,
   messages: ChatMessage[],
-  opts?: { temperature?: number; allowOverseas?: boolean },
+  opts?: { temperature?: number; allowOverseas?: boolean; providerId?: string },
 ): Promise<ReadableStream<string>> {
   assertNotDemo(tenantId); // 演示租户不烧 token
-  const { provider, source } = await resolveWithSource(tenantId, fn, { allowOverseas: opts?.allowOverseas });
+  const { provider, source } = await resolveWithSource(tenantId, fn, {
+    allowOverseas: opts?.allowOverseas,
+    providerId: opts?.providerId,
+  });
   if (source === 'platform') await assertPlatformBudget();
   if (source !== 'mock') await assertLlmQuota(tenantId, source);
   const streamCfg = await readPlatformAiConfig();
@@ -338,7 +409,7 @@ export async function llmCompleteStream(
 }
 
 // 写入成本账本（单租户单位经济仪表盘数据源）
-async function recordUsage(tenantId: string | null, fn: LlmFunction, r: LlmResult, source: ProviderSource) {
+async function recordUsage(tenantId: string | null, fn: LlmFunction, r: LlmResult, source: ProviderSource, runId?: string) {
   try {
     const pt = r.usage?.promptTokens ?? 0;
     const ct = r.usage?.completionTokens ?? 0;
@@ -346,6 +417,7 @@ async function recordUsage(tenantId: string | null, fn: LlmFunction, r: LlmResul
       data: {
         tenantId: tenantId ?? undefined,
         fn,
+        runId,
         provider: r.provider,
         model: r.model,
         mocked: r.mocked,

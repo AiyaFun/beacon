@@ -85,3 +85,16 @@ export function beijingEndOfMonth(d: Date = new Date()): Date {
 export function beijingMinuteOfDay(d: Date = new Date()): number {
   return (Math.floor(d.getTime() / 60_000) + BEIJING_OFFSET_MIN) % 1440;
 }
+
+/**
+ * 北京时间的星期几（0=周日 … 6=周六，与 cron 和 JS 的 getDay 同一口径）。
+ *
+ * 【为什么不能用 d.getDay()】那是**本机时区**的星期。容器跑 UTC 时，
+ * 北京周一早上 8 点在 UTC 还是周日晚上——一条 `0 8 * * 1` 的周报会整周不跑，
+ * 而且不报错，只是那份周报从来不来。
+ */
+export function beijingWeekday(d: Date = new Date()): number {
+  // 1970-01-01 是周四（getDay=4），所以从「北京时间过了多少个整日」推回星期
+  const days = Math.floor((d.getTime() + BEIJING_OFFSET_MIN * 60_000) / 86_400_000);
+  return (((days + 4) % 7) + 7) % 7;
+}

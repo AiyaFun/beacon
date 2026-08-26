@@ -80,6 +80,17 @@ export async function fetchAllHot(): Promise<HotFetchResult[]> {
 // 注意与热榜的一个刻意差异：真实通道**配置了但全部失败**时不落 Mock 而是返回空——
 // 竞对作品会入库成全局 CrawledPost，生产态把 Mock 假作品写进真实竞对档案是数据污染事故。
 // （另有 authorized 通道 = 浏览器插件回传，不走本链——见 lib/ingest/competitor.ts）
+/**
+ * 服务端有没有一条**真能走通**的路去采这个平台。
+ *
+ * 判据就是链空不空，不写死平台名单：将来补上 BEACON_NEWRANK_KEY 之类，
+ * 这里自动变成 true，靠它做决定的地方（定时采集派不派活给插件）也就自动停手。
+ * 写死名单的话，配了 key 还在派活，用户会看到「插件一直在采一个服务端已经采好的号」。
+ */
+export function serverCanCrawl(platform: string): boolean {
+  return competitorChain(platform).length > 0;
+}
+
 function competitorChain(platform: string): CompetitorAdapter[] {
   const chain: CompetitorAdapter[] = [];
   const real = realCompetitorAdapter(platform);

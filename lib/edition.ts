@@ -44,7 +44,13 @@ export type Capability =
   /** 首次启动的配置向导（建管理员 / 填 Key / 配 OA） */
   | 'setupWizard'
   /** 机器人入站走飞书长连接（WS）而非公网 webhook —— NAT 后的整机没有公网地址 */
-  | 'botInboundWs';
+  | 'botInboundWs'
+  /**
+   * 本地发布器：在装了烽火台的那台机器上跑一个常驻登录的浏览器，替你打开创作后台填内容。
+   * SaaS 恒为 false —— 服务端在机房，够不到用户的浏览器；把这条开给 SaaS 只能靠云端托管
+   * 登录态，那是另一回事（也是我们不做的那件事）。
+   */
+  | 'localPublisher';
 
 /**
  * 能力矩阵。**这张表就是三个版本的产品定义**，改它等于改产品边界，不要顺手改。
@@ -57,6 +63,7 @@ export type Capability =
  */
 const MATRIX: Record<Edition, Record<Capability, boolean>> = {
   saas: {
+    localPublisher: false,
     payment: true,
     smsLogin: true,
     oaLogin: false,
@@ -66,6 +73,7 @@ const MATRIX: Record<Edition, Record<Capability, boolean>> = {
     botInboundWs: false,
   },
   appliance: {
+    localPublisher: true,
     payment: false,
     smsLogin: false,
     oaLogin: true,
@@ -76,6 +84,7 @@ const MATRIX: Record<Edition, Record<Capability, boolean>> = {
     botInboundWs: true,
   },
   private: {
+    localPublisher: true,
     payment: false,
     smsLogin: false,
     oaLogin: true,

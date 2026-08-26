@@ -8,8 +8,13 @@ import { AccountSecurityCard } from '../AccountSecurityCard';
 import { AccountDataCard } from '../AccountDataCard';
 import { PrivacyCard } from '../PrivacyCard';
 import { OaBindCard } from '../OaBindCard';
+import { ApiTokenCard } from '../ApiTokenCard';
+import { listApiTokens, apiEnabled } from '@/lib/api/token';
+import { siteUrl } from '@/lib/site-url';
+import { fmtDate } from '@/lib/format';
 import { can as canEdition } from '@/lib/edition';
 import { botProviderName } from '@/lib/bot/types';
+import { HubHeader } from '@/components/HubHeader';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,6 +22,16 @@ type SettingsQuery = { wx_bind?: string; wx_bind_error?: string };
 
 export default async function AccountSecurityPage(props: { searchParams: Promise<SettingsQuery> }) {
   const s = await getSession();
+  // 只有本机/私有化部署才有对外调用面；SaaS 上这张卡整个不渲染
+  const apiTokens = apiEnabled()
+    ? (await listApiTokens(s.memberId)).map((t) => ({
+        id: t.id,
+        label: t.label,
+        prefix: t.prefix,
+        createdAt: fmtDate(t.createdAt),
+        lastUsedAt: t.lastUsedAt ? fmtDate(t.lastUsedAt) : null,
+      }))
+    : null;
   const searchParams = await props.searchParams;
   
   const me = await prisma.member.findUnique({
@@ -47,12 +62,16 @@ export default async function AccountSecurityPage(props: { searchParams: Promise
 
   return (
     <>
-      <PageHead
+      <HubHeader
         title="账号与安全"
-        desc="登录方式绑定与换绑 · 隐私与数据安全声明 · 数据导出与账号注销"
+        hint="登录方式绑定与换绑 · 隐私与数据安全声明 · 数据导出与账号注销"
       />
 
       {oaLogin ? <OaBindCard providerName={oaProviderName} bound={oaBound} /> : null}
+
+      {/* 对外调用令牌：只有本机/私有化部署才有这条路（SaaS 的边界是公网，
+          多开一条「拿到一串字符就能代人操作」的通道要单独评估） */}
+      {apiTokens ? <ApiTokenCard rows={apiTokens} siteUrl={siteUrl()} /> : null}
 
       <AccountSecurityCard
         maskedPhone={maskedPhone}

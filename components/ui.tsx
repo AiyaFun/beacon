@@ -16,6 +16,7 @@ export function PageHead({ title, desc, action }: { title: string; desc?: string
 }
 
 export function Card({
+  id,
   title,
   sub,
   action,
@@ -23,6 +24,8 @@ export function Card({
   className = '',
   style,
 }: {
+  /** 锚点定位用（导航里 `/x#id` 这种链接要落到具体卡片上） */
+  id?: string;
   title?: React.ReactNode;
   sub?: React.ReactNode;
   action?: React.ReactNode;
@@ -31,7 +34,7 @@ export function Card({
   style?: React.CSSProperties;
 }) {
   return (
-    <div className={`card ${className}`} style={style}>
+    <div id={id} className={`card ${className}`} style={style}>
       {(title || action) && (
         // 换行：卡片标题旁边常挂着长徽标/动作（如工坊的「当前选中：⋯」），
         // 不换行就会把标题硬挤成断词的两行。

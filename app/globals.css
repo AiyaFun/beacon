@@ -119,6 +119,27 @@ input, textarea, select { font-family: inherit; font-size: 14px; }
 /* ── 导航 ── */
 .nav-group { margin-bottom: 6px; }
 .nav-group-title { font-size: 11px; color: var(--text-3); padding: 10px 10px 4px; font-weight: 600; letter-spacing: 0.3px; text-transform: uppercase; }
+/* 可折叠分组的标题是个按钮：整行可点，右侧箭头指示展开状态（收起 ≠ 藏起来） */
+.nav-group-toggle { display: flex; align-items: center; justify-content: space-between; gap: 6px; width: 100%; background: none; border: 0; cursor: pointer; text-align: left; font-family: inherit; }
+.nav-group-toggle:hover { color: var(--text-2); }
+.nav-chevron { transition: transform 0.15s ease; flex-shrink: 0; }
+.nav-chevron.open { transform: rotate(180deg); }
+
+/* 阶段页签：页面顶部一排，列出这个阶段的全部板块，最后接跨阶段的那一跳 */
+.stage-bar { margin-bottom: 18px; }
+/* 右侧同样给悬浮球让位：这一行是阶段说明，被圆球压住半句话很难看 */
+.stage-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; padding-right: 84px; }
+.stage-name { font-size: 12px; font-weight: 700; color: var(--text-3); letter-spacing: 0.3px; }
+/* 右边留出 84px：AI 助手那个悬浮球是 fixed（right:24 top:72 · 52px），
+   正好压在这一行的右端。不留空位的话，「下一阶段」那个按钮会被它盖住点不到。 */
+.stage-tabs { display: flex; flex-wrap: wrap; gap: 6px; border-bottom: 1px solid var(--border); padding-bottom: 10px; padding-right: 84px; }
+.stage-tab { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 8px; font-size: 13px; color: var(--text-2); text-decoration: none; border: 1px solid transparent; transition: background 0.15s ease, color 0.15s ease; }
+.stage-tab:hover { background: var(--surface-2); color: var(--text); }
+.stage-tab.active { background: var(--brand-soft); color: var(--brand); font-weight: 600; }
+.stage-next-wrap { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
+.stage-tab.stage-next { color: var(--text-3); border-color: var(--border); }
+.stage-tab.stage-next:hover { color: var(--brand); }
+@media (max-width: 720px) { .stage-next-wrap { margin-left: 0; } .stage-why { display: none; } }
 .nav-item {
   display: flex; align-items: center; gap: 10px;
   padding: 8px 10px; border-radius: var(--radius-sm);
@@ -200,6 +221,21 @@ input, textarea, select { font-family: inherit; font-size: 14px; }
 .grid-4 { grid-template-columns: repeat(4, 1fr); }
 .grid-5 { grid-template-columns: repeat(5, 1fr); }
 .grid-6 { grid-template-columns: repeat(6, 1fr); }
+/* 【一个宽子项不许把整页撑开】`1fr` = `minmax(auto, 1fr)`，而 auto 的下界是**内容最小宽度**。
+   于是格子里只要有一段不换行的长文本，这一列就会涨到那段文本的宽度，整页跟着横向溢出。
+   2026-08-20 真机量到过一次：AI 能力清单里一条 nowrap 的说明，把 .grid-2 的第二列
+   顶成 2388px、body.scrollWidth 2861px（视口 1265px）。
+   下面 .grid-asym-* 早就为同一个原因加过这条，普通 .grid-N 一直漏着。 */
+.grid > * { min-width: 0; }
+
+/* 折叠卡并排成一行：收起时三张卡各占一列，**展开的那张自动占满整行**。
+   纯 CSS（Fold 是 <details>，不需要 JS 知道哪张开着）。
+   为什么要占满：里面是名单表格和采集台账，挤在 1/3 宽的列里根本看不清；
+   而收起态本来就只有一行标题，并排才不至于让三张卡吃掉三屏。 */
+.fold-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; align-items: start; }
+.fold-row > details[open] { grid-column: 1 / -1; }
+@media (max-width: 1280px) { .fold-row { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 720px) { .fold-row { grid-template-columns: 1fr; } }
 
 /* 折叠卡并排成一行：收起时三张卡各占一列，**展开的那张自动占满整行**。
    纯 CSS（Fold 是 <details>，不需要 JS 知道哪张开着）。
@@ -1009,3 +1045,283 @@ button.tab.active { border-bottom-color: var(--brand); }
   .chip { min-height: 36px; }
 }
 
+
+
+/* ── 运行中心的一行 ─────────────────────────────────────────────────────────
+   每行是 details：点开就地看这次都干了什么，不用跳到一个看不见它的页面。
+   summary 的默认三角必须两条都去（::marker 与 webkit 的私有伪元素），
+   只去一条会在 Safari 或 Firefox 其中一边留下小箭头。
+   min-width:0 不能省：run-main 里的标题靠它才能在窄屏正确省略号，
+   否则长标题会把时间那列挤出卡片。 */
+.run-row { border-bottom: 1px solid var(--border); }
+.run-row:last-child { border-bottom: none; }
+.run-sum { list-style: none; cursor: pointer; display: flex; align-items: center; gap: 12px; padding: 11px 6px; border-radius: 8px; }
+.run-sum::-webkit-details-marker { display: none; }
+.run-sum::marker { content: ''; }
+.run-sum:hover { background: var(--surface-2); }
+.run-sum:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--brand-soft); }
+.run-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.run-title { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-main .small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-time { flex-shrink: 0; }
+.run-caret { color: var(--text-3); display: inline-flex; flex-shrink: 0; transition: transform 0.18s ease; }
+.run-row[open] .run-caret { transform: rotate(180deg); }
+.run-body { padding: 4px 6px 14px 6px; display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.run-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; color: var(--text-2); }
+.run-step-bad { color: var(--red); }
+@media (max-width: 640px) { .run-time { display: none; } }
+
+/* ── 外壳切换器（顶栏常驻）───────────────────────────────────────────────── */
+.shell-switch { display: inline-flex; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 2px; gap: 2px; flex-shrink: 0; }
+.shell-opt { border: none; background: transparent; color: var(--text-2); font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 999px; cursor: pointer; white-space: nowrap; }
+.shell-opt:hover:not(.active) { color: var(--text); }
+.shell-opt.active { background: var(--surface); color: var(--brand); box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+.shell-opt:disabled { cursor: default; opacity: .7; }
+
+/* ── 任务台侧栏 ──────────────────────────────────────────────────────────
+   flex 列 + task-recent 吃掉剩余高度：任务列表长了自己滚，
+   底部那句「切回工作台」永远钉在视野里（margin-top:auto）。
+   写成普通文档流的话，任务一多就把出口顶到滚动区外面去了。 */
+.sidebar-task { display: flex; flex-direction: column; }
+
+.task-recent { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.task-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 8px; color: var(--text-2); text-decoration: none; font-size: 12px; }
+.task-item:hover { background: var(--surface-2); color: var(--text); }
+.task-item .dot { flex-shrink: 0; }
+.task-item-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-more { display: block; padding: 6px 10px; text-decoration: none; }
+
+/* ── 任务台的「接下来」条 ────────────────────────────────────────────────
+   复用阶段页签那一跳的样式（stage-next-wrap / stage-why / stage-next），
+   只换外面的容器：它在内容**下方**，是读完这一页之后的出口，不是导航。 */
+.next-bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--border); }
+.next-bar-lead { flex-shrink: 0; font-weight: 600; }
+
+/* ── 四类干活单位的分工梯（能力/技能/智能体/助手）────────────────────────
+   四页复用同一份（components/RoleLadder.tsx）。窄屏落成一列而不是横向滚：
+   这是解释性的内容，读不完整还不如竖着排。 */
+/* auto-fit + minmax 而不是写死 4 列 + 视口断点：这块梯子会出现在**宽窄差很多的容器**里
+   （助手页是整幅宽，采集助手页里它在 .grid-2 的一格中只有 475px）。
+   按视口断点排的话，宽屏下那一格里就是四条 100px 的窄柱，字全挤成竖排读不了——
+   媒体查询问的是「窗口多宽」，这里要问的是「我这个格子多宽」。 */
+.role-ladder { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; margin-bottom: 14px; }
+.role-cell { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: 10px; background: var(--surface-2); text-decoration: none; color: inherit; min-width: 0; }
+.role-cell:hover { border-color: var(--brand); }
+/* 当前这一类：不是链接，也不该有 hover 反馈 */
+.role-cell.active { border-color: var(--brand); background: var(--brand-soft, var(--surface)); }
+.role-name { font-size: 13px; }
+.role-cell.active .role-name { color: var(--brand); }
+.role-one, .role-by { line-height: 1.5; }
+.role-by { opacity: .75; }
+
+/* ── 「先答后做」的移交条 ────────────────────────────────────────────────
+   放在对话输入框**上方**、紧贴刚读完的那段回答。放页面底部的话，用户要先滚过
+   输入框才看得到，而那时他已经在打下一句了。amber 底色与「等你确认」同一套语义：
+   这是一个会真的动数据的入口，不该长得跟普通按钮一样。 */
+.handoff-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 12px; padding: 10px 12px;
+  border: 1px solid var(--amber); background: var(--amber-soft); border-radius: 10px; }
+.handoff-why { flex: 1; min-width: 0; line-height: 1.5; }
+
+/* AI 能力清单的一行：左边说明可伸缩、可换行，右边开关固定宽。
+   【别复用 .run-main】它长得很像，但带着 `.small { white-space: nowrap; text-overflow: ellipsis }`
+   ——那是给运行中心的**单行标题**写的。能力说明是要读完整的一句话，套上去有两个后果：
+   句子被省略号截断（读不到它到底能干嘛），以及这一行的 min-content 变成整句话的宽度，
+   把外面那层 grid 连同整页一起横向撑开（2026-08-20 真机量到：2388px 的列 / 2861px 的 body）。
+   左边可伸缩要的只是 min-width:0 + flex:1，这两条自己写就够，不值得为它借一整个类。 */
+.tool-row { display: flex; align-items: center; gap: 14px; padding: 11px 4px; border-bottom: 1px solid var(--border); }
+.tool-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.tool-main .small { line-height: 1.55; }
+.tool-row:last-child { border-bottom: none; }
+.tool-row code { font-size: 11px; }
+
+/* ── 本周作战报告 (/battle) ─────────────────────────────────────────
+   全部走既有 token（--brand/--surface/--border…），明暗两主题自动跟随。 */
+.battle-metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+@media (max-width: 720px) { .battle-metrics { grid-template-columns: repeat(2, 1fr); } }
+.battle-m { border: 1px solid var(--border); border-radius: 12px; padding: 13px 14px; background: var(--surface); }
+.battle-m .k { font-size: 11px; color: var(--text-3); font-weight: 500; }
+.battle-m .v { font-size: 23px; font-weight: 650; letter-spacing: -0.5px; margin-top: 6px; font-variant-numeric: tabular-nums; }
+.battle-m .d { font-size: 11px; font-weight: 600; margin-top: 3px; font-variant-numeric: tabular-nums; }
+.battle-m .d.up { color: var(--green); } .battle-m .d.down { color: var(--red); } .battle-m .d.muted { color: var(--text-3); }
+.battle-m .sub { font-size: 10.5px; color: var(--text-3); margin-top: 2px; }
+
+.battle-grid { display: grid; grid-template-columns: 1fr 320px; gap: 16px; align-items: start; }
+@media (max-width: 900px) { .battle-grid { grid-template-columns: 1fr; } }
+.battle-main { min-width: 0; }
+
+.battle-step { display: inline-grid; place-items: center; width: 21px; height: 21px; border-radius: 6px; font-size: 12px; font-weight: 700; margin-right: 6px; vertical-align: middle; }
+.battle-step.a { background: var(--brand-soft); color: var(--brand); }
+.battle-step.b { background: var(--amber-soft); color: var(--amber); }
+
+.battle-row { display: grid; grid-template-columns: 1fr auto; gap: 14px; align-items: center; border: 1px solid var(--border); border-radius: 11px; padding: 13px 14px; }
+.battle-row:hover { border-color: var(--border-strong); }
+@media (max-width: 640px) { .battle-row { grid-template-columns: 1fr; } }
+.battle-row-body { min-width: 0; }
+.battle-tt { font-size: 14px; font-weight: 650; letter-spacing: -0.2px; }
+.battle-why { margin-top: 9px; font-size: 12px; color: var(--text-2); line-height: 1.65; padding-left: 10px; border-left: 2px solid var(--border-strong); }
+.battle-why b { color: var(--text); font-weight: 600; }
+.battle-acts { display: flex; flex-direction: column; gap: 7px; min-width: 128px; }
+@media (max-width: 640px) { .battle-acts { flex-direction: row; min-width: 0; } .battle-acts form { flex: 1; } }
+
+.battle-aside { display: flex; flex-direction: column; }
+.battle-rv { display: flex; align-items: center; gap: 10px; padding: 9px 0; }
+.battle-rv + .battle-rv { border-top: 1px solid var(--border); }
+.battle-rv .rk { font-size: 12px; font-weight: 600; color: var(--text-3); width: 18px; flex: none; text-align: center; font-variant-numeric: tabular-nums; }
+.battle-rv .rvt { font-size: 12.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.battle-rv .rvt a { color: inherit; text-decoration: none; }
+.battle-rv .rvt a:hover { color: var(--brand); }
+.battle-rv .rvs { font-size: 11px; color: var(--text-3); margin-top: 1px; }
+.battle-rv .rvn { font-size: 12.5px; font-weight: 600; color: var(--green); flex: none; font-variant-numeric: tabular-nums; }
+
+.battle-caret { display: inline-block; margin-left: 1px; color: var(--brand); animation: battle-blink 1s steps(2, start) infinite; }
+@keyframes battle-blink { to { visibility: hidden; } }
+@media (prefers-reduced-motion: reduce) { .battle-caret { animation: none; } }
+
+/* 首页「本周作战」入口条 */
+.battle-entry { display: flex; align-items: center; gap: 14px; padding: 14px 18px; border-radius: 12px; text-decoration: none; color: var(--text); border: 1px solid var(--brand-soft); background: linear-gradient(100deg, var(--brand-soft), var(--surface)); transition: border-color .15s, transform .04s; }
+.battle-entry:hover { border-color: var(--brand); transform: translateY(-1px); }
+.battle-entry:active { transform: translateY(0); }
+.battle-entry-ic { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; font-size: 20px; background: var(--surface); border: 1px solid var(--brand-soft); flex: none; }
+.battle-entry b { font-size: 14.5px; letter-spacing: -0.2px; }
+.battle-entry-cta { font-size: 13px; font-weight: 600; color: var(--brand); white-space: nowrap; flex: none; }
+@media (max-width: 560px) { .battle-entry-cta { display: none; } }
+
+/* ── 新任务：输入框下的模型选择器（2026-08-26）────────────────────────────── */
+.model-picker { position: relative; display: inline-block; }
+.model-picker-trigger { display: inline-flex; align-items: center; gap: 5px; }
+/* 菜单向**上**弹：它挂在输入框下方，向下弹会被视口底部截掉 */
+.model-picker-menu {
+  position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 40;
+  min-width: 268px; max-width: 340px; max-height: 60vh; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: 0 10px 32px rgba(0,0,0,.14); padding: 6px;
+}
+.model-picker-group {
+  font-size: 11.5px; color: var(--text-2); padding: 8px 10px 4px; font-weight: 600;
+}
+.model-picker-item {
+  display: flex; flex-direction: column; gap: 2px; width: 100%;
+  padding: 8px 10px; border: 0; border-radius: 8px; background: transparent;
+  text-align: left; cursor: pointer; color: var(--text); text-decoration: none;
+}
+.model-picker-item:hover { background: var(--surface-2); }
+.model-picker-item.active { background: var(--brand-soft); }
+
+/* ── 新任务空态：大标题 + 为你推荐（2026-08-26）──────────────────────────── */
+.chat-hero { text-align: center; padding: 34px 12px 22px; }
+.chat-hero-title { font-size: 25px; margin: 0 0 8px; letter-spacing: -0.3px; }
+.chat-hero-sub { max-width: 520px; margin: 0 auto 18px; line-height: 1.7; }
+.chat-hero-cards { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+.chat-hero-card {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 9px 16px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--surface);
+  color: var(--text); font-size: 13.5px; cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.chat-hero-card:hover:not(:disabled) { border-color: var(--brand); background: var(--brand-soft); }
+.chat-hero-card:disabled { opacity: .5; cursor: not-allowed; }
+
+
+/* ── 侧栏底部：钉底的设置 + 账号区（2026-08-26 从顶栏搬下来）──────────────── */
+/* 桌面默认藏起来；手机端媒体查询里再放出来（见下方 @media 段） */
+.show-mobile { display: none; }
+
+/* 把底部那块推到侧栏最下面。sidebar 已是 flex column，这里靠 margin-top:auto 顶开 */
+.sidebar-bottom { margin-top: auto; padding-top: 8px; }
+.sidebar-bottom .nav-group { margin-bottom: 4px; }
+
+.sidebar-user { position: relative; border-top: 1px solid var(--border); padding-top: 8px; margin-top: 6px; }
+.sidebar-user-trigger {
+  display: flex; align-items: center; gap: 9px; width: 100%;
+  padding: 7px 8px; border: 0; border-radius: 9px;
+  background: transparent; color: var(--text); cursor: pointer; text-align: left;
+}
+.sidebar-user-trigger:hover { background: var(--surface-2); }
+.sidebar-user-avatar { width: 27px; height: 27px; font-size: 13px; flex-shrink: 0; }
+.sidebar-user-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.sidebar-user-name {
+  font-size: 13px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sidebar-user-plan { font-size: 11px; color: var(--text-2); }
+
+/* 菜单向**上**弹：它贴在侧栏最底部，向下弹整个在视口外 */
+.sidebar-user-menu {
+  position: absolute; bottom: calc(100% + 6px); left: 0; right: 0; z-index: 40;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: 0 10px 32px rgba(0,0,0,.16); padding: 6px;
+}
+.sidebar-user-section { font-size: 11.5px; color: var(--text-2); padding: 6px 10px 4px; font-weight: 600; }
+.sidebar-user-item {
+  display: flex; align-items: center; gap: 7px; width: 100%;
+  padding: 8px 10px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--text); font-size: 13px;
+  text-align: left; cursor: pointer; text-decoration: none;
+}
+.sidebar-user-item:hover { background: var(--surface-2); }
+.sidebar-user-logout { color: var(--red); }
+/* 账号菜单里的切换器要占满宽度：它在顶栏时是紧凑一小条，这里横向有的是地方 */
+.sidebar-user-menu .shell-switch { display: flex; width: 100%; }
+.sidebar-user-menu .shell-opt { flex: 1; text-align: center; }
+
+
+/* ── 手机端收尾覆盖：必须放在**文件最末**（mobile-escape）───────────────────
+   【为什么不能并进上面那个 @media 段】CSS 同权重看先后。上面那段手机规则在 ~530 行，
+   而 `.sidebar-task { display:flex }`（~1076 行）与本文件末尾的 `.show-mobile{display:none}`
+   都在它之后 —— 后来者赢。真机 436px 实测到的两个后果：
+     · 任务台侧栏**根本没被隐藏**，占掉大半屏把正文挤成一列窄条（既有 bug，这里一并修）；
+     · 顶栏那个给手机留的退出按钮 display 仍是 none，等于手机上退不出登录。
+   放在最末尾重新声明一次，是唯一不靠提高权重（!important）就能压住的写法。 */
+@media (max-width: 768px) {
+  /* 压住 .sidebar-task 的 display:flex —— 两种外壳的侧栏在手机上都不出现，
+     导航走顶栏的 MobileNav（它恒给全量导航，见 components/Topbar.tsx） */
+  .sidebar, .sidebar-task { display: none; }
+  /* 侧栏不在 → 侧栏账号区里的退出也不在，所以顶栏那个必须现身 */
+  .show-mobile { display: inline-flex; }
+}
+
+/* 次级标签条：页内已有一层主标签时用，靠字号/间距/无下边框分出主次，不与主标签抢眼 */
+.tabs.tabs-sub { border-bottom: 0; gap: 2px; margin-bottom: 12px; }
+.tabs-sub .tab { padding: 5px 11px; font-size: 12.5px; border-bottom: 0; border-radius: 999px; }
+.tabs-sub .tab.active { background: var(--brand-soft); color: var(--brand); }
+
+
+/* ── 侧栏三段式：头部固定 / 中间滚动 / 账号区钉底（2026-08-26）──────────────
+   【修的是什么】此前整根侧栏是一个 flex 列，只有「最近」带 min-height:0 + overflow-y:auto，
+   于是它成了唯一能被压缩的那一段：「设置」一展开（9 项），最近就被挤成两行高的小滚动条，
+   看上去像界面坏了（真机截图确认）。
+   现在超出高度时滚的是**中间那一层**，最近与设置各自保持自然高度，账号区永远在底部可见。 */
+.sidebar { display: flex; flex-direction: column; overflow: hidden; }
+.sidebar-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+/* 账号区不参与压缩：它是退出与切换外壳的唯一出口，被挤没了等于走不出去 */
+.sidebar-user { flex-shrink: 0; }
+.sidebar-bottom { margin-top: 0; }
+/* 「最近」里同一件事重复的次数：不抢标题的视觉，但让人知道这行代表好几次 */
+.task-item-times { flex-shrink: 0; font-size: 11px; color: var(--text-2); }
+
+/* 助手页的状态行：默认收成一行，点开才展开（主角是输入框，不是这些徽章） */
+.assistant-meta { margin-bottom: 10px; }
+.assistant-meta > summary { cursor: pointer; list-style: none; padding: 2px 0; }
+.assistant-meta > summary::-webkit-details-marker { display: none; }
+.assistant-meta > summary::before { content: '▸ '; color: var(--text-2); }
+.assistant-meta[open] > summary::before { content: '▾ '; }
+/* 设置整组收进账号菜单后菜单会变长（9 项 + 切换器 + 退出），给它自己的滚动上限 */
+.sidebar-user-menu { max-height: 72vh; overflow-y: auto; }
+
+/* ── 合并页组的紧凑页头 + 切换骨架（2026-08-26）─────────────────────────── */
+.hub-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 14px; }
+.hub-head-title { font-size: 17px; margin: 0; letter-spacing: -0.2px; flex-shrink: 0; }
+.hub-head-right { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* 页签的 inline 模式：嵌在页头行里，去掉整行下边框与下边距 */
+.tabs.tabs-inline { border-bottom: 0; margin-bottom: 0; gap: 2px; }
+.tabs-inline .tab { padding: 7px 12px; }
+.hub-skel { display: grid; gap: 16px; }
+.hub-skel-block {
+  border-radius: var(--radius, 12px); border: 1px solid var(--border);
+  background: linear-gradient(100deg, var(--surface) 40%, var(--surface-2) 50%, var(--surface) 60%);
+  background-size: 200% 100%; animation: hub-shimmer 1.2s linear infinite;
+}
+@keyframes hub-shimmer { to { background-position: -200% 0; } }
+.sidebar-user-version { padding: 6px 10px 2px; font-size: 11px; color: var(--text-2); border-top: 1px solid var(--border); margin-top: 4px; }

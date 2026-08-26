@@ -10,7 +10,7 @@ import {
   buildBattleCards, hasBattleContent, formatViews, type BattleCard,
 } from '@/lib/topic/battlecard';
 import { BLUE_SEA_BADGE } from '@/lib/topic/bluesea';
-import { PageHead, Card, ScorePill, Empty } from '@/components/ui';
+import { PageHead, Card, ScorePill, Empty, Fold } from '@/components/ui';
 import { ActionButton } from '@/components/ActionButton';
 import { Icon } from '@/components/icons';
 import { actGenerate, actReplenishEvergreen } from './actions';
@@ -21,6 +21,10 @@ import { TopicRescore } from './TopicRescore';
 import { SourceReadinessCard } from './SourceReadiness';
 import { BulkBar } from './BulkBar';
 import { loadReadiness } from '@/lib/topic/readiness';
+import { PickTabs } from './PickTabs';
+import { InspirationPanel } from '../inspiration/InspirationPanel';
+import { AdvisorPanel } from '../advisor/AdvisorPanel';
+import { HubHeader } from '@/components/HubHeader';
 
 export const dynamic = 'force-dynamic';
 
@@ -265,10 +269,28 @@ function TopicCard({ t, battle, votes }: { t: TopicRow; battle?: BattleCard; vot
 export default async function TopicsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ state?: string }>;
+  searchParams: Promise<{ state?: string; view?: string }>;
 }) {
   const s = await getSession();
   const sp = await searchParams;
+
+  // 「定选题」三合一（2026-08-25）：灵感箱 /inspiration、选题智囊团 /advisor 并进本页。
+  // 顶层 view 参数切换、只渲染当前 tab（同 /data 看效果的早返回模式）——
+  // 两个面板各自取数，切到才查；默认视图不为它们多查一行。
+  const view = sp.view === 'inspiration' || sp.view === 'advisor' ? sp.view : 'topics';
+  if (view !== 'topics') {
+    return (
+      <>
+        <HubHeader
+          title="挑选题"
+          hint="把情报变成「今天写哪一条」：候选、灵感、专家会诊"
+          tabs={<PickTabs active={view} inline />}
+        />
+        {view === 'inspiration' ? <InspirationPanel /> : <AdvisorPanel />}
+      </>
+    );
+  }
+
   const active = TABS.some((t) => t.key === sp.state) ? (sp.state as string) : 'recommended';
 
   const topics = await prisma.topicIdea.findMany({
@@ -322,9 +344,10 @@ export default async function TopicsPage({
 
   return (
     <>
-      <PageHead
-        title="选题引擎"
-        desc="先海选、再由 AI 精选 · 每条推荐都要说清「为什么是你、为什么是现在」"
+      <HubHeader
+        title="挑选题"
+        hint="先海选、再由 AI 精选 · 每条推荐都要说清「为什么是你、为什么是现在」"
+        tabs={<PickTabs active="topics" inline />}
         action={
           <ActionButton action={actGenerate} primary loadingText="全流程运行中…">
             生成今日推荐
@@ -332,11 +355,11 @@ export default async function TopicsPage({
         }
       />
 
-      {/* 顶部流程条：候选池 → 海选 → AI 精选。
-          原来是「一句正文 + 一根竖分隔线 + 一句灰字」挤在一个 row 里，换行后那根竖线被甩到行尾
-          变成一根孤零零的竖杠，两阶段的先后关系也读不出来。
-          流程就该画成流程：三格等宽、箭头串起来，每格只说「这一步拿什么、做什么」。 */}
-      <Card style={{ marginBottom: 16, background: 'var(--surface-2)', boxShadow: 'none' }}>
+      {/* 流程说明收进折叠（2026-08-26 用户「把重点内容提前，该缩起来缩起来」）：
+          它是「懂一次就够」的机制说明，摊开摆在推荐列表前面，每天都把真正要挑的题
+          压到第二屏。三格流程条本体没动——那是真机打磨过的（竖杠换行那次）。 */}
+      <Fold title="推荐是怎么选出来的" sub="候选池 → 海选 → AI 精选" note={<span className="small muted">看一次就够</span>}>
+
         <div className="row wrap" style={{ gap: 8, alignItems: 'center', marginBottom: 12 }}>
           <span className="badge badge-brand">两阶段打分</span>
           <span className="small muted">候选先过一遍粗筛，剩下的才交给 AI 逐条打分</span>
@@ -371,12 +394,14 @@ export default async function TopicsPage({
         <div className="small muted" style={{ marginTop: 10 }}>
           抢跑窗口＝别的平台已经爆了、你的平台还没有；旧文翻新与跨平台补发＝你自己验证过的内容。
         </div>
-      </Card>
+      </Fold>
 
       {/* 冷启动引导：沉默的来源够多时才展开，全部解锁后自动缩成一行。
           放在 tab 之前是因为它回答的是「为什么今天的推荐看起来这么普通」——
           那个疑问出现在用户读推荐之前，不是之后。 */}
-      {readiness && (readiness.cold || readiness.material) && <SourceReadinessCard report={readiness} />}
+      {/* 「推荐从哪来」只在**没有推荐**时前置——那时它就是「为什么空着」的答案；
+          有推荐时它是背景说明，移到列表后面（见下），别把今天要挑的题压下去 */}
+      {shown.length === 0 && readiness && (readiness.cold || readiness.material) && <SourceReadinessCard report={readiness} />}
 
       {/* 状态分区 tab */}
       <div className="tabs" style={{ marginBottom: 16 }}>
@@ -460,6 +485,11 @@ export default async function TopicsPage({
       {/* 采纳后的落地入口。挂在页面根部这个固定位置，采纳触发的 RSC 重渲染才带不走它
           （挂在卡片里就是一闪即逝——那正是「点采纳后直接跳走」的成因，见 accepted-bus.ts）。 */}
       <AcceptedBar key="accepted-bar" />
+
+      {shown.length > 0 && readiness && (readiness.cold || readiness.material) && (
+        <div style={{ marginTop: 16 }}><SourceReadinessCard report={readiness} /></div>
+      )}
+
     </>
   );
 }

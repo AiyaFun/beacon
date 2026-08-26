@@ -119,6 +119,7 @@ const SHORTLINK_HOSTS: Record<string, PlatformKey> = {
   't.co': 'x',
   'vm.tiktok.com': 'tiktok',
   'vt.tiktok.com': 'tiktok',
+  'v.kuaishou.com': 'kuaishou',
 };
 
 function hostPlatform(host: string): PlatformKey | null {
@@ -138,6 +139,13 @@ function hostPlatform(host: string): PlatformKey | null {
   if (host === 'youtube.com' || host.endsWith('.youtube.com')) return 'youtube';
   if (host === 'youtu.be') return 'youtube';
   if (host === 'tiktok.com' || host.endsWith('.tiktok.com')) return 'tiktok';
+  // ── 大陆图文/资讯平台 ──
+  if (host === 'weibo.com' || host.endsWith('.weibo.com')) return 'weibo';
+  if (host === 'weibo.cn' || host.endsWith('.weibo.cn')) return 'weibo';
+  if (host === 'zhihu.com' || host.endsWith('.zhihu.com')) return 'zhihu';
+  if (host === 'toutiao.com' || host.endsWith('.toutiao.com')) return 'toutiao';
+  if (host === 'baijiahao.baidu.com') return 'baijiahao';
+  if (host === 'kuaishou.com' || host.endsWith('.kuaishou.com')) return 'kuaishou';
   return null;
 }
 
@@ -297,6 +305,86 @@ function parseTiktok(u: URL): ParseResult {
   return fail('no-item-id', '这是 TikTok 的链接，但没认出作品 ID。请贴作品详情页的完整链接（形如 https://www.tiktok.com/@someone/video/7123456789012345678），个人主页链接里没有作品 ID。', 'tiktok');
 }
 
+// ── 微博：weibo.com/<uid>/<mid_base62>、weibo.com/detail/<mid>、m.weibo.cn/detail/<mid>、
+//    以及 /status/<mid>。回流口径取 **mid**（详情页地址里那一段），与微博开放平台的 id 同族。
+const WEIBO_MID = /^[A-Za-z0-9]{9,32}$/;
+function parseWeibo(u: URL): ParseResult {
+  const segs = pathSegs(u);
+  const i = segs.findIndex((x) => x === 'detail' || x === 'status');
+  let id = i >= 0 ? segs[i + 1] : undefined;
+  // weibo.com/<uid>/<mid>：第一段是纯数字 uid，第二段才是 mid
+  if (!id && segs.length >= 2 && /^\d{6,}$/.test(segs[0])) id = segs[1];
+  if (id && WEIBO_MID.test(id)) return ok('weibo', id, `https://weibo.com/detail/${id}`);
+  return fail(
+    'no-item-id',
+    '这是微博的链接，但没认出这条博文的 ID。请贴单条微博的详情页链接（形如 https://weibo.com/detail/5012345678901234 或 https://weibo.com/1234567890/PabcDefGh），个人主页链接里没有博文 ID。',
+    'weibo',
+  );
+}
+
+// ── 知乎：专栏文章 zhuanlan.zhihu.com/p/<id>、回答 zhihu.com/question/<qid>/answer/<aid>、
+//    想法 zhihu.com/pin/<id>。三种内容形态 ID 不同族，前缀区分开，免得回流去拉错东西。
+function parseZhihu(u: URL): ParseResult {
+  const segs = pathSegs(u);
+  const a = segs.indexOf('answer');
+  if (a >= 0 && /^\d{6,}$/.test(segs[a + 1] ?? '')) {
+    const qid = segs[segs.indexOf('question') + 1] ?? '';
+    return ok('zhihu', `answer_${segs[a + 1]}`, `https://www.zhihu.com/question/${qid}/answer/${segs[a + 1]}`);
+  }
+  const p = segs.indexOf('p');
+  if (p >= 0 && /^\d{5,}$/.test(segs[p + 1] ?? '')) {
+    return ok('zhihu', `p_${segs[p + 1]}`, `https://zhuanlan.zhihu.com/p/${segs[p + 1]}`);
+  }
+  const pin = segs.indexOf('pin');
+  if (pin >= 0 && /^\d{6,}$/.test(segs[pin + 1] ?? '')) {
+    return ok('zhihu', `pin_${segs[pin + 1]}`, `https://www.zhihu.com/pin/${segs[pin + 1]}`);
+  }
+  return fail(
+    'no-item-id',
+    '这是知乎的链接，但没认出内容 ID。文章请贴 https://zhuanlan.zhihu.com/p/... ，回答请贴 https://www.zhihu.com/question/.../answer/... 。',
+    'zhihu',
+  );
+}
+
+// ── 头条号：文章 toutiao.com/article/<item_id>/、微头条 toutiao.com/w/<id>、
+//    旧版 toutiao.com/a<item_id>/、以及 toutiao.com/item/<item_id>/。
+function parseToutiao(u: URL): ParseResult {
+  const segs = pathSegs(u);
+  const i = segs.findIndex((x) => x === 'article' || x === 'item' || x === 'w' || x === 'video');
+  let id = i >= 0 ? segs[i + 1] : undefined;
+  if (!id && /^a\d{10,}$/.test(segs[0] ?? '')) id = segs[0].slice(1); // 旧版 /a67...
+  if (id && /^\d{10,}$/.test(id)) return ok('toutiao', id, `https://www.toutiao.com/article/${id}/`);
+  return fail(
+    'no-item-id',
+    '这是头条的链接，但没认出内容 ID。请贴文章详情页链接（形如 https://www.toutiao.com/article/7234567890123456789/）。',
+    'toutiao',
+  );
+}
+
+// ── 百家号：baijiahao.baidu.com/s?id=<id>。ID 在 query 里，不在 path 里。
+function parseBaijiahao(u: URL): ParseResult {
+  const id = u.searchParams.get('id') ?? '';
+  if (/^\d{10,}$/.test(id)) return ok('baijiahao', id, `https://baijiahao.baidu.com/s?id=${id}`);
+  return fail(
+    'no-item-id',
+    '这是百家号的链接，但没认出文章 ID。请贴 https://baijiahao.baidu.com/s?id=... 的完整链接（ID 在 ?id= 后面）。',
+    'baijiahao',
+  );
+}
+
+// ── 快手：kuaishou.com/short-video/<photoId>、/f/<photoId>、/profile/<uid>/video/<photoId>。
+function parseKuaishou(u: URL): ParseResult {
+  const segs = pathSegs(u);
+  const i = segs.findIndex((x) => x === 'short-video' || x === 'video' || x === 'f');
+  const id = i >= 0 ? segs[i + 1] : undefined;
+  if (id && /^[A-Za-z0-9_-]{8,}$/.test(id)) return ok('kuaishou', id, `https://www.kuaishou.com/short-video/${id}`);
+  return fail(
+    'no-item-id',
+    '这是快手的链接，但没认出作品 ID。请贴作品详情页链接（形如 https://www.kuaishou.com/short-video/3xabcdefg...）。',
+    'kuaishou',
+  );
+}
+
 const PARSERS: Record<PlatformKey, (u: URL) => ParseResult> = {
   douyin: parseDouyin,
   xiaohongshu: parseXiaohongshu,
@@ -306,6 +394,11 @@ const PARSERS: Record<PlatformKey, (u: URL) => ParseResult> = {
   x: parseX,
   youtube: parseYoutube,
   tiktok: parseTiktok,
+  weibo: parseWeibo,
+  zhihu: parseZhihu,
+  toutiao: parseToutiao,
+  baijiahao: parseBaijiahao,
+  kuaishou: parseKuaishou,
 };
 
 const SHORTLINK_MSG: Record<PlatformKey, string> = {
@@ -319,6 +412,13 @@ const SHORTLINK_MSG: Record<PlatformKey, string> = {
   shipinhao: '这是短链，解析不出作品 ID。请贴 https://channels.weixin.qq.com/web/pages/feed?eid=... 的完整链接。',
   youtube: '这是短链，解析不出视频 ID。请贴 https://www.youtube.com/watch?v=... 的完整链接。',
   tiktok: '这是 TikTok 的分享短链（vm./vt.tiktok.com），解析不出作品 ID（我们不会替你跟随跳转）。请在浏览器里打开这条作品，贴地址栏里 https://www.tiktok.com/@.../video/... 的完整链接。',
+  kuaishou: '这是快手的分享短链（v.kuaishou.com），解析不出作品 ID（我们不会替你跟随跳转）。请在浏览器里打开这条作品，贴 https://www.kuaishou.com/short-video/... 的完整链接。',
+  // 下面四个平台没有已知短链域名（不在 SHORTLINK_HOSTS 里），这几条实际走不到，
+  // 留着是为了让 Record<PlatformKey, …> 保持穷尽——漏一个平台就是编译期报错。
+  weibo: '这是短链，解析不出博文 ID。请贴 https://weibo.com/detail/... 的完整链接。',
+  zhihu: '这是短链，解析不出内容 ID。请贴 https://zhuanlan.zhihu.com/p/... 或回答的完整链接。',
+  toutiao: '这是短链，解析不出内容 ID。请贴 https://www.toutiao.com/article/... 的完整链接。',
+  baijiahao: '这是短链，解析不出文章 ID。请贴 https://baijiahao.baidu.com/s?id=... 的完整链接。',
 };
 
 /**
@@ -374,6 +474,23 @@ export function publicItemUrl(platform: string, platformItemId: string | null | 
       return TIKTOK_ID.test(id) ? `https://www.tiktok.com/embed/v2/${id}` : null;
     case 'shipinhao':
       return SPH_ID.test(id) ? `https://channels.weixin.qq.com/web/pages/feed?eid=${id}` : null;
+    case 'weibo':
+      return WEIBO_MID.test(id) ? `https://weibo.com/detail/${id}` : null;
+    // 知乎三种形态的 ID 带前缀（parseZhihu 打的），逆运算按前缀分回去。
+    // 回答缺 question id：知乎的 /answer/<aid> 单独也能打开，会自动补上问题。
+    case 'zhihu': {
+      const m = /^(p|answer|pin)_(\d+)$/.exec(id);
+      if (!m) return null;
+      if (m[1] === 'p') return `https://zhuanlan.zhihu.com/p/${m[2]}`;
+      if (m[1] === 'pin') return `https://www.zhihu.com/pin/${m[2]}`;
+      return `https://www.zhihu.com/answer/${m[2]}`;
+    }
+    case 'toutiao':
+      return /^\d{10,}$/.test(id) ? `https://www.toutiao.com/article/${id}/` : null;
+    case 'baijiahao':
+      return /^\d{10,}$/.test(id) ? `https://baijiahao.baidu.com/s?id=${id}` : null;
+    case 'kuaishou':
+      return /^[A-Za-z0-9_-]{8,}$/.test(id) ? `https://www.kuaishou.com/short-video/${id}` : null;
     // 公众号没有平台级数字 ID，规范化后的 URL 本身**就是** ID（见 parseWechat）。
     // 但不能原样信任：这个值可能是历史上手填进来的任意字符串，
     // 必须回过一遍 parsePublishUrl 确认它确实是一条公众号文章链接。

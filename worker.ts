@@ -2,7 +2,7 @@
 // 运行：BEACON_QUEUE=bullmq REDIS_URL=redis://... npx tsx worker.ts
 // （dev 不需要此进程——进程内队列在按钮点击时同步执行）
 
-import { getQueue, BullMqQueue } from './lib/jobs/queue';
+import { getQueue, BullMqQueue, MAIN_QUEUE_NAME, AGENT_QUEUE_NAME } from './lib/jobs/queue';
 import { SCHEDULES, SCHEDULE_TZ } from './lib/jobs/schedule-config';
 import { initObservability, log, flushReports } from './lib/logger';
 
@@ -13,7 +13,11 @@ async function main() {
   await (await import('./lib/ops/install')).installOpsAlerting();
 
   if (process.env.BEACON_QUEUE !== 'bullmq') {
-    log.error('worker 需要 BEACON_QUEUE=bullmq（生产态）。dev 用进程内队列，无需 worker。');
+    log.error(
+      'worker 需要 BEACON_QUEUE=bullmq（SaaS / 私有化）。'
+      + '整机版用 BEACON_QUEUE=local——定时跑在 web 进程里（单文件 SQLite 不能有第二个写进程），不要起本进程。'
+      + '本机开发不设这个变量，不跑定时。',
+    );
     await flushReports();
     process.exit(1);
   }
@@ -30,23 +34,34 @@ async function main() {
     log.info('已注册定时任务', { jobName: s.name, cron: s.cron, tz: SCHEDULE_TZ, note: s.note });
   }
 
-  // 起消费者
-  const worker = await q.startWorker();
-  worker.on('completed', (job) => {
-    log.info('任务完成', { jobName: job.name, jobId: job.id, durationMs: job.finishedOn ? job.finishedOn - job.processedOn! : undefined });
+  // 起消费者。**两条队列各一个**：
+  // AI 执行的 loop 一跑就是几十分钟，与它共用槽位的话，热榜采集、定时智能体、
+  // 清理、发布回流会全部排在几个用户的 AI 任务后面——一个人用助手，全平台定时停摆。
+  const mainConcurrency = Number(process.env.BEACON_WORKER_CONCURRENCY || 4);
+  const agentConcurrency = Number(process.env.BEACON_AGENT_CONCURRENCY || 4);
+  const workers = [
+    { name: MAIN_QUEUE_NAME, w: await q.startWorker(MAIN_QUEUE_NAME, mainConcurrency), concurrency: mainConcurrency },
+    { name: AGENT_QUEUE_NAME, w: await q.startWorker(AGENT_QUEUE_NAME, agentConcurrency), concurrency: agentConcurrency },
+  ];
+  for (const { name, w } of workers) {
+    w.on('completed', (job) => {
+      log.info('任务完成', { queue: name, jobName: job.name, jobId: job.id, durationMs: job.finishedOn ? job.finishedOn - job.processedOn! : undefined });
+    });
+    w.on('failed', (job, err) => {
+      // 任务失败是要被看见的：error 级 + 自动上报
+      log.error('任务失败', { queue: name, jobName: job?.name, jobId: job?.id, attempts: job?.attemptsMade, err });
+    });
+    w.on('error', (err) => {
+      log.error('worker 内部错误', { queue: name, err });
+    });
+  }
+  log.info('beacon worker 已启动', {
+    queues: workers.map((x) => `${x.name}(并发 ${x.concurrency})`).join(' + '),
   });
-  worker.on('failed', (job, err) => {
-    // 任务失败是要被看见的：error 级 + 自动上报
-    log.error('任务失败', { jobName: job?.name, jobId: job?.id, attempts: job?.attemptsMade, err });
-  });
-  worker.on('error', (err) => {
-    log.error('worker 内部错误', { err });
-  });
-  log.info('beacon worker 已启动，消费队列 beacon-jobs', { concurrency: Number(process.env.BEACON_WORKER_CONCURRENCY || 4) });
 
   const shutdown = async (signal: string) => {
     log.info('收到退出信号，关闭 worker…', { signal });
-    await worker.close();
+    await Promise.all(workers.map(({ w }) => w.close()));
     await q.close();
     await flushReports();
     process.exit(0);

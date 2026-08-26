@@ -4,6 +4,7 @@ import { buildAccountContext } from '../account-context';
 import { log } from '../logger';
 import type { ChatMessage } from '../llm/types';
 import type { BotTurn } from './conversation';
+import { can } from '../edition';
 import { beaconUrl } from './index';
 
 // 群里 @机器人 的自由对话。
@@ -83,8 +84,14 @@ export async function botChat(params: {
     return { text: prefix + text, mocked: !!res.mocked };
   } catch (e) {
     const msg = e instanceof Error ? e.message : '';
-    // 配额超限与演示模式的文案本身就是给用户看的，原样透出比「出错了」有用得多
-    if (/配额|quota|演示/.test(msg)) return { text: `${msg}\n用量与套餐 → ${beaconUrl('/settings')}`, mocked: false };
+    // 配额超限与演示模式的文案本身就是给用户看的，原样透出比「出错了」有用得多。
+    // 指路只在**有计费面的形态**下给：/settings 早就不是「用量与套餐」那一页了
+    // （2026-08-19 分成了接入与密钥/运行设置/账号与安全），而企业版根本没有 /billing，
+    // 点进去只会撞上 assertCan('payment') 的错误页。
+    if (/配额|quota|演示/.test(msg)) {
+      const hint = can('payment') ? `\n用量与套餐 → ${beaconUrl('/billing')}` : '';
+      return { text: `${msg}${hint}`, mocked: false };
+    }
     log.warn('bot 对话失败', { workspaceId, err: e });
     return { text: 'AI 这会儿没答上来（服务异常），过一会儿再问一次。', mocked: false };
   }

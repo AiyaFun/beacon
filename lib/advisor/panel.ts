@@ -374,6 +374,15 @@ export async function convene(
   workspaceId: string,
   seed?: string,
   draftId?: string,
+  /**
+   * 计费与限流用的租户。**在没有请求上下文的地方调用时必须显式传**
+   *（后台跑的 AI 执行、worker、群机器人——那里 getSession() 必然失败）。
+   *
+   * 不传就退回从会话取，取不到则为 null；而 null 会让 assertLlmQuota 与
+   * assertNotDemo **直接放行**——一场十几席的会诊一个配额都不计，
+   * 演示租户也拦不住。这不是「优雅降级」，是白送。
+   */
+  tenantIdOverride?: string | null,
 ): Promise<string> {
   const account = await prisma.creatorAccount.findUnique({ where: { id: accountId } });
   const persona = readPersona(account?.personaCard ?? '{}');
@@ -385,11 +394,14 @@ export async function convene(
     seed?.trim() || draftMaterial?.title || undefined,
   );
 
-  let tenantId: string | null = null;
-  try {
-    tenantId = (await getSession()).tenantId;
-  } catch {
-    tenantId = null;
+  let tenantId: string | null = tenantIdOverride ?? null;
+  if (tenantId === null && tenantIdOverride === undefined) {
+    // 只有「调用方没说」时才去翻会话。显式传了 null 就是真的没有租户，别再自作主张
+    try {
+      tenantId = (await getSession()).tenantId;
+    } catch {
+      tenantId = null;
+    }
   }
 
   const fp = readFingerprint(account?.styleFingerprint ?? '{}');

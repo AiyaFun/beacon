@@ -12,3 +12,4 @@ README.md
 # 注意：不能忽略 scripts —— build 脚本会调 tsx scripts/pack-extension.ts 打包插件 zip。
 # 只忽略明确不需要进构建上下文的脚本（shell 运维脚本）。
 scripts/*.sh
+.next-verify

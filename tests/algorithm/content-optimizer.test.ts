@@ -96,8 +96,16 @@ describe('长文判据（8a/8b/8c）：只对 kind === article 的平台生效',
   });
 
   it('不认识的平台也不套长文判据', () => {
-    const d = analyzeContent(ANAPHORA_HEAVY, 'zhihu');
+    // 用一个**确实不在 PLATFORMS 里**的 key。此处曾写 'zhihu'，2026-08-19 知乎进了 PLATFORMS
+    // 且 kind='article'，长文判据本来就该套上——再用它当反例，测的就成了「表漏配」。
+    const d = analyzeContent(ANAPHORA_HEAVY, 'douban');
     for (const dim of ARTICLE_DIMS) expect(dims(d)).not.toContain(dim);
+  });
+
+  it('知乎是 article 平台 → 长文判据要套上（新增平台别只加 key 不接判据）', () => {
+    expect(PLATFORMS.zhihu.kind).toBe('article');
+    const d = analyzeContent(ANAPHORA_HEAVY, 'zhihu');
+    expect(ARTICLE_DIMS.some((dim) => dims(d).includes(dim))).toBe(true);
   });
 });
 

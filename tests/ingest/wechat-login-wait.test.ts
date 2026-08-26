@@ -44,10 +44,14 @@ const COLLECTED = {
  * loggedInAfter: 第 N 次「探登录态」之后算登录成功（Infinity = 用户始终没登录）。
  * 探针与采集是两种消息，分开计数——「等待期间不许再打微信接口」这条就是靠它验证的。
  */
-function loadSw(opts: { loggedInAfter?: number; activeUrl?: string; tabGone?: boolean } = {}) {
+function loadSw(opts: { loggedInAfter?: number; activeUrl?: string; tabGone?: boolean; riskAcked?: boolean } = {}) {
   const noop = () => {};
   const listener = { addListener: noop };
   const local: Store = {
+    // 风险确认（0.9.8 起 collectWechatOne 的第一道闸）预置为已确认——本文件测的是
+    // 确认**之后**的行为。闸本身由 tests/legal/wechat-risk-ack.test.ts 与本文件末尾
+    // 那条「没确认时一个请求都不发」守着。
+    ...(opts.riskAcked === false ? {} : { wechatRiskAck: { version: 1, at: Date.now() } }),
     // 两个公开主页竞对（都采不到：内容脚本在用例里永远不发 beacon-collected）+ 缓存时间戳，
     // 让 getCompetitors 直接用本机这份，不去打服务器
     competitors: [
@@ -224,6 +228,33 @@ describe('未登录 → 把登录页交给用户 → 登录完接着采', () => 
 
     expect(sw.removed).toEqual([]); // 用户自己的标签页，任何情况下都不关
     expect(r.ok).toBe(true);
+  });
+
+  // ── 风险确认闸（0.9.8 起）──────────────────────────────────────────
+  //
+  // 这条通道用用户自己的公众平台登录态调非官方后台接口，踩线的后果落在**用户自己的号**上。
+  // 上面所有用例都预置了「已确认」，所以这里必须反过来验一遍：没确认时它是真的什么都不做，
+  // 而不只是返回一个错误对象却已经把请求发出去了。
+  it('🔒 没确认过风险 → 一个标签页都不开、一个请求都不发', async () => {
+    vi.useFakeTimers();
+    const sw = loadSw({ riskAcked: false, loggedInAfter: 0 });
+    const r = await runWithClock(sw.collectWechatOne('央视新闻', { interactive: true }), 60_000);
+
+    expect(r.ok).toBe(false);
+    expect(r.code).toBe('risk_unacked');
+    // 真正要紧的是这三条：没开页、没关页、没发任何消息给内容脚本
+    expect(sw.sent).toEqual([]);
+    expect(sw.surfaced).toEqual([]);
+    expect(sw.removed).toEqual([]);
+  });
+
+  it('🔒 定时那一轮同样被拦 —— 用户没确认过，自动跑更不能开始', async () => {
+    vi.useFakeTimers();
+    const sw = loadSw({ riskAcked: false, loggedInAfter: 0 });
+    const r = await runWithClock(sw.collectWechatOne('央视新闻'), 60_000); // interactive 缺省 = false
+
+    expect(r.code).toBe('risk_unacked');
+    expect(sw.sent).toEqual([]);
   });
 });
 

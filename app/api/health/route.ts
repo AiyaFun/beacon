@@ -3,6 +3,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { prisma } from '@/lib/db';
 import { hotSourceMode } from '@/lib/adapters/registry';
 import { log } from '@/lib/logger';
+import { schedulerKind } from '@/lib/jobs/queue';
 
 export const dynamic = 'force-dynamic';
 
@@ -35,7 +36,10 @@ export async function GET(req: NextRequest) {
     healthy = false;
   }
 
+  // 定时到底谁在跑：bullmq(独立 worker) / local(web 进程内，整机版) / none(本机开发)。
+  // 单看「队列类型」不够——local 与 inprocess 的队列实现是同一个，差别在有没有人到点敲门
   checks.queue = process.env.BEACON_QUEUE === 'bullmq' ? 'bullmq' : 'inprocess';
+  checks.scheduler = schedulerKind();
   checks.llm = process.env.BEACON_DEFAULT_LLM_API_KEY ? 'configured' : 'mock';
   // 数据通道口径（'dailyhot' / '60s' / 'mock'），不参与 healthy 判定：源不可达会逐源回退 Mock，不算基础设施故障
   checks.hotSource = hotSourceMode();

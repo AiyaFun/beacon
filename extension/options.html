@@ -728,6 +728,47 @@
 
     <div class="setting-row">
       <div class="setting-info">
+        <div class="setting-title">公众号竞对采集（默认关，风险自负）</div>
+        <!-- ⚠️ 用户的同意是在这个开关上给出的，所以这里的描述**就是**同意的范围。
+             这是全插件唯一一条「用用户自己的登录态调平台非官方接口」的通道，
+             与其它「读屏幕上已渲染的公开页面」性质不同，代价必须讲全。
+             同源文本：extension/store/privacy.md 第 4 条 ⑦、站内服务条款 3.3（三）、popup.html 的确认面板。 -->
+        <div class="setting-sub">公众号没有公开主页，所以这项功能是用<b>你自己已登录的公众号后台</b>
+          查对标公众号的文章列表，调用的是后台自带的两个查询接口。开启前请知悉：
+          ① 它们<b>不是微信官方开放的数据接口</b>，这样使用<b>可能违反《微信公众平台服务协议》</b>；
+          ② 一旦踩线，被限接口、被封功能的是<b>你自己的公众号账号</b>，我们无法代为申诉；
+          ③ 插件已内置保守节流（同号 12 小时一次、单轮最多 5 个号、间隔 3–6 秒、撞频控即停 30 分钟），
+          只能降低概率，<b>不能消除风险</b>；
+          ④ 只读标题/链接/发布时间/摘要，不取阅读量、不下载正文，登录态只用于当次请求、不上传不保存。
+          关掉后插件立刻停止一切公众号采集请求；下次开启需要重新确认一遍风险。</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="wechatRiskAck">
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-title">代点发布（默认关，风险自负）</div>
+        <!-- ⚠️ 用户的同意是在这个开关上给出的，所以这里的描述**就是**同意的范围。
+             这是本插件唯一一个会替用户做「对外意思表示」的动作，措辞必须把代价讲全。 -->
+        <div class="setting-sub">开启后，「一键发布」把内容填进创作后台并<b>替你点一下发布按钮</b>。
+          默认关闭时只填不点，由你自己检查后再发。开启前请知悉：
+          <b>① 各平台创作者协议普遍不欢迎自动化发布</b>，出问题（限流、封号）平台通常没有申诉渠道，风险由你承担；
+          <b>② 发布不可撤销</b>——点下去内容就公开了；
+          <b>③ 只有标题与正文都填成功才会去点</b>，半填状态不点；找不到明确的「发布」按钮也不点（绝不乱点别的按钮）；
+          <b>④ 点之前有 5 秒倒计时</b>，面板上可随时取消。
+          这个开关只作用在你自己的浏览器里，随时可以关掉。</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="autoClickPublish">
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="setting-row">
+      <div class="setting-info">
         <div class="setting-title">版本与更新</div>
         <div class="setting-sub" id="versionSub">当前版本加载中…</div>
       </div>

@@ -142,4 +142,21 @@ describe('push_daily_brief 按设置的时刻推送', () => {
     await HANDLERS.push_daily_brief({ now: bjNow(9, 0) });
     expect(posted).toEqual([]);
   });
+
+  // 【回归】晨报的意图是「今天动手做一条」，落地页应指能就地起稿的「本周作战」，
+  // 不是只能看的选题引擎。2026-08-25 从 /topics 改到 /battle——别再改回去。
+  it('🔒 晨报卡片按钮指向 /battle（就地起稿），不是 /topics', async () => {
+    const { workspaceId, accountId } = await mkWorkspace();
+    await mkRecommendation(accountId);
+    await mkBot(workspaceId, '09:00', 'https://open.feishu.cn/hook/nine');
+
+    await HANDLERS.push_daily_brief({ now: bjNow(9, 0) });
+    // fetch 被 spy，第二个参数是 init，body 里是飞书卡片 JSON，含按钮的 url
+    const calls = (globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const bodies = calls.map((c) => String((c[1] as { body?: unknown })?.body ?? ''));
+    const withCard = bodies.find((b) => b.includes('/battle') || b.includes('/topics'));
+    expect(withCard, '没抓到带落地链接的推送 body').toBeTruthy();
+    expect(withCard).toContain('/battle');
+    expect(withCard).not.toContain('/topics');
+  });
 });
