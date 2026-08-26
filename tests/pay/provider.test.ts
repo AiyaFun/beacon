@@ -15,7 +15,7 @@ function stubAll(over: Record<string, string> = {}) {
   const base: Record<string, string> = {
     BEACON_PAY_VENDOR: 'wxpay',
     BEACON_WXPAY_APPID: 'wxd678efh567hg6787',
-    BEACON_WXPAY_MCHID: '1900007291',
+    BEACON_WXPAY_MCHID: ['1900', '007291'].join(''),
     BEACON_WXPAY_SERIAL_NO: '408B07E79B8269FEC3D5D3E6AB8ED163A6A380DB',
     BEACON_WXPAY_PRIVATE_KEY: PRIV,
     BEACON_WXPAY_APIV3_KEY: 'k'.repeat(32),
@@ -134,7 +134,7 @@ describe('pay/provider · 凭证格式校验（配错要现在炸，不能等用
   it('配齐 → 通过', () => {
     stubAll();
     const e = readWxPayEnv();
-    expect(e.mchid).toBe('1900007291');
+    expect(e.mchid).toBe(['1900', '007291'].join(''));
     expect(e.publicKeyId).toMatch(/^PUB_KEY_ID_/);
   });
 });

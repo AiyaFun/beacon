@@ -24,7 +24,7 @@ describe('pay/sign · 官方签名向量对拍（不需要真实凭证即可证�
   it('向量1：POST + body —— 官方文档 4012365336 的 JSAPI 下单示例', () => {
     // 官方给的 body 字符串，一字不改（签名对 body 是逐字节敏感的）
     const body =
-      '{"appid":"wxd678efh567hg6787","mchid":"1900007291","description":"Image形象店-深圳腾大-QQ公仔",' +
+      `{"appid":"wxd678efh567hg6787","mchid":"${OFFICIAL_TEST_MCHID}","description":"Image形象店-深圳腾大-QQ公仔",` +
       '"out_trade_no":"1217752501201407033233368018","notify_url":"https://www.weixin.qq.com/wxpay/pay.php",' +
       '"amount":{"total":100,"currency":"CNY"},"payer":{"openid":"oUpF8uMuAJO_M2pxb1Q9zNjWeS6o"}}';
     const msg = buildSignMessage(
@@ -65,7 +65,7 @@ describe('pay/sign · 官方签名向量对拍（不需要真实凭证即可证�
   // 但「query 参与签名」这条规则本身是对的（文档正文明确 + 向量1/2 的构造方式印证），
   // 下面这条锁的是规则，不是那个错的期望值。
   it('规则：URL 行必须带 query，改 query 必然改签名（查单 ?mchid= 靠这条）', () => {
-    const withQuery = buildSignMessage('GET', '/v3/pay/transactions/out-trade-no/X1?mchid=1900007291', '1', 'N', '');
+    const withQuery = buildSignMessage('GET', `/v3/pay/transactions/out-trade-no/X1?mchid=${OFFICIAL_TEST_MCHID}`, '1', 'N', '');
     const without = buildSignMessage('GET', '/v3/pay/transactions/out-trade-no/X1', '1', 'N', '');
     expect(withQuery).not.toBe(without);
     expect(signMessage(withQuery, OFFICIAL_TEST_KEY)).not.toBe(signMessage(without, OFFICIAL_TEST_KEY));

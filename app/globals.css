@@ -237,15 +237,6 @@ input, textarea, select { font-family: inherit; font-size: 14px; }
 @media (max-width: 1280px) { .fold-row { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 720px) { .fold-row { grid-template-columns: 1fr; } }
 
-/* 折叠卡并排成一行：收起时三张卡各占一列，**展开的那张自动占满整行**。
-   纯 CSS（Fold 是 <details>，不需要 JS 知道哪张开着）。
-   为什么要占满：里面是名单表格和采集台账，挤在 1/3 宽的列里根本看不清；
-   而收起态本来就只有一行标题，并排才不至于让三张卡吃掉三屏。 */
-.fold-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; align-items: start; }
-.fold-row > details[open] { grid-column: 1 / -1; }
-@media (max-width: 1280px) { .fold-row { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 720px) { .fold-row { grid-template-columns: 1fr; } }
-
 .grid-asym-left { display: grid; grid-template-columns: minmax(300px, 360px) 1fr; gap: 20px; }
 /* grid / flex 子项默认 min-width:auto（= 内容最小宽度），一条按钮多的动作行就能把整栏
    撑得比视口还宽——窄屏下表现为整页可以左右拖动、右边的徽标被裁掉。归零后各栏老老实实

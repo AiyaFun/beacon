@@ -18,7 +18,8 @@ const MERCHANT_KEY = crypto
 
 const APIV3_KEY = 'k'.repeat(32);
 const PUB_KEY_ID = 'PUB_KEY_ID_0000000000000024101100397200000006';
-const MCHID = '1900007291';
+import { OFFICIAL_TEST_MCHID } from './official-key';
+const MCHID = OFFICIAL_TEST_MCHID;
 
 function stubEnv() {
   vi.stubEnv('BEACON_PAY_VENDOR', 'wxpay');
