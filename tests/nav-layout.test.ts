@@ -16,22 +16,17 @@ describe('分组：一个阶段一组，别再长成杂物抽屉', () => {
   // 「设置与支持」是低频例外：装一次就不再动，板块多但不影响天天走的那条路。
   const LOW_FREQ = '设置与支持';
 
-  it('每组 2–4 项（低频的设置与支持除外）', () => {
-    const oversized = NAV.filter((g) => g.items.length > 4 && g.title !== LOW_FREQ).map(
-      (g) => `${g.title}(${g.items.length})`,
-    );
-    expect(oversized, `这些组超过 4 项，说明混进了别的阶段的东西：${oversized.join('、')}`).toEqual([]);
-    for (const g of NAV) expect(g.items.length, `${g.title} 是空组`).toBeGreaterThan(0);
+  it('展开组 ≤5 项；折叠组是抽屉，容量不设上限', () => {
+    // 单壳化（2026-08-26）后组语义变了：主入口是扁平一列（≤5 条守在 shell-modes），
+    // 「内容板块」「设置」是折叠抽屉——抽屉的意义就是装下低频多件，数量不是问题，
+    // 摊开才是。所以只守「不折叠的组不许超载」。
+    const oversized = NAV.filter((g) => !g.collapsed && g.items.length > 5)
+      .map((g) => `${g.title || '主入口'}(${g.items.length})`);
+    expect(oversized, `这些展开组超载了：${oversized.join('、')}`).toEqual([]);
   });
 
-  it('侧栏逐个板块列出（用户拍板的效果），低频组允许收起', () => {
-    const src = fs.readFileSync(path.join(ROOT, 'components/Sidebar.tsx'), 'utf8');
-    // 板块必须逐个渲染成链接：改回「一个阶段一行」的话，任何板块都要点两下才到
-    expect(src).toContain('group.items.map');
-    expect(src).toContain('href={item.href}');
-    // 收起只允许发生在标了 collapsed 的组上，且默认展开
-    expect(src).toContain('!group.collapsed || hasActive');
-    expect(NAV.filter((g) => g.collapsed).map((g) => g.title)).toEqual(['设置与支持']);
+  it('收起的组就是那两个抽屉：内容板块、设置', () => {
+    expect(NAV.filter((g) => g.collapsed).map((g) => g.title)).toEqual(['内容板块', '设置']);
   });
 
   it('每个阶段都有图标与落地页', () => {
@@ -94,33 +89,21 @@ describe('高亮：只点亮一条，最长前缀胜出', () => {
   });
 
   it('当前页能定位到所属阶段（侧栏那一行、顶部页签都靠它）', () => {
-    expect(groupOf(NAV, '/settings/keys')?.title).toBe('设置与支持');
-    expect(groupOf(NAV, '/data')?.title).toBe('看效果');
-    expect(groupOf(NAV, '/studio')?.title).toBe('做内容');
+    expect(groupOf(NAV, '/settings/keys')?.title).toBe('设置');
+    expect(groupOf(NAV, '/data')?.title).toBe('内容板块');
+    expect(groupOf(NAV, '/studio')?.title).toBe('内容板块');
     // 不属于任何阶段的页面（装机向导）不渲染阶段页签
     expect(groupOf(NAV, '/setup')).toBeNull();
   });
 
-  it('两个路由组都渲染阶段页签（热点页在 (public) 组里，漏了它链路就断一截）', () => {
-    // 原来这条要求**两个 layout 各自出现 `<StageTabs`**。它保证了「都有」，却顺手鼓励了
-    // 「各抄一份外壳」——(public) 抄的那份写死工作台，于是选了任务台的人点进 /hotlists
-    // 侧栏当场变回七阶段（2026-08-20 真机抓到）。
-    // 要的是「两个组都有」，不是「两个文件里各写一遍」：现在核对它们走同一份实现。
-    for (const shell of ['app/(app)/layout.tsx', 'app/(public)/layout.tsx']) {
-      const src = fs.readFileSync(path.join(ROOT, shell), 'utf8');
-      expect(src, `${shell} 没走 TenantShell，外壳会各长各的`).toContain('<TenantShell');
-    }
-    const tenant = fs.readFileSync(path.join(ROOT, 'components/TenantShell.tsx'), 'utf8');
-    expect(tenant, 'TenantShell 没渲染阶段页签').toContain('<StageTabs');
+  it('单壳后阶段页签退役，跨页导航由页顶组页签承担（Intel/Make/Asset/RoleTabs）', () => {
+    // StageTabs 是「阶段」概念的产物，单壳（2026-08-26）没有阶段。
+    // 「下一步去哪儿」链路由 NextSteps 恒渲染兜住（shell-modes 有守卫）。
+    const shellSrc = fs.readFileSync(path.join(ROOT, 'components/TenantShell.tsx'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    expect(shellSrc).not.toContain('<StageTabs');
   });
 
-  it('进到一个阶段，它的板块全部列在页面顶部——一个都不许少', () => {
-    // 侧栏只剩阶段行之后，板块的可发现性**全靠**阶段页签。
-    // 这条断言就是那份保证：页签渲染的是 group.items 全集，没有任何过滤。
-    const src = fs.readFileSync(path.join(ROOT, 'components/StageTabs.tsx'), 'utf8');
-    expect(src).toContain('group.items.map');
-    expect(src).not.toMatch(/group\.items\.(filter|slice)\(/);
-  });
 });
 
 describe('帮助页的路标不许指向不存在的分组', () => {
@@ -143,10 +126,9 @@ describe('帮助页的路标不许指向不存在的分组', () => {
 describe('链路：每个工作流页面都要说清「这一步之后去哪儿」', () => {
   // 侧栏回答「东西在哪」，这张表回答「做完接着做什么」。后者断了，用户走不完一整圈：
   // 重排前数据看板不指向爆款基因（它俩本来就该一组），爆款基因看完也不知道拿去哪儿用。
-  const WORKFLOW_GROUPS = ['看情报', '定选题', '做内容', '看效果'];
-
-  it('四个工作流分组里的每一页都配了下一步', () => {
-    const pages = NAV.filter((g) => WORKFLOW_GROUPS.includes(g.title)).flatMap((g) => g.items.map((i) => i.href));
+  // 单壳化后没有阶段分组了：工作流页 = 内容板块抽屉里的每一条（设置类不参与闭环）
+  it('内容板块抽屉里的每一页都配了下一步', () => {
+    const pages = NAV.filter((g) => g.title === '内容板块').flatMap((g) => g.items.map((i) => i.href.split(/[#?]/)[0]));
     const missing = pages.filter((h) => nextSteps(h).length === 0);
     expect(missing, `这些页面走到底就断了：${missing.join('、')}`).toEqual([]);
   });

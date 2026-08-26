@@ -1,5 +1,6 @@
 import type { IconName } from '@/components/icons';
 import { can, type Capability } from '@/lib/edition';
+import { AGENT_ROLES } from '@/lib/agent/roles';
 
 // ── 信息架构：侧栏就是这个产品的说明书 ──────────────────────────────────────
 //
@@ -65,104 +66,63 @@ export type NavGroup = {
   pinBottom?: boolean;
 };
 
+// ── 2026-08-26 单壳化：工作台已删（用户拍板），这份就是唯一导航 ────────────────
+// 历史：曾有 workbench（按阶段排）/ taskdeck（按「我要什么」排）两套壳、两张表、
+// 一套对等守卫。多轮页面合并后两张表内容几乎重合，用户点破「好像都一样」并拍板删工作台。
+// TASK_NAV 在 lib/shell.ts 里 re-export 指回这份——存量 import 不用改。
 export const NAV: NavGroup[] = [
   {
-    title: '每天从这里开始',
-    icon: 'home',
-    purpose: '打开系统先看的：今天该做什么、随时能问的助手、有什么正在跑或在等你',
+    // 2026-08-26 扁平化（用户原话「把干活去掉，更多工具去掉」「导航栏里面很多都跟点进去内容都重复了」）：
+    // 主入口不再套分组标题（title: '' → 不渲染组头），照 Doubao 工作那样一列到底。
+    //
+    // 【删掉的三条都是「同一个东西列两遍」】
+    //   · 本周作战 /battle —— 任务台首页本体**就是**这份报告（page.tsx 的 taskdeck 分支）；
+    //   · 智能体 /workflows —— 技能·连接器页顶标签一键就到（components/RoleTabs.tsx）；
+    //   · 能力 /extension#abilities —— 同上，且 /extension 本身在「设置·采集插件」里。
+    // 删条目会撞对等守卫（NAV 每个板块任务台都要到得了），所以改用 covers 把
+    // 「页内覆盖了谁」显式写出来——要求是**板块到得了**，不是「侧栏必须单列一条」。
+    title: '',
+    icon: 'chat',
+    purpose: '每天就这四件事：看今天做什么、说一句话派活、管好班底、回看跑过的',
     items: [
-      { href: '/', label: '今日概览', icon: 'home' },
-      // 本周作战：把选题/表现/竞对拼成一份「这周该做什么」的操作台，每条建议后面就是
-      // 起稿入口。与今日概览挨着放——概览是「现在什么状态」，作战是「照着做哪几条」。
-      { href: '/battle', label: '本周作战', icon: 'fire' },
-      // 助手此前**只有右下角那个浮标**能进，导航里一个入口都没有——
-      // 页面存在、能力也在（含执行模式），但用户以为没有。
-      { href: '/assistant', label: 'AI 助手', icon: 'chat' },
-      // 运行中心：五类「会跑起来的东西」此前散在四个页面，其中 AI 执行器的运行记录
-      // 一个页面都没有（写了没接）。它跟助手挨着放：助手是发起，运行中心是回看。
-      { href: '/runs', label: '运行中心', icon: 'clock' },
+      { href: '/', label: '今天', icon: 'home', hint: '本周作战报告 · 今天该做什么，每条后面就是起稿入口', covers: ['/battle'] },
+      { href: '/assistant', label: '新任务', icon: 'chat', hint: 'AI 助手 · 说一句话让它去做' },
+      // 「班底」→「技能 · 连接器」（用户指定）：与 Doubao「技能·连接器·伙伴」同一说法。
+      // 页顶 RoleTabs 切技能/智能体/能力，所以它 covers 掉 /workflows。
+      { href: '/skills', label: '技能 · 连接器', icon: 'sparkles', hint: `${AGENT_ROLES.skill.name} / ${AGENT_ROLES.agent.name} / ${AGENT_ROLES.ability.name} · 能重复用的干活单位，页顶标签互切；定时任务也在这里`, covers: ['/workflows'] },
+      { href: '/runs', label: '任务记录', icon: 'clock', hint: '运行中心 · 所有跑过和在等你处理的' },
     ],
   },
   {
-    title: '看情报',
-    icon: 'radar',
-    purpose: '外面正在发生什么：全网热点、同行在发什么、我存下的外部内容',
-    items: [
-      // 2026-08-26 情报三合一（同看效果/定选题的整理）：三个入口收成一条，
-      // 页顶 components/IntelTabs.tsx 互切。路由都保留——/hotlists 在 (public)
-      // 是游客拉新入口，不能并进登录页，所以是「侧栏收敛+页顶标签」而不是合并路由。
-      // covers 让对等/孤儿页/NEXT_STEPS 守卫知道这两页仍到得了。
-      { href: '/hotlists', label: '看情报', icon: 'radar', hint: '看热点 / 看同行 / 我存的资料 · 页顶标签互切', covers: ['/competitors', '/library'] },
-    ],
-  },
-  {
-    title: '定选题',
-    icon: 'bulb',
-    purpose: '把情报变成「今天写哪一条」：候选、灵感、专家会诊',
-    items: [
-      // 2026-08-25 定选题三合一：灵感收集箱 + 选题智囊团并进选题引擎（页内三标签，
-      // 见 app/(app)/topics/page.tsx 的 view 参数）。此前三个入口点开发现是
-      // 「今天写哪一条」这一件事的三个视角——与看效果三合一同一个整理。
-      { href: '/topics', label: '选题引擎', icon: 'bulb', hint: '挑选题 / 灵感箱 / 找角度（智囊团）· 页内三标签' },
-    ],
-  },
-  {
-    title: '做内容',
-    icon: 'pen',
-    purpose: '从选题到发出去这一整段：写、配图、查合规、发布',
-    items: [
-      // 2026-08-26 做内容四合一（用户「能否把这几块也放在一起」）：四页仍各自成页
-      //（出图/发布是「做完还要接着点」的多步操作，理由未变），侧栏收成一条，
-      // 页顶 components/MakeTabs.tsx 互切。covers 保住对等/孤儿页/NEXT_STEPS 守卫。
-      { href: '/studio', label: '做内容', icon: 'pen', hint: '写稿 / 配图 / 查红线 / 发出去 · 页顶标签互切', covers: ['/images', '/compliance', '/publish'] },
-    ],
-  },
-  {
-    title: '看效果',
-    icon: 'chart',
-    purpose: '发完之后回答三个问题：跑得怎么样、什么样的内容跑得动、平台规则层面为什么',
-    items: [
-      // ⚠️ 这里曾有一个独立的 /growth「增长追踪」。用户 2026-08-10 明确要求把它
-      // 融合进竞对监控、不要单开一页，已整体搬到 /competitors 里的「增长追踪」区块。
-      // 别再加回来：同一份数据两个入口，用户只会两边都不知道该看哪个。
-      // 2026-08-25「看效果」三合一：数据看板 + 爆款基因 + 平台算法教练并成一页，页内三个标签
-      //（见 app/(app)/data/page.tsx 的 view 参数 + components/insight/EffectTabs）。
-      // 此前它们是三个独立入口，用户点开发现是同一件事的三个视角——收成一个。
-      { href: '/data', label: '看效果', icon: 'chart', hint: '数据看板 / 爆款基因 / 平台算法教练 · 页内三标签' },
-    ],
-  },
-  {
-    title: '我的资产',
-    icon: 'user',
-    purpose: '越用越懂你的那部分：人设与记忆、只有你有的素材、装好的技能与模板',
-    items: [
-      // 2026-08-26 记忆与素材二合一：都是「越用越懂你」喂给 AI 的资产，页顶 AssetTabs 互切
-      { href: '/persona', label: '记忆与素材', icon: 'user', hint: '记忆与人设 / 我的素材 · 页顶标签互切', covers: ['/material'] },
-      // 2026-08-26 合并：技能中心与工作流模板并成一条「技能 · 连接器」——
-      // /skills 页顶 RoleTabs 一键切技能/智能体/能力，两个入口挨着放已经是同一页的两个标签，
-      // 列两条就是用户说的「导航栏跟点进去内容重复」。covers 让对等守卫知道 /workflows 到得了。
-      { href: '/skills', label: '技能 · 连接器', icon: 'sparkles', hint: '技能 / 智能体 / 能力 · 页顶标签互切', covers: ['/workflows'] },
-    ],
-  },
-  {
-    title: '设置与支持',
-    icon: 'settings',
-    purpose: '装一次就不用再动的东西：接入、开关、团队、账单、帮助',
-    // 侧栏里默认收起：9 项且低频，天天用的是上面六组。点标题即展开，进到组内页面自动展开。
+    // 内容板块：这些是**真页面**（写稿、看数据），不是技能，收在一个抽屉里按做事顺序排。
+    // 名字从「更多工具」改成「内容板块」——它们就是这个产品的板块，不是"工具箱杂物"。
+    title: '内容板块',
+    icon: 'archive',
+    purpose: '找料 → 挑题 → 写 → 查 → 发 → 看结果，按做事顺序排',
     collapsed: true,
-    // 2026-08-26 钉到最底部，与账号区挨着——都是「装一次/一天点不了一次」的东西
+    items: [
+      // 2026-08-26 情报三合一：三条收成一条，页顶标签互切（components/IntelTabs.tsx）
+      { href: '/hotlists', label: '看情报', icon: 'radar', hint: '看热点 / 看同行 / 我存的资料 · 页顶标签互切', covers: ['/competitors', '/library'] },
+
+      { href: '/topics', label: '挑选题', icon: 'bulb', hint: '选题引擎 · 候选与六维评分；灵感箱、找角度在页内标签' },
+      // 2026-08-26 做内容四合一：四条收成一条，页顶标签互切（components/MakeTabs.tsx）
+      { href: '/studio', label: '做内容', icon: 'pen', hint: '写稿 / 配图 / 查红线 / 发出去 · 页顶标签互切', covers: ['/images', '/compliance', '/publish'] },
+      { href: '/data', label: '看效果', icon: 'chart', hint: '数据看板 / 爆款基因 / 平台算法教练 · 页内三标签' },
+      { href: '/persona', label: '记忆与素材', icon: 'user', hint: '记忆与人设 / 我的素材 · 喂给 AI 的那部分，页顶标签互切', covers: ['/material'] },
+    ],
+  },
+  {
+    title: '设置',
+    icon: 'settings',
+    purpose: '装一次就不用再动的：接入、插件、推送、团队、账单、帮助',
+    collapsed: true,
     pinBottom: true,
     items: [
-      // 密钥类全部收在 /settings/keys（模型 Key / 生图 / 公众号发布 / 采集令牌 / 机器人凭据）；
-      // /settings 只剩运行类设置。分两条是刻意的：用户找 Key 时不该还要先猜它在哪一页。
       { href: '/settings/keys', label: '接入与密钥', icon: 'cpu' },
       { href: '/settings', label: '运行设置', icon: 'settings' },
-      // 推送「推什么、什么时候推」在这里，机器人的**凭据**在接入与密钥——
-      // 两页各自都写明了另一半在哪，改名字时两处要一起改。
-      { href: '/notifications', label: '推送与机器人', icon: 'chat' },
-      { href: '/extension', label: '采集助手', icon: 'download' },
+      { href: '/notifications', label: '消息渠道', icon: 'chat', hint: '推送与机器人 · 推什么、什么时候推' },
+      { href: '/extension', label: '采集插件', icon: 'download', hint: '采集助手 · 装到浏览器里的那个扩展' },
       { href: '/members', label: '成员与权限', icon: 'users' },
-      // 企业版没有计费面：链接留着的话点进去只会撞上 assertCan('payment') 抛出的错误页。
       { href: '/billing', label: '套餐与计费', icon: 'sparkles', requires: 'payment' },
       { href: '/settings/account', label: '账号与安全', icon: 'shield' },
       { href: '/help', label: '使用帮助', icon: 'help' },
@@ -327,6 +287,8 @@ export const NEXT_STEPS: Record<string, { href: string; why: string }[]> = {
   ],
   '/library': [{ href: '/topics', why: '存下来的资料拿去挑今天写什么' }],
   '/topics': [{ href: '/studio', why: '选定了就去起稿' }],
+  // 人设是所有推荐的地基——建完/改完人设，下一步就是让推荐按新人设跑一轮
+  '/persona': [{ href: '/topics', why: '人设变了，推荐会跟着变——去看今天该写哪条' }],
   '/studio': [
     { href: '/compliance', why: '发之前过一遍平台红线' },
     { href: '/publish', why: '写完了就排发布任务' },

@@ -151,8 +151,9 @@ describe('任务台侧栏：术语与 roles.ts 同一套', () => {
     expect(hub?.covers ?? [], '技能·连接器没声明覆盖智能体，那智能体就真找不到了').toContain('/workflows');
     // 名字硬编码在 shell.ts 里的话，改 roles.ts 就会出现「侧栏叫插件、页面叫能力」——
     // skill 的名字进了合并入口的 hint，正则必须连它一起盯住
-    expect(code('lib/shell.ts')).toMatch(/AGENT_ROLES\.skill\.name/);
-    expect(code('lib/shell.ts')).toMatch(/AGENT_ROLES\.(agent|ability)\.name/);
+    // 2026-08-26 单壳化：导航真相源从 shell.ts 搬进 nav.ts，名字引用跟着搬
+    expect(code('lib/nav.ts')).toMatch(/AGENT_ROLES\.skill\.name/);
+    expect(code('lib/nav.ts')).toMatch(/AGENT_ROLES\.(agent|ability)\.name/);
   });
 
   it('「插件」这个词只留给浏览器扩展', () => {

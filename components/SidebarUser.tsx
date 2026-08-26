@@ -3,8 +3,6 @@
 import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 import { Icon } from './icons';
-import { ShellSwitch } from './ShellSwitch';
-import type { ShellMode } from '@/lib/shell';
 import type { NavGroup } from '@/lib/nav';
 import { Icon as NavIcon } from './icons';
 
@@ -21,7 +19,6 @@ import { Icon as NavIcon } from './icons';
 export function SidebarUser({
   memberName,
   planLabel,
-  shell,
   isPlatformAdmin,
   settings,
   logout,
@@ -29,7 +26,6 @@ export function SidebarUser({
 }: {
   memberName: string;
   planLabel: string;
-  shell: ShellMode;
   isPlatformAdmin: boolean;
   /**
    * 「设置」那一组（接入与密钥 / 运行设置 / …）。2026-08-26 用户要求收进这个菜单——
@@ -59,12 +55,6 @@ export function SidebarUser({
     <div className="sidebar-user" ref={boxRef}>
       {open && (
         <div className="sidebar-user-menu">
-          {/* 切换器就摆在菜单里而不是收进设置页——它是两套排法之间唯一的门，
-              点错一次就找不回来的东西不能藏（理由同 ShellSwitch 文件头） */}
-          <div className="sidebar-user-section">界面排法</div>
-          <div style={{ padding: '2px 10px 8px' }}>
-            <ShellSwitch mode={shell} />
-          </div>
           {settings && settings.items.length > 0 && (
             <>
               <div className="sidebar-user-section">{settings.title}</div>

@@ -6,7 +6,6 @@ import { PageHead } from '@/components/ui';
 import { AssistantTabs } from './AssistantTabs';
 import { availableTools } from '@/lib/agent/run';
 import { disabledTools } from '@/lib/agent/tool-config';
-import { currentShell } from '@/lib/shell-server';
 import { AGENT_ROLES } from '@/lib/agent/roles';
 import { RoleLadder } from '@/components/RoleLadder';
 import { listSelectableModels } from '@/lib/llm/selectable';
@@ -29,7 +28,6 @@ export default async function AssistantPage({
 }) {
   const s = await getSession();
   const { run, goal } = await searchParams;
-  const shell = await currentShell();
   const [account, memoryCount, ws, waiting, models] = await Promise.all([
     prisma.creatorAccount.findUnique({ where: { id: s.accountId } }),
     prisma.memoryEntry.count({ where: { workspaceId: s.workspaceId, active: true } }),
@@ -49,7 +47,6 @@ export default async function AssistantPage({
   const persona = readPersona(account?.personaCard ?? '{}');
   const completeness = personaCompleteness(persona);
   const accountName = account?.name ?? '我的账号';
-  const taskdeck = shell === 'taskdeck';
   // 已经打开的就是那一条时不再提示——一条指着当前页面的「去处理」是纯噪音
   const resume = waiting && waiting.id !== run ? waiting : null;
 
@@ -63,7 +60,6 @@ export default async function AssistantPage({
 
   return (
     <>
-      {taskdeck ? (
         // 任务台：标题压成一行，输入框紧跟其后
         <div className="row wrap" style={{ gap: 8, alignItems: 'baseline', marginBottom: 10 }}>
           <h1 style={{ fontSize: 19, margin: 0 }}>新任务</h1>
@@ -71,12 +67,6 @@ export default async function AssistantPage({
               页顶重复一遍只是把输入框往下推 */}
           <span className="small muted">说一句话，它自己决定用哪几样去做</span>
         </div>
-      ) : (
-        <HubHeader
-          title="AI 助手"
-          hint="选题 / 文案 / 运营随便问；需要它真的动手时，答完会就地问你要不要去做——写操作默认逐条确认，也可在派发时一次授权"
-        />
-      )}
 
       {resume && (
         // 死胡同的出口：一次执行停在「等你确认」时，如果不给这条，用户只有在

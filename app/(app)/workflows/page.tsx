@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
-import { PageHead, Card, Stat } from '@/components/ui';
+import { PageHead, Card, Stat, Fold } from '@/components/ui';
 import { can } from '@/lib/rbac';
 import { backgroundSchedulerRuns } from '@/lib/jobs/queue';
 import { listTemplates, preinstallBuiltinTemplates } from '@/lib/workflow/market';
@@ -66,17 +66,11 @@ export default async function WorkflowsPage() {
         title="技能 · 连接器"
         hint={`${AGENT_ROLES.agent.oneLine} · 怎么做由${AGENT_ROLES.agent.decidedBy}`}
         tabs={<RoleTabs active="agent" inline />}
+        meta={<span className="small muted hide-mobile">已装 {installed.length} / 市场 {templates.length}</span>}
       />
 
       {/* 「智能体」这个名字最容易被误解成「它会自己想」。分工梯就摆在页顶，
           让用户当场看清：会思考的是助手，这里的每一条步骤都是写死的 */}
-
-      <div className="grid grid-4" style={{ marginBottom: 16 }}>
-        <Stat label="可用模板" value={installed.length} foot={`市场里共 ${templates.length} 条`} />
-        <Stat label="内置模板" value={templates.filter((t) => t.isBuiltin).length} foot="全租户可见" />
-        <Stat label="我建的" value={templates.filter((t) => !t.isBuiltin).length} foot="可导出分享" />
-        <Stat label="最近运行" value={recentRuns.length} foot="近 8 次" />
-      </div>
 
       <WorkflowMarket templates={templates} readOnly={!can(s.role, 'content.create')} />
 
@@ -129,7 +123,9 @@ export default async function WorkflowsPage() {
         />
       </Card>
 
-      <Card title="最近运行" sub="每一步的结果都留痕：失败时能看出停在哪一步、为什么" style={{ marginTop: 16 }}>
+      {/* 折叠：回看才翻（运行中心有全量）。「一键任务」不折——PresetCards 链着 #presets 锚点，
+          收进默认关闭的 Fold 会让跳转落在一个关着的抽屉上（extension 那轮的教训） */}
+      <Fold title="最近运行" sub="每一步的结果都留痕：失败时能看出停在哪一步、为什么" note={<span className="small muted">回看才翻</span>}>
         {recentRuns.length === 0 ? (
           <p className="small muted">还没有跑过模板。</p>
         ) : (
@@ -160,7 +156,7 @@ export default async function WorkflowsPage() {
             })}
           </div>
         )}
-      </Card>
+      </Fold>
     </>
   );
 }
