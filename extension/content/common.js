@@ -598,6 +598,7 @@ async function beaconCollectDeep(parse) {
   for (let round = 0; round < DEEP_MAX_ROUNDS; round++) {
     const count = (payload && payload.posts && payload.posts.length) || 0;
     if (count >= BEACON_POST_CAP || Date.now() > deadline) break;
+    beaconLiveStep(`滚动加载第 ${round + 1} 屏（已见 ${count} 条作品）…`);
     const anchor = beaconScrollAnchor(payload);
     try {
       if (anchor) anchor.scrollIntoView({ block: 'end' });
@@ -623,6 +624,60 @@ async function beaconCollectDeep(parse) {
   return payload;
 }
 globalThis.__beaconCollectDeep = beaconCollectDeep;
+
+// ── 执行可视化的进度卡（0.9.10）─────────────────────────────────────────────
+//
+// 只有 SW 确认「这一页是本轮可视化执行开的」才渲染（live:query）；用户自己浏览
+// 触发的「访问即采」永远不弹卡。卡是纯 DOM 叠加，不碰页面自身的任何元素。
+let beaconLiveCard = null;
+
+function beaconLiveStep(text) {
+  try {
+    if (!beaconLiveCard) return; // 没在可视化：所有 step 调用都是无声无息的 no-op
+    const line = document.createElement('div');
+    line.textContent = text;
+    line.style.cssText = 'opacity:.92;padding:2px 0';
+    const list = beaconLiveCard.querySelector('[data-live-steps]');
+    list.appendChild(line);
+    while (list.children.length > 6) list.removeChild(list.firstChild); // 只留最近几步
+  } catch { /* ignore */ }
+}
+globalThis.__beaconLiveStep = beaconLiveStep;
+
+function beaconLiveDone(ok) {
+  try {
+    if (!beaconLiveCard) return;
+    beaconLiveStep(ok ? '✓ 采集完成，即将关闭本页' : '✗ 这一页没采到（可能要登录或没加载完）');
+    const head = beaconLiveCard.querySelector('[data-live-title]');
+    head.style.color = ok ? '#4ade80' : '#f87171';
+  } catch { /* ignore */ }
+}
+
+async function beaconLiveInit() {
+  try {
+    const r = await chrome.runtime.sendMessage({ type: 'live:query' }).catch(() => null);
+    if (!r || r.live !== true) return;
+    const el = document.createElement('div');
+    el.id = 'beacon-live-card';
+    el.style.cssText = [
+      'position:fixed', 'right:18px', 'bottom:18px', 'z-index:2147483647', 'width:300px',
+      'padding:12px 14px', 'border-radius:12px', 'background:rgba(17,17,17,.92)', 'color:#fff',
+      'font:12.5px/1.6 -apple-system,"PingFang SC",sans-serif',
+      'box-shadow:0 8px 28px rgba(0,0,0,.35)', 'backdrop-filter:blur(6px)',
+      'pointer-events:none', // 绝不挡用户点页面
+    ].join(';');
+    el.innerHTML = '<div data-live-title style="font-weight:600;margin-bottom:6px"></div><div data-live-steps></div>';
+    el.querySelector('[data-live-title]').textContent = r.title || '烽火台正在采集';
+    (document.body || document.documentElement).appendChild(el);
+    beaconLiveCard = el;
+    beaconLiveStep('已打开页面，等待渲染…');
+  } catch { /* ignore */ }
+}
+// ⚠️ 这里**不注册第二个 onMessage 监听器**：收尾状态由 beaconAutoCollect 回传成功后
+// 就地调 beaconLiveDone——内容脚本自己就知道结果，不需要 SW 发消息回来。
+// （第一版注册过一个 live:done 监听，把单测桩里「只保留最后一个监听器」的主通道顶掉了，
+// 采集消息从此无人应答；生产里多监听虽然合法，但能不加第二个就不加。）
+beaconLiveInit();
 
 function beaconToast(text, ok) {
   try {
@@ -664,6 +719,7 @@ async function beaconAutoCollect() {
     }
     if (!competitors.length) return;
 
+    beaconLiveStep('解析页面数据…');
     let payload = null;
     for (let i = 0; i < 15; i++) {
       payload = parse();
@@ -679,18 +735,25 @@ async function beaconAutoCollect() {
     if (!payload.posts || payload.posts.length === 0) return;
 
     // 确认是已订阅的竞对之后，再翻几页把首屏之外的作品带上（首屏通常只有 18–20 条）。
-    // **只在后台标签页里翻**——批量采集打开的那种页面用户看不见，滚它没有代价；
-    // 用户正看着的页面一律不滚（见 beaconCollectDeep 顶部第 ① 条）。
+    // 翻页的边界是「**绝不滚用户自己在看的页**」，落成判据是两种情况才滚：
+    //   ① 后台标签页（document.hidden）——批量采集默认形态，用户看不见，滚它没有代价；
+    //   ② 本页是可视化执行的工作页（beaconLiveCard 存在，即 SW 在 live:query 里认过账）——
+    //      页面是插件自己开并放到前台**给用户看**的，滚动本身就是要展示的过程。
+    //      少了这半句，开可视化会静默退化成只采首屏（前台 ≠ 用户自己的页）。
+    // 用户自己浏览竞对主页触发的「访问即采」两条都不满足：前台且无卡，照旧一律不滚。
     // 放在订阅判定之后：不订阅的号本来就不回传，没必要为它滚一遍页面。
-    if (document.hidden) {
+    if (document.hidden || beaconLiveCard) {
+      beaconLiveStep('开始翻页，采集首屏之外的作品…');
       const deeper = await beaconCollectDeep(parse);
       if (deeper && deeper.posts && deeper.posts.length > payload.posts.length) payload = deeper;
     }
 
+    beaconLiveStep(`回传烽火台（${payload.posts.length} 条作品）…`);
     const r = await chrome.runtime.sendMessage({ type: 'beacon-ingest', payload });
     try {
       chrome.runtime.sendMessage({ type: 'beacon-collected', platform: payload.platform, handle: payload.handle, ok: !!r?.ok });
     } catch { /* ignore */ }
+    beaconLiveDone(!!r?.ok);
     if (r?.ok) beaconToast(`✓ 已自动采集「${r.competitor}」${r.withMetrics ?? r.posts} 条作品`, true);
     else if (r?.error) beaconToast(`采集未成功：${r.error}`, false);
   } catch { /* ignore */ }

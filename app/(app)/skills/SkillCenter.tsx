@@ -104,9 +104,11 @@ export function SkillCenter({ skills, readOnly }: { skills: SkillSummary[]; read
             <div className="small muted" style={{ flex: 1 }}>{skl.description}</div>
             {!readOnly && (
               <div>
+                {/* 只暗被点的这一张：disabled={pending} 会让全部卡片的按钮一起灰掉，
+                    看上去像整页坏了。装/卸各自独立，别的卡没理由陪着不可点。 */}
                 <button
                   className={`btn btn-sm${skl.installed ? ' btn-ghost' : ' btn-primary'}`}
-                  disabled={pending}
+                  disabled={busyId === skl.id && pending}
                   onClick={() => toggleInstall(skl)}
                 >
                   {busyId === skl.id && pending ? '处理中…' : skl.installed ? '卸载' : '安装'}

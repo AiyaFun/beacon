@@ -1,4 +1,6 @@
-import { assertPublicUrl } from './ssrf';
+import http from 'node:http';
+import https from 'node:https';
+import { assertPublicUrl, pinnedLookup } from './ssrf';
 import { checkRobots } from './robots';
 
 // 带 SSRF 护栏的网页抓取 —— 全站唯一入口。
@@ -35,13 +37,17 @@ export async function safeFetch(
   // 默认遵守 robots。关掉它必须是**显式**的一次决定，不能靠忘了传参数悄悄绕过
   // （理由见 lib/web/robots.ts 文件头：违反 robots 会成为反法诉讼里对我们不利的事实）。
   const respectRobots = opts.respectRobots !== false;
-  let current = normalizeGithubUrl(await assertPublicUrl(startUrl));
+  let resolved = await assertPublicUrl(startUrl);
+  let current = normalizeGithubUrl(resolved.url);
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    // 每一跳都验：重定向可能落到另一个域，只验起点等于给「用跳转绕开 robots」开了门
     if (respectRobots) {
       const verdict = await checkRobots(current);
       if (!verdict.allowed) throw new Error(`抓取被拒绝：${verdict.reason}`);
     }
+    // 用 pinnedLookup 将 TCP 连接锁定在已验证的公网 IP 上，消除 DNS rebinding TOCTOU
+    const agent = current.protocol === 'https:'
+      ? new https.Agent({ lookup: pinnedLookup(resolved.resolvedIps) as never })
+      : new http.Agent({ lookup: pinnedLookup(resolved.resolvedIps) as never });
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
     let res: Response;
@@ -50,11 +56,14 @@ export async function safeFetch(
         signal: ctrl.signal,
         redirect: 'manual',
         headers: { 'user-agent': ua, accept: 'text/html,application/json,text/markdown,text/plain,*/*' },
+        // @ts-expect-error Node.js fetch 接受 dispatcher / agent，类型定义未覆盖
+        agent,
       });
     } catch (e) {
       throw new Error(`抓取失败：${(e as Error).name === 'AbortError' ? '请求超时' : (e as Error).message}`);
     } finally {
       clearTimeout(timer);
+      agent.destroy();
     }
 
     // 3xx：手动逐跳复验，防重定向绕过 SSRF
@@ -62,7 +71,8 @@ export async function safeFetch(
       const loc = res.headers.get('location');
       if (!loc) throw new Error(`抓取失败：HTTP ${res.status} 但无跳转地址`);
       if (hop === MAX_REDIRECTS) throw new Error('重定向次数过多');
-      current = normalizeGithubUrl(await assertPublicUrl(new URL(loc, current).toString()));
+      resolved = await assertPublicUrl(new URL(loc, current.toString()).toString());
+      current = normalizeGithubUrl(resolved.url);
       continue;
     }
     if (!res.ok) throw new Error(`抓取失败：HTTP ${res.status}`);

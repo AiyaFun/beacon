@@ -97,11 +97,13 @@ describe('这条能力默认是关的', () => {
     }
   });
 
-  it('派活工具会先查这个开关', () => {
-    const tools = code('lib/agent/tools.ts');
+  it('派活前的闸会先查这个开关（2026-08-26 起闸收口在 vet.ts，AI 工具与对外 API 共用）', () => {
+    const vet = code('lib/browser-task/vet.ts');
     // 【两处都要断】只验名字的话，`select: { browserReadEnabled: true }` 那一行就够它绿了——
     // 把下面真正拦人的 if 删掉，开关照样形同虚设，而守卫毫无反应。
-    expect(tools, '没把开关查出来').toMatch(/select: \{ browserReadEnabled: true \}/);
-    expect(tools, '查了却没拦 = 默认关形同虚设').toMatch(/if \(!ws\?\.browserReadEnabled\)/);
+    expect(vet, '没把开关查出来').toMatch(/select: \{ browserReadEnabled: true \}/);
+    expect(vet, '查了却没拦 = 默认关形同虚设').toMatch(/if \(!ws\?\.browserReadEnabled\)/);
+    // 工具那头必须真的走 vet（不走的话上面两条守着一个没人调的函数）
+    expect(code('lib/agent/tools.ts')).toMatch(/vetBrowserTaskArgs\(ctx\.workspaceId/);
   });
 });

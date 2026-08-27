@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "引导页的最小权限：只需要核心窗口能力（探测与跳转是普通 fetch/location，不走 IPC）",
+  "windows": ["main"],
+  "permissions": ["core:default", "autostart:default", "opener:default"]
+}

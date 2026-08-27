@@ -178,6 +178,48 @@ async function reportParserMiss(payload) {
   }
 }
 
+// ── 失败现场截图（0.9.9）：解析失效时给诊断留一张当页截图 ────────────────────
+//
+// 【只截用户正看着的那一页】captureVisibleTab 拍的是「窗口当前可见的标签页」，
+// **不是发消息的那个 tab**——发消息的 tab 不在前台时，拍到的会是用户正在看的
+// 别的页面。那不是废数据，是把用户没打算给的页面传出去。所以 sender.tab.active
+// 不为 true 一律不拍（后台自动回填开的标签页因此永远不会被截，隐私政策写的就是这条）。
+//
+// 【体积上限 150000 字符】与服务端 MAX_SCREENSHOT_CHARS 同一数值（两边要一起改）：
+// 生产 WAF 对超过约 256KB 的请求体回「200 + HTML 错误页」，超限的截图会把骨架一起带死。
+// 缩到宽 ≤1200 压两档 JPEG 还超，就放弃——截图是锦上添花，骨架才是诊断主料。
+const INCIDENT_SHOT_MAX_CHARS = 150000;
+
+async function captureIncidentShot(sender) {
+  try {
+    const tab = sender && sender.tab;
+    if (!tab || tab.active !== true || typeof tab.windowId !== 'number') return null;
+    // 没有该站点的 host 权限时这里会 throw（比如公众号后台）——外层 catch 吞掉，照常只报骨架
+    const raw = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'jpeg', quality: 60 });
+    if (!raw) return null;
+    const bmp = await createImageBitmap(await (await fetch(raw)).blob());
+    const scale = Math.min(1, 1200 / bmp.width);
+    const w = Math.max(1, Math.round(bmp.width * scale));
+    const h = Math.max(1, Math.round(bmp.height * scale));
+    const canvas = new OffscreenCanvas(w, h);
+    canvas.getContext('2d').drawImage(bmp, 0, 0, w, h);
+    bmp.close();
+    for (const quality of [0.55, 0.35]) {
+      const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality });
+      const dataUrl = await new Promise((resolve) => {
+        const r = new FileReader();
+        r.onload = () => resolve(typeof r.result === 'string' ? r.result : null);
+        r.onerror = () => resolve(null);
+        r.readAsDataURL(blob);
+      });
+      if (dataUrl && dataUrl.length <= INCIDENT_SHOT_MAX_CHARS) return dataUrl;
+    }
+    return null;
+  } catch {
+    return null; // 拍不了就不拍：截图失败绝不能拖累骨架上报
+  }
+}
+
 /** 拉规则包并缓存到本地。失败就保留上一份缓存——没网时不该把已有的兜底规则清掉。 */
 async function refreshParserRules() {
   const { host, token } = await getConfig();
@@ -1531,6 +1573,28 @@ function waitForCollect(platform, handle, timeoutMs) {
 
 // opts.interactive 一路传到 collectWechatOne：用户点「全部采集」时人在电脑前，
 // 撞到未登录可以把登录页摆给他；定时那轮（runScheduledCollect）人多半不在，不弹前台页。
+// ── 执行可视化（0.9.10，默认关）─────────────────────────────────────────────
+//
+// 开启后，用户**当场点击**的「批量采集 / 回填我的数据」把工作标签页开在前台，
+// 页面上叠一张进度卡（common.js 渲染），让用户看着它干活。
+//
+// 【硬边界，与隐私政策逐字对应】只作用于 opts.interactive 的那两轮：
+// 定时采集（runScheduledCollect）与后台派发任务（BrowserTask）**不看这个开关**，
+// 照旧全程后台——政策对那两条链路承诺的就是「后台标签页」，开关不是改承诺的通道。
+// 它只改变「让用户看见」，不改变采集范围、字段或频率。
+async function liveViewOn() {
+  try {
+    const { liveView } = await chrome.storage.sync.get('liveView');
+    return liveView === true; // 默认关：只有显式存过 true 才算开
+  } catch {
+    return false;
+  }
+}
+
+// 本轮处于可视化中的标签页（tabId → 标题）。内容脚本加载后来问「我这页要不要显示进度卡」
+// ——方向必须是内容脚本问过来：SW 往刚 create 的 tab sendMessage 会撞上脚本还没加载。
+const liveTabs = new Map();
+
 async function batchCollect(reportTabId, opts = {}) {
   if (batchRunning) { reportBatch(reportTabId, { type: 'batch-progress', busy: true }); return { busy: true }; }
   batchRunning = true;
@@ -1564,21 +1628,30 @@ async function batchCollect(reportTabId, opts = {}) {
     // 分寸：一轮最多打扰一次（否则 10 个号失败就弹 10 个页面），且只在用户当场点击时——
     // 定时那轮人多半不在电脑前，弹页面只会在他回来时留下一堆莫名其妙的标签页。
     let stranded = null;
+    // 可视化只跟着「用户当场点击」走：定时与派发调进来时 opts.interactive 不为 true，恒为后台
+    const live = opts.interactive === true && (await liveViewOn());
     for (const c of targets) {
       reportBatch(reportTabId, { type: 'batch-progress', done, total, current: c.name });
       let tab = null;
       let keep = false;
       try {
-        tab = await chrome.tabs.create({ url: c.url, active: false });
+        tab = await chrome.tabs.create({ url: c.url, active: live });
+        if (live && tab?.id) liveTabs.set(tab.id, { title: `烽火台正在采集：${c.name}` });
         const res = await waitForCollect(c.platform, c.handle, 20000);
         if (res === 'ok') collected++;
         else if (opts.interactive && !stranded && tab?.id) {
           stranded = { id: tab.id, name: c.name };
           keep = true;
         }
+        if (live && tab?.id) {
+          // 停一拍再关页——收尾状态由内容脚本回传时自己点亮（beaconLiveDone），
+          // 立刻关掉的话用户只看见页面一闪，什么都没看清
+          await new Promise((r) => setTimeout(r, 1600));
+        }
       } catch {
         /* ignore */
       } finally {
+        if (tab && tab.id) liveTabs.delete(tab.id);
         if (!keep && tab && tab.id) await chrome.tabs.remove(tab.id).catch(() => {});
       }
       done++;
@@ -2090,18 +2163,27 @@ async function batchCollectSelf(reportTabId) {
     let posts = 0;
     reportBatch(reportTabId, { type: 'batch-self-progress', done, total, current: null });
 
+    // batchCollectSelf 只有「用户当场点击」这一个入口（bridge 的 batch-collect-self），
+    // 所以可视化直接看开关；将来若有定时入口调进来，必须像 batchCollect 一样加 interactive 位
+    const live = await liveViewOn();
     for (const { a, url } of targets) {
       reportBatch(reportTabId, { type: 'batch-self-progress', done, total, current: a.name });
       let tab = null;
       try {
-        tab = await chrome.tabs.create({ url, active: false });
+        tab = await chrome.tabs.create({ url, active: live });
+        if (live && tab?.id) liveTabs.set(tab.id, { title: `烽火台正在回填：${a.name}` });
         const payload = await collectFromTab(tab.id);
         if (payload) {
           // accountId 显式指定：这一趟是**为这个账号**开的页面，归属不能再让别处去猜
           const res = await ingestSelf({ ...payload, accountId: a.id });
           if (res?.ok) posts += (res.updated || 0) + (res.created || 0);
         }
+        if (live && tab?.id) {
+          // 同上：只停一拍。自有后台页的解析走另一条消息路，收尾灯就不点了，卡本身即过程
+          await new Promise((r) => setTimeout(r, 1600));
+        }
       } catch { /* 单个账号失败不该中断整批 */ } finally {
+        if (tab && tab.id) liveTabs.delete(tab.id);
         if (tab && tab.id) await chrome.tabs.remove(tab.id).catch(() => {});
       }
       done++;
@@ -2159,9 +2241,27 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     sendResponse({ ok: false, error: '侧边栏需在常规标签页窗口触发' });
     return true;
   }
+  if (msg?.type === 'live:query') {
+    // 内容脚本问「我这页是不是可视化执行中」。只有 SW 在本轮 liveTabs 里登记过的页才是——
+    // 用户自己浏览竞对主页触发的「访问即采」绝不能弹进度卡（那是他在看页，不是插件在干活）
+    const tabId = _sender?.tab?.id;
+    const entry = tabId ? liveTabs.get(tabId) : null;
+    sendResponse(entry ? { live: true, title: entry.title } : { live: false });
+    return true;
+  }
   if (msg?.type === 'parser:miss') {
     respond(
-      reportParserMiss({ platform: msg.platform, scope: msg.scope || 'rival', field: msg.field, skeleton: msg.skeleton }),
+      (async () => {
+        // 截图在上报**之前**拍：等上报回来页面可能已经跳走了
+        const screenshot = await captureIncidentShot(_sender);
+        return reportParserMiss({
+          platform: msg.platform,
+          scope: msg.scope || 'rival',
+          field: msg.field,
+          skeleton: msg.skeleton,
+          ...(screenshot ? { screenshot } : {}),
+        });
+      })(),
       sendResponse,
       '上报解析样本',
     );

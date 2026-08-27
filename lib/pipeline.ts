@@ -80,20 +80,47 @@ export async function ingestHot(): Promise<{ inserted: number; degraded: string[
       }
       inserted++;
     }
-    // 不在本轮榜单上的旧条目 → 标记 cooling/faded
-    const stale = await prisma.hotItem.findMany({
-      where: { source: r.source, title: { notIn: [...seenTitles] } },
-    });
-    for (const s of stale) {
-      const lifecycle = computeLifecycle(
-        { heat: 0, peakHeat: s.peakHeat, firstSeenAt: s.firstSeenAt, lastSeenAt: s.lastSeenAt, source: s.source },
-        now,
-      );
-      if (lifecycle === 'faded') {
-        await prisma.hotItem.delete({ where: { id: s.id } });
-      } else {
-        await prisma.hotItem.update({ where: { id: s.id }, data: { lifecycle } });
+    // 不在本轮榜单上的旧条目 → 标记 cooling/faded（分批处理，避免一次全量加载）
+    const STALE_BATCH = 500;
+    let staleCursor: string | undefined;
+    while (true) {
+      const stale = await prisma.hotItem.findMany({
+        where: { source: r.source, title: { notIn: [...seenTitles] } },
+        take: STALE_BATCH,
+        ...(staleCursor ? { skip: 1, cursor: { id: staleCursor } } : {}),
+        orderBy: { id: 'asc' },
+      });
+      if (stale.length === 0) break;
+      staleCursor = stale[stale.length - 1].id;
+
+      const toDelete: string[] = [];
+      const toUpdate: { id: string; lifecycle: string }[] = [];
+      for (const s of stale) {
+        const lifecycle = computeLifecycle(
+          { heat: 0, peakHeat: s.peakHeat, firstSeenAt: s.firstSeenAt, lastSeenAt: s.lastSeenAt, source: s.source },
+          now,
+        );
+        if (lifecycle === 'faded') {
+          toDelete.push(s.id);
+        } else {
+          toUpdate.push({ id: s.id, lifecycle });
+        }
       }
+      if (toDelete.length > 0) {
+        await prisma.hotItem.deleteMany({ where: { id: { in: toDelete } } });
+      }
+      // updateMany 只能设同一个值，lifecycle 因条目而异需逐组更新
+      const byLifecycle = new Map<string, string[]>();
+      for (const u of toUpdate) {
+        const ids = byLifecycle.get(u.lifecycle) ?? [];
+        ids.push(u.id);
+        byLifecycle.set(u.lifecycle, ids);
+      }
+      for (const [lifecycle, ids] of byLifecycle) {
+        await prisma.hotItem.updateMany({ where: { id: { in: ids } }, data: { lifecycle } });
+      }
+
+      if (stale.length < STALE_BATCH) break;
     }
   }
   return { inserted, degraded };

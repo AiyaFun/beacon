@@ -1,6 +1,6 @@
 import { prisma } from '../db';
 import { parseJson, toJson } from '../json';
-import { llmComplete } from '../llm/gateway';
+import { llmComplete, llmVision } from '../llm/gateway';
 import { sendOpsAlert } from '../ops/alert';
 import { createLogger } from '../logger';
 
@@ -8,14 +8,19 @@ const log = createLogger({ module: 'parser-learn' });
 
 // ── 采集自学习：从「看得见」到「自己修得好」 ──────────────────────────────────
 //
-// 【链路】采不到 → 插件上传**脱敏结构骨架** → 合并成事件 → 模型推断新锚点（候选规则）
-//        → 影子验证命中率 → 人工审核 → 规则包下发（插件当天用上，不必发版）→ 可回滚。
+// 【链路】采不到 → 插件上传**脱敏结构骨架**（正看着的页面还会带一张压缩截图）
+//        → 合并成事件 → 模型推断新锚点（候选规则）→ 骨架静态验证（机器硬闸）
+//        → 自动上线（2026-08-26 起；冷静期+告警+一键回滚）或人工审核
+//        → 规则包下发（插件当天用上，不必发版）→ 可回滚。
 //
 // 【三条硬规矩】
 // 1. **骨架里不许有内容**。上传的是标签/类名/属性名与文本的**形状**（数字→NUM、中文→CJK），
 //    不含正文、昵称、链接、图片。服务端收到后再脱敏一次——客户端上传的东西一律不信。
-// 2. **候选规则不许自动上线**。模型很可能指到旁边那个数字（抖音「关注 178 / 粉丝 328.3万」
-//    那次事故的形状），自动上线 = 把一个看着正常、实际差三个数量级的数字写进所有人的库。
+//    （截图是这条的**显式例外**：只在用户正看着的页面失败时截、只用于排障、30 天清空，
+//    三份隐私政策都写了；后台自动回填那些用户没在看的页面绝不截。）
+// 2. **没过机器验证的候选不许自动上线**。模型很可能指到旁边那个数字（抖音「关注 178 /
+//    粉丝 328.3万」那次事故的形状）。自动上线的前提是 verifyAgainstSkeleton 逐 token
+//    对上骨架；人工回滚过的字段 24h 冷静期内不再自动上线（autoAdoptIncident）。
 // 3. **命中率是 null 就说 null**。没验证过不等于 0，也不等于 1；界面上要显示「未验证」。
 
 /** 骨架的大小上限。超了截断——一份 MB 级的 DOM 摘要既喂不进模型，也不该占着库。 */
@@ -23,6 +28,24 @@ export const MAX_SKELETON_CHARS = 20_000;
 
 /** 一个事件最多留几次样本（撞多了只加计数，不重复存骨架）。 */
 export const MAX_SAMPLES_KEPT = 20;
+
+/**
+ * 失败现场截图（dataUrl）的大小上限。
+ *
+ * 【为什么是 150K 字符】生产的 WAF 对超过 client_body_buffer_size（约 256KB）的请求体
+ * 会回「HTTP 200 + HTML 错误页」——插件看到的是一次假成功，连骨架都一起丢。
+ * 截图 150K + 骨架 60K + JSON 外壳 ≈ 220K，压在阈值之下。插件端同一数值再闸一道。
+ */
+export const MAX_SCREENSHOT_CHARS = 150_000;
+
+/**
+ * 截图字段的准入闸：不是合法的 data:image JPEG/PNG/WebP、或超长，一律**丢字段不打回**
+ * ——截图是锦上添花，骨架才是诊断主料，为附件拒掉整次上报本末倒置（截断不打回同一原则）。
+ */
+export function vetScreenshot(raw: unknown): string {
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > MAX_SCREENSHOT_CHARS) return '';
+  return /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(raw) ? raw : '';
+}
 
 export type SkeletonNode = {
   tag: string;
@@ -107,6 +130,8 @@ export type RecordIncidentInput = {
   scope: 'rival' | 'self';
   field: string;
   skeleton?: unknown;
+  /** 失败现场截图（dataUrl）。这里收 unknown，vetScreenshot 说了算——插件是可改的本地代码 */
+  screenshot?: unknown;
   note?: string;
 };
 
@@ -122,6 +147,7 @@ export async function recordParserIncident(input: RecordIncidentInput): Promise<
   });
 
   const skeleton = serializeSkeleton(sanitizeSkeleton(input.skeleton));
+  const screenshot = vetScreenshot(input.screenshot);
 
   if (existing) {
     await prisma.parserIncident.update({
@@ -129,8 +155,9 @@ export async function recordParserIncident(input: RecordIncidentInput): Promise<
       data: {
         samples: Math.min(existing.samples + 1, MAX_SAMPLES_KEPT),
         // 已经有骨架就不覆盖：第一份多半来自最早发现的那个用户，覆盖没有收益，
-        // 反而让每次上传都写一次大字段。
+        // 反而让每次上传都写一次大字段。截图同一政策。
         skeleton: existing.skeleton || skeleton,
+        screenshot: existing.screenshot || screenshot,
         note: input.note?.slice(0, 300) || existing.note,
       },
     });
@@ -145,6 +172,7 @@ export async function recordParserIncident(input: RecordIncidentInput): Promise<
       field: input.field,
       fingerprint,
       skeleton,
+      screenshot,
       note: input.note?.slice(0, 300) ?? '',
     },
   });
@@ -161,16 +189,94 @@ export async function recordParserIncident(input: RecordIncidentInput): Promise<
   return { id: row.id, created: true };
 }
 
+// ── 骨架静态验证：把「绝不编造」从提示词软约束变成机器硬闸 ─────────────────────
+//
+// 【为什么必须有】提示词里写着「绝不编造骨架里不存在的类名」，但那只是请求；
+// 自动上线（2026-08-26 用户授权自学习闭环）之前，必须机器验一遍：
+// 选择器里的每个类名/属性 token、每个文本锚点，都要真的出现在这次的骨架样本里。
+// 通不过的**逐条剔除**而不是整批拒——模型常常一半真一半编，把真的留下来。
+
+/** 从一条 CSS 选择器里抽出可验证的 token（类名 / 属性名 / id）。 */
+export function selectorTokens(selector: string): string[] {
+  const out: string[] = [];
+  for (const m of selector.matchAll(/\.([\w-]{3,})/g)) out.push(m[1]);
+  for (const m of selector.matchAll(/\[([\w-]{3,})/g)) out.push(m[1]);
+  for (const m of selector.matchAll(/#([\w-]{3,})/g)) out.push(m[1]);
+  return out;
+}
+
+/**
+ * 候选在骨架文本上的验证。返回**通过的子集**。
+ * 判据刻意保守：token 长度 ≥3 才参与（避免 `.a` 这类误配），
+ * 纯标签选择器（div > span，一个 token 都没有）不算通过——那是结构猜测，改版最先碎的就是它。
+ */
+export function verifyAgainstSkeleton(
+  skeleton: string,
+  selectors: string[],
+  anchors: string[],
+): { selectors: string[]; anchors: string[]; pass: boolean } {
+  const okSelectors = selectors.filter((sel) => {
+    const tokens = selectorTokens(sel);
+    return tokens.length > 0 && tokens.every((t) => skeleton.includes(t));
+  });
+  const okAnchors = anchors.filter((a) => a.length >= 2 && skeleton.includes(a));
+  return { selectors: okSelectors, anchors: okAnchors, pass: okSelectors.length > 0 || okAnchors.length > 0 };
+}
+
 // ── 诊断：让模型从骨架里推断新锚点 ────────────────────────────────────────────
 
 export type ProposeResult =
   | { ok: true; ruleId: string; selectors: string[]; anchors: string[] }
   | { ok: false; error: string };
 
+/**
+ * 让视觉模型看一眼失败现场截图，说清目标字段出现在页面哪个区域、旁边有什么标签文字。
+ *
+ * 产出只是给诊断模型的**参考语境**，绝不成为选择器的依据——选择器仍要逐 token
+ * 过 verifyAgainstSkeleton 的机器验证，视觉模型编出来的类名一样会被剔掉。
+ * 没配视觉模型（llmVision 诚实返回 not_configured）或调用失败：跳过，诊断照跑。
+ */
+async function screenshotHint(
+  tenantId: string | null,
+  incident: { platform: string; field: string; screenshot: string },
+): Promise<string | null> {
+  if (!incident.screenshot) return null;
+  const res = await llmVision(
+    tenantId,
+    [
+      {
+        role: 'system',
+        content:
+          '你在帮排查一次网页数据解析失败。只回答两件事：'
+          + '① 目标字段的数值大概出现在截图哪个区域（如「头部资料区左侧」「作品卡片右下角标」）；'
+          + '② 它紧挨着什么标签文字（如「粉丝」「获赞」）。'
+          + '120 字以内，中文。看不到目标字段就如实说「截图里没看到」。不要编造类名或代码。',
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: `平台：${incident.platform}，目标字段：${incident.field}。` },
+          { type: 'image_url', image_url: { url: incident.screenshot } },
+        ],
+      },
+    ],
+    { temperature: 0 },
+  );
+  if (!res.ok) {
+    if (res.reason === 'failed') log.warn('截图视觉描述失败，诊断照常走骨架', { error: res.error });
+    return null;
+  }
+  const hint = res.text.trim().slice(0, 300);
+  return hint || null;
+}
+
 export async function proposeSelectors(incidentId: string, tenantId: string | null): Promise<ProposeResult> {
   const incident = await prisma.parserIncident.findUnique({ where: { id: incidentId } });
   if (!incident) return { ok: false, error: '事件不存在' };
   if (!incident.skeleton) return { ok: false, error: '这条事件还没有页面结构样本，没法诊断' };
+
+  // 有截图就先要一份视觉描述（没配视觉模型 = null，不影响主链路）
+  const hint = await screenshotHint(tenantId, incident).catch(() => null);
 
   const res = await llmComplete(
     tenantId,
@@ -190,7 +296,10 @@ export async function proposeSelectors(incidentId: string, tenantId: string | nu
       },
       {
         role: 'user',
-        content: `平台：${incident.platform}\n目标字段：${incident.field}\n结构骨架：\n${incident.skeleton}`,
+        content:
+          `平台：${incident.platform}\n目标字段：${incident.field}\n结构骨架：\n${incident.skeleton}`
+          // 视觉描述只帮模型判断「该往骨架的哪一片找」，类名依据仍然只能来自骨架本身
+          + (hint ? `\n\n失败现场截图的视觉描述（另一模型看图所得，仅供定位参考，不能作为类名依据）：${hint}` : ''),
       },
     ],
     { temperature: 0.2, json: true },
@@ -202,10 +311,14 @@ export async function proposeSelectors(incidentId: string, tenantId: string | nu
   }
 
   const parsed = parseJson<{ selectors?: string[]; anchors?: string[]; note?: string }>(res.text, {});
-  const selectors = (parsed.selectors ?? []).filter((s) => typeof s === 'string' && s.trim()).slice(0, 6);
-  const anchors = (parsed.anchors ?? []).filter((s) => typeof s === 'string' && s.trim()).slice(0, 6);
-  if (selectors.length === 0 && anchors.length === 0) {
-    return { ok: false, error: '模型没能给出可用的选择器' };
+  const rawSelectors = (parsed.selectors ?? []).filter((s) => typeof s === 'string' && s.trim()).slice(0, 6);
+  const rawAnchors = (parsed.anchors ?? []).filter((s) => typeof s === 'string' && s.trim()).slice(0, 6);
+  // 机器验证：编造的（骨架里找不到 token 的）逐条剔掉，剩下的才有资格成为候选
+  const verified = verifyAgainstSkeleton(incident.skeleton, rawSelectors, rawAnchors);
+  const selectors = verified.selectors;
+  const anchors = verified.anchors;
+  if (!verified.pass) {
+    return { ok: false, error: '模型给的选择器在页面骨架上一个都对不上（疑似编造），已丢弃' };
   }
 
   const last = await prisma.parserRule.findFirst({
@@ -262,6 +375,55 @@ export async function rollbackRule(platform: string, field: string, reviewedBy: 
   return { ok: true };
 }
 
+// ── 自动采纳（2026-08-26 用户授权「可以自我学习，不要因为网页改了无法抓取」）────
+//
+// 之前的闭环卡在「人工点头才下发」。现在：骨架验证通过 → 自动上线 → 发告警留痕，
+// 运维台随时一键回滚。三道闸守住「自动」不变成「放飞」：
+//   ① 机器验证：候选 token 必须真在骨架里（proposeSelectors 内已剔编造）；
+//   ② 冷却：同 platform+field 的自动规则 24h 内被人回滚过 → 不再自动，留给人审；
+//   ③ 兜底：下发后仍有既有的量级闸/坏值拒绝（parser-health）挡住学歪了的规则。
+export async function autoAdoptIncident(
+  incidentId: string,
+  tenantId: string | null,
+): Promise<{ adopted: boolean; reason: string }> {
+  const incident = await prisma.parserIncident.findUnique({ where: { id: incidentId } });
+  if (!incident || incident.status !== 'open') return { adopted: false, reason: '事件不存在或已处理' };
+
+  // 冷却判据：这个字段上一条「自动上线」的规则最近 24h 被人退掉了 —— 说明自动学的不靠谱，让人来
+  const recentAutoRollback = await prisma.parserRule.findFirst({
+    where: {
+      platform: incident.platform,
+      field: incident.field,
+      source: 'llm',
+      status: 'retired',
+      reviewedBy: { not: 'auto' },
+      updatedAt: { gte: new Date(Date.now() - 24 * 3600_000) },
+    },
+  });
+  if (recentAutoRollback) return { adopted: false, reason: '24h 内该字段的自动规则被人工回滚过，冷却中' };
+
+  const p = await proposeSelectors(incidentId, tenantId);
+  if (!p.ok) return { adopted: false, reason: p.error };
+
+  const act = await activateRule(p.ruleId, 'auto');
+  if (!act.ok) return { adopted: false, reason: act.error ?? '上线失败' };
+
+  // 留痕告警：自动学了新规则这件事必须有人知道，且告警里就带着回滚的路
+  await sendOpsAlert({
+    level: 'info',
+    title: `🧠 解析自学习：${incident.platform} 的 ${incident.field} 已自动上线新规则`,
+    lines: [
+      '插件报改版 → 模型从脱敏骨架推断 → 骨架验证通过 → 已自动下发（插件当天生效）。',
+      `选择器：${p.selectors.join(' , ') || '（走文本锚点）'}`,
+      '学歪了就去 /ops/parser 一键回滚；回滚后 24h 内该字段不再自动上线。',
+    ],
+    fingerprint: `parser-auto:${incident.platform}:${incident.field}:v`,
+  }).catch(() => { /* 告警失败不拦上线：规则本身已可回滚 */ });
+
+  log.info('解析规则自动上线', { platform: incident.platform, field: incident.field });
+  return { adopted: true, reason: 'ok' };
+}
+
 /** 影子验证回传的命中率。**只记不判**——够不够格上线由人看着数字决定。 */
 export async function recordHitRate(ruleId: string, hitRate: number): Promise<void> {
   if (!Number.isFinite(hitRate) || hitRate < 0 || hitRate > 1) return;
@@ -295,4 +457,23 @@ export async function activeRulePack(): Promise<RulePack> {
       version: r.version,
     })),
   };
+}
+
+// ── 保留期：截图 30 天清空 ───────────────────────────────────────────────────
+
+/** 截图最长保存天数。诊断在事发当天就跑完了，截图长期躺着只剩风险没有用途。 */
+export const SCREENSHOT_RETENTION_DAYS = 30;
+
+/**
+ * 清空超期的失败现场截图（只清 screenshot 列，骨架与事件本身保留）。
+ * 挂在合规保留期任务（lib/legal/retention.ts）里每天跑；按 updatedAt 算——
+ * 一条还在活跃合并样本的事件，它的截图也跟着事件的活跃时间走。
+ */
+export async function purgeParserScreenshots(now = new Date()): Promise<number> {
+  const cutoff = new Date(now.getTime() - SCREENSHOT_RETENTION_DAYS * 24 * 3600_000);
+  const r = await prisma.parserIncident.updateMany({
+    where: { screenshot: { not: '' }, updatedAt: { lt: cutoff } },
+    data: { screenshot: '' },
+  });
+  return r.count;
 }

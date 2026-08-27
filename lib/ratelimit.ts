@@ -84,6 +84,10 @@ class InProcessStore implements RateLimitStore {
     const cur = this.counters.get(key);
     const c = !cur || cur.exp <= now ? { v: seed, exp: now + ttlMs } : cur;
     c.v += 1;
+    if (!this.counters.has(key) && this.counters.size >= this.maxKeys) {
+      const oldest = this.counters.keys().next().value;
+      if (oldest) this.counters.delete(oldest);
+    }
     this.counters.set(key, c);
     if (c.v > limit) {
       c.v -= 1; // 回滚，越限的这次不占名额

@@ -12,6 +12,7 @@ import { scheduleTargetLabel } from '@/lib/workflow/schedule-format';
 import { parseJson } from '@/lib/json';
 import { WorkflowMarket } from './WorkflowMarket';
 import { RoleTabs } from '@/components/RoleTabs';
+import { AgentCreateActions } from '@/components/AgentCreateActions';
 import { AGENT_ROLES } from '@/lib/agent/roles';
 import { Schedules } from './Schedules';
 import { MAX_RUNS_PER_DAY, AUTO_PAUSE_FAILS, parseWeekdays } from '@/lib/workflow/schedule';
@@ -34,13 +35,21 @@ export default async function WorkflowsPage() {
   // 那是他的选择，不能每次打开这一页又给他装上。
   await preinstallBuiltinTemplates(s.tenantId).catch(() => {});
 
-  const [templates, recentRuns, schedules, presets, ws] = await Promise.all([
+  const [templates, recentRuns, activeRun, schedules, presets, ws] = await Promise.all([
     listTemplates(s.tenantId),
     prisma.workflowRun.findMany({
       where: { workspaceId: s.workspaceId },
       orderBy: { createdAt: 'desc' },
       take: 8,
       include: { template: { select: { name: true, emoji: true } } },
+    }),
+    // 正在跑的那条手点运行：跳走再回来时，页面要接着盯它——否则组件状态一丢，
+    // 「跑一遍」恢复可点，同一条模板会被再派一次（真双跑、双花额度）。
+    // 只认 manual：定时/AI 派的有自己的展示面，不该劫持这页的进度卡。
+    prisma.workflowRun.findFirst({
+      where: { workspaceId: s.workspaceId, status: 'running', trigger: 'manual' },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, templateId: true },
     }),
     prisma.scheduledAgent.findMany({
       where: { workspaceId: s.workspaceId },
@@ -67,16 +76,47 @@ export default async function WorkflowsPage() {
         hint={`${AGENT_ROLES.agent.oneLine} · 怎么做由${AGENT_ROLES.agent.decidedBy}`}
         tabs={<RoleTabs active="agent" inline />}
         meta={<span className="small muted hide-mobile">已装 {installed.length} / 市场 {templates.length}</span>}
+        action={canEdit ? <AgentCreateActions /> : undefined}
       />
 
       {/* 「智能体」这个名字最容易被误解成「它会自己想」。分工梯就摆在页顶，
           让用户当场看清：会思考的是助手，这里的每一条步骤都是写死的 */}
 
-      <WorkflowMarket templates={templates} readOnly={!can(s.role, 'content.create')} />
+      {/* 两列（2026-08-26 用户「分成两列，这样就不会不知道在哪里」）：
+          左=班底（有哪些智能体），右=反复要做的事（怎么复用它们）。
+          窄屏回落单列（.workflows-cols 的媒体查询）。 */}
+      <div className="workflows-cols">
+      <div style={{ minWidth: 0 }}>
+      <WorkflowMarket
+        templates={templates}
+        readOnly={!can(s.role, 'content.create')}
+        activeRun={activeRun ? { runId: activeRun.id, templateId: activeRun.templateId } : null}
+      />
+      </div>
+      <div style={{ minWidth: 0 }}>
 
-      {/* 一键任务：排在定时前面。「存一张卡点一下就派」是低门槛的那一步，
-          「让它到点自己跑」是下一步——顺序照着用户的接受次序来 */}
-      <Card title="一键任务" sub="反复要做的那几件事，存成卡片点一下就派" style={{ marginTop: 16 }}>
+      {/* 2026-08-26 三合一（用户「一键任务、定时任务、最近运行……能融合就融合」）：
+          它们是「反复要做的事」一件事的三个面——存一张卡手动点 / 挂上时间自动跑 / 跑过的记录。
+          此前三张卡摞着，像三个不同的功能，区别只写在各自 sub 里没人对照着读。
+          合成一张卡、三个小节，每节第一句就是它与上一节的区别。 */}
+      <Card
+        title="反复要做的事"
+        sub="存成卡点一下就派 · 挂上时间自动跑 · 都留痕"
+        action={
+          // 「通过 AI 一键优化」：把整理工作交给执行器——它有 list_ 系工具能翻运行记录，
+          // draft_schedule 能起草定时（落库前会停下来要确认，合约不能它一个人签）
+          <a
+            className="btn btn-sm"
+            href={`/assistant?goal=${encodeURIComponent('看看我最近的运行记录和常做的事，把反复出现的活整理成一键任务卡的方案，并建议哪几件值得挂成定时（先列方案给我确认，不要直接建）')}`}
+          >
+            ✨ 让 AI 帮我配
+          </a>
+        }
+      >
+        <div className="row wrap" style={{ gap: 8, alignItems: 'baseline', marginBottom: 4 }}>
+          <b className="small">一键任务</b>
+          <span className="small muted">手动的那一半：存成卡，想跑的时候点一下就派</span>
+        </div>
         <PresetManager
           presets={presets.map((p) => ({
             id: p.id, title: p.title, goal: p.goal,
@@ -92,15 +132,14 @@ export default async function WorkflowsPage() {
             .filter((t) => t.write || t.costly)
             .map((t) => ({ name: t.name, label: t.label, costly: t.costly, contract: t.contract }))}
         />
-      </Card>
 
-      {/* 定时：紧跟在市场后面。用户刚看完「有哪些智能体」，下一个问题就是「能不能让它自己跑」 */}
-      <Card
-        id="schedules"
-        title="定时任务"
-        sub="让智能体按时自己跑一遍 · 时刻按北京时间 · 睡着时也会花配额，所以有上限与失败自停"
-        style={{ marginTop: 16 }}
-      >
+        <div className="divider" />
+        {/* id=schedules 留在这个小节上：产物落点 lib/agent/artifacts.ts 与历史通知还指着它 */}
+        <div id="schedules" style={{ scrollMarginTop: 80 }}>
+          <div className="row wrap" style={{ gap: 8, alignItems: 'baseline', marginBottom: 4 }}>
+            <b className="small">定时任务</b>
+            <span className="small muted">自动的那一半：挂上时间到点自己跑（北京时间 · 有上限与失败自停）· 新建在页头右上</span>
+          </div>
         <Schedules
           scheduleWorks={backgroundSchedulerRuns()}
           rows={schedules.map((r) => ({
@@ -121,11 +160,11 @@ export default async function WorkflowsPage() {
           autoPauseFails={AUTO_PAUSE_FAILS}
           readOnly={!canEdit}
         />
-      </Card>
+        </div>
 
-      {/* 折叠：回看才翻（运行中心有全量）。「一键任务」不折——PresetCards 链着 #presets 锚点，
-          收进默认关闭的 Fold 会让跳转落在一个关着的抽屉上（extension 那轮的教训） */}
-      <Fold title="最近运行" sub="每一步的结果都留痕：失败时能看出停在哪一步、为什么" note={<span className="small muted">回看才翻</span>}>
+        <div className="divider" />
+        {/* 第三面：跑过的记录。折叠——回看才翻（运行中心有全量） */}
+        <Fold title="最近运行" sub="每一步的结果都留痕：失败时能看出停在哪一步、为什么" note={<span className="small muted">回看才翻</span>}>
         {recentRuns.length === 0 ? (
           <p className="small muted">还没有跑过模板。</p>
         ) : (
@@ -156,7 +195,10 @@ export default async function WorkflowsPage() {
             })}
           </div>
         )}
-      </Fold>
+        </Fold>
+      </Card>
+      </div>
+      </div>
     </>
   );
 }

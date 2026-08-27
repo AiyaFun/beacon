@@ -13,3 +13,5 @@ README.md
 # 只忽略明确不需要进构建上下文的脚本（shell 运维脚本）。
 scripts/*.sh
 .next-verify
+# 桌面壳（Tauri）：纯客户端子项目，服务器构建用不到；src-tauri/target 近 1GB
+desktop

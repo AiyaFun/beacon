@@ -6,6 +6,7 @@ const msgEl = document.getElementById('msg');
 
 const showInPageAiEl = document.getElementById('showInPageAi');
 const autoCollectEl = document.getElementById('autoCollect');
+const liveViewEl = document.getElementById('liveView');
 const dailyReminderEl = document.getElementById('dailyReminder');
 
 const scheduledCollectEl = document.getElementById('scheduledCollect');
@@ -86,6 +87,7 @@ chrome.storage.sync
     'commentCollectOwn',
     'autoClickPublish',
     'commentCollectRival',
+    'liveView',
   ])
   .then((s) => {
     hostEl.value = s.host || DEFAULT_HOST;
@@ -93,6 +95,8 @@ chrome.storage.sync
 
     showInPageAiEl.checked = s.showInPageAi !== false;
     autoCollectEl.checked = s.autoCollect !== false;
+    // 默认关：只有显式存过 true 才算开（与 autoClickPublish 同款判法）
+    liveViewEl.checked = s.liveView === true;
     dailyReminderEl.checked = s.dailyReminder !== false;
 
     scheduledCollectEl.checked = s.scheduledCollect !== false; // 默认开启
@@ -162,6 +166,7 @@ loadAccounts();
 // Event Listeners for Quick Auto-Save Toggles
 showInPageAiEl.addEventListener('change', () => chrome.storage.sync.set({ showInPageAi: showInPageAiEl.checked }));
 autoCollectEl.addEventListener('change', () => chrome.storage.sync.set({ autoCollect: autoCollectEl.checked }));
+liveViewEl.addEventListener('change', () => chrome.storage.sync.set({ liveView: liveViewEl.checked }));
 dailyReminderEl.addEventListener('change', () => chrome.storage.sync.set({ dailyReminder: dailyReminderEl.checked }));
 
 scheduledCollectEl.addEventListener('change', () => {

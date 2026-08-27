@@ -84,3 +84,40 @@ export function looksActionable(text: string): boolean {
   if (hit(t, QUESTION_PATTERNS)) return false;
   return true;
 }
+
+/**
+ * 强委派：这句话不只是「像派活」，而是**明说了要它去执行**。
+ *
+ * 2026-08-26 真机反馈：「帮我去执行一下今天的采集」在对话侧得到一大篇计划文字，
+ * 用户的原话是「并没办法去执行」——对这种句子，先答一篇再给按钮是绕路。
+ * 命中这里的，输入框直接把话移交到「让它去做」预填（仍然要用户按开始才真跑、
+ * 才花配额——自动开跑的红线不动，见 tests/shell-modes.test.ts 的 ?goal= 守卫）。
+ * 词表刻意窄：只收「去执行/执行一下」这种不可能是提问的说法，宁可漏（漏了还有
+ * 答后按钮兜底），不可误收（误收会把想聊的人硬拽进执行面板）。
+ */
+const STRONG_DELEGATE = /(帮我去|替我去|去执行|执行一下|直接执行|直接去做)/;
+
+/**
+ * 查询系统数据的说法。「给我今天的选题」在对话侧只能得到编造（那边没工具），
+ * 真数据在执行侧的 list_topics/list_drafts……这类句子也直通执行侧。
+ * 结构=（取数动词 或 我的/今天的这类归属词）+ 系统数据名词，两段都命中才算——
+ * 只写名词会把「选题是什么意思」也拽过去。
+ */
+const DATA_VERBS = /(给我|看看|查查|查一下|列一下|拉一下|汇总|看下|要)/;
+const DATA_OWN = /(我的|我今天|今天的|本周的|最近的|当前的)/;
+const DATA_NOUNS = /(选题|推荐|草稿|数据|竞对|对标|热点|任务|作战|发布计划|表现)/;
+
+export function wantsExecution(text: string): boolean {
+  const t = (text ?? '').trim();
+  if (t.length < 4 || t.length > 2000) return false;
+  // 查数据类：动词/归属 + 系统名词，且不是疑问口吻（「我的选题怎么没了」照旧对话）
+  if (DATA_NOUNS.test(t) && (DATA_VERBS.test(t) || DATA_OWN.test(t))
+      && !QUESTION_PATTERNS.some((p) => t.includes(p))) {
+    return true;
+  }
+  // 强委派短语本身就是执行语（「去执行/执行一下/直接去做」没有提问用法），
+  // 不再要求命中动作词表——「直接去做今天的选题推荐」的「推荐」不在动作词表里，
+  // && looksActionable 会把这类句子漏掉。只需挡住疑问口吻
+  //（「执行一下是什么意思」照旧走对话）。
+  return STRONG_DELEGATE.test(t) && !QUESTION_PATTERNS.some((p) => t.includes(p));
+}

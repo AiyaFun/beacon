@@ -50,23 +50,8 @@ export default async function AssistantPage({
   // 已经打开的就是那一条时不再提示——一条指着当前页面的「去处理」是纯噪音
   const resume = waiting && waiting.id !== run ? waiting : null;
 
-  const meta = (
-    <>
-      <span className="badge badge-brand">当前账号：{accountName}</span>
-      <span className="badge badge-gray">人设完善度 {completeness}%</span>
-      <span className="badge badge-gray">生效记忆 {memoryCount} 条</span>
-    </>
-  );
-
   return (
     <>
-        // 任务台：标题压成一行，输入框紧跟其后
-        <div className="row wrap" style={{ gap: 8, alignItems: 'baseline', marginBottom: 10 }}>
-          <h1 style={{ fontSize: 19, margin: 0 }}>新任务</h1>
-          {/* 副标题只留半句：完整的「会思考的那一个…」在下面分工梯里有，
-              页顶重复一遍只是把输入框往下推 */}
-          <span className="small muted">说一句话，它自己决定用哪几样去做</span>
-        </div>
 
       {resume && (
         // 死胡同的出口：一次执行停在「等你确认」时，如果不给这条，用户只有在
@@ -82,22 +67,6 @@ export default async function AssistantPage({
         </div>
       )}
 
-      {/* 【为什么这一行收起来】三个徽章（当前账号/人设完善度/生效记忆）加一句 Mock 说明
-          是**状态**，不是「我现在要做的事」。它们此前和标题、页签一起占掉近三分之一屏，
-          把真正的主角——输入框——压到折叠线以下（用户 2026-08-26 截图圈的就是这一段）。
-          收进一行可展开的细节里：想看随时点开，不看就不挡路。
-          Mock 那句话没删——没配 Key 时用户必须知道自己看到的是演示回答。 */}
-      <details className="assistant-meta">
-        <summary className="small muted">
-          当前账号：{accountName} · 人设 {completeness}% · 记忆 {memoryCount} 条
-        </summary>
-        <div className="row wrap" style={{ gap: 8, marginTop: 8 }}>
-          {meta}
-          <span className="small muted">
-            未配置 API Key 时走 Mock（回答旁会标「Mock」徽章），配置后自动切真实模型。
-          </span>
-        </div>
-      </details>
 
       <AssistantTabs
         accountName={accountName}

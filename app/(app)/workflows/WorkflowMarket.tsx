@@ -3,10 +3,13 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Card } from '@/components/ui';
+import { Overlay } from '@/components/Overlay';
+import { useEffect } from 'react';
 import {
   actInstallWorkflow,
   actUninstallWorkflow,
-  actRunWorkflow,
+  actStartWorkflow,
+  actReadWorkflowRun,
   actCreateWorkflow,
   actDeleteWorkflow,
   actExportWorkflow,
@@ -118,7 +121,16 @@ function PersonaLine({
   );
 }
 
-export function WorkflowMarket({ templates, readOnly }: { templates: Template[]; readOnly: boolean }) {
+export function WorkflowMarket({
+  templates,
+  readOnly,
+  activeRun,
+}: {
+  templates: Template[];
+  readOnly: boolean;
+  /** 服务端查到的「正在跑的手点运行」：跳走再回来时接着盯它，别让同一条被再派一次 */
+  activeRun?: { runId: string; templateId: string } | null;
+}) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [run, setRun] = useState<RunResult | null>(null);
@@ -127,26 +139,79 @@ export function WorkflowMarket({ templates, readOnly }: { templates: Template[];
   // 【为什么单独记「是哪一张在跑」】useTransition 的 pending 是整个组件共享的一个布尔。
   // 只用它来渲按钮，用户点了「小红书日更三件套」，三张卡的按钮会一起变成「跑着…」——
   // 看上去像是三条智能体同时开跑，而每条都要花额度。记住 id，只让那一张变。
-  const [busyId, setBusyId] = useState('');
+  const [busyId, setBusyId] = useState(activeRun?.templateId ?? '');
+  // 正在盯的那次运行（后台在跑，前端轮询进度）。null = 没有在跑的
+  const [watchId, setWatchId] = useState<string | null>(activeRun?.runId ?? null);
   const [form, setForm] = useState({ name: '', description: '', persona: '', emoji: '🧩', steps: SAMPLE_STEPS });
+  // 页头「＋ 新建智能体」发的信号（components/AgentCreateActions.tsx）——表单留在这里弹窗
+  useEffect(() => {
+    const open = () => setCreating(true);
+    window.addEventListener('beacon:new-agent', open);
+    return () => window.removeEventListener('beacon:new-agent', open);
+  }, []);
   const [importJson, setImportJson] = useState('');
+  /** 「让 AI 生成」那一行的许愿描述 */
+  const [aiWish, setAiWish] = useState('');
   const [exported, setExported] = useState('');
 
+  // 【为什么是「派出去 + 轮询」而不是等 action 跑完】server action 在途时，
+  // Next 会把同一客户端的后续导航与其它 action 全排在它后面——同步跑一条几分钟的
+  // 工作流 = 用户点完「跑一遍」整个站点点不动（真机撞到的：跳不了页、
+  // 技能页的安装/卸载全部灰死）。现在 action 只负责建行并立刻返回 runId，
+  // 执行在服务端后台进行，每一步实时落库，这里每 2 秒读一次进度。
   function doRun(t: Template) {
     setErr('');
     setRun(null);
     setBusyId(t.id);
     start(async () => {
-      const r = await actRunWorkflow(t.id);
+      const r = await actStartWorkflow(t.id);
+      if (!r.ok || !r.runId) {
+        setBusyId('');
+        setErr(r.error ?? '没派出去');
+        return;
+      }
+      setWatchId(r.runId);
+    });
+  }
+
+  useEffect(() => {
+    if (!watchId) return;
+    let alive = true;
+    let polls = 0;
+    const stopWatching = () => {
+      setWatchId(null);
       setBusyId('');
-      if (!r.ok) {
-        setErr(r.error ?? '跑失败了');
+    };
+    const tick = async () => {
+      if (!alive) return;
+      polls += 1;
+      const r = await actReadWorkflowRun(watchId).catch(() => null);
+      if (!alive) return;
+      if (!r?.ok || !r.run) {
+        setErr(r?.error ?? '读不到这次运行的进度了，去「任务记录」里找它');
+        stopWatching();
         return;
       }
       setRun(r);
-      router.refresh();
-    });
-  }
+      if (r.run.status !== 'running') {
+        stopWatching();
+        // 跑完的草稿/封面/发布计划要在别的板块出现，刷一次服务端数据
+        router.refresh();
+        return;
+      }
+      // ~8 分钟还没完就不盯了：它仍在后台跑（跑飞的由巡检如实判死），任务记录里能继续看
+      if (polls >= 240) {
+        setErr('这条跑得比较久，页面先不盯着了——它还在后台继续，去「任务记录」看进度。');
+        stopWatching();
+        return;
+      }
+      setTimeout(tick, 2000);
+    };
+    void tick();
+    return () => {
+      alive = false;
+    };
+  }, [watchId, router]);
 
   function simple(fn: () => Promise<{ ok: boolean; error?: string }>) {
     setErr('');
@@ -198,7 +263,8 @@ export function WorkflowMarket({ templates, readOnly }: { templates: Template[];
       {!readOnly && (
         <div className="row wrap" style={{ gap: 6 }}>
           {t.installed ? (
-            <button className="btn btn-sm btn-primary" disabled={pending} onClick={() => doRun(t)}>
+            // 一次只盯一条：有在跑的就不再派第二条（结果卡只有一张，同时跑两条会互相顶掉进度）
+            <button className="btn btn-sm btn-primary" disabled={pending || watchId !== null} onClick={() => doRun(t)}>
               {busyId === t.id ? '跑着…' : '跑一遍'}
             </button>
           ) : (
@@ -237,16 +303,38 @@ export function WorkflowMarket({ templates, readOnly }: { templates: Template[];
       <Card
         title="智能体班底"
         sub="已装的排上面点了就跑 · 市场里的装上即用 · 自建可导出分享"
-        action={
-          !readOnly && (
-            <button className="btn btn-sm" onClick={() => setCreating((v) => !v)}>
-              {creating ? '收起' : '+ 自建模板'}
-            </button>
-          )
-        }
       >
         {creating && !readOnly && (
-          <div style={{ display: 'grid', gap: 8, marginBottom: 16 }}>
+          <Overlay label="新建智能体" onClose={() => setCreating(false)}>
+          {/* 弹窗化（2026-08-26 用户按豆包「新建定时任务」的样式指定）：
+              字段没变，只是从页内展开改成居中弹窗——入口在页头，业务区不再被表单顶开 */}
+          <div className="dialog-card" style={{ display: 'grid', gap: 10 }}>
+            <div className="row-between" style={{ marginBottom: 2 }}>
+              <b style={{ fontSize: 16 }}>新建智能体</b>
+              <button className="btn btn-sm btn-ghost" onClick={() => setCreating(false)}>✕</button>
+            </div>
+            {/* AI 一键生成（2026-08-26 用户要求）：不在这儿现场生成——执行器已有
+                draft_workflow 通道（起草后停下来要确认，合约不能 AI 一个人签）。
+                这里把用户的一句描述带过去预填，走的就是那条被守卫钉着的安全通道。 */}
+            <div className="row" style={{ gap: 8, padding: '8px 10px', background: 'var(--brand-soft)', borderRadius: 10 }}>
+              <span className="small" style={{ flexShrink: 0, alignSelf: 'center' }}>✨ 懒得配？</span>
+              <input
+                className="input"
+                placeholder="一句话说你想要的智能体，例：每天挑一条选题写成知乎长文并配图"
+                value={aiWish}
+                onChange={(e) => setAiWish(e.target.value)}
+                style={{ flex: 1 }}
+              />
+              <button
+                className="btn btn-sm btn-primary"
+                disabled={!aiWish.trim()}
+                onClick={() => {
+                  window.location.href = `/assistant?goal=${encodeURIComponent(`用 draft_workflow 帮我起草一个智能体：${aiWish.trim()}。步骤、职责说明、名字都由你拟好，起草完等我确认`)}`;
+                }}
+              >
+                让 AI 生成
+              </button>
+            </div>
             <div className="row wrap" style={{ gap: 8 }}>
               <input className="input" placeholder="模板名" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} style={{ maxWidth: 200 }} />
               <input className="input" placeholder="emoji" value={form.emoji} onChange={(e) => setForm({ ...form, emoji: e.target.value })} style={{ maxWidth: 80 }} />
@@ -317,6 +405,7 @@ export function WorkflowMarket({ templates, readOnly }: { templates: Template[];
               </button>
             </div>
           </div>
+          </Overlay>
         )}
 
         {mine.length > 0 && (
@@ -346,20 +435,32 @@ export function WorkflowMarket({ templates, readOnly }: { templates: Template[];
       </Card>
 
       {run?.run && (
-        <Card title="这一次跑的结果" sub={run.run.status === 'done' ? '全部跑完' : '中途停下了'} style={{ marginTop: 16 }}>
+        <Card
+          title={run.run.status === 'running' ? '正在跑…' : '这一次跑的结果'}
+          sub={
+            run.run.status === 'running'
+              ? `第 ${run.run.stepIndex + 1} 步进行中 · 在后台跑，离开这页也不影响`
+              : run.run.status === 'done' ? '全部跑完' : '中途停下了'
+          }
+          style={{ marginTop: 16 }}
+        >
           <ol style={{ margin: 0, paddingLeft: 20 }}>
             {run.run.logs.map((l, i) => (
               <li key={i} className="small" style={{ color: l.ok ? 'inherit' : 'var(--red)' }}>
                 {l.label} — {l.message}
               </li>
             ))}
+            {run.run.status === 'running' && (
+              <li className="small muted">第 {run.run.stepIndex + 1} 步正在进行…</li>
+            )}
           </ol>
           {run.run.error && <div className="small" style={{ marginTop: 8, color: 'var(--red)' }}>{run.run.error}</div>}
-          {run.run.draftId && (
-            <a className="btn btn-sm" href={`/studio?draft=${run.run.draftId}`} style={{ marginTop: 10, display: 'inline-flex' }}>
-              去看这篇稿子
-            </a>
-          )}
+          <div className="row wrap" style={{ gap: 8, marginTop: 10 }}>
+            {run.run.draftId && run.run.status !== 'running' && (
+              <a className="btn btn-sm" href={`/studio?draft=${run.run.draftId}`}>去看这篇稿子</a>
+            )}
+            <a className="btn btn-sm btn-ghost" href="/runs">在任务记录里看</a>
+          </div>
         </Card>
       )}
     </>

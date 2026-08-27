@@ -103,3 +103,20 @@ describe('运行中心：按钮不许自己指自己', () => {
     expect(src, '等浏览器领活的行没有给出口').toMatch(/href="\/extension"/);
   });
 });
+
+describe('执行器：少反问、后台跑要说清', () => {
+  it('🔒 systemPrompt 带着「不要停下来反问」纪律', () => {
+    // 2026-08-26 真机：让它采竞对，它反问两次（先要链接、查到 6 个又问采哪个）。
+    // 这类行为回退没有任何报错，只有用户体感——用守卫钉住这几句话在场。
+    const src = code('lib/agent/run.ts');
+    expect(src).toMatch(/不要停下来反问/);
+    expect(src).toMatch(/至多反问一次/);
+    expect(src, '没写「没点名＝全部」这类默认取值示例').toMatch(/监控列表里\*\*全部\*\*/);
+  });
+
+  it('🔒 跑起来有显眼横幅：在跑 / 可以走 / 会提醒', () => {
+    const src = code('app/(app)/assistant/AgentPanel.tsx');
+    expect(src).toMatch(/run-live-banner/);
+    expect(src, '横幅没说完成会提醒').toMatch(/会提醒你/);
+  });
+});

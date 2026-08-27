@@ -54,7 +54,7 @@ export function AssistantTabs({
 
   return (
     <>
-      <div className="tabs">
+      <div className="tabs tabs-sub" style={{ justifyContent: "center" }}>
         <button className={`tab ${mode === 'chat' ? 'active' : ''}`} onClick={() => setMode('chat')}>
           问一句
         </button>

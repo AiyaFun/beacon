@@ -251,10 +251,14 @@ describe('没装插件就别排——排了也没人领', () => {
   });
 
   it('AI 的派活工具会先问一句，并把用户指到安装页', () => {
+    // 2026-08-26 起这道闸收口到 lib/browser-task/vet.ts（对外调用面 /api/v1/browser-tasks
+    // 也要走同一份）；派活工具必须调 vet，vet 里必须先查有没有插件
     const src = fs.readFileSync(path.join(ROOT, 'lib/agent/tools.ts'), 'utf8');
     const fn = src.slice(src.indexOf('const dispatchBrowserTask'), src.indexOf('const listBrowserTasks'));
-    expect(fn, '派活前没查有没有插件').toMatch(/hasCollector\(ctx\.workspaceId\)/);
-    expect(fn, '没告诉用户去哪装').toMatch(/采集助手/);
+    expect(fn, '派活工具没走统一的闸').toMatch(/vetBrowserTaskArgs\(ctx\.workspaceId/);
+    const vet = fs.readFileSync(path.join(ROOT, 'lib/browser-task/vet.ts'), 'utf8');
+    expect(vet, '派活前没查有没有插件').toMatch(/hasCollector\(workspaceId\)/);
+    expect(vet, '没告诉用户去哪装').toMatch(/采集助手/);
   });
 });
 

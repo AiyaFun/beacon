@@ -97,6 +97,62 @@ const TOOLS = [
       properties: { limit: { type: 'number', description: '默认 10，上限 30' } },
     },
   },
+  // ── 浏览器动词：指挥用户自己的采集插件干白名单里的三件事 ──────────────────
+  // 这不是「远程驱动浏览器」：没有打开任意 URL、点击、填表、执行脚本的动词，
+  // 能派的动作是一份写死在插件代码里的白名单。三个动词都是异步排队——
+  // 要有一台装了插件的浏览器在线才会被领走，用 beacon_browser_task_status 看进度。
+  {
+    name: 'beacon_collect_competitor',
+    description:
+      '让用户的浏览器插件去采一个**已订阅**竞对的公开主页（作品与数据）。'
+      + 'competitor 用监控列表里的 id、主页 handle 或名字（精确匹配；同名多个会让你带 id 重来）。'
+      + '不在监控列表里的采不了——先让用户在烽火台「竞对监控」里订阅。'
+      + '异步排队：立刻返回 taskId，插件在线时才执行，不会立刻有数据。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        competitor: { type: 'string', description: '监控列表里的竞对：id / 主页 handle / 名字（精确匹配）' },
+        limit: { type: 'number', description: '采几条作品，默认 20，最多 50' },
+      },
+      required: ['competitor'],
+    },
+  },
+  {
+    name: 'beacon_collect_self',
+    description:
+      '让用户的浏览器插件回填**用户本人**创作后台的数据（用他自己的登录态，进他自己的后台）。'
+      + '目前只支持 platform=wechat（公众号）。异步排队，插件在线时执行。',
+    inputSchema: {
+      type: 'object',
+      properties: { platform: { type: 'string', description: '目前只有 wechat' } },
+      required: ['platform'],
+    },
+  },
+  {
+    name: 'beacon_read_page',
+    description:
+      '让用户的浏览器插件打开一个网页、把**已渲染的可见正文**读回来（服务端直接抓不到的平台用它：'
+      + '要登录、或整页 JS 渲染）。只读不动：不点击、不填写、不提交。'
+      + '⚠️ 两个前置：工作区要开过「让插件替我读网页」开关（默认关）；'
+      + 'URL 必须在硬编码的站点白名单里（抖音/B站/小红书/知乎/微博/公众号文章/头条/百家号/X/YouTube 等），'
+      + '清单外的一律拒绝。别的网址让烽火台服务端直接抓（beacon_run 里说「剪藏这条链接」）。',
+    inputSchema: {
+      type: 'object',
+      properties: { url: { type: 'string', description: '要读的网页地址（必须在白名单站点里）' } },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'beacon_browser_task_status',
+    description:
+      '看一个浏览器任务走到哪了。状态：pending=等插件在线来领 / claimed=正在做 / done / failed / '
+      + 'expired（48 小时无人执行自动作废）/ cancelled。beacon_read_page 跑完后这里会带回摘要与正文节选。',
+    inputSchema: {
+      type: 'object',
+      properties: { taskId: { type: 'string', description: '排队时返回的 taskId' } },
+      required: ['taskId'],
+    },
+  },
 ];
 
 async function callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
@@ -138,6 +194,40 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
     const runs = (r.runs ?? []) as { runId: string; goal: string; status: string; answer: string | null }[];
     if (runs.length === 0) return text('还没有任何执行记录。');
     return text(runs.map((x) => `· [${x.status}] ${x.goal}${x.answer ? ` → ${x.answer}` : ''}（${x.runId}）`).join('\n'));
+  }
+
+  // 三个浏览器动词共用同一条创建路：白名单校验、开关、监控列表归属全在服务端那侧判
+  const BROWSER_CREATE: Record<string, (a: Record<string, unknown>) => Record<string, unknown>> = {
+    beacon_collect_competitor: (a) => ({ kind: 'collect_competitor', competitor: String(a.competitor ?? ''), ...(a.limit ? { limit: Number(a.limit) } : {}) }),
+    beacon_collect_self: (a) => ({ kind: 'collect_self', platform: String(a.platform ?? '') }),
+    beacon_read_page: (a) => ({ kind: 'open_and_read', url: String(a.url ?? '') }),
+  };
+  if (BROWSER_CREATE[name]) {
+    const r = await api('/api/v1/browser-tasks', { method: 'POST', body: JSON.stringify(BROWSER_CREATE[name](args)) });
+    return text(`已排队（taskId: ${r.taskId}）。\n${String(r.note ?? '')}`);
+  }
+
+  if (name === 'beacon_browser_task_status') {
+    const taskId = String(args.taskId ?? '').trim();
+    if (!taskId) return text('要给出 taskId。');
+    const r = await api(`/api/v1/browser-tasks/${encodeURIComponent(taskId)}`);
+    const read = r.read as
+      | { url: string; title: string; summary: string | null; points: string[]; textPreview: string; textTruncated: boolean; note?: string }
+      | undefined;
+    const lines = [
+      `${r.label}：${r.status}`,
+      r.result ? `\n回执：${r.result}` : '',
+      r.error ? `\n出错：${r.error}` : '',
+      r.waitingFor ? `\n${r.waitingFor}` : '',
+      read
+        ? `\n\n读到的内容：${read.title}（${read.url}）`
+          + (read.summary ? `\n摘要：${read.summary}` : '')
+          + (read.points?.length ? `\n要点：\n${read.points.map((p) => `· ${p}`).join('\n')}` : '')
+          + (read.textPreview ? `\n正文节选：\n${read.textPreview}` : '')
+          + (read.textTruncated ? `\n（${read.note ?? '正文有截断'}）` : '')
+        : '',
+    ];
+    return text(lines.filter(Boolean).join(''));
   }
 
   throw new Error(`没有名为 ${name} 的工具`);

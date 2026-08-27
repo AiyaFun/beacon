@@ -20,6 +20,10 @@ export function generateIngestToken(): string {
   return `bcn_${crypto.randomBytes(24).toString('hex')}`;
 }
 
+export function hashToken(token: string): string {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
 // lastUsedAt 的写入节流。它只用来在界面上回答「这台设备还在用吗」，精确到分钟毫无意义；
 // 而不节流就是给**每一条采集回传**平白加一次写库。
 const TOUCH_INTERVAL_MS = 10 * 60 * 1000;
@@ -86,12 +90,14 @@ export async function issueIngestToken(opts: {
     if (existing) return { id: existing.id, token: existing.token, label: existing.label, reused: true };
   }
 
+  const plainToken = generateIngestToken();
   const created = await prisma.ingestToken.create({
     data: {
       workspaceId: opts.workspaceId,
       memberId: opts.memberId,
       label,
-      token: generateIngestToken(),
+      token: plainToken,
+      tokenHash: hashToken(plainToken),
     },
   });
 
@@ -171,10 +177,19 @@ export async function resolveIngestToken(raw: string | null | undefined) {
   const t = raw?.trim();
   if (!t) return null;
 
-  const row = await prisma.ingestToken.findUnique({
-    where: { token: t },
+  // 优先按哈希查（新签发的令牌走这条路），数据库泄露时攻击者拿不到明文
+  const h = hashToken(t);
+  let row = await prisma.ingestToken.findUnique({
+    where: { tokenHash: h },
     include: { workspace: true },
   });
+  // 兜底：存量令牌没有 tokenHash，仍按明文匹配（迁移完成后可删此分支）
+  if (!row) {
+    row = await prisma.ingestToken.findUnique({
+      where: { token: t },
+      include: { workspace: true },
+    });
+  }
   if (row) {
     if (row.revokedAt) return null;
     await touch(row.id, row.lastUsedAt);

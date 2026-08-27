@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Icon } from '@/components/icons';
-import { looksActionable } from '@/lib/agent/intent';
+import { looksActionable, wantsExecution } from '@/lib/agent/intent';
 import { prepareReferenceImage } from '@/lib/cover/client-image';
 import { ModelPicker, readPickedModel } from './ModelPicker';
 import type { SelectableModel } from '@/lib/llm/selectable';
@@ -46,12 +46,8 @@ export function Chat({
   /** 「让它直接去做」：把这句话交给执行那一侧。不传 = 不显示那个按钮 */
   onHandoff?: (goal: string) => void;
 }) {
-  const [messages, setMessages] = useState<Msg[]>([
-    {
-      role: 'assistant',
-      content: `你好，我是「${accountName}」的 AI 运营助手。选题、文案、运营变现随便问——我会带上你的账号人设和历史记忆来答。`,
-    },
-  ]);
+  // 空态不放开场白气泡（豆包式：留白+大标题就是欢迎）。第一句欢迎信息在 hero 副标题里。
+  const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   /**
@@ -86,6 +82,14 @@ export function Chat({
     const q = text.trim();
     // 只发图不打字也算数：「这张图怎么样」是很自然的问法
     if ((!q && pics.length === 0) || streaming) return;
+
+    // 「帮我去执行/执行一下」这种明说要执行的话，不再先答一篇计划再给按钮——
+    // 直接带到「让它去做」预填（用户按开始才真跑；2026-08-26 用户原话「并没办法去执行」）
+    if (onHandoff && wantsExecution(q)) {
+      setInput('');
+      onHandoff(q);
+      return;
+    }
 
     const history: ChatTurn[] = messages
       .filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -126,6 +130,24 @@ export function Chat({
       const decoder = new TextDecoder();
       let buf = '';
 
+      // 【为什么攒着刷】SSE 每个 delta 通常就一两个字，逐条 setMessages 会让文字
+      // 一字一顿地蹦（用户原话「要流畅点，不要一个字一个字的吐」）。攒进 acc、
+      // 每 80ms 批量追加一次——观感是成句地流出来，重渲染次数也降一个量级。
+      let acc = '';
+      let flushTimer: ReturnType<typeof setTimeout> | null = null;
+      const flush = () => {
+        flushTimer = null;
+        if (!acc) return;
+        const chunk = acc;
+        acc = '';
+        setMessages((prev) => {
+          const copy = [...prev];
+          const last = copy[copy.length - 1];
+          copy[copy.length - 1] = { ...last, content: last.content + chunk };
+          return copy;
+        });
+      };
+
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -138,16 +160,15 @@ export function Chat({
           const payload = trimmed.slice(5).trim();
           if (payload === '[DONE]') break;
           try {
-            const delta = JSON.parse(payload) as string;
-            setMessages((prev) => {
-              const copy = [...prev];
-              const last = copy[copy.length - 1];
-              copy[copy.length - 1] = { ...last, content: last.content + delta };
-              return copy;
-            });
+            acc += JSON.parse(payload) as string;
+            if (!flushTimer) flushTimer = setTimeout(flush, 80);
           } catch { /* skip */ }
         }
       }
+      // 收尾必须把余量刷出去，且要清掉挂着的定时器——不然最后一截会在 80ms 后
+      // 才蹦出来，或者组件卸载后 setMessages 打在已卸载的组件上
+      if (flushTimer) clearTimeout(flushTimer);
+      flush();
       // 答完了再判：答之前就亮按钮，等于在回答还没出来时催用户做决定。
       // 出错/中断的分支各自 return，不会走到这里——那种时候更不该催他去执行
       if (looksActionable(q)) setHandoffGoal(q);
@@ -194,12 +215,14 @@ export function Chat({
   }
 
   return (
-    <div className="card" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 220px)', minHeight: 440 }}>
+    <div className="chat-stage">
       {/* 空态（只有开场白那一条）时给豆包式的落地：大标题 + 为你推荐四张卡。
           聊起来之后整段消失——它是「不知道从哪开始」的解药，不是常驻装饰。 */}
-      {messages.length <= 1 ? (
-        <div className="chat-hero">
-          <h2 className="chat-hero-title">今天要做什么？</h2>
+      {messages.length === 0 ? (
+        <div className="chat-hero chat-hero-doubao">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo.png" alt="" width={64} height={64} style={{ borderRadius: 16, marginBottom: 18 }} />
+          <h2 className="chat-hero-title">今天要做什么，{accountName}？</h2>
           <p className="small muted chat-hero-sub">
             说一句话就行。选题、写稿、看同行、看数据都可以问；需要动手做的，答完会问你要不要去做。
           </p>
@@ -292,6 +315,7 @@ export function Chat({
           {picErr && <span className="small" style={{ color: 'var(--red)' }}>{picErr}</span>}
         </div>
       )}
+      <div className="chat-input-box">
       <div className="row" style={{ gap: 8, alignItems: 'flex-end' }}>
 
         <textarea
@@ -333,12 +357,11 @@ export function Chat({
         <div className="row wrap chat-toolbar" style={{ gap: 8, alignItems: 'center', marginTop: 8 }}>
           <ModelPicker models={models} value={modelId} onChange={setModelId} />
           {pics.length > 0 && (
-            // 带图那一路走视觉模型（llmVision），不吃这里选的那个——不说清楚
-            // 用户会以为自己选的模型在看图
             <span className="small muted">带图时自动用支持看图的模型</span>
           )}
         </div>
       )}
+      </div>
     </div>
   );
 }

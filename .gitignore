@@ -45,3 +45,8 @@ docs/方案-*.md
 
 # 本机排查用的一次性 repro 脚本（写死了绝对路径），不进仓库
 .repro-check.mjs
+
+# ── 桌面壳（Tauri 2）──
+desktop/node_modules
+desktop/src-tauri/target
+desktop/src-tauri/gen

@@ -52,7 +52,7 @@ export async function enqueueBrowserTask(input: {
   workspaceId: string;
   accountId?: string | null;
   payload: unknown;
-  origin?: 'agent' | 'user' | 'schedule';
+  origin?: 'agent' | 'user' | 'schedule' | 'api';
   createdBy: string;
 }): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
   const parsed = browserTaskPayloadSchema.safeParse(input.payload);

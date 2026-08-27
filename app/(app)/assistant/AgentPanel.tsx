@@ -183,6 +183,18 @@ export function AgentPanel({
         {err && <div className="small" style={{ marginTop: 10, color: 'var(--red)' }}>{err}</div>}
       </div>
 
+      {/* 跑起来必须显眼（2026-08-26 用户「开始跑的时候最好显眼点，同时可以在后台慢慢跑，最后提示一个结果」）：
+          执行本来就是后台跑的，但界面上没人说——用户以为要守着。这条横幅把三件事说清：
+          在跑、可以走、跑完会叫你（完成通知 lib/agent/notify-run.ts 早已在发）。 */}
+      {turn && (turn.status === 'running' || turn.status === 'queued') && (
+        <div className="alert-gradient-brand run-live-banner" style={{ padding: '12px 16px', marginBottom: 12 }}>
+          <span className="run-live-spinner" aria-hidden />
+          <span className="small" style={{ lineHeight: 1.7 }}>
+            <b>正在后台执行…</b> 可以离开本页去做别的——跑完（或需要你确认时）右上角 🔔 会提醒你，
+            「任务记录」里也随时能看到这一条。
+          </span>
+        </div>
+      )}
       {turn && (
         <div className="card" style={{ padding: 16 }}>
           <div className="row-between" style={{ marginBottom: 10 }}>
@@ -375,11 +387,12 @@ export function AgentPanel({
         </summary>
         <div className="table-wrap" style={{ marginTop: 10 }}>
           <table className="table">
-            <thead><tr><th>能力</th><th>说明</th><th style={{ width: 110 }}>是否需确认</th></tr></thead>
+            {/* 能力列钉住不换行：不钉的话窄屏下「查选题」会断成竖排两行（用户截图） */}
+            <thead><tr><th style={{ whiteSpace: 'nowrap' }}>能力</th><th>说明</th><th style={{ width: 96, whiteSpace: 'nowrap' }}>是否需确认</th></tr></thead>
             <tbody>
               {tools.map((t) => (
                 <tr key={t.name}>
-                  <td>{t.label}</td>
+                  <td style={{ whiteSpace: 'nowrap', fontWeight: 600 }}>{t.label}</td>
                   <td className="small muted">{t.description}</td>
                   <td className="small">
                     {t.write || t.costly ? <span className="badge badge-amber">要你点头</span> : <span className="badge badge-gray">只读</span>}

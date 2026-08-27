@@ -1316,3 +1316,40 @@ button.tab.active { border-bottom-color: var(--brand); }
 }
 @keyframes hub-shimmer { to { background-position: -200% 0; } }
 .sidebar-user-version { padding: 6px 10px 2px; font-size: 11px; color: var(--text-2); border-top: 1px solid var(--border); margin-top: 4px; }
+
+/* 豆包式新建弹窗的内容卡（Overlay 只给遮罩与定位，卡面自己画） */
+.dialog-card {
+  width: min(560px, 92vw); max-height: 84vh; overflow-y: auto;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 16px; padding: 20px 22px; box-shadow: 0 18px 48px rgba(0,0,0,.22);
+}
+
+/* ── 新任务页：豆包工作式全屏对话面（2026-08-26 用户按截图指定）──────────── */
+.chat-stage { display: flex; flex-direction: column; height: calc(100vh - 150px); min-height: 480px; }
+.chat-hero-doubao { padding-top: 9vh; }
+.chat-hero-doubao .chat-hero-title { font-size: 30px; }
+.chat-hero-doubao .chat-hero-sub { margin-bottom: 26px; }
+/* 底部大圆角输入盒：textarea 融进盒子，工具条贴在盒内下沿 */
+.chat-input-box {
+  border: 1.5px solid var(--border-strong); border-radius: 18px;
+  padding: 10px 14px 8px; background: var(--surface);
+  box-shadow: 0 4px 18px rgba(0,0,0,.05);
+}
+.chat-input-box:focus-within { border-color: var(--brand); }
+.chat-input-box .textarea { border: 0 !important; box-shadow: none !important; padding: 6px 4px; background: transparent; }
+.chat-input-box .chat-toolbar { margin-top: 2px !important; border-top: 1px solid var(--border); padding-top: 8px; }
+
+/* 执行中的活横幅：转圈 + 渐变底，跑起来一眼可见 */
+.run-live-banner { display: flex; align-items: flex-start; gap: 10px; }
+.run-live-spinner {
+  width: 16px; height: 16px; flex-shrink: 0; margin-top: 3px;
+  border: 2px solid var(--brand); border-top-color: transparent; border-radius: 50%;
+  animation: run-spin .8s linear infinite;
+}
+@keyframes run-spin { to { transform: rotate(360deg); } }
+
+/* 智能体页两列：左=班底画廊 右=反复要做的事。1180px 以下回落单列 */
+.workflows-cols { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 16px; align-items: start; }
+@media (max-width: 1180px) { .workflows-cols { grid-template-columns: 1fr; } }
+/* 左列变窄后伙伴卡不再两列摆（每张卡内容密，半宽会挤断） */
+.workflows-cols .grid-2 { grid-template-columns: 1fr; }

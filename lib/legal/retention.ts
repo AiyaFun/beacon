@@ -1,5 +1,6 @@
 import { prisma } from '../db';
 import { expireStaleTasks } from '../browser-task';
+import { purgeParserScreenshots } from '../ingest/parser-learn';
 import { purgeExpiredCovers } from '../media/store';
 import { purgeExpiredComments } from '../ingest/reader-comments';
 import { pruneStaleQuestions } from '../ingest/comment-questions';
@@ -63,6 +64,8 @@ export type RetentionSweep = {
   runLogs: { agentRuns: number; workflowRuns: number; staleQueued: number };
   /** 浏览器任务：标记为过期的 / 到期清掉的 */
   browserTasks: { expired: number; purged: number };
+  /** 解析自学习：清空的超期失败现场截图张数（只清 screenshot 列，事件与骨架保留） */
+  parserScreenshots: number;
   /** 已核验移除申请的重扫：扫了几条申请，以及这一趟补删掉了什么 */
   removals: { swept: number; purged: PurgeResult };
   /**
@@ -152,6 +155,10 @@ export async function sweepRetention(): Promise<RetentionSweep> {
     { expired: 0, purged: 0 },
   );
 
+  // ③.7 解析自学习的失败现场截图：满 30 天清空（隐私政策写的就是这个期限）。
+  //      只清 screenshot 列——事件与脱敏骨架留着，运维台还要靠它们看历史。
+  const parserScreenshots = await step('parser_screenshots', () => purgeParserScreenshots(), 0);
+
   // ④ 已核验移除申请的重扫。resolveRemovalRequest 在流转那一刻已经删过一遍，这是**第二道**：
   //    停采闸只挂在两条竞对通道上（lib/pipeline.ts、lib/ingest/competitor.ts），
   //    评论回传那条（app/api/ingest/questions）没过闸，被移除账号作品下的评论正文仍可能重新写进来。
@@ -177,5 +184,5 @@ export async function sweepRetention(): Promise<RetentionSweep> {
     return { swept: reqs.length, purged };
   }, { swept: 0, purged: { ...EMPTY_PURGE } });
 
-  return { readerComments, covers, commentQuestions, orphanedLlmLogs, runLogs, browserTasks, removals, errors };
+  return { readerComments, covers, commentQuestions, orphanedLlmLogs, runLogs, browserTasks, parserScreenshots, removals, errors };
 }

@@ -266,6 +266,11 @@ function systemPrompt(personaBlock: string, memoryBlock: string, toolNames: stri
     '',
     '工作方式：',
     '- 需要系统里的真实数据时，**必须先调工具查**，不许凭印象编。查不到就说查不到。',
+    // 【2026-08-26 真机反馈「应该智能点，不要每次都询问」】那次它先反问要主页链接、
+    // 自己又查到 6 个监控账号、然后又停下问「采哪个」——用户说的就是「都采一下」。
+    // 反问是把用户当成执行器的一部分；目标含糊时按最合理的默认做完再说明取舍，才是「去做」。
+    '- **不要停下来反问**。目标里没写明的细节，按最合理的默认去做：让你采竞对没点名＝监控列表里**全部**；没说数量＝常规量；没说时间范围＝最近的。做完在结果里说明你的取舍。',
+    '- 反问之前必须先把能查的都查了（list_ 开头的工具）；查完能定的就自己定。整次执行**至多反问一次**，且只在查遍了仍无法继续时。',
     writeConfirmLine(authMode),
     '- 用户拒绝某一步时，不要重复请求同一个操作，换个思路或直接告诉他你的建议。',
     '- 工具返回里标了「示例数据」的内容，转述时必须一并说明它是示例，不能当成真实数据下结论。',
@@ -913,8 +918,10 @@ async function executeCall(ctx: ToolContext, call: ToolCall): Promise<CallOutcom
     }
   }
   const args = parseJson<Record<string, unknown>>(call.arguments, {});
+  const ac = new AbortController();
+  const ctxWithSignal = { ...ctx, signal: ac.signal };
   try {
-    const result = await withTimeout(tool.run(ctx, args), toolTimeoutMs(tool), tool.label);
+    const result = await withTimeout(tool.run(ctxWithSignal, args), toolTimeoutMs(tool), tool.label, ac);
     // 产物登记挂在**这一个咽喉**上：所有工具执行都过 executeCall，
     // 挂在这里就不会出现「新加的工具忘了登记产物」——它只要在 ToolResult 里报，就一定被记下
     if (result.artifacts?.length && ctx.runId) await recordArtifacts(ctx.runId, result.artifacts);
@@ -936,13 +943,16 @@ async function executeCall(ctx: ToolContext, call: ToolCall): Promise<CallOutcom
  * 那为什么还要有它：没有上限的话，一个卡住的外部请求会把这次运行永远钉在 running 上，
  * 租约一直续、谁也接手不了，用户看到的是一个永不结束的转圈。
  */
-function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+function withTimeout<T>(p: Promise<T>, ms: number, label: string, ac?: AbortController): Promise<T> {
   let timer: ReturnType<typeof setTimeout>;
   return Promise.race([
     p,
     new Promise<never>((_, reject) => {
       timer = setTimeout(
-        () => reject(new Error(`「${label}」超过 ${Math.round(ms / 1000)} 秒还没返回，先不等了。它可能仍在后台继续，别重复执行同一步。`)),
+        () => {
+          ac?.abort();
+          reject(new Error(`「${label}」超过 ${Math.round(ms / 1000)} 秒还没返回，先不等了。它可能仍在后台继续，别重复执行同一步。`));
+        },
         ms,
       );
     }),

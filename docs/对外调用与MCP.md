@@ -63,11 +63,47 @@ curl "http://127.0.0.1:3070/api/v1/runs?limit=5" \
 
 配好之后，在那个客户端里直接说「让烽火台看看我最近数据怎么样」就行。
 
-暴露三个工具：
+暴露七个工具：
 
 - `beacon_run` —— 让它去做一件事
 - `beacon_run_status` —— 看一次执行走到哪了
 - `beacon_recent_runs` —— 最近几次
+- `beacon_collect_competitor` —— 让用户的浏览器插件去采一个**已订阅**的竞对
+- `beacon_collect_self` —— 让插件回填用户本人创作后台的数据（目前只有公众号）
+- `beacon_read_page` —— 让插件打开白名单站点里的一页、把可见正文读回来
+- `beacon_browser_task_status` —— 看一个浏览器任务走到哪了
+
+## 三之二、浏览器动词（指挥用户自己的插件）
+
+后三个动词走的是 `/api/v1/browser-tasks`：
+
+```bash
+# 排一个「采竞对」任务（competitor 可以是监控列表里的 id、主页 handle 或名字，精确匹配）
+curl -X POST http://127.0.0.1:3070/api/v1/browser-tasks \
+  -H "Authorization: Bearer bck_你的令牌" \
+  -H "content-type: application/json" \
+  -d '{"kind":"collect_competitor","competitor":"学习博主小王","limit":20}'
+# → {"ok":true,"taskId":"cm...","status":"pending","note":"已排队…"}
+
+# 看进度 / 拿结果
+curl http://127.0.0.1:3070/api/v1/browser-tasks/cm... \
+  -H "Authorization: Bearer bck_你的令牌"
+```
+
+`kind` 只有三个：`collect_competitor` / `collect_self`（`platform` 目前只有 `wechat`）/
+`open_and_read`（`url` 必须在插件硬编码的站点白名单里，且工作区开过
+「让插件替我读网页」开关——默认是关的）。
+
+**这不是「远程驱动浏览器」的接口。** 没有打开任意 URL、点击、填表、执行脚本的动词，
+将来也不会有：能派的动作是一份写死在插件代码里的白名单，服务端下发白名单以外的
+指令插件不认。理由与整个采集架构一致——一枚泄漏的令牌，不该等于一台带着
+用户登录态的可遥控浏览器。三道闸（有没有插件 / 读网页开关+域白名单 /
+竞对必须在监控列表）与 AI 工具 `dispatch_browser_task` 共用同一份实现
+（`lib/browser-task/vet.ts`），不存在「API 这条路更宽」。
+
+任务是异步的：`pending` 要等一台装了插件、令牌有效的浏览器在线来领；
+48 小时无人执行自动作废（`expired`，不算失败）。所有任务照常出现在
+烽火台「运行中心」，标注「外部程序派的」。
 
 ## 四、有一件事它**做不了**：确认
 

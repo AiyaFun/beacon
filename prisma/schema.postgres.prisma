@@ -103,8 +103,11 @@ model Workspace {
 model IngestToken {
   id          String    @id @default(cuid())
   workspaceId String
-  // 令牌明文（bcn_ 前缀）。唯一约束 = 鉴权时一次 findUnique 命中
+  // 令牌明文（bcn_ 前缀）。存量兼容：新签发的令牌只存哈希，此字段留给迁移期旧令牌兜底查询。
+  // 迁移完成后（所有行都有 tokenHash）可清空此列。
   token       String    @unique
+  // SHA-256 哈希（hex）。新签发的令牌鉴权走这条索引，数据库泄露时无法直接冒用。
+  tokenHash   String?   @unique
   // 设备标签，签发时按 User-Agent 生成，如「Chrome · macOS」。用户靠它认出这是哪一台
   label       String
   // 签发人。null = 从旧的工作区级令牌迁移进来的，没有签发人可考
@@ -1922,7 +1925,7 @@ model BrowserTask {
   payload     String   @default("{}")
   // pending=等插件来领 | claimed=已被某个浏览器领走 | done | failed | expired | cancelled
   status      String   @default("pending")
-  // 谁派的：agent=AI 执行器 | user=用户在页面上点 | schedule=定时智能体
+  // 谁派的：agent=AI 执行器 | user=用户在页面上点 | schedule=定时智能体 | api=对外调用面(/api/v1)
   origin      String   @default("agent")
   // 领走它的那个浏览器（IngestToken.id）。用于「同一台机器别重复领」与排查
   claimedBy   String?
@@ -2001,6 +2004,9 @@ model ParserIncident {
   status      String   @default("open")
   // 脱敏后的页面结构骨架（JSON 字符串，有大小上限）
   skeleton    String   @default("")
+  // 失败现场截图（0.9.9 起，data:image JPEG；只在用户正看着的页面失败时才有）。
+  // 大小由 vetScreenshot 闸住（150K 字符，WAF 请求体阈值之下）；30 天由保留期任务清空。
+  screenshot  String   @default("")
   note        String   @default("")
   samples     Int      @default(1) // 同一指纹撞了几次
   fingerprint String // platform+scope+field，用于合并同类事件

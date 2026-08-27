@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>烽火台</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin:0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+         display:flex; align-items:center; justify-content:center; height:100vh;
+         background:#faf7f2; color:#1f1b16; }
+  @media (prefers-color-scheme: dark) { body { background:#17130e; color:#efe9df; } }
+  .box { text-align:center; max-width:420px; padding:24px; }
+  .logo { width:72px; height:72px; border-radius:18px; margin-bottom:18px; }
+  h1 { font-size:20px; margin:0 0 8px; }
+  p  { font-size:13px; line-height:1.8; opacity:.75; margin:0 0 14px; }
+  .spin { width:18px; height:18px; border:2.5px solid #e56b3c; border-top-color:transparent;
+          border-radius:50%; margin:0 auto 14px; animation:s .8s linear infinite; }
+  @keyframes s { to { transform:rotate(360deg); } }
+  code { background:rgba(229,107,60,.12); padding:2px 8px; border-radius:6px; font-size:12px; }
+  .err { display:none; }
+</style>
+</head>
+<body>
+<div class="box">
+  <img class="logo" src="logo.png" alt="" />
+  <div class="spin" id="spin"></div>
+  <h1 id="title">正在连接本机烽火台…</h1>
+  <p id="hint">服务地址 <code id="addr">http://localhost:3070</code></p>
+  <div class="err" id="err">
+    <p><b>本机服务还没在跑。</b></p>
+    <p>先在终端进入烽火台目录执行整机版安装（只需一次）：<br/><code>bash deploy/appliance/install.sh</code><br/>
+       装好后服务开机自启，这个窗口会自动进入。</p>
+  </div>
+</div>
+<script>
+  // 端口可被整机版改（BEACON_PORT）；壳侧允许用 ?port= 覆盖，缺省 3070
+  const port = new URLSearchParams(location.search).get('port') || '3070';
+  const base = `http://localhost:${port}`;
+  document.getElementById('addr').textContent = base;
+  let fails = 0;
+  async function probe() {
+    try {
+      // no-cors：健康接口跨源也能探到「通没通」（opaque 响应即算通）
+      await fetch(`${base}/api/health`, { mode: 'no-cors', cache: 'no-store' });
+      location.replace(base);
+    } catch {
+      fails += 1;
+      if (fails >= 3) {
+        document.getElementById('spin').style.display = 'none';
+        document.getElementById('title').textContent = '没连上本机服务';
+        document.getElementById('err').style.display = 'block';
+      }
+      setTimeout(probe, 1500);
+    }
+  }
+  probe();
+</script>
+</body>
+</html>

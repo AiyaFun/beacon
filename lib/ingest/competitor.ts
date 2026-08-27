@@ -282,7 +282,7 @@ export async function ingestCompetitorData(
       // 首次入库也要留起点：没有它，这条作品的增长序列要等到**第二次**采集才开始，
       // 第一段增长（往往是最猛的那段）永远丢失。
       if (metrics) {
-        await prisma.postMetricSnapshot.create({ data: { postId: createdPost.id, metrics: toJson(metrics) } });
+        await prisma.postMetricSnapshot.create({ data: { postId: createdPost.id, metrics: toJson(metrics), source: payload.source ?? 'home' } });
       }
       created++;
     }

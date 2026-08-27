@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useTransition } from 'react';
+import { useEffect, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { actCreateSchedule, actToggleSchedule, actDeleteSchedule } from './schedule-actions';
 import { scheduleWhen, DOW } from '@/lib/workflow/schedule-format';
+import { Overlay } from '@/components/Overlay';
 
 // 定时智能体：让一条模板每天/每周自己跑。
 //
@@ -62,6 +63,13 @@ export function Schedules({
   }
 
   const full = rows.length >= maxSchedules;
+  /** 新建弹窗（2026-08-26 豆包式）。页头「＋ 定时任务」发事件打开，卡内按钮也能开 */
+  const [dialogOpen, setDialogOpen] = useState(false);
+  useEffect(() => {
+    const open = () => setDialogOpen(true);
+    window.addEventListener('beacon:new-schedule', open);
+    return () => window.removeEventListener('beacon:new-schedule', open);
+  }, []);
 
   // 定时不会跑的形态（整机版只启一个 next start，用的是空实现的进程内队列）：
   // 直接说清楚，不给配。让用户配一个永不执行的计划比不给这个功能更糟——
@@ -130,43 +138,65 @@ export function Schedules({
         </div>
       )}
 
-      {!readOnly && agents.length > 0 && (
-        <div className="row wrap" style={{ gap: 8, alignItems: 'flex-end' }}>
-          {/* ⚠️ .input 类自带 width:100%——三个 select 直接用它会在 row wrap 里
-              一人独占一行（用户截图里模板/时/分竖着摞了三层）。逐个钉回 auto 宽。 */}
-          <select className="input" value={form.templateId} onChange={(e) => setForm({ ...form, templateId: e.target.value })} style={{ width: 'auto', minWidth: 200, maxWidth: 320 }} aria-label="选智能体">
-            {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </select>
-          <select className="input" value={form.hour} onChange={(e) => setForm({ ...form, hour: Number(e.target.value) })} style={{ width: 'auto' }} aria-label="小时">
-            {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')} 点</option>)}
-          </select>
-          {/* 只给整十分：扫描每 10 分钟一轮，配 09:07 会让用户以为「说好 7 分却 10 分才跑」 */}
-          <select className="input" value={form.minute} onChange={(e) => setForm({ ...form, minute: Number(e.target.value) })} style={{ width: 'auto' }} aria-label="分钟">
-            {[0, 10, 20, 30, 40, 50].map((m) => <option key={m} value={m}>{String(m).padStart(2, '0')} 分</option>)}
-          </select>
-          <span className="row" style={{ gap: 4 }}>
-            {DOW.map((d, i) => (
-              <label key={i} className="small" style={{ cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={form.weekdays.includes(i)}
-                  onChange={() => setForm({ ...form, weekdays: form.weekdays.includes(i) ? form.weekdays.filter((x) => x !== i) : [...form.weekdays, i].sort() })}
-                />
-                {d}
-              </label>
-            ))}
-            <span className="small muted">（都不勾 = 每天）</span>
-          </span>
-          <button
-            className="btn btn-sm btn-primary"
-            disabled={pending || full || !form.templateId}
-            title={full ? `最多 ${maxSchedules} 条` : undefined}
-            onClick={() => run(() => actCreateSchedule({ templateId: form.templateId, atHour: form.hour, atMinute: form.minute, weekdays: form.weekdays }))}
-          >
-            {full ? `已满 ${maxSchedules} 条` : '加一条'}
-          </button>
+      {/* 卡内不再放新建按钮：页头右侧已有「＋ 定时任务」（用户 2026-08-26：
+          「顶部已经有任务新建了，下面就直接不要了」）。上限满时保存动作由服务端闸拦。 */}
+
+      {dialogOpen && !readOnly && agents.length > 0 && (
+        <Overlay label="新建定时任务" onClose={() => setDialogOpen(false)}>
+        <div className="dialog-card" style={{ display: 'grid', gap: 12 }}>
+          <div className="row-between">
+            <b style={{ fontSize: 16 }}>新建定时任务</b>
+            <button className="btn btn-sm btn-ghost" onClick={() => setDialogOpen(false)}>✕</button>
+          </div>
+          {/* 豆包式竖排：每行一个字段，宽度占满弹窗（这里的 .input 100% 宽正合适） */}
+          <label className="small muted">哪个智能体
+            <select className="input" value={form.templateId} onChange={(e) => setForm({ ...form, templateId: e.target.value })} style={{ marginTop: 4 }} aria-label="选智能体">
+              {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </select>
+          </label>
+          <div className="row" style={{ gap: 10 }}>
+            <label className="small muted" style={{ flex: 1 }}>几点
+              <select className="input" value={form.hour} onChange={(e) => setForm({ ...form, hour: Number(e.target.value) })} style={{ marginTop: 4 }} aria-label="小时">
+                {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')} 点</option>)}
+              </select>
+            </label>
+            <label className="small muted" style={{ flex: 1 }}>几分（整十）
+              <select className="input" value={form.minute} onChange={(e) => setForm({ ...form, minute: Number(e.target.value) })} style={{ marginTop: 4 }} aria-label="分钟">
+                {[0, 10, 20, 30, 40, 50].map((m) => <option key={m} value={m}>{String(m).padStart(2, '0')} 分</option>)}
+              </select>
+            </label>
+          </div>
+          <div className="small muted">重复
+            <div className="row" style={{ gap: 8, marginTop: 4 }}>
+              {DOW.map((d, i) => (
+                <label key={i} className="small" style={{ cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={form.weekdays.includes(i)}
+                    onChange={() => setForm({ ...form, weekdays: form.weekdays.includes(i) ? form.weekdays.filter((x) => x !== i) : [...form.weekdays, i].sort() })}
+                  />
+                  {d}
+                </label>
+              ))}
+              <span className="small muted">（都不勾 = 每天）</span>
+            </div>
+          </div>
+          <div className="small muted">时刻按北京时间 · 每天最多跑 {maxRunsPerDay} 次 · 连续失败 {autoPauseFails} 次自动停用</div>
+          {err && <div className="small" style={{ color: 'var(--red)' }}>{err}</div>}
+          <div className="row" style={{ gap: 8, justifyContent: 'flex-end' }}>
+            <button className="btn btn-sm" onClick={() => setDialogOpen(false)}>取消</button>
+            <button
+              className="btn btn-sm btn-primary"
+              disabled={pending || full || !form.templateId}
+              onClick={() => run(async () => { const r = await actCreateSchedule({ templateId: form.templateId, atHour: form.hour, atMinute: form.minute, weekdays: form.weekdays }); if (r?.ok !== false) setDialogOpen(false); return r; })}
+            >
+              保存
+            </button>
+          </div>
         </div>
+        </Overlay>
       )}
+
 
       {agents.length === 0 && <p className="small muted">先装一个智能体，才能给它排定时。</p>}
     </div>

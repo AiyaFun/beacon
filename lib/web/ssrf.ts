@@ -10,7 +10,10 @@ import net from 'node:net';
 //
 // 只允许 http/https + 公网地址。域名解析到内网、IP 字面量在私有段、localhost/.local 一律拒。
 // 调用方需手动跟随重定向并**逐跳**复验（防「重定向到内网」绕过）。
-// 不是防 DNS rebinding 的银弹，但挡住了直连内网/回环/云元数据（169.254.169.254）这类常见面。
+// DNS rebinding 防护：assertPublicUrl 把解析到的公网 IP 列表一起返回（resolvedIps），
+// 调用方可以用 pinnedLookup() 构造一个只返回这些 IP 的 lookup 函数传给 http(s).Agent，
+// 使得实际 TCP 连接锁定在已验证的地址上，消除 resolve→connect 之间的 TOCTOU 窗口。
+// safeFetch 已经在用这条路径。
 
 const PRIVATE_V4 = [/^10\./, /^127\./, /^169\.254\./, /^192\.168\./, /^172\.(1[6-9]|2\d|3[01])\./, /^0\./, /^100\.6[4-9]\./, /^100\.[7-9]\d\./, /^100\.1[01]\d\./, /^100\.12[0-7]\./];
 
@@ -28,7 +31,9 @@ export function isPrivateIp(ip: string): boolean {
   return false;
 }
 
-export async function assertPublicUrl(raw: string): Promise<URL> {
+export type PublicUrlResult = { url: URL; resolvedIps: string[] };
+
+export async function assertPublicUrl(raw: string): Promise<PublicUrlResult> {
   let u: URL;
   try {
     u = new URL(raw.trim());
@@ -42,9 +47,9 @@ export async function assertPublicUrl(raw: string): Promise<URL> {
   }
   if (net.isIP(host)) {
     if (isPrivateIp(host)) throw new Error('不允许访问内网 / 本机地址');
-    return u;
+    return { url: u, resolvedIps: [host] };
   }
-  let addrs: { address: string }[];
+  let addrs: { address: string; family: number }[];
   try {
     addrs = await dns.lookup(host, { all: true });
   } catch {
@@ -53,5 +58,16 @@ export async function assertPublicUrl(raw: string): Promise<URL> {
   if (addrs.length === 0 || addrs.some((a) => isPrivateIp(a.address))) {
     throw new Error('不允许访问内网 / 本机地址');
   }
-  return u;
+  return { url: u, resolvedIps: addrs.map((a) => a.address) };
+}
+
+/**
+ * 构造一个只返回已验证 IP 的 lookup 函数，传给 http(s).Agent 的 lookup 选项。
+ * 消除 DNS rebinding TOCTOU：实际 TCP 连接锁定在 assertPublicUrl 已检查过的地址上。
+ */
+export function pinnedLookup(ips: string[]): (hostname: string, opts: object, cb: Function) => void {
+  return (_hostname: string, _opts: object, cb: Function) => {
+    const ip = ips[0];
+    cb(null, ip, net.isIPv6(ip) ? 6 : 4);
+  };
 }

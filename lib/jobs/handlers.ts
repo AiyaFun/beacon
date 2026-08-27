@@ -511,6 +511,7 @@ export const HANDLERS: Record<JobName, JobHandler> = {
         ` / 孤儿日志 ${r.orphanedLlmLogs}` +
         ` / 运行记录 AI ${r.runLogs.agentRuns} 工作流 ${r.runLogs.workflowRuns}` +
         ` / 浏览器任务 过期 ${r.browserTasks.expired} 清理 ${r.browserTasks.purged}` +
+        ` / 解析截图清空 ${r.parserScreenshots}` +
         ` / 移除申请重扫 ${r.removals.swept} 条`;
       if (r.errors.length > 0) {
         throw new Error(`${detail}；失败步骤：${r.errors.map((e) => `${e.step}(${e.message})`).join('，')}`);

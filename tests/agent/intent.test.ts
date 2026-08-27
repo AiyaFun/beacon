@@ -70,3 +70,28 @@ describe('这些判据坏掉的时候会怎样（改坏任一条都要变红）'
     expect(looksActionable('帮我建个草稿'.repeat(400))).toBe(false);
   });
 });
+
+describe('wantsExecution：明说要执行的直通执行侧', () => {
+  it('「帮我去执行一下今天的采集」→ true（2026-08-26 用户原话，之前只得到一篇计划）', async () => {
+    const { wantsExecution } = await import('@/lib/agent/intent');
+    expect(wantsExecution('帮我去执行一下今天的采集')).toBe(true);
+    expect(wantsExecution('执行一下小红书日更')).toBe(true);
+    expect(wantsExecution('直接去做今天的选题推荐')).toBe(true);
+  });
+  it('普通提问与普通派活不直通——那条路仍走「先答后做」', async () => {
+    const { wantsExecution } = await import('@/lib/agent/intent');
+    expect(wantsExecution('执行模式是什么意思')).toBe(false);
+    expect(wantsExecution('帮我想 3 个选题')).toBe(false);
+    expect(wantsExecution('采集是怎么工作的')).toBe(false);
+    expect(wantsExecution('执行一下是什么意思')).toBe(false);
+  });
+  it('查系统数据的说法直通执行侧（对话侧没工具，只会编造）', async () => {
+    const { wantsExecution } = await import('@/lib/agent/intent');
+    expect(wantsExecution('给我今天的选题')).toBe(true);   // 2026-08-26 真机原话
+    expect(wantsExecution('看看我的竞对最近的动态')).toBe(true);
+    expect(wantsExecution('查一下本周的数据')).toBe(true);
+    // 疑问口吻照旧走对话
+    expect(wantsExecution('选题是什么意思')).toBe(false);
+    expect(wantsExecution('我的选题怎么没了')).toBe(false);
+  });
+});

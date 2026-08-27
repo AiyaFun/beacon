@@ -347,7 +347,7 @@ export async function listRuns(workspaceId: string, opts: ListRunsOpts = {}): Pr
       at: r.updatedAt,
       // pending 时要说清「在等什么」——用户看到「等你处理」却不知道自己该干嘛最糟
       detail: [
-        r.origin === 'agent' ? 'AI 派的' : r.origin === 'schedule' ? '定时派的' : null,
+        r.origin === 'agent' ? 'AI 派的' : r.origin === 'schedule' ? '定时派的' : r.origin === 'api' ? '外部程序派的（对外调用令牌）' : null,
         r.status === 'pending' ? '等你的浏览器打开插件' : null,
         r.result ?? r.error ?? null,
       ]

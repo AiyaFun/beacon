@@ -8,6 +8,8 @@ import { actProposeSelectors, actActivateRule, actRollbackRule, actIgnoreInciden
 type Incident = {
   id: string; platform: string; platformLabel: string; scope: string; field: string;
   status: string; samples: number; hasSkeleton: boolean; note: string; at: string;
+  /** 失败现场截图（dataUrl，可为空）。用来肉眼核对自动上线的规则是不是指对了位置 */
+  screenshot: string;
 };
 type Rule = {
   id: string; platform: string; platformLabel: string; field: string; status: string;
@@ -55,6 +57,17 @@ export function ParserPanel({ incidents, rules }: { incidents: Incident[]; rules
                     <td>{i.samples}</td>
                     <td className="small">
                       {i.hasSkeleton ? '有结构骨架' : <span style={{ color: 'var(--amber)' }}>无（没法诊断）</span>}
+                      {i.screenshot && (
+                        <details style={{ marginTop: 4 }}>
+                          <summary style={{ cursor: 'pointer' }}>失败现场截图</summary>
+                          {/* dataUrl 直接内联渲染；30 天后被保留期任务清空，这里就不再显示 */}
+                          <img
+                            src={i.screenshot}
+                            alt={`${i.platformLabel} ${i.field} 解析失败现场`}
+                            style={{ maxWidth: 420, width: '100%', borderRadius: 8, marginTop: 6, border: '1px solid var(--line)' }}
+                          />
+                        </details>
+                      )}
                     </td>
                     <td className="small muted">{i.at}</td>
                     <td className="row" style={{ gap: 6 }}>

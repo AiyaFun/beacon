@@ -8,6 +8,7 @@ import { listRuns, countByStatus, KIND_LABEL, STATUS_LABEL, type RunEntry, type 
 import { ActionButton } from '@/components/ActionButton';
 import { actRerunWorkflow, actCancelBrowserTask } from './actions';
 import { HubHeader } from '@/components/HubHeader';
+import { RunsBatchExecute } from '@/components/RunsBatchExecute';
 
 export const dynamic = 'force-dynamic';
 
@@ -160,6 +161,7 @@ export default async function RunsPage() {
           title="等你处理"
           sub="这些不是「在跑」，是停下来等人：等你确认写操作、等你去平台点发布"
           style={{ marginBottom: 16 }}
+          action={<RunsBatchExecute />}
         >
           <RunGroup rows={waiting} />
         </Card>

@@ -17,7 +17,10 @@
 // 这个取舍是刻意的，改之前先想清楚：把它改成「失败即禁止」，等于把我们的可用性
 // 挂在别人服务器的健康度上。
 
+import http from 'node:http';
+import https from 'node:https';
 import { assertPublicUrl } from './fetch';
+import { pinnedLookup } from './ssrf';
 
 /** 我们对外声明的抓取者名字。与 safeFetch 默认 UA 里的 token 一致。 */
 export const BEACON_UA_TOKEN = 'beaconbot';
@@ -140,14 +143,19 @@ async function loadRobots(origin: string, uaToken: string): Promise<Parsed> {
   try {
     // 走 assertPublicUrl 而不是 safeFetch：safeFetch 现在会回头调本模块，套一层就成环。
     // robots.txt 只有一跳、只读纯文本，这点检查够了。
-    await assertPublicUrl(`${origin}/robots.txt`);
+    const { resolvedIps } = await assertPublicUrl(`${origin}/robots.txt`);
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), ROBOTS_TIMEOUT_MS);
     try {
+      const agent = origin.startsWith('https')
+        ? new https.Agent({ lookup: pinnedLookup(resolvedIps) as never })
+        : new http.Agent({ lookup: pinnedLookup(resolvedIps) as never });
       const res = await fetch(`${origin}/robots.txt`, {
         signal: ctrl.signal,
         redirect: 'follow',
         headers: { 'user-agent': `${uaToken}/1.0`, accept: 'text/plain,*/*' },
+        // @ts-expect-error Node.js fetch 接受 agent，类型定义未覆盖
+        agent,
       });
       if (res.ok) {
         const buf = await res.arrayBuffer();

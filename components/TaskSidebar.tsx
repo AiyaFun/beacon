@@ -58,7 +58,7 @@ export function TaskSidebar({
         <Image src="/logo.png" alt="烽火台" width={36} height={36} className="brand-logo-img" />
         <div>
           <div className="brand-name">烽火台</div>
-          <div className="brand-sub">任务台</div>
+          <div className="brand-sub">跨平台内容作战室</div>
         </div>
       </div>
 

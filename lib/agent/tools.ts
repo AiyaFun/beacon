@@ -13,9 +13,10 @@ import { listInstalledSkills, runSkill, skillPlatformName } from '../skills';
 import { persistDraftVersion } from '../studio/draft-core';
 import { parseWeekdays } from '../workflow/schedule';
 import { scheduleWhen, scheduleTargetLabel } from '../workflow/schedule-format';
-import { enqueueBrowserTask, hasCollector, KIND_LABEL as BROWSER_KIND_LABEL } from '../browser-task';
+import { enqueueBrowserTask, KIND_LABEL as BROWSER_KIND_LABEL } from '../browser-task';
+import { vetBrowserTaskArgs } from '../browser-task/vet';
 import { browserWaitToken } from './wake';
-import { isReadAllowed, readAllowlistLabels } from '../browser-task/read-allowlist';
+import { readAllowlistLabels } from '../browser-task/read-allowlist';
 import { fmtDate } from '../format';
 import type { ToolDef } from '../llm/types';
 import { INSIGHT_TOOLS } from './tools-insight';
@@ -50,6 +51,8 @@ export type ToolContext = {
   accountId: string;
   memberId: string;
   role: string;
+  /** 超时取消信号。工具内部的 fetch / 外部调用可挂此信号，超时后自动 abort。 */
+  signal?: AbortSignal;
 };
 
 export type ToolResult = {
@@ -491,59 +494,19 @@ const dispatchBrowserTask: AgentTool = {
     },
   },
   async run(ctx, args) {
-    // 没装插件就别排：那条活会一直 pending 到 48 小时后过期，而 AI 已经说过「已排给插件」，
-    // 用户等两天什么都没发生也没人告诉他为什么。当场说清、并指路，比排一个没人领的活有用
-    if (!(await hasCollector(ctx.workspaceId))) {
-      return {
-        ok: false,
-        error: '这个工作区还没有装采集插件（没有可用的采集令牌），派下去也没有浏览器会执行。请先到「采集助手」页装插件并填入采集令牌。',
-        summary: '还没装采集插件',
-      };
-    }
     const kind = str(args.kind);
 
-    // 「让浏览器去读一个网页」是唯一一个由服务端指定 URL 的动作，所以多两道闸：
-    // ① 工作区必须显式打开过这个开关（**默认关**）；② URL 必须在白名单里。
-    // 插件端另有一份硬编码的同款清单——那份才是真正的防线，这里只是早失败早说清楚
-    if (kind === 'open_and_read') {
-      const ws = await prisma.workspace.findUnique({
-        where: { id: ctx.workspaceId },
-        select: { browserReadEnabled: true },
-      });
-      if (!ws?.browserReadEnabled) {
-        return {
-          ok: false,
-          error: '这个团队还没有打开「让插件替我读网页」这个开关（默认是关的）。要用的话去「采集助手」页打开它。',
-          summary: '读网页的开关没开',
-        };
-      }
-      const url = str(args.url);
-      if (!isReadAllowed(url)) {
-        return {
-          ok: false,
-          error: `这个网址不在允许打开的站点清单里（只允许：${readAllowlistLabels().join('、')}）。别的网址用 clip_url 让服务端直接抓。`,
-          summary: '网址不在白名单里',
-        };
-      }
-    }
-
-    const payload =
-      kind === 'collect_competitor'
-        ? { kind, competitorId: str(args.competitor_id), limit: clamp(num(args.limit, 20), 1, 50) }
-        : kind === 'open_and_read'
-          ? { kind, url: str(args.url), mode: 'article' as const }
-          : { kind, platform: str(args.platform) };
-
-    // 竞对必须已经在订阅列表里：不校验的话 AI 可以拿一个任意 id 让插件去访问
-    if (kind === 'collect_competitor') {
-      const watched = await prisma.watchlistItem.findFirst({
-        where: { workspaceId: ctx.workspaceId, competitorId: str(args.competitor_id) },
-        select: { id: true },
-      });
-      if (!watched) {
-        return { ok: false, error: '这个竞对不在你的监控列表里，先用 add_competitor 加进来', summary: '竞对未订阅' };
-      }
-    }
+    // 三道闸（有没有插件 / 读网页开关+白名单 / 竞对必须在监控列表）收口在 vet.ts——
+    // 对外调用面（/api/v1/browser-tasks）排同样的任务，闸各写一份迟早对不上
+    const vetted = await vetBrowserTaskArgs(ctx.workspaceId, {
+      kind,
+      competitorId: str(args.competitor_id),
+      platform: str(args.platform),
+      url: str(args.url),
+      limit: num(args.limit, 20),
+    });
+    if (!vetted.ok) return { ok: false, error: vetted.error, summary: vetted.summary };
+    const payload = vetted.payload;
 
     const r = await enqueueBrowserTask({
       workspaceId: ctx.workspaceId,

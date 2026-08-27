@@ -45,6 +45,7 @@ export default async function OpsParserPage() {
           status: i.status,
           samples: i.samples,
           hasSkeleton: !!i.skeleton,
+          screenshot: i.screenshot,
           note: i.note,
           at: fmtDateTime(i.updatedAt),
         }))}
