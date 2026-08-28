@@ -1,0 +1,84 @@
+# 桌面客户端跨平台构建（手动触发）。
+#
+# 【为什么必须有它】Tauri 的包只能在**对应操作系统上**构建：
+#   · Mac 的 .dmg 只能 Mac 出；Windows 的 .exe/.msi 只能 Windows 出。
+#   · 2026-08-27 实测过从 Mac 交叉编译 Windows：exe 主程序**能**出（cargo-xwin + llvm-rc，
+#     产物是真 PE32+），但安装包封装出不来——NSIS 要 makensis（Homebrew 的 arm64 bottle 是坏的，
+#     4 行空脚本就 std::bad_alloc），MSI 要 WiX（只能 Windows/wine）；而且交叉产物在 Mac 上
+#     无法真机验证，Tauri 自己也打 "Cross-platform compilation is experimental" 警告。
+#   结论：Windows 包走这条 CI，别再试交叉编译（细节记在 scripts/pack-desktop.ts 文件头）。
+#
+# 【产物怎么用】跑完在 Actions 页面下载 artifact，把里面的文件放进
+#   desktop/src-tauri/target/<任意>/release/bundle/{dmg,msi,nsis}/ 下，
+#   再在项目根目录跑 `npm run pack:desktop` 收集 → public/downloads/ + desktop.manifest.json。
+#   pack:desktop 是**合并收集**：已在清单里、这次没重新构建的平台原样保留，
+#   所以两个平台可以分两次接力打进同一份清单。
+#
+# 【刻意手动触发（workflow_dispatch）而不是 push 就跑】桌面壳极少改动，
+# 每次 push 都跑一遍 Rust 编译是几十分钟的公共 runner 时间；要发版时手动点一下即可。
+#
+# 【为什么两个平台都跑、不给「只构建某一个」的选项】那需要在 job 级 `if` 里读 matrix 上下文，
+# 而 GitHub 文档对该上下文在 job 级是否可用表述含糊——这个工作流**没法在本地试跑**，
+# 所以宁可多花点公共 runner 时间，也不留一个「看起来对、实际可能整个 job 被跳过」的写法。
+# fail-fast: false 保证一边挂了另一边照样出包。
+#
+# 【不做签名】Mac 公证要 Apple 开发者账号、Windows 代码签名要证书，都是用户持有的凭据，
+# 不放进 CI。产物是未签名包，下载页已如实写明首次打开的绕行方式。
+
+name: 桌面客户端构建
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            # NSIS(.exe) 与 MSI 都出，用户按习惯选
+            bundles: nsis,msi
+            artifact: beacon-desktop-windows
+          - os: macos-latest
+            bundles: dmg
+            artifact: beacon-desktop-macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 装 Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # 编译缓存：Rust 全量编译在公共 runner 上要十几分钟，缓存后增量只要一两分钟
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+
+      # Linux 才需要 webkit 等系统依赖；本工作流只有 win/mac，两者都不需要额外系统包
+      - name: 装依赖
+        working-directory: desktop
+        run: npm ci || npm install
+
+      - name: 构建
+        working-directory: desktop
+        run: npx tauri build --bundles ${{ matrix.bundles }}
+
+      # 只收安装包本身，不收整个 bundle 目录（那里还有几百 MB 的中间产物）
+      - name: 收集产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          if-no-files-found: error # 没产出就是构建其实失败了，别静默上传一个空包
+          retention-days: 14
+          path: |
+            desktop/src-tauri/target/release/bundle/dmg/*.dmg
+            desktop/src-tauri/target/release/bundle/msi/*.msi
+            desktop/src-tauri/target/release/bundle/nsis/*.exe
