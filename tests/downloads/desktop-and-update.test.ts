@@ -213,3 +213,42 @@ describe('产物与清单', () => {
     expect(m.sha256).toMatch(/^[0-9a-f]{64}$/);
   });
 });
+
+describe('🔒 每次部署都刷新增量更新包（不靠人记得）', () => {
+  // 病灶：整机版客户点「一键更新」读的是 appliance.manifest.json，它描述的是**打包那一刻**的代码。
+  // 忘了重打就部署 → 站上挂旧包 → 版本号没变时客户查到「已经是最新版」，新修的东西永远到不了
+  // 他机器上。这类错不报错、不变红，只会安静地让升级通道失效。
+  // 所以两层：本地 deploy-prepare.sh 无条件重打 + 服务端闸门兜底拦「漏跑」。
+
+  it('deploy-prepare.sh 无条件重打更新包（不做「有没有变」的判断）', () => {
+    const s = read('scripts/deploy-prepare.sh');
+    expect(s).toMatch(/npm run --silent pack:appliance/);
+    // 桌面包相反：没有构建产物时必须跳过，硬打会把已有清单清空
+    expect(s).toMatch(/跳过（站上保留现有清单）/);
+  });
+
+  it('闸门里有「分发产物」这一道，且拦三种硬错', () => {
+    const s = read('scripts/deploy-gate.sh');
+    expect(s).toMatch(/闸门 2\/4：分发产物/);
+    expect(s).toMatch(/缺 \$MF/);                 // 清单不存在
+    expect(s).toMatch(/更新包版本对不上/);          // package.json 与清单版本不一致
+    expect(s).toMatch(/但文件不在（rsync 漏传/);    // 清单指向的 tar 包没传到
+  });
+
+  it('这道闸必须排在需要容器/数据库的闸门之前（旧镜像没起来时也要能报出来）', () => {
+    const s = read('scripts/deploy-gate.sh');
+    expect(s.indexOf('闸门 2/4：分发产物')).toBeLessThan(s.indexOf('WEB_ID='));
+    expect(s.indexOf('WEB_ID=')).toBeLessThan(s.indexOf('闸门 3/4：schema 漂移'));
+  });
+
+  it('产物与清单一律不进 git（一个 dmg 6MB、更新包 13MB，进了公开历史就删不掉）', () => {
+    const ig = read('.gitignore');
+    for (const p of [
+      'public/downloads/*.dmg', 'public/downloads/*.exe', 'public/downloads/*.msi',
+      'public/downloads/*.tar.gz',
+      'public/downloads/desktop.manifest.json', 'public/downloads/appliance.manifest.json',
+    ]) {
+      expect(ig, `.gitignore 缺 ${p}`).toContain(p);
+    }
+  });
+});

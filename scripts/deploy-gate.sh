@@ -11,11 +11,12 @@
 # 满盘时再 --build 只会雪上加霜 —— 所以磁盘水位成为第一道闸门，先于任何构建。
 #
 # 检查三件事（全部只读：不写库、不改仓库文件，跑多少遍都安全）：
-#   0. 磁盘水位：余量不足时先自动清 docker 垃圾，清完仍不足才拦截（详见闸门 1/3）。
+#   0. 磁盘水位：余量不足时先自动清 docker 垃圾，清完仍不足才拦截（详见闸门 1/4）。
 #   1. schema 漂移：生产库 vs 即将构建的 prisma/schema.postgres.prisma（migrate diff）。
 #      白名单 = 3 条手工 pgvector 资产的 DROP（它们不在 Prisma schema 里，diff 永远想删，永远不执行）。
 #      除白名单外还有任何语句 → 拦下，先按增量流程迁移。
 #   2. 系统数据：sync-system-data.ts dry-run（敏感词/算法规则/内置技能模板）。
+#   3. 分发产物：整机版增量更新包在不在、版本对不对得上（漏跑 deploy-prepare.sh 的兜底）。
 #      有待同步项 → 拦下，核对后 --apply。旧容器跑不动 dry-run（旧 client 不认新字段）→
 #      放行构建但要求构建后立刻重跑本闸门补查。
 #
@@ -33,14 +34,14 @@ SCHEMA_SRC="${BEACON_GATE_SCHEMA:-prisma/schema.postgres.prisma}"
 [ -f "$SCHEMA_SRC" ] || die "schema 文件不存在：$SCHEMA_SRC"
 
 
-# ── 闸门 1/3：磁盘水位 ───────────────────────────────────────────
+# ── 闸门 1/4：磁盘水位 ───────────────────────────────────────────
 # 放在最前面：盘满时 docker build 会以各种离奇姿势失败（写不了层、mkdir /tmp 失败），
 # 且构建产物本身还要占几 G。先清垃圾，清完仍不够才拦。
 NEED_GB="${BEACON_GATE_DISK_GB:-8}"
 avail_gb() { df -BG --output=avail / 2>/dev/null | tail -1 | tr -dc '0-9'; }
 used_pct() { df --output=pcent  / 2>/dev/null | tail -1 | tr -dc '0-9'; }
 
-say "―― 闸门 1/3：磁盘水位（构建需至少 ${NEED_GB}G 余量）"
+say "―― 闸门 1/4：磁盘水位（构建需至少 ${NEED_GB}G 余量）"
 say "当前：已用 $(used_pct)%，可用 $(avail_gb)G"
 
 if [ "$(avail_gb)" -lt "$NEED_GB" ] || [ "$(used_pct)" -ge 85 ]; then
@@ -63,10 +64,42 @@ if [ "$(avail_gb)" -lt "$NEED_GB" ]; then
 fi
 say "✅ 磁盘余量充足（可用 $(avail_gb)G）"
 
+# ── 闸门 2/4：分发产物（整机版一键更新的弹药）─────────────────────────────
+#
+# 【拦的是什么】整机版客户点「一键更新」读的是 public/downloads/appliance.manifest.json。
+# 忘了跑 scripts/deploy-prepare.sh 就部署，站上挂的是上一次的包——
+# 版本号没变时客户查到「已经是最新版」，新修的东西永远到不了他机器上。
+# 这类错不报错、不变红，只会安静地让升级通道失效，所以要有一道机器判据。
+#
+# 【为什么放在这么前面】它是纯本地文件检查,最便宜、且不依赖数据库或容器——
+# 快速失败比让人等完 schema diff 再被拦下友好得多。
+#
+# 【为什么只查「存在 + 版本对得上」而不查内容是否最新】要判「内容是否为当前代码的快照」
+# 得在服务器上重打一次包再比 sha256——那是几秒的 tar 加上一份 13MB 的临时文件，
+# 而且服务器上的树与本地并不完全一致（rsync 有 exclude），比出来的差异是噪音不是信号。
+# 「无条件重打」的保证放在本地那一步；这里守的是**漏跑**与**版本对不上**这两种硬错。
+say "―― 闸门 2/4：分发产物（整机版一键更新的弹药）"
+MF="public/downloads/appliance.manifest.json"
+if [ ! -f "$MF" ]; then
+  die "缺 $MF —— 部署前请在**本地**跑 bash scripts/deploy-prepare.sh 再 rsync"
+fi
+PKG_VER=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' package.json | head -1)
+MF_VER=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$MF" | head -1)
+MF_FILE=$(sed -n 's|.*"file"[[:space:]]*:[[:space:]]*"/downloads/\([^"]*\)".*|\1|p' "$MF" | head -1)
+if [ "$PKG_VER" != "$MF_VER" ]; then
+  die "更新包版本对不上：package.json=$PKG_VER 而清单=$MF_VER。本地跑 bash scripts/deploy-prepare.sh 重打后再来"
+fi
+if [ ! -f "public/downloads/$MF_FILE" ]; then
+  die "清单指向 $MF_FILE，但文件不在（rsync 漏传？）。本地跑 deploy-prepare.sh 后重新 rsync"
+fi
+say "✅ 更新包在位：$MF_FILE（v$MF_VER）"
+
+# 下面两道要进容器跑 prisma（宿主机没有 node_modules）。容器检查放在这里而不是更早，
+# 是为了让纯本地的闸门 1/2 先跑完——旧镜像没起来时也该先把「产物漏打」这类错报出来。
 WEB_ID=$(docker compose ps --status running -q web 2>/dev/null)
 [ -n "$WEB_ID" ] || die "web 容器未运行，没法对生产库做检查。先 docker compose up -d web 起旧镜像再跑闸门。"
 
-say "―― 闸门 2/3：schema 漂移（生产库 vs ${SCHEMA_SRC}）"
+say "―― 闸门 3/4：schema 漂移（生产库 vs ${SCHEMA_SRC}）"
 docker cp "$SCHEMA_SRC" "$WEB_ID":/tmp/schema.gate.prisma >/dev/null || die "docker cp schema 进容器失败"
 
 DIFF_ERR=$(mktemp)
@@ -101,7 +134,7 @@ if [ -n "$LEFT" ]; then
 fi
 say "✅ schema 已同步（diff 为空或仅剩 3 条 pgvector 白名单 DROP）"
 
-say "―― 闸门 3/3：系统数据同步检查（dry-run，只读）"
+say "―― 闸门 4/4：系统数据同步检查（dry-run，只读）"
 docker exec -u root "$WEB_ID" mkdir -p /app/scripts || die "容器内建 /app/scripts 失败"
 docker cp scripts/sync-system-data.ts "$WEB_ID":/app/scripts/ >/dev/null || die "docker cp 同步脚本失败"
 docker cp prisma/system-data.ts "$WEB_ID":/app/prisma/system-data.ts >/dev/null || die "docker cp system-data 失败"
