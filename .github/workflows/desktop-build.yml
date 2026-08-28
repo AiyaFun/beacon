@@ -40,8 +40,12 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            # NSIS(.exe) 与 MSI 都出，用户按习惯选
-            bundles: nsis,msi
+            # 【只出 NSIS(.exe)，不出 MSI】2026-08-28 首跑实测：exe 那步干净通过，
+            # 而 MSI 在 WiX 的 light.exe 上失败（产品名「烽火台」是 CJK，
+            # WiX3 的 en-US culture 对非 ASCII 产品名有老毛病）。
+            # .exe 是 Tauri/Windows 的现代标准装法，对个人用户完全够用；
+            # 为了一个没人要的 MSI 去折腾 WiX 本地化不值得。要加回来先解决 CJK 那一层。
+            bundles: nsis
             artifact: beacon-desktop-windows
           - os: macos-latest
             bundles: dmg
@@ -78,7 +82,9 @@ jobs:
           name: ${{ matrix.artifact }}
           if-no-files-found: error # 没产出就是构建其实失败了，别静默上传一个空包
           retention-days: 14
+          # msi 那一行已删：不再构建 MSI（见上面 bundles 的说明）。
+          # 留着不会报错（多路径只要有一条命中就算数），但它是死配置——
+          # 留着会让人以为「MSI 还在出，只是没上传」。
           path: |
             desktop/src-tauri/target/release/bundle/dmg/*.dmg
-            desktop/src-tauri/target/release/bundle/msi/*.msi
             desktop/src-tauri/target/release/bundle/nsis/*.exe
