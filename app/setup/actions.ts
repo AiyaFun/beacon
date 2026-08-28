@@ -29,6 +29,8 @@ export type SetupInput = {
   token: string;
   companyName: string;
   adminName: string;
+  /** 本机登录密码（必填 ≥8 位）：OA 是可选步，没有它会话一过期人就被锁在门外只能重装 */
+  password: string;
   llm: { vendor: string; apiKey: string; model?: string };
   /** OA 可以留到装完再配（有些客户装机时还没建好企业应用）。 */
   oa?: {
@@ -64,6 +66,12 @@ export async function actCompleteSetup(input: SetupInput): Promise<SetupResult> 
   const companyName = input.companyName?.trim() || '我的团队';
   const adminName = input.adminName?.trim() || '管理员';
 
+  const { hashPassword, MIN_PASSWORD_LENGTH } = await import('@/lib/auth/password');
+  if ((input.password ?? '').length < MIN_PASSWORD_LENGTH) {
+    return { ok: false, message: `请设置至少 ${MIN_PASSWORD_LENGTH} 位的本机登录密码` };
+  }
+  const passwordHash = await hashPassword(input.password);
+
   // 模型渠道：向导只让用户从白名单里**选厂商**，baseUrl 一律取白名单里的值。
   // 这里刻意不走 checkVendorEndpoint —— 那个函数是给「用户提交了 baseUrl」的表单用的，
   // 而向导根本不提供这个输入框，端点没有任何用户可控的余地。
@@ -89,6 +97,7 @@ export async function actCompleteSetup(input: SetupInput): Promise<SetupResult> 
         name: adminName,
         role: 'owner',
         status: 'active',
+        passwordHash,
         // 装机者即本实例的运营者，装机这一步就是他对法律文本的确认动作。
         consentAt: new Date(),
         consentVersion: LEGAL_VERSION,

@@ -24,6 +24,8 @@ export type DispatchPresetInput = {
   scheduledAgentId?: string;
   /** 临时改一下这次的目标（页面上点卡片时可以改，定时不给改） */
   goalOverride?: string;
+  /** 群机器人派的话记下回哪儿——终态回执发回那个群 */
+  botChatRef?: string;
 };
 
 export type DispatchResult =
@@ -96,6 +98,7 @@ export async function dispatchPreset(ctx: ToolContext, input: DispatchPresetInpu
     agentSystemPrompt,
     toolAllowlist,
     scheduledAgentId: input.scheduledAgentId,
+    botChatRef: input.botChatRef,
   });
 
   log.info('派出一键任务', {

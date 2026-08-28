@@ -19,6 +19,8 @@
     "sync:system-data": "tsx scripts/sync-system-data.ts",
     "seed:demo": "tsx scripts/seed-demo.ts",
     "pack:ext": "tsx scripts/pack-extension.ts",
+    "pack:desktop": "tsx scripts/pack-desktop.ts",
+    "pack:appliance": "tsx scripts/pack-appliance.ts",
     "db:reset": "rm -f prisma/dev.db && prisma db push --skip-generate && tsx prisma/seed.ts",
     "setup": "prisma generate && prisma db push --skip-generate && tsx prisma/seed.ts",
     "connector": "tsx connector.ts",

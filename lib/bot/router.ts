@@ -17,7 +17,10 @@ import { bindOaByCode, issueOaLoginTicket, type OaProvider } from '@/lib/auth/oa
 import { siteUrl } from '@/lib/site-url';
 
 // 入站命令路由（需求④）：把一条群消息 → 内容引擎的一次操作，返回给用户的回执文本。
-// 红线：所有操作只「收录/查询/采集/分析」，不触发任何发布；生成走既有管线时仍全程过合规。
+// 红线：所有操作只「收录/查询/采集/分析/派任务」，**不触发任何发布**；生成走既有管线时仍全程过合规。
+// 派任务（/派 /执行）是唯一会真实执行的通道，它的边界写在 lib/bot/dispatch.ts 文件头：
+// 仅绑定身份的成员可用、默认关、确认类操作（发布/定时/长期记忆）永远回站内点头——
+// 所以「不触发发布」在派任务通道上依然成立：发布类工具必然停在 awaiting_confirm，群里无法确认。
 //
 // 三种进入方式，落到同一批实现上：
 //   · 斜杠命令（/热点 /选题 /分析 …）—— 确定性解析，行为永不受 LLM 影响
@@ -43,6 +46,9 @@ const HELP_LINES: { cmd: BotCommandKey; line: string }[] = [
   { cmd: 'crawl', line: '· /竞对 [名字] → 看监控中的竞对近期高热作品（带链接）' },
   { cmd: 'clip', line: '· /拆解 竞对作品链接 → 它凭什么跑起来 + 你能借鉴什么' },
   { cmd: 'optimize', line: '· /优化 → 触发一次记忆学习优化' },
+  { cmd: 'dispatch', line: '· /派 [卡名] → 派一张一键任务卡真去干（授权按卡上存的）' },
+  { cmd: 'dispatch', line: '· /执行 你要做的事 → 一句话派给 AI 执行器（要点头的操作会等你去网页确认）' },
+  { cmd: 'dispatch', line: '· /任务 → 看本群派出的任务进度；/终止 → 停掉还在跑的那条' },
   { cmd: 'chat', line: '· /重置 → 清掉当前对话上下文，重开一轮' },
 ];
 
@@ -393,6 +399,28 @@ export async function handleInbound(workspaceId: string, rawText: string, ctx: I
     if (!can('chat')) return denied('chat', allow);
     await resetConversation(key);
     return '已清掉对话上下文，接下来是全新一轮。（账号绑定保留）';
+  }
+
+  // ── 派任务（dispatch）：唯一会真实执行的通道，默认关，身份闸在 lib/bot/dispatch.ts ──
+  if (/^\/派(?=\s|$)/.test(text)) {
+    if (!can('dispatch')) return denied('dispatch', allow);
+    const { cmdDispatchPreset } = await import('./dispatch');
+    return cmdDispatchPreset(workspaceId, ctx, firstArg(text, '/派'), boundId);
+  }
+  if (/^\/执行(?=\s|$)/.test(text)) {
+    if (!can('dispatch')) return denied('dispatch', allow);
+    const { cmdDispatchGoal } = await import('./dispatch');
+    return cmdDispatchGoal(workspaceId, ctx, firstArg(text, '/执行'), boundId);
+  }
+  if (/^\/任务(?=\s|$)/.test(text)) {
+    if (!can('dispatch')) return denied('dispatch', allow);
+    const { cmdChatTasks } = await import('./dispatch');
+    return cmdChatTasks(workspaceId, ctx);
+  }
+  if (/^\/终止(?=\s|$)/.test(text)) {
+    if (!can('dispatch')) return denied('dispatch', allow);
+    const { cmdStopChatRun } = await import('./dispatch');
+    return cmdStopChatRun(workspaceId, ctx, boundId);
   }
 
   // ── 带链接：优先按链接处理，语义最明确，不必过 LLM ──

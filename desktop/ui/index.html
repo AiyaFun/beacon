@@ -4,56 +4,158 @@
 <meta charset="utf-8" />
 <title>烽火台</title>
 <style>
-  :root { color-scheme: light dark; }
+  :root { color-scheme: light dark; --fg:#1f1b16; --bg:#faf7f2; --brand:#e56b3c; --line:rgba(31,27,22,.14); }
+  @media (prefers-color-scheme: dark) { :root { --fg:#efe9df; --bg:#17130e; --line:rgba(239,233,223,.18); } }
   body { margin:0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
          display:flex; align-items:center; justify-content:center; height:100vh;
-         background:#faf7f2; color:#1f1b16; }
-  @media (prefers-color-scheme: dark) { body { background:#17130e; color:#efe9df; } }
-  .box { text-align:center; max-width:420px; padding:24px; }
+         background:var(--bg); color:var(--fg); }
+  .box { text-align:center; max-width:460px; padding:24px; }
   .logo { width:72px; height:72px; border-radius:18px; margin-bottom:18px; }
   h1 { font-size:20px; margin:0 0 8px; }
   p  { font-size:13px; line-height:1.8; opacity:.75; margin:0 0 14px; }
-  .spin { width:18px; height:18px; border:2.5px solid #e56b3c; border-top-color:transparent;
+  .spin { width:18px; height:18px; border:2.5px solid var(--brand); border-top-color:transparent;
           border-radius:50%; margin:0 auto 14px; animation:s .8s linear infinite; }
   @keyframes s { to { transform:rotate(360deg); } }
   code { background:rgba(229,107,60,.12); padding:2px 8px; border-radius:6px; font-size:12px; }
-  .err { display:none; }
+  .hide { display:none; }
+  .pick { display:grid; gap:10px; margin-top:6px; text-align:left; }
+  .card { border:1px solid var(--line); border-radius:12px; padding:12px 14px; cursor:pointer;
+          background:transparent; color:inherit; font:inherit; text-align:left; }
+  .card:hover { border-color:var(--brand); }
+  .card b { display:block; font-size:14px; margin-bottom:4px; }
+  .card span { font-size:12px; opacity:.7; line-height:1.7; }
+  .row { display:flex; gap:8px; margin-top:4px; }
+  input { flex:1; padding:8px 10px; border:1px solid var(--line); border-radius:8px;
+          background:transparent; color:inherit; font:inherit; font-size:13px; }
+  .go { background:var(--brand); color:#fff; border:0; border-radius:8px; padding:8px 16px;
+        cursor:pointer; font:inherit; font-size:13px; }
+  .link { background:none; border:0; color:var(--brand); cursor:pointer; font:inherit; font-size:12px;
+          text-decoration:underline; padding:0; margin-top:10px; }
 </style>
 </head>
 <body>
 <div class="box">
   <img class="logo" src="logo.png" alt="" />
-  <div class="spin" id="spin"></div>
-  <h1 id="title">正在连接本机烽火台…</h1>
-  <p id="hint">服务地址 <code id="addr">http://localhost:3070</code></p>
-  <div class="err" id="err">
-    <p><b>本机服务还没在跑。</b></p>
-    <p>先在终端进入烽火台目录执行整机版安装（只需一次）：<br/><code>bash deploy/appliance/install.sh</code><br/>
-       装好后服务开机自启，这个窗口会自动进入。</p>
+
+  <!-- ① 探测中 -->
+  <div id="probing">
+    <div class="spin"></div>
+    <h1 id="title">正在连接烽火台…</h1>
+    <p>服务地址 <code id="addr">http://localhost:3070</code></p>
+  </div>
+
+  <!-- ② 选连哪儿（本机没跑起来时出现） -->
+  <div id="pick" class="hide">
+    <h1>连到哪一个烽火台？</h1>
+    <p>没检测到本机服务。你可以连云端账号，或先把整机版装起来。</p>
+    <div class="pick">
+      <button class="card" id="pick-cloud">
+        <b>☁️ 连云端账号</b>
+        <span>用 <code id="cloud-host"></code> 上的账号，和浏览器里是同一个工作区。适合直接用 SaaS 的人。</span>
+      </button>
+      <button class="card" id="pick-local">
+        <b>🖥️ 连本机整机版</b>
+        <span>数据全在这台机器上。还没装的话，在烽火台目录执行一次
+          <code>bash deploy/appliance/install.sh</code>，装完开机自启，这里就能连上。</span>
+      </button>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <input id="custom" placeholder="或填自建地址，如 https://beacon.mycorp.com" />
+      <button class="go" id="custom-go">进入</button>
+    </div>
+  </div>
+
+  <!-- ③ 记住的选择连不上时 -->
+  <div id="failed" class="hide">
+    <h1>连不上</h1>
+    <p><code id="failed-addr"></code> 没有响应。检查网络，或换一个连接方式。</p>
+    <button class="link" id="reset">换个地址</button>
   </div>
 </div>
 <script>
-  // 端口可被整机版改（BEACON_PORT）；壳侧允许用 ?port= 覆盖，缺省 3070
-  const port = new URLSearchParams(location.search).get('port') || '3070';
-  const base = `http://localhost:${port}`;
-  document.getElementById('addr').textContent = base;
-  let fails = 0;
-  async function probe() {
-    try {
-      // no-cors：健康接口跨源也能探到「通没通」（opaque 响应即算通）
-      await fetch(`${base}/api/health`, { mode: 'no-cors', cache: 'no-store' });
-      location.replace(base);
-    } catch {
-      fails += 1;
-      if (fails >= 3) {
-        document.getElementById('spin').style.display = 'none';
-        document.getElementById('title').textContent = '没连上本机服务';
-        document.getElementById('err').style.display = 'block';
-      }
-      setTimeout(probe, 1500);
-    }
+  // 【双模式，2026-08-27】此前壳写死探测 localhost:3070——SaaS 用户装了这个客户端
+  // 永远停在「本机服务还没在跑」，因为他根本没有本机服务。现在：
+  //   本机通 → 直接进本机（整机版用户零改变，仍是开箱即用）
+  //   本机不通 → 让用户选云端 / 本机 / 自建，选择记住，下次直接进。
+  const qs = new URLSearchParams(location.search);
+  const PORT = qs.get('port') || '3070';
+  const LOCAL = `http://localhost:${PORT}`;
+  // 构建期可用 ?cloud= 覆盖（私有化客户拿同一个壳指自己的域名）
+  const CLOUD = qs.get('cloud') || 'https://beacon.iyunci.cn';
+  const KEY = 'beacon.desktop.target';
+
+  const $ = (id) => document.getElementById(id);
+  $('addr').textContent = LOCAL;
+  try { $('cloud-host').textContent = new URL(CLOUD).host; } catch { $('cloud-host').textContent = CLOUD; }
+
+  function show(which) {
+    for (const id of ['probing', 'pick', 'failed']) $(id).classList.toggle('hide', id !== which);
   }
-  probe();
+
+  // 探一个地址通不通。no-cors：健康接口跨源也能探到「通没通」（opaque 响应即算通）
+  async function alive(base) {
+    try {
+      await fetch(`${base}/api/health`, { mode: 'no-cors', cache: 'no-store' });
+      return true;
+    } catch { return false; }
+  }
+
+  function remember(base) {
+    try { localStorage.setItem(KEY, base); } catch {}
+  }
+
+  function enter(base) {
+    remember(base);
+    location.replace(base);
+  }
+
+  async function boot() {
+    // 记住过就先按记住的走——但**仍然要探活**：记着一个连不上的地址直接跳过去，
+    // 用户看到的是浏览器的错误页，连「换个地址」的入口都没有。
+    let saved = null;
+    try { saved = localStorage.getItem(KEY); } catch {}
+    if (saved) {
+      $('addr').textContent = saved;
+      if (await alive(saved)) return enter(saved);
+      // 本机模式下服务可能只是还没起来（开机自启有延迟），多等几轮再判失败
+      if (saved === LOCAL) {
+        for (let i = 0; i < 6; i++) {
+          await new Promise((r) => setTimeout(r, 1500));
+          if (await alive(saved)) return enter(saved);
+        }
+      }
+      $('failed-addr').textContent = saved;
+      show('failed');
+      return;
+    }
+
+    // 首次启动：先给本机几轮机会（整机版用户装完就该直接进，不该被问一遍）
+    for (let i = 0; i < 3; i++) {
+      if (await alive(LOCAL)) return enter(LOCAL);
+      await new Promise((r) => setTimeout(r, 1200));
+    }
+    show('pick');
+  }
+
+  $('pick-cloud').onclick = () => enter(CLOUD);
+  $('pick-local').onclick = async () => {
+    if (await alive(LOCAL)) return enter(LOCAL);
+    $('failed-addr').textContent = `${LOCAL}（本机服务没在跑）`;
+    show('failed');
+  };
+  $('custom-go').onclick = () => {
+    let v = $('custom').value.trim();
+    if (!v) return;
+    if (!/^https?:\/\//i.test(v)) v = `https://${v}`;
+    enter(v.replace(/\/+$/, ''));
+  };
+  $('custom').onkeydown = (e) => { if (e.key === 'Enter') $('custom-go').click(); };
+  $('reset').onclick = () => {
+    try { localStorage.removeItem(KEY); } catch {}
+    show('pick');
+  };
+
+  boot();
 </script>
 </body>
 </html>

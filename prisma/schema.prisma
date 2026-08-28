@@ -244,6 +244,9 @@ model Member {
   phone          String?   @unique // 手机号（短信验证码登录主标识）
   email          String?   @unique
   wechatOpenId   String?   @unique // 微信登录 openid
+  // 本机密码登录（个人创作者小站）：仅 appliance/private 形态启用（MATRIX.passwordLogin）。
+  // scrypt 格式 `scrypt:N:r:p:<saltB64>:<hashB64>`，见 lib/auth/password.ts。null = 未设密码。
+  passwordHash   String?
   // 企业应用（飞书/钉钉/企微）登录身份，格式 `<provider>:<openId>`，例如 `feishu:ou_xxx`。
   // 【为什么合成一列而不是 provider + openId 两列】一个实例只接一家企业应用（装机向导里选定），
   // 跨家不会共存；合成一列换来一条简单的唯一约束，两库行为一致，也不必再维护复合索引。
@@ -1531,6 +1534,9 @@ model AgentRun {
   // waiting_quota 时：什么时候可以再试（北京时间次日 0 点）。定时扫它决定叫醒谁。
   // 只对「等一等真的会好」的日额度有意义——月度/平台预算超限一律如实判 failed，不挂在这里。
   quotaResumeAt DateTime?
+  // 从群机器人派出来的话，记下「回哪儿」：`<provider>:<integrationId>:<chatId>`。
+  // 终态/等确认时把回执发回那个群（lib/bot/dispatch.ts），/任务 /终止 也按它圈定本群的运行。
+  botChatRef  String?
   answer      String? // 最终回答
   error       String?
   // 【steps 与 rounds 是两个数，别再混用】

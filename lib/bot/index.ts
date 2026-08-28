@@ -135,6 +135,21 @@ export async function pushEvent(
   return { sent, failed };
 }
 
+// ── 定点发送：把一条消息发给**指定的那一个**集成 ──
+// 群里派任务的回执用它：那是对一次指令的**答复**，不是订阅制的事件广播——
+// 走 pushEvent 会被「订阅了哪些事件」过滤掉，变成「派活的群要不要收回执
+// 取决于管理员有没有勾某个推送事件」这种谁也想不到的暗联动。
+export async function sendToIntegration(workspaceId: string, integrationId: string, message: PushMessage): Promise<SendResult> {
+  const it = await prisma.botIntegration.findFirst({ where: { id: integrationId, workspaceId, enabled: true } });
+  if (!it) return { ok: false, error: '集成不存在或已停用' };
+  if (!it.webhookUrl && !it.inboundKey) return { ok: false, error: '未配置 webhook 地址或自建应用凭据' };
+  const r = await routeSend(it, readBotSecrets(it.secretsEnc), message);
+  await prisma.botIntegration
+    .update({ where: { id: it.id }, data: r.ok ? { lastOutboundAt: new Date(), lastError: null } : { lastError: `回执发送失败：${r.error ?? ''}` } })
+    .catch(() => {});
+  return r;
+}
+
 // ── 测试发送：设置页「测试发送」按钮用 ──
 export async function testPush(integrationId: string, workspaceId: string): Promise<SendResult> {
   const it = await prisma.botIntegration.findFirst({ where: { id: integrationId, workspaceId } });

@@ -87,6 +87,86 @@ export function readDownloadsManifest(): DownloadsManifest | null {
   }
 }
 
+// ── 桌面客户端（Tauri 壳）分发清单 ───────────────────────────────────────
+//
+// 壳是**双模式**的（desktop/ui/index.html）：探到本机整机版就进本机，探不到就让用户选
+// 云端账号 / 自建地址。所以同一个安装包对 SaaS 用户和整机版客户都有意义——
+// 别再按「这是整机版专属」把它藏起来（此前壳写死 localhost:3070，SaaS 用户装了打不开）。
+//
+// 产物由 `npm run pack:desktop` 从 desktop/src-tauri/target/.../bundle 收集而来。
+// **Mac 包只能在 Mac 上构建、Windows 包只能在 Windows 上构建**（Tauri 不支持交叉编译），
+// 所以清单里某个平台缺席是常态，页面按「有什么给什么」渲染，绝不给不存在的文件放下载按钮。
+
+export type DesktopOs = 'mac' | 'win';
+
+export type DesktopBuild = {
+  os: DesktopOs;
+  arch: string; // aarch64 / x64
+  /** 站内静态路径 /downloads/xxx.dmg */
+  file: string;
+  ext: string; // dmg / msi / exe
+  sizeMB: number;
+  sha256: string;
+};
+
+export type DesktopManifest = {
+  name: string;
+  version: string;
+  builds: DesktopBuild[];
+};
+
+export const DESKTOP_OS_LABEL: Record<DesktopOs, string> = { mac: 'macOS', win: 'Windows' };
+
+export function readDesktopManifest(): DesktopManifest | null {
+  try {
+    const raw = readFileSync(join(process.cwd(), 'public', 'downloads', 'desktop.manifest.json'), 'utf8');
+    const m = JSON.parse(raw) as DesktopManifest;
+    if (!m.version || !Array.isArray(m.builds) || m.builds.length === 0) return null;
+    return m;
+  } catch {
+    return null;
+  }
+}
+
+/** 按来访者的 UA 猜他要哪个包（猜不出返回 null——不猜错给他一个装不上的文件）。 */
+export function pickDesktopBuild(m: DesktopManifest | null, userAgent: string | null | undefined): DesktopBuild | null {
+  if (!m) return null;
+  const ua = (userAgent || '').toLowerCase();
+  const want: DesktopOs | null = /mac os x|macintosh/.test(ua) ? 'mac' : /windows/.test(ua) ? 'win' : null;
+  if (!want) return null;
+  const same = m.builds.filter((b) => b.os === want);
+  if (same.length === 0) return null;
+  // Mac 上区分 Apple 芯片与 Intel：UA 里区分不出（都报 Intel Mac OS X），
+  // 所以有多个时不猜，交给下载页让用户自己挑。
+  return same.length === 1 ? same[0] : null;
+}
+
+// ── 整机版服务代码包（一键增量更新用）─────────────────────────────────────
+//
+// 「增量」的含义要说准：**不是二进制差分**，而是「只拉一个代码包、原地覆盖，
+// 数据库与配置一动不动」——相对「重装一遍」是增量的。产物由 `npm run pack:appliance` 打，
+// deploy/appliance/update.sh --fetch 与站内「一键更新」按钮都读同一份清单。
+
+export type ApplianceManifest = {
+  version: string;
+  file: string; // /downloads/beacon-appliance-<ver>.tar.gz
+  sizeMB: number;
+  sha256: string;
+  /** 这一版要人工留意的事（跑哪份 SQL、要重配什么）。没有就空数组。 */
+  notes: string[];
+};
+
+export function readApplianceManifest(): ApplianceManifest | null {
+  try {
+    const raw = readFileSync(join(process.cwd(), 'public', 'downloads', 'appliance.manifest.json'), 'utf8');
+    const m = JSON.parse(raw) as ApplianceManifest;
+    if (!m.version || !m.file || !m.sha256) return null;
+    return { ...m, notes: Array.isArray(m.notes) ? m.notes : [] };
+  } catch {
+    return null;
+  }
+}
+
 // ── 浏览器卡片元数据（下载页 + 三处触点复用）──
 export type BrowserInstall = 'store' | 'unpacked' | 'coming';
 export type BrowserCard = {

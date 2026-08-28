@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { NavList } from './Sidebar';
+import { DesktopDownloadCard } from './DesktopDownloadCard';
 import type { NavGroup } from '@/lib/nav';
 import { STATUS_LABEL, type RunEntry, type RunStatus } from '@/lib/runs';
 
@@ -31,11 +32,14 @@ export function TaskSidebar({
   nav,
   recent,
   footer,
+  desktop,
 }: {
   nav: NavGroup[];
   recent: RunEntry[];
   /** 侧栏最底部的账号区（服务端组装好传进来，见 components/SidebarUser.tsx） */
   footer?: React.ReactNode;
+  /** 桌面客户端下载卡的数据；没打过包（清单读不到）时不传，那块位置就空着 */
+  desktop?: { version: string; platforms: string };
 }) {
   // 设置钉到最底部：它在「最近」之下、账号区之上（2026-08-26 用户要求「把设置也往下放」）
   const main = nav.filter((g) => !g.pinBottom);
@@ -101,6 +105,8 @@ export function TaskSidebar({
         {/* 「设置」不在这儿渲染了：2026-08-26 起它收进底部账号菜单
             （components/SidebarUser.tsx），由 TenantShell 传过去 */}
       </div>
+      {/* 下载卡钉在账号区之上、滚动区之外：它是常驻入口，不该跟着「最近」一起滚走 */}
+      {desktop && <DesktopDownloadCard version={desktop.version} platforms={desktop.platforms} />}
       {footer}
     </aside>
   );

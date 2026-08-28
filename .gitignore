@@ -19,6 +19,17 @@ coverage
 public/downloads/*.zip
 public/downloads/downloads.manifest.json
 
+# 桌面客户端安装包与整机版更新包（npm run pack:desktop / pack:appliance 产出）。
+# 同插件 zip 的口径：**二进制不进 git**（一个 dmg 6MB、更新包 13MB，进了公开仓库历史就永远删不掉）。
+# 它们靠 rsync 直接同步到生产的 public/downloads/，不依赖 git；
+# 清单描述的是本地那个具体文件的 sha256，跟着二进制一起走才有意义，所以一并不入库。
+public/downloads/*.dmg
+public/downloads/*.exe
+public/downloads/*.msi
+public/downloads/*.tar.gz
+public/downloads/desktop.manifest.json
+public/downloads/appliance.manifest.json
+
 # xray 代理二进制与配置(含节点密钥,仅服务器)
 deploy/xray-bin
 deploy/xray-config.json

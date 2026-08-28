@@ -202,7 +202,17 @@ const TERMINAL: readonly AgentRunStatus[] = ['done', 'failed', 'cancelled'];
 
 async function afterTransition(runId: string, from: readonly AgentRunStatus[], to: AgentRunStatus): Promise<void> {
   // ① 通知（旁路，自己吞错）
-  await notifyRunStatus(runId, to);
+  const freshNotify = await notifyRunStatus(runId, to);
+
+  // ①½ 群机器人派的运行：把「跑完了/没跑成/等确认」回执发回派它的那个群。
+  //    与①同理挂在咽喉上（终态有七八处写点）；动态 import 免得 agent 静态引 bot 绕成环。
+  //    只有 botChatRef 非空的运行才会真的发（站内/API/定时派的此列为 NULL，零影响）。
+  //    【去重直接借①的返回值】叫醒重投会让同一个 (runId,状态) 走到这里两次，
+  //    notifyRunStatus 已按 (runId,状态,episode) 去过重——它没发的，群里也不该再说一遍。
+  if (freshNotify && (to === 'done' || to === 'failed' || to === 'awaiting_confirm')) {
+    const { echoRunToChat } = await import('../bot/dispatch');
+    await echoRunToChat(runId, to).catch(() => {});
+  }
 
   // ② 我要是别人派出来的子运行，跑完了得叫醒那个正挂着等我的父运行。
   //    **挂在这里而不是各个终态写点**：终态有七八处，每处都记得叫一次是不可能的，
@@ -477,6 +487,8 @@ export type StartRunOptions = {
   agentSystemPrompt?: string;
   /** 定时派的话记下是哪一条——连败自停闸靠它在终态时回写 */
   scheduledAgentId?: string;
+  /** 群机器人派的话记下回哪儿（`<provider>:<integrationId>:<chatId>`）——终态回执与 /任务 /终止 靠它 */
+  botChatRef?: string;
   /**
    * 这次只许用这些工具（自主智能体的白名单，**已经与用户自己的权限求过交集**）。
    * 不传 = 用户有权用的全都能用。
@@ -527,6 +539,7 @@ export async function startAgentRun(ctx: ToolContext, goal: string, opts: StartR
       parentRunId: opts.parentRunId ?? null,
       agentTemplateId: opts.agentTemplateId ?? null,
       scheduledAgentId: opts.scheduledAgentId ?? null,
+      botChatRef: opts.botChatRef ?? null,
       toolAllowlist: toJson([...(opts.toolAllowlist ?? [])]),
     },
   });

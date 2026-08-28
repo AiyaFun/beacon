@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { prisma } from '@/lib/db';
 import { handleInbound } from '@/lib/bot/router';
-import { isCommandAllowed, sanitizeAllowCommands, TOGGLEABLE_COMMANDS } from '@/lib/bot/types';
+import { isCommandAllowed, sanitizeAllowCommands, TOGGLEABLE_COMMANDS, DEFAULT_OFF_COMMANDS } from '@/lib/bot/types';
 
 // 入站命令白名单：机器人装在群里，`/分析` 会把粉丝数播放量摊给群里所有人、`/问` 会烧配额，
 // 该放开哪些由管理员（owner/admin，与密钥同级）决定。
@@ -39,9 +39,15 @@ async function mockLlm(text = '回答') {
 
 describe('isCommandAllowed · 空数组的语义（老数据兼容）', () => {
   it('🔒 空 = 从未配置 = 全开（绝不能理解成全关，那会让线上机器人集体哑掉）', () => {
-    for (const c of TOGGLEABLE_COMMANDS) expect(isCommandAllowed(c.key, [])).toBe(true);
+    // 唯一例外：DEFAULT_OFF_COMMANDS（派任务这类后来才出现的高危命令）。
+    // 它们不吃「空=全开」的祖荫——否则一次发版让所有已装机器人的群突然能烧额度派任务。
+    // 逐条双向断言，别让例外名单静默吞掉老命令。
+    for (const c of TOGGLEABLE_COMMANDS) {
+      expect(isCommandAllowed(c.key, []), c.key).toBe(!DEFAULT_OFF_COMMANDS.includes(c.key));
+    }
     expect(isCommandAllowed('analyze', null)).toBe(true);
     expect(isCommandAllowed('analyze', undefined)).toBe(true);
+    expect(isCommandAllowed('dispatch', null)).toBe(false);
   });
 
   it('配过但全关 = ["help"] → 除 help 外全部拒绝', () => {

@@ -35,8 +35,15 @@ export type Capability =
   | 'payment'
   /** 短信验证码登录（火山短信按条计费） */
   | 'smsLogin'
-  /** OA（飞书/钉钉/企微）扫码免登 —— 企业内部形态的唯一登录方式 */
+  /** OA（飞书/钉钉/企微）扫码免登 —— 企业内部形态的主登录方式 */
   | 'oaLogin'
+  /**
+   * 本机密码登录（个人创作者小站）：装机向导可设一个登录密码，之后凭它进来。
+   * 没有它的话，个人用户（没有企业应用）在会话过期后被永久锁在门外只能重装——
+   * OA 是可选步、一次性登录链接又要「已登录的管理员」才能生成。
+   * SaaS 恒 false：那边有短信/微信，多一条密码通道只是多一个撞库面。
+   */
+  | 'passwordLogin'
   /** 平台垫付的 AI 渠道（超管在 /ops/ai 配的 + env 兜底）。非 SaaS 一律 BYOK */
   | 'platformLlmChannel'
   /** 按套餐档位的配额与账单 */
@@ -67,6 +74,7 @@ const MATRIX: Record<Edition, Record<Capability, boolean>> = {
     payment: true,
     smsLogin: true,
     oaLogin: false,
+    passwordLogin: false,
     platformLlmChannel: true,
     quotaBilling: true,
     setupWizard: false,
@@ -77,6 +85,7 @@ const MATRIX: Record<Edition, Record<Capability, boolean>> = {
     payment: false,
     smsLogin: false,
     oaLogin: true,
+    passwordLogin: true,
     platformLlmChannel: false,
     quotaBilling: false,
     setupWizard: true,
@@ -88,6 +97,8 @@ const MATRIX: Record<Edition, Record<Capability, boolean>> = {
     payment: false,
     smsLogin: false,
     oaLogin: true,
+    // D6：appliance 与 private 能力面一致——个人模式密码在两个企业版都可用
+    passwordLogin: true,
     platformLlmChannel: false,
     quotaBilling: false,
     setupWizard: true,

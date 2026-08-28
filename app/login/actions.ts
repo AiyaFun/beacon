@@ -85,3 +85,59 @@ export async function actGuestLogin() {
   });
   return { ok: true as const };
 }
+
+// ── 本机密码登录（个人创作者小站，仅 appliance/private）────────────────────
+// 同 IP 每 10 分钟 10 次：单人小站的正常使用远够，字典攻击直接窒息。
+const PASSWORD_LIMIT = { limit: 10, windowMs: 600_000 };
+
+export async function actPasswordLogin(name: string, password: string): Promise<{ ok: boolean; message?: string }> {
+  // 能力硬闸在服务端入口：SaaS 上 UI 不渲染只是不显示，端点还在就还能被直接打
+  const { assertCan } = await import('@/lib/edition');
+  try {
+    assertCan('passwordLogin');
+  } catch {
+    return { ok: false, message: '本版本不提供密码登录' };
+  }
+
+  const h = await headers();
+  const rl = await checkRateLimit(ipKey('login:password', getClientIp(h)), PASSWORD_LIMIT);
+  if (!rl.ok) return { ok: false, message: `尝试过于频繁，请${retryHint(rl.resetAt)}再试` };
+
+  const memberName = name.trim();
+  const plain = password ?? '';
+  // 统一错误文案：名字对不对、有没有设过密码、密码错，从外面都看不出来（防枚举）
+  const FAIL = { ok: false as const, message: '成员名或密码不对' };
+  if (!memberName || !plain) return FAIL;
+
+  const { prisma } = await import('@/lib/db');
+  const { verifyPassword } = await import('@/lib/auth/password');
+  const candidates = await prisma.member.findMany({
+    where: { name: memberName, status: 'active', passwordHash: { not: null } },
+    select: { id: true, passwordHash: true },
+  });
+  const matched: string[] = [];
+  for (const c of candidates) {
+    if (await verifyPassword(plain, c.passwordHash)) matched.push(c.id);
+  }
+  // 恰好一个才放行：0 个是没对上；>1 个是同名成员设了相同密码的病态配置，
+  // 猜着登等于把 A 的会话发给 B——如实拒绝，日志里说清楚怎么解
+  if (matched.length !== 1) {
+    if (matched.length > 1) {
+      const { createLogger } = await import('@/lib/logger');
+      createLogger({ module: 'auth-password' }).warn('同名成员密码撞车，拒绝登录', { name: memberName, count: matched.length });
+      return { ok: false, message: '有多个同名成员设置了相同的密码，请先在「成员」里改名或改密码，再来登录' };
+    }
+    return FAIL;
+  }
+
+  const token = await createSession(matched[0], h.get('user-agent') ?? undefined);
+  const store = await cookies();
+  store.set(AUTH_COOKIE, token, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: authCookieSecure(),
+    path: '/',
+    maxAge: AUTH_COOKIE_MAX_AGE_S,
+  });
+  return { ok: true };
+}

@@ -70,6 +70,10 @@ export const PAGE_INFOS: Record<string, { name: string; desc: string }> = {
     name: '下载采集助手',
     desc: '浏览器采集助手插件下载，安装后可免去 Cookie 实现各平台公开页一键回填。',
   },
+  '/desktop': {
+    name: '桌面客户端',
+    desc: 'Mac / Windows 桌面客户端下载：独立窗口、托盘常驻、开机自启，可连云端账号或本机整机版；整机版还能在这里一键增量更新本机服务。',
+  },
   '/skills': {
     name: '技能中心',
     desc: '定制化创作提示词模板市场，安装或自定义不同平台与体裁的文案渲染格式。',

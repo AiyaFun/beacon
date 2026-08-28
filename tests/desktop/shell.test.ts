@@ -12,8 +12,12 @@ describe('桌面壳契约', () => {
     expect(html).toMatch(/\/api\/health/);
     // 注意钉的是 fetch 选项本身，不是注释里的字样（注释也写了 no-cors，会骗过宽断言）
     expect(html).toMatch(/mode: 'no-cors'/);
-    // 端口可覆盖：整机版允许改 BEACON_PORT，壳靠 ?port= 跟上
-    expect(html).toMatch(/URLSearchParams\(location\.search\)\.get\('port'\)/);
+    // 端口可覆盖：整机版允许改 BEACON_PORT，壳靠 ?port= 跟上。
+    // 2026-08-27 壳改双模式后取法从一行内联变成了 qs 变量——守卫跟着搬到新址
+    // （旧断言 /URLSearchParams\(location\.search\)\.get\('port'\)/ 从此永不命中，
+    //  是 fake-green-guard 当场抓出来的 NEVER_MATCHES）。
+    expect(html).toMatch(/const qs = new URLSearchParams\(location\.search\)/);
+    expect(html).toMatch(/qs\.get\('port'\)/);
   });
 
   it('关窗必须收进托盘而不是退出（服务在后台，窗口只是视图）', () => {

@@ -14,6 +14,7 @@ import { prisma } from '@/lib/db';
 import { isDemoTenant } from '@/lib/demo/guard';
 import { visibleTaskNav } from '@/lib/shell-server';
 import { listRuns } from '@/lib/runs';
+import { readDesktopManifest, DESKTOP_OS_LABEL } from '@/lib/downloads';
 import type { SessionContext } from '@/lib/session';
 
 // 登录用户的外壳，**唯一一份**。(app) 与 (public) 两个路由组都必须经由这里渲染。
@@ -39,6 +40,13 @@ export async function TenantShell({
   children: React.ReactNode;
 }) {
   const demo = isDemoTenant(session.tenantId);
+  // 侧栏下载卡：没打过桌面包（清单读不到）就不给卡，免得点进去是空页面
+  const desktopCard = () => {
+    const m = readDesktopManifest();
+    if (!m) return undefined;
+    const oses = [...new Set(m.builds.map((b) => DESKTOP_OS_LABEL[b.os]))];
+    return { version: m.version, platforms: oses.join(' · ') };
+  };
   const [account, member, platformAdmin] = await Promise.all([
     prisma.creatorAccount.findUnique({ where: { id: session.accountId }, select: { name: true } }),
     // 用户上次选的外壳。cookie 没有时用它——换台电脑、清了缓存，选过的那套还在
@@ -66,7 +74,7 @@ export async function TenantShell({
 
   return (
     <div className="app-shell shell-taskdeck">
-      <TaskSidebar nav={shellNav} recent={recent} footer={userFooter} />
+      <TaskSidebar nav={shellNav} recent={recent} footer={userFooter} desktop={desktopCard()} />
       <div className="main">
         <Topbar />
         {demo && <DemoBanner />}

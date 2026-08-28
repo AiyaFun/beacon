@@ -33,7 +33,7 @@ export type BotSecrets = {
 // 环比涨跌直接摊在群消息里；`/问` 会烧租户的 AI 配额。这些该由管理员决定放不放开，
 // 而不是「装了机器人 = 群里所有人自动拥有」。权限与密钥同级（byok.manage，仅 owner/admin）。
 
-export type BotCommandKey = 'chat' | 'analyze' | 'clip' | 'topic' | 'crawl' | 'hot' | 'optimize' | 'account' | 'help';
+export type BotCommandKey = 'chat' | 'analyze' | 'clip' | 'topic' | 'crawl' | 'hot' | 'optimize' | 'account' | 'dispatch' | 'help';
 
 export const BOT_COMMANDS: {
   key: BotCommandKey;
@@ -51,11 +51,28 @@ export const BOT_COMMANDS: {
   { key: 'hot', name: '查热榜', trigger: '/热点', desc: '返回当前热榜 Top8' },
   { key: 'optimize', name: '记忆优化', trigger: '/优化', desc: '触发一次记忆学习优化并回小结' },
   { key: 'account', name: '切换账号', trigger: '/账号', desc: '查看/切换本群对应的创作者账号', warn: '会列出工作区里的账号名' },
+  {
+    key: 'dispatch',
+    name: '派任务',
+    trigger: '/派 · /执行 · /任务 · /终止',
+    desc: '把一键任务卡或一句话目标派给 AI 执行器真去干（仅绑定了企业应用身份的成员可用）',
+    warn: '会真实执行并消耗 AI 额度；默认关闭，勾选即开。确认类操作（发布/定时/长期记忆）仍要到网页里点头，群里不能确认',
+  },
   // help 不出现在勾选项里：全关时机器人至少还能自报家门，否则它就是个不响的黑箱
 ];
 
 /** 可勾选的命令（help 恒开，不给开关）。 */
 export const TOGGLEABLE_COMMANDS = BOT_COMMANDS.filter((c) => c.key !== 'help');
+
+/**
+ * 空白名单（=从未配置）时也**默认关**的命令。
+ *
+ * 「空 = 全开」是给存量数据的兼容语义（见 isCommandAllowed 注释）——但 dispatch 是
+ * 那个语义定下之后才出现的：把它也归进「全开」，等于一次发版让所有已装机器人的群
+ * 突然都能烧额度派任务，而管理员从没见过这个选项。新的高危命令一律进这个名单，
+ * 只有管理员在设置页亲手勾过才算开。
+ */
+export const DEFAULT_OFF_COMMANDS: readonly BotCommandKey[] = ['dispatch'];
 
 const COMMAND_KEYS = new Set<string>([...BOT_COMMANDS.map((c) => c.key), 'help']);
 
@@ -66,10 +83,11 @@ const COMMAND_KEYS = new Set<string>([...BOT_COMMANDS.map((c) => c.key), 'help']
  * 把空当成全关会让所有已装机器人在一次发版后集体哑掉，而且没有任何报错。
  * 管理员保存时前端会**永远至少写入 `help`**（见 actSaveBot），所以「配过」的记录必然非空，
  * 全部取消勾选存下来的是 `["help"]` —— 与「没配过」区分得开。
+ * 唯一例外是 DEFAULT_OFF_COMMANDS：后来才出现的高危命令不吃这份「空=全开」的祖荫。
  */
 export function isCommandAllowed(cmd: BotCommandKey, allow: string[] | null | undefined): boolean {
   if (cmd === 'help') return true;
-  if (!allow || allow.length === 0) return true;
+  if (!allow || allow.length === 0) return !DEFAULT_OFF_COMMANDS.includes(cmd);
   return allow.includes(cmd);
 }
 

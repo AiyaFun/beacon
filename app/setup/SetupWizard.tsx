@@ -32,6 +32,10 @@ export function SetupWizard({
   const [token, setToken] = useState('');
   const [companyName, setCompanyName] = useState('');
   const [adminName, setAdminName] = useState('');
+  // 本机登录密码：必设。OA 是可选步、一次性链接又要已登录的管理员才能生成——
+  // 不设密码的话，会话一过期人就被锁在门外只能重装（个人创作者小站的第一课）。
+  const [password, setPassword] = useState('');
+  const [password2, setPassword2] = useState('');
   const [vendor, setVendor] = useState(vendors[0]?.key ?? '');
   const [apiKey, setApiKey] = useState('');
   const [model, setModel] = useState('');
@@ -62,6 +66,7 @@ export function SetupWizard({
         token,
         companyName,
         adminName,
+        password,
         llm: { vendor, apiKey, model: model || undefined },
         oa:
           withOa && appId.trim() && appSecret.trim()
@@ -136,9 +141,29 @@ export function SetupWizard({
               <div className="field-label">管理员称呼</div>
               <input value={adminName} onChange={(e) => setAdminName(e.target.value)} placeholder="例如：老王" />
             </div>
+            <div className="field">
+              <div className="field-label">本机登录密码（至少 8 位）</div>
+              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="以后就凭它登录这台烽火台" autoComplete="new-password" />
+            </div>
+            <div className="field">
+              <div className="field-label">再输一遍</div>
+              <input type="password" value={password2} onChange={(e) => setPassword2(e.target.value)} autoComplete="new-password" />
+              {password2 && password !== password2 && (
+                <div className="small" style={{ color: 'var(--red, #b91c1c)', marginTop: 4 }}>两次输入不一致</div>
+              )}
+            </div>
+            <p className="small" style={{ color: '#64748b', lineHeight: 1.7, marginTop: -4 }}>
+              这是你进系统的钥匙：配了企业应用的团队也建议记好——企业应用没配好或失效时，凭它照样能进来。
+            </p>
             <div style={{ display: 'flex', gap: 8 }}>
               <button className="btn btn-ghost" onClick={() => setStep(0)}>上一步</button>
-              <button className="btn btn-primary" disabled={!companyName.trim()} onClick={() => setStep(2)}>下一步</button>
+              <button
+                className="btn btn-primary"
+                disabled={!companyName.trim() || password.length < 8 || password !== password2}
+                onClick={() => setStep(2)}
+              >
+                下一步
+              </button>
             </div>
           </>
         )}

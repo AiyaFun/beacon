@@ -8,6 +8,7 @@ import { AccountSecurityCard } from '../AccountSecurityCard';
 import { AccountDataCard } from '../AccountDataCard';
 import { PrivacyCard } from '../PrivacyCard';
 import { OaBindCard } from '../OaBindCard';
+import { PasswordCard } from '../PasswordCard';
 import { ApiTokenCard } from '../ApiTokenCard';
 import { listApiTokens, apiEnabled } from '@/lib/api/token';
 import { siteUrl } from '@/lib/site-url';
@@ -36,8 +37,9 @@ export default async function AccountSecurityPage(props: { searchParams: Promise
   
   const me = await prisma.member.findUnique({
     where: { id: s.memberId },
-    select: { phone: true, wechatOpenId: true }
+    select: { phone: true, wechatOpenId: true, passwordHash: true }
   });
+  const hasPassword = Boolean(me?.passwordHash);
 
   const maskedPhone = me?.phone ? me.phone.replace(/^(\d{3})\d{4}(\d{4})$/, '$1****$2') : null;
 
@@ -66,6 +68,9 @@ export default async function AccountSecurityPage(props: { searchParams: Promise
         title="账号与安全"
         hint="登录方式绑定与换绑 · 隐私与数据安全声明 · 数据导出与账号注销"
       />
+
+      {/* 本机密码（个人创作者小站）：设了它，登录页就多一条不依赖企业应用的门 */}
+      {canEdition('passwordLogin') ? <PasswordCard hasPassword={hasPassword} /> : null}
 
       {oaLogin ? <OaBindCard providerName={oaProviderName} bound={oaBound} /> : null}
 

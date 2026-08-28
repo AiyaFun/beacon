@@ -3,7 +3,7 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { actSaveBot, actTestBot, actToggleBot, actDeleteBot, actRevealBotSecrets, actDiagnoseBot } from './bot-actions';
-import { BOT_PROVIDERS, PUSH_EVENTS, TOGGLEABLE_COMMANDS } from '@/lib/bot/types';
+import { BOT_PROVIDERS, PUSH_EVENTS, TOGGLEABLE_COMMANDS, DEFAULT_OFF_COMMANDS } from '@/lib/bot/types';
 import { fmtDateTime } from '@/lib/format';
 
 // 一键配置飞书机器人（需求③④）。密钥永不回显；表单留空=保持原值。
@@ -38,8 +38,12 @@ export type BotRow = {
 };
 
 const DEFAULT_EVENTS = ['daily_recommend', 'compliance_alert', 'learning_summary'];
-// 新建时默认全开，与「库里空数组 = 默认全开」的老语义一致，不让新老两条路给出不同结果
-const ALL_COMMANDS = TOGGLEABLE_COMMANDS.map((c) => c.key as string);
+// 新建时默认全开，与「库里空数组 = 默认全开」的老语义一致，不让新老两条路给出不同结果。
+// 但 DEFAULT_OFF_COMMANDS（派任务这类高危命令）例外：它们连「空=全开」都不吃，
+// 新建时预勾上等于管理员没看见就开了——必须亲手勾。
+const ALL_COMMANDS = TOGGLEABLE_COMMANDS
+  .filter((c) => !DEFAULT_OFF_COMMANDS.includes(c.key))
+  .map((c) => c.key as string);
 
 export function BotIntegrationCard({ rows, callbackBase }: { rows: BotRow[]; callbackBase: string }) {
   const router = useRouter();
