@@ -129,11 +129,37 @@ export default async function DesktopPage() {
               首次打开会问你「连到哪一个烽火台」：
               <b>连云端账号</b>就是现在这个站点，和浏览器里同一个工作区；
               <b>连本机整机版</b>要先在这台机器上装过整机版服务。选过一次就记住了，之后直接进。
-              <br />
-              ⚠️ 安装包<b>没有代码签名</b>（Mac 公证要 Apple 开发者账号、Windows 要代码签名证书）：
-              macOS 首次打开请<b>右键 →「打开」</b>，或到「系统设置 → 隐私与安全性 → 仍要打开」；
-              Windows 会弹 SmartScreen，点「更多信息 → 仍要运行」。
             </p>
+          </div>
+
+          {/* 【两个平台待遇不同，别写成一句话】
+              macOS：2026-08-28 起已用 Developer ID 签名 + 苹果公证（notarization），
+              Gatekeeper 判定 source=Notarized Developer ID —— 双击直接开，**不要再写右键打开那套**，
+              那是没签名时的绕行办法，现在写它反而让用户以为这软件有问题。
+              Windows：代码签名证书一年好几千，现阶段不买，SmartScreen 必然弹。
+              而它的默认界面**只有一个「不运行」按钮**，「仍要运行」藏在「更多信息」后面——
+              不说破的话多数人到这一步就放弃了，等于包发了但装不上。所以这一侧要写得很细。 */}
+          <div className="divider" />
+          <div className="grid grid-2" style={{ gap: 10 }}>
+            <div className="card" style={{ padding: 12 }}>
+              <b className="small">🍎 macOS · 已签名并公证</b>
+              <p className="small muted" style={{ margin: '6px 0 0', lineHeight: 1.9 }}>
+                拖进「应用程序」双击即可，没有任何安全提示。
+                签名主体：厦门云词数字科技，已通过 Apple 公证。
+              </p>
+            </div>
+            <div className="card" style={{ padding: 12 }}>
+              <b className="small">🪟 Windows · 会弹提示，按这三步</b>
+              <ol className="small muted" style={{ margin: '6px 0 0', paddingLeft: 18, lineHeight: 1.9 }}>
+                <li>浏览器提示「不常下载」→ 点 <b>保留</b></li>
+                <li>双击后蓝屏「Windows 已保护你的电脑」→ 点左下角 <b>更多信息</b></li>
+                <li>展开后点 <b>仍要运行</b></li>
+              </ol>
+              <p className="small muted" style={{ margin: '6px 0 0', lineHeight: 1.8 }}>
+                Windows 端<b>没有代码签名</b>，所以会拦——不是软件有问题，
+                可对照下方 sha256 自行校验文件完整性。
+              </p>
+            </div>
           </div>
 
           {builds.length > 0 && (

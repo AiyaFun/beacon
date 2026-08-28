@@ -14,6 +14,11 @@
 #   pack:desktop 是**合并收集**：已在清单里、这次没重新构建的平台原样保留，
 #   所以两个平台可以分两次接力打进同一份清单。
 #
+# 【为什么不迁到 cnb.cool，2026-08-28 用户拍板】cnb 的构建环境是 Docker 容器，
+# 文档里只有 Linux 容器与多架构镜像（x86_64/arm64/loong64），**没有 Windows/macOS runner**。
+# 而 Tauri 的 Windows 安装包必须在 Windows 上打（见上面交叉编译那段实测）——
+# 迁过去等于把唯一能出 Windows 安装包的机器扔掉。GitHub Actions 这条留着。
+#
 # 【刻意手动触发（workflow_dispatch）而不是 push 就跑】桌面壳极少改动，
 # 每次 push 都跑一遍 Rust 编译是几十分钟的公共 runner 时间；要发版时手动点一下即可。
 #

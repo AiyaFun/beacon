@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { pickDesktopBuild, DESKTOP_OS_LABEL, type DesktopManifest } from '@/lib/downloads';
 import { NAV, reachableRoutes } from '@/lib/nav';
@@ -34,11 +34,22 @@ describe('下载入口不会指向空气', () => {
     expect(page).toMatch(/还没有 \{DESKTOP_OS_LABEL\[os\]\} 安装包/);
   });
 
-  it('未签名要如实写明（不写用户会以为包坏了）', () => {
-    const page = read('app/(app)/desktop/page.tsx');
+  it('两个平台的安装提示各自说对（且断言只看界面文案，不看注释）', () => {
+    // 【为什么要剥注释】2026-08-28 改文案时当场撞到：macOS 已签名公证、界面上
+    // 「右键打开」那套绕行办法删掉了，而守卫照样绿——因为「右键」「SmartScreen」
+    // 这些词还留在**代码注释**里。这就是「被自己的注释骗」那种假绿，
+    // 守的是「用户看得见什么」，就必须先把注释剥掉再断言。
+    const raw = read('app/(app)/desktop/page.tsx');
+    const page = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+    // macOS：已签名+公证 → 说「直接双击」，**绝不能**再出现右键绕行那套
+    expect(page).toContain('已签名并公证');
+    expect(page).not.toContain('右键');
+
+    // Windows：没签名 → 必须如实说，并把 SmartScreen 的三步写全（默认界面只有「不运行」）
     expect(page).toContain('没有代码签名');
-    expect(page).toContain('右键');
-    expect(page).toContain('SmartScreen');
+    expect(page).toContain('更多信息');
+    expect(page).toContain('仍要运行');
   });
 });
 
@@ -249,6 +260,34 @@ describe('🔒 每次部署都刷新增量更新包（不靠人记得）', () =>
       'public/downloads/desktop.manifest.json', 'public/downloads/appliance.manifest.json',
     ]) {
       expect(ig, `.gitignore 缺 ${p}`).toContain(p);
+    }
+  });
+});
+
+describe('🔒 签名凭据只许待在会被剥离的路径下', () => {
+  // 2026-08-28 用户要求把 macOS 签名证书备份也存进 cnb（私有仓）。
+  // 风险不在「私有仓存不存得」，而在**这个仓库的工作分支同时喂 cnb 和 GitHub**：
+  // 发布走 `git read-tree -u --reset opensource-clean` 把整棵树搬过去再剥离，
+  // 放错地方 = 私钥进公开仓库，而且 git 历史删不掉。
+  // 所以放在 deploy/private/ 下——那个路径**本来就在剥离清单里**，不用新增机制。
+
+  it('签名备份放在 deploy/private/ 下（该路径已在 GitHub 发布的剥离清单里）', () => {
+    const dir = join(process.cwd(), 'deploy', 'private', 'signing');
+    if (!existsSync(dir)) return; // 没存也行（本地可能清掉了），存了就必须在这个位置
+    const push = read('.claude/skills/push.md');
+    expect(push).toMatch(/git rm -r --cached[^\n]*deploy\/private/);
+  });
+
+  it('绝不提交明文私钥：只许有加密的 .p12 与公开的 .cer', () => {
+    const dir = join(process.cwd(), 'deploy', 'private', 'signing');
+    if (!existsSync(dir)) return;
+    for (const f of readdirSync(dir)) {
+      expect(f, `${f} 看起来是明文私钥，绝不能进库`).not.toMatch(/\.(key|pem|p8)$/i);
+    }
+    // 逐个文件翻内容：PEM 私钥头是最后一道判据（改个扩展名就能骗过上面那条）
+    for (const f of readdirSync(dir)) {
+      const body = readFileSync(join(dir, f), 'latin1');
+      expect(body, `${f} 内含 PEM 私钥`).not.toMatch(/-----BEGIN (RSA |EC )?PRIVATE KEY-----/);
     }
   });
 });
