@@ -37,11 +37,14 @@
 <div class="box">
   <img class="logo" src="logo.png" alt="" />
 
-  <!-- ① 探测中 -->
+  <!-- ① 探测中。
+       【别把 localhost 印成主信息】旧版这里大字写「服务地址 http://localhost:3070」，
+       而云端用户压根没有本机服务——他看到的是一个正在连接一台不存在的机器的界面，
+       第一印象就是「这软件坏了」。真实语义是「先看看你本机装没装整机版」，就照实写。 -->
   <div id="probing">
     <div class="spin"></div>
-    <h1 id="title">正在连接烽火台…</h1>
-    <p>服务地址 <code id="addr">http://localhost:3070</code></p>
+    <h1 id="title">正在启动…</h1>
+    <p>正在检查这台电脑上有没有装整机版…</p>
   </div>
 
   <!-- ② 选连哪儿（本机没跑起来时出现） -->
@@ -85,7 +88,6 @@
   const KEY = 'beacon.desktop.target';
 
   const $ = (id) => document.getElementById(id);
-  $('addr').textContent = LOCAL;
   try { $('cloud-host').textContent = new URL(CLOUD).host; } catch { $('cloud-host').textContent = CLOUD; }
 
   function show(which) {
@@ -104,9 +106,14 @@
     try { localStorage.setItem(KEY, base); } catch {}
   }
 
+  // 跳进站点时带一次性握手参数：站点据此① 不再劝你下载客户端 ② 有新版时提醒你。
+  // 站点读到后会把这两个参数从地址栏抹掉。CLIENT_VERSION 必须与 tauri.conf.json / package.json
+  // 的 version 一致——有守卫钉死，改版本号漏改这里会红。
+  const CLIENT_VERSION = '1.2.1';
   function enter(base) {
     remember(base);
-    location.replace(base);
+    const sep = base.includes('?') ? '&' : '?';
+    location.replace(`${base}${sep}_client=desktop&_cv=${encodeURIComponent(CLIENT_VERSION)}`);
   }
 
   async function boot() {
@@ -115,7 +122,6 @@
     let saved = null;
     try { saved = localStorage.getItem(KEY); } catch {}
     if (saved) {
-      $('addr').textContent = saved;
       if (await alive(saved)) return enter(saved);
       // 本机模式下服务可能只是还没起来（开机自启有延迟），多等几轮再判失败
       if (saved === LOCAL) {

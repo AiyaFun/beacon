@@ -1289,27 +1289,37 @@ button.tab.active { border-bottom-color: var(--brand); }
 /* 账号区不参与压缩：它是退出与切换外壳的唯一出口，被挤没了等于走不出去 */
 .sidebar-user { flex-shrink: 0; }
 
-/* 桌面客户端下载卡：钉在账号区之上，与「最近」同样不参与滚动。
-   flex-shrink:0 同理——被压扁的入口点不中，等于没有 */
+/* 桌面客户端下载入口：钉在账号区之上，与「最近」同样不参与滚动。
+   flex-shrink:0 同理——被压扁的入口点不中，等于没有。
+
+   【为什么做得这么轻】它常驻在每一页的视野里，是个顺手提一句的入口，不是号召行动的按钮。
+   第一版用了品牌色底 + 加粗标题，在侧栏里比「今天」「新任务」这些天天点的主入口还抢眼。
+   现在：无底色、次要文字色、只靠一条上边线与账号区分隔，悬停才微微亮。 */
 .desktop-card {
   flex-shrink: 0;
-  display: flex; align-items: center; gap: 4px;
-  margin: 6px 10px 8px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--brand-soft);
+  display: flex; align-items: baseline; gap: 6px;
+  margin: 2px 10px 4px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  transition: background .15s;
 }
-.desktop-card-main { flex: 1; min-width: 0; text-decoration: none; color: inherit; display: grid; gap: 2px; }
-.desktop-card-title { font-size: 12.5px; font-weight: 600; color: var(--brand); }
-.desktop-card-sub { font-size: 11px; color: var(--text-2); }
-.desktop-card:hover { border-color: var(--brand); }
+.desktop-card:hover { background: var(--hover, rgba(0, 0, 0, .04)); }
+.desktop-card-main {
+  flex: 1; min-width: 0; text-decoration: none;
+  display: flex; align-items: baseline; gap: 6px;
+}
+.desktop-card-title { font-size: 12.5px; color: var(--text-2); white-space: nowrap; }
+.desktop-card:hover .desktop-card-title { color: var(--text); }
+/* 系统名（macOS / Windows）：比标题再退一层，它是补充信息不是重点 */
+.desktop-card-sub { font-size: 11px; color: var(--text-3, var(--text-2)); opacity: .75; }
+/* 关闭键平时不占视线——一个常驻入口旁边永远杵着个 ×，本身就是种打扰 */
 .desktop-card-close {
-  flex-shrink: 0; width: 20px; height: 20px; line-height: 1;
-  border: 0; border-radius: 6px; background: transparent; color: var(--text-2);
-  cursor: pointer; font-size: 15px;
+  flex-shrink: 0; width: 18px; height: 18px; line-height: 1;
+  border: 0; border-radius: 5px; background: transparent; color: var(--text-2);
+  cursor: pointer; font-size: 14px; opacity: 0; transition: opacity .15s;
 }
-.desktop-card-close:hover { background: rgba(0, 0, 0, .06); color: var(--text); }
+.desktop-card:hover .desktop-card-close { opacity: .6; }
+.desktop-card-close:hover { opacity: 1; background: rgba(0, 0, 0, .06); }
 .sidebar-bottom { margin-top: 0; }
 /* 「最近」里同一件事重复的次数：不抢标题的视觉，但让人知道这行代表好几次 */
 .task-item-times { flex-shrink: 0; font-size: 11px; color: var(--text-2); }

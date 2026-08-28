@@ -94,6 +94,38 @@ if [ ! -f "public/downloads/$MF_FILE" ]; then
 fi
 say "✅ 更新包在位：$MF_FILE（v$MF_VER）"
 
+# 【页面文件必须真的传上来了】2026-08-28 事故：部署技能的 rsync 写了 --exclude desktop，
+# 而 rsync **不带前导斜杠的模式匹配任意层级**——本意是排掉根目录的 Tauri 子项目，
+# 结果把 app/(app)/desktop/（下载页）也一起排除了。线上那个页面从来没存在过，
+# 用户点侧栏下载卡直接 404，而 health/状态码全绿，谁也看不出来。
+# 判据用 lib/nav.ts 的导航表：里面列了的页面，源码就必须在这台机器上。
+MISSING=""
+for href in $(grep -oE "href: '/[a-z-]+'" lib/nav.ts 2>/dev/null | sed "s/href: '//;s/'//" | sort -u); do
+  [ "$href" = "/" ] && continue
+  # 页面可能在 app/(app)/<name>/page.tsx 或 app/<name>/page.tsx
+  if ! find app -type f -name page.tsx -path "*${href}/page.tsx" 2>/dev/null | grep -q .; then
+    MISSING="$MISSING $href"
+  fi
+done
+if [ -n "$MISSING" ]; then
+  say "⛔ 导航里列了这些页面，但源码没传上来：$MISSING"
+  say "   多半是 rsync 的 exclude 模式没锚定（如 --exclude desktop 会连 app/(app)/desktop 一起排掉，"
+  say "   要写成 --exclude /desktop）。修好 exclude 后重新 rsync。"
+  die "页面缺失会让用户点进去 404，而状态码检查全绿——已拦下本次构建。"
+fi
+say "✅ 导航里的页面源码齐全"
+
+# 【签名凭据绝不能出现在这台机器上】生产是公网 SaaS 部署，既不打包也不签名，
+# deploy/private/signing/ 里那份 macOS 签名私钥对它毫无用处，放在这儿纯属多一个暴露面。
+# 2026-08-28 真同步上来过一次（部署技能的 rsync 当时漏了 --exclude deploy/private）。
+# 文档改了还是会被忘，所以在这儿加一道机器判据：发现就拦，并告诉运维怎么收拾。
+if [ -e "deploy/private/signing" ]; then
+  say "⛔ 生产上出现了签名凭据目录 deploy/private/signing/"
+  say "   立即处理：rm -rf /var/www/beacon/deploy/private/signing"
+  say "   根因：rsync 少了 --exclude deploy/private（见部署技能第 2 步的 exclude 表）"
+  die "签名私钥不该出现在公网机器上，已拦下本次构建。"
+fi
+
 # 下面两道要进容器跑 prisma（宿主机没有 node_modules）。容器检查放在这里而不是更早，
 # 是为了让纯本地的闸门 1/2 先跑完——旧镜像没起来时也该先把「产物漏打」这类错报出来。
 WEB_ID=$(docker compose ps --status running -q web 2>/dev/null)

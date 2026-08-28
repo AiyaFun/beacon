@@ -170,9 +170,12 @@ describe('executeAccountDeletion（所有者注销）', () => {
     expect(ledger[0].amountFen).toBe(9900);
     expect(ledger[0].transactionId).toBe(order.transactionId);
 
-    // 存根里不许出现任何能指向自然人的东西
+    // 存根里不许出现任何能指向自然人的东西。
+    // 【为什么不写 '138'】那是号段前缀，会撞上存根里的时间戳毫秒位（2026-08-28 真的红过一次：
+    // deletedAt 恰好是 …34.138Z）。断言整串手机号既不flaky，也比只验前缀更严。
     const dump = JSON.stringify(rec);
-    expect(dump).not.toContain('138');
+    expect(owner.phone).toBeTruthy();
+    expect(dump).not.toContain(owner.phone!);
     expect(dump).not.toContain('SECRET-CIPHERTEXT');
   });
 

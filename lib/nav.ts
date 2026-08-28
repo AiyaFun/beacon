@@ -122,7 +122,7 @@ export const NAV: NavGroup[] = [
       { href: '/settings', label: '运行设置', icon: 'settings' },
       { href: '/notifications', label: '消息渠道', icon: 'chat', hint: '推送与机器人 · 推什么、什么时候推' },
       { href: '/extension', label: '采集插件', icon: 'download', hint: '采集助手 · 装到浏览器里的那个扩展' },
-      { href: '/desktop', label: '桌面客户端', icon: 'download', hint: 'Mac / Windows 客户端 · 独立窗口、托盘常驻、开机自启' },
+      { href: '/desktop', label: '下载客户端', icon: 'download', hint: 'Mac / Windows 桌面版 · 功能与网页相同，多的是独立窗口、托盘常驻、开机自启' },
       { href: '/members', label: '成员与权限', icon: 'users' },
       { href: '/billing', label: '套餐与计费', icon: 'sparkles', requires: 'payment' },
       { href: '/settings/account', label: '账号与安全', icon: 'shield' },

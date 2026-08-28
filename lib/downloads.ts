@@ -21,6 +21,7 @@
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { compareVersion } from './version';
 
 // ── 商店正式链接 ──
 // 只有 chrome 一个渠道：其余商店不提交，留着空字段只会让页面误显示「审核中」。
@@ -55,15 +56,9 @@ export function storeIsBehind(latestVersion: string | null | undefined): boolean
 }
 
 /** 语义化版本粗比较：只按数字段逐位比，非数字段忽略（够用于 0.6.4 / 0.7.0 这种）。 */
-export function compareVersion(a: string, b: string): number {
-  const pa = a.split('.').map((x) => parseInt(x, 10) || 0);
-  const pb = b.split('.').map((x) => parseInt(x, 10) || 0);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
-    if (d !== 0) return d < 0 ? -1 : 1;
-  }
-  return 0;
-}
+// 实现搬到 lib/version.ts（纯函数、无 node:fs），这里只再导出一次保持既有调用点不变。
+// 搬家的原因：客户端组件要比版本，不能 import 这个带 fs 的文件。
+export { compareVersion };
 
 // ── 自托管 zip 清单（pack:ext 产出的 downloads.manifest.json）──
 export type DownloadsManifest = {

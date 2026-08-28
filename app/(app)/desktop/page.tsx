@@ -24,6 +24,30 @@ export const dynamic = 'force-dynamic';
 // 【只给真实存在的包放按钮】Tauri 不能交叉编译：Mac 包只能在 Mac 上出、Win 包只能在
 // Win 上出，所以某个平台缺席是常态。缺的那个如实写「还没有」，绝不放一个 404 的按钮。
 
+// 客户端相对网页多出来的四件事。逐条对着 desktop/src-tauri 核过：
+// 托盘 + 关闭收起(prevent_close)、autostart 插件、dataDirectory="webview"。
+// 没有通知插件，所以这里绝不能写「消息提醒」。
+const DESKTOP_EXTRAS: Array<[string, string]> = [
+  ['独立窗口', '有自己的图标和任务栏位置，不会被一堆标签页淹掉'],
+  ['托盘常驻', '点关闭只是收进托盘，后台照常待命，随手点回来'],
+  ['开机自启', '开机自动在后台起来，不用每次去找入口'],
+  ['独立本地缓存', '登录态存在客户端自己的数据目录，清浏览器缓存不影响它'],
+];
+
+// 三者分工。网页版与客户端两列几乎完全相同——这正是要让人一眼看到的结论。
+// 采集那三行的口径按实际实现写：自有后台数据只能插件；公众号/视频号服务端没路；
+// 其余平台服务端能自动采，插件只是补采。
+const SPLIT_MATRIX: string[][] = [
+  ['选题、起稿、改稿、配图、发布', '✓', '✓', '—'],
+  ['看数据、竞对监控、作战报告', '✓', '✓', '—'],
+  ['派 AI 任务、定时任务', '✓', '✓', '—'],
+  ['抓你自己后台的经营数据', '—', '—', '✓ 只能靠它'],
+  ['抓公众号 / 视频号竞对', '—', '—', '✓ 只能靠它'],
+  ['抓其他平台竞对', '✓ 服务端自动', '✓ 同左', '✓ 可补采'],
+  ['独立窗口 / 托盘 / 开机自启', '—', '✓', '—'],
+  ['连这台机器上的整机版', '手动输地址', '✓ 自动探测并记住', '—'],
+];
+
 function osIcon(os: DesktopBuild['os']): string {
   return os === 'mac' ? '🍎' : '🪟';
 }
@@ -60,16 +84,81 @@ export default async function DesktopPage() {
         }
       />
 
-      <div className="grid grid-4" style={{ marginBottom: 16 }}>
+      {/* 【不适用就别占版面】SaaS 用户没有「本机服务」这台机器，原先那格会印出一个
+          巨大的「不适用」压在首屏——说了等于没说。缺席的东西直接不渲染，
+          栅格随之从四列收成三列。 */}
+      <div className={`grid ${localService ? 'grid-4' : 'grid-3'}`} style={{ marginBottom: 16 }}>
         <Stat label="客户端版本" value={m ? `v${m.version}` : '—'} foot={m ? '桌面壳' : '还没打包'} />
         <Stat label="可下载" value={builds.length} foot={builds.length ? [...new Set(builds.map((b) => DESKTOP_OS_LABEL[b.os]))].join(' · ') : '无'} />
         <Stat label="服务端版本" value={`v${pkg.version}`} foot="网页与功能本体" />
-        <Stat
-          label="本机服务更新"
-          value={localService ? (appliance ? `v${appliance.version}` : '—') : '不适用'}
-          foot={localService ? (appliance ? '可一键更新' : '未发布更新包') : 'SaaS 由平台维护'}
-        />
+        {localService && (
+          <Stat
+            label="本机服务更新"
+            value={appliance ? `v${appliance.version}` : '—'}
+            foot={appliance ? '可一键更新' : '未发布更新包'}
+          />
+        )}
       </div>
+
+      {/* 【这一页首先要回答「我到底要不要装」】
+          客户端是 Tauri 壳，装进去的就是同一套网页界面——功能一模一样，没有客户端专属能力。
+          真实差别只有「怎么打开」和「能不能自动连本机整机版」两类，多写一个字都是夸大。
+          更要紧的是说破它**替代不了采集插件**：采集要用你自己浏览器里的登录态，
+          客户端是独立 WebView 装不了扩展。不写清楚的话，装完客户端等数据自己进来的人会一直等。 */}
+      <Card
+        title="客户端和网页，差在哪"
+        sub="功能一模一样 · 差别只在怎么打开、能不能连本机"
+        style={{ marginBottom: 16 }}
+      >
+        <p className="small muted" style={{ margin: '0 0 12px', lineHeight: 1.9 }}>
+          桌面客户端装的<b>就是这个网页</b>：同一个工作区、同一批数据、同一套功能，
+          没有「客户端才有」的能力。它解决的是另一类问题——不跟十几个标签页挤在一起、
+          关掉窗口还在后台待命、开机自己起来。<b>只用浏览器完全够用，不装不影响任何功能。</b>
+        </p>
+
+        <div className="grid grid-4" style={{ gap: 10 }}>
+          {DESKTOP_EXTRAS.map(([t, d]) => (
+            <div key={t} className="card" style={{ padding: 12 }}>
+              <b className="small">{t}</b>
+              <p className="small muted" style={{ margin: '4px 0 0', lineHeight: 1.7 }}>{d}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="divider" />
+        <b className="small">哪件事该用哪个</b>
+        <div className="table-wrap" style={{ marginTop: 8 }}>
+          <table className="table">
+            <thead>
+              <tr>
+                <th style={{ minWidth: 190 }}>要做的事</th>
+                <th style={{ minWidth: 88 }}>网页版</th>
+                <th style={{ minWidth: 96 }}>桌面客户端</th>
+                <th style={{ minWidth: 130 }}>采集插件</th>
+              </tr>
+            </thead>
+            <tbody>
+              {SPLIT_MATRIX.map((row) => (
+                <tr key={row[0]}>
+                  <td className="small">{row[0]}</td>
+                  {row.slice(1).map((cell, i) => (
+                    <td key={i} className="small" style={{ color: cell === '—' ? 'var(--text-3)' : undefined }}>
+                      {cell}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <p className="small muted" style={{ margin: '10px 0 0', lineHeight: 1.9 }}>
+          注意<b>客户端替代不了插件</b>：采集用的是你自己浏览器里的登录态，
+          而客户端是独立窗口、装不了浏览器扩展。想让数据自动回流，
+          插件仍要装在你日常用的 Chrome 里 ——{' '}
+          <Link href="/extension" style={{ color: 'var(--brand)', fontWeight: 600 }}>去装采集插件</Link>。
+        </p>
+      </Card>
 
       {!m ? (
         <Card title="还没有可下载的安装包" sub="打包之后这里会出现下载按钮">
@@ -120,6 +209,21 @@ export default async function DesktopPage() {
                 )}
               </div>
             ))}
+          </div>
+
+          {/* 【桌面壳没有自动更新，别让人以为有】Tauri updater 插件没装，更新 = 重新下载覆盖安装。
+              侧栏会在有新版时提醒（靠壳跳转时带的版本标记认出来），但真正的动作在这里说明。
+              整机版服务那套「一键增量更新」是服务端的事，两件事别混为一谈。 */}
+          <div className="divider" />
+          <div className="stack" style={{ gap: 6 }}>
+            <b className="small">怎么更新</b>
+            <p className="small muted" style={{ lineHeight: 1.9, margin: 0 }}>
+              客户端<b>不会自动更新</b>。有新版时，侧栏会出现一行「客户端有新版」提醒你；
+              回到这一页重新下载，<b>覆盖安装即可</b>（macOS 拖进「应用程序」选替换，Windows 直接装在原位）。
+              你的登录态和本地缓存都留着，装完还是同一个工作区。
+              客户端只是外壳，<b>网页功能本身一直是最新的</b>，不更新客户端也不会少功能——
+              更新带来的是壳自己的修复。
+            </p>
           </div>
 
           <div className="divider" />

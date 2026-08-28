@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { pickDesktopBuild, DESKTOP_OS_LABEL, type DesktopManifest } from '@/lib/downloads';
 import { NAV, reachableRoutes } from '@/lib/nav';
@@ -11,6 +12,10 @@ import { NAV, reachableRoutes } from '@/lib/nav';
 // 所以每一道都在这里源码级钉死——它们大多没法在单测里真跑（真跑=真更新一台机器）。
 
 const read = (p: string) => readFileSync(join(process.cwd(), p), 'utf8');
+// 断言页面文案时必须先剥注释：2026-08-28 就栽过一次——守卫之所以绿，
+// 只是因为「右键」两个字活在我自己写的注释里，正文其实没有。
+const stripComments = (s: string) =>
+  s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -278,6 +283,21 @@ describe('🔒 签名凭据只许待在会被剥离的路径下', () => {
     expect(push).toMatch(/git rm -r --cached[^\n]*deploy\/private/);
   });
 
+  it('闸门会拦「签名凭据出现在生产机器上」（rsync 漏排除的兜底）', () => {
+    // 2026-08-28 真发生过：部署技能的 rsync 少了 --exclude deploy/private，
+    // 签名私钥被同步到公网服务器。文档改了还是会被忘，所以要有机器判据。
+    const gate = read('scripts/deploy-gate.sh');
+    expect(gate).toMatch(/deploy\/private\/signing/);
+    expect(gate).toMatch(/die "签名私钥不该出现在公网机器上/);
+    // 部署技能的 exclude 表也得有，否则每次同步上去再被闸门拦，等于每次部署都失败。
+    // 技能装在用户主目录（不在仓库里），别的机器上可能没有——**不存在时明确跳过**，
+    // 而不是让断言默默变成真（那就是「从不命中」型假绿）。
+    const skillPath = join(homedir(), '.claude', 'skills', 'beacon-deploy', 'SKILL.md');
+    if (existsSync(skillPath)) {
+      expect(readFileSync(skillPath, 'utf8')).toMatch(/--exclude deploy\/private/);
+    }
+  });
+
   it('绝不提交明文私钥：只许有加密的 .p12 与公开的 .cer', () => {
     const dir = join(process.cwd(), 'deploy', 'private', 'signing');
     if (!existsSync(dir)) return;
@@ -289,5 +309,30 @@ describe('🔒 签名凭据只许待在会被剥离的路径下', () => {
       const body = readFileSync(join(dir, f), 'latin1');
       expect(body, `${f} 内含 PEM 私钥`).not.toMatch(/-----BEGIN (RSA |EC )?PRIVATE KEY-----/);
     }
+  });
+});
+
+// ── 下载入口的可发现性 + 页面得讲清楚差别（2026-08-28）────────────────────
+// 起因：侧栏那张下载卡是可关闭的，关掉之后用户就再也找不到这一页了。
+// 所以入口必须**同时**固定在设置菜单里（账号菜单从 nav 的「设置」组渲染），
+// 且标签要一眼看得出是下载，不能只写「桌面客户端」让人以为是台什么设备。
+describe('下载客户端的入口与说明', () => {
+  it('设置组里有 /desktop，且标签写明是下载', () => {
+    const nav = read('lib/nav.ts');
+    const settings = nav.slice(nav.indexOf("title: '设置'"));
+    const line = settings.split('\n').find((l) => l.includes("href: '/desktop'"));
+    expect(line, '/desktop 必须留在设置组里：侧栏卡片可关闭，它是关掉后唯一的入口').toBeTruthy();
+    expect(line!).toMatch(/label: '[^']*下载[^']*'/);
+  });
+
+  it('页面把「和网页有什么区别」讲清楚了', () => {
+    const page = stripComments(read('app/(app)/desktop/page.tsx'));
+    // 结论先行：功能一样、不装也不影响
+    expect(page).toContain('功能一模一样');
+    expect(page).toContain('不装不影响任何功能');
+    // 对照表三列都在
+    for (const col of ['网页版', '桌面客户端', '采集插件']) expect(page).toContain(col);
+    // 最容易被误解的一条：客户端不能替代采集插件
+    expect(page).toContain('客户端替代不了插件');
   });
 });
