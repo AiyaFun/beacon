@@ -91,6 +91,9 @@ const PUBLIC_PATHS = [
   // ⚠️ /api/ingest/parser：插件拉解析规则包 + 上报「这个字段采不到」的脱敏结构样本。
   //    同样用工作区采集令牌自守卫；样本里只有标签/类名/属性名与文本形状，无任何正文与个人信息。
   '/api/ingest/parser',
+  // 任意站点采集配方（0.9.11）：拉配方 / 上传骨架去学 / 报抓取结果。
+  // 与其它 ingest 路由同样按工作区令牌鉴权，插件够不着登录态。
+  '/api/ingest/recipe',
   // ⚠️ /api/bot：飞书等平台机器人事件回调（authorized 通道）——平台服务器的请求不带登录
   //    cookie。路由内部用 inboundKey(app_id) 反查工作区 + Verification Token/签名自守卫，
   //    无效即拒。见 app/api/bot/feishu/events/[key]/route.ts。

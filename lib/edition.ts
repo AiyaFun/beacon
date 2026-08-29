@@ -57,7 +57,20 @@ export type Capability =
    * SaaS 恒为 false —— 服务端在机房，够不到用户的浏览器；把这条开给 SaaS 只能靠云端托管
    * 登录态，那是另一回事（也是我们不做的那件事）。
    */
-  | 'localPublisher';
+  | 'localPublisher'
+  /**
+   * 本机命令执行：让 AI 在装了烽火台的这台机器上跑白名单内的命令（OpenClaw / Hermes 那类能力）。
+   * **SaaS 恒 false，没有例外**——SaaS 的服务跑在我们机房、多租户共用一台机器，
+   * 给模型 shell 等于给它别人的数据。整机版/私有化是客户自己的机器，风险由他自己承担。
+   * 注意：矩阵为 true 只代表「这个形态允许开」，默认仍是关的（Workspace.shellEnabled）。
+   */
+  | 'localShell'
+  /**
+   * 本机浏览器驱动：连用户自己电脑上已经开着的 Chrome（CDP），替他打开页面读内容。
+   * **SaaS 恒 false**——服务端在机房，够不到用户的浏览器；真要做只能托管登录态，
+   * 那是这个产品明确不做的那件事（与 localPublisher 同一条理由）。
+   */
+  | 'localBrowser';
 
 /**
  * 能力矩阵。**这张表就是三个版本的产品定义**，改它等于改产品边界，不要顺手改。
@@ -71,6 +84,8 @@ export type Capability =
 const MATRIX: Record<Edition, Record<Capability, boolean>> = {
   saas: {
     localPublisher: false,
+    localShell: false,
+    localBrowser: false,
     payment: true,
     smsLogin: true,
     oaLogin: false,
@@ -82,6 +97,8 @@ const MATRIX: Record<Edition, Record<Capability, boolean>> = {
   },
   appliance: {
     localPublisher: true,
+    localShell: true,
+    localBrowser: true,
     payment: false,
     smsLogin: false,
     oaLogin: true,
@@ -94,6 +111,8 @@ const MATRIX: Record<Edition, Record<Capability, boolean>> = {
   },
   private: {
     localPublisher: true,
+    localShell: true,
+    localBrowser: true,
     payment: false,
     smsLogin: false,
     oaLogin: true,

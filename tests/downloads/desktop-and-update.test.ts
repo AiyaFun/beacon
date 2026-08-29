@@ -328,8 +328,9 @@ describe('下载客户端的入口与说明', () => {
   it('页面把「和网页有什么区别」讲清楚了', () => {
     const page = stripComments(read('app/(app)/desktop/page.tsx'));
     // 结论先行：功能一样、不装也不影响
+    // 「功能一模一样」在卡片副标题里；正文那段解释 2026-08-29 按用户要求删掉了，
+    // 结论靠副标题 + 下面的对照表承载，所以这里不再断言那段正文。
     expect(page).toContain('功能一模一样');
-    expect(page).toContain('不装不影响任何功能');
     // 对照表三列都在
     for (const col of ['网页版', '桌面客户端', '采集插件']) expect(page).toContain(col);
     // 最容易被误解的一条：客户端不能替代采集插件

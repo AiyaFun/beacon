@@ -19,6 +19,8 @@ import { expiryNoticeFor, sentStagesFrom, EXPIRED_GRACE_DAYS } from '../pay/expi
 import { sweepRetention } from '../legal/retention';
 import { automationAllows } from './automation';
 import { JOB_TRACK, type JobHandler, type JobName } from './types';
+import { sweepLocalRecipes } from '../scrape/sweep';
+import { can as editionCan } from '../edition';
 
 // 各任务的实际处理逻辑，包一层 JobRun 记账（可观测性）。
 
@@ -503,6 +505,20 @@ export const HANDLERS: Record<JobName, JobHandler> = {
   // 【为什么不吞错误】sweepRetention 内部按步骤隔离（一张表失败不连坐其余），但会把失败原样带出来。
   // 这里必须把它抛成任务失败：一次静默失败的合规清理，和没有这个任务是一回事——而 JobRun 里
   // 一条绿色记录反而会让人以为「删过了」。宁可任务红着，也不要一份骗人的执行记录。
+  // 定时把本机浏览器配方跑一遍。**只在整机版且配了调试端点时才真做事**。
+  // 频率刻意不高：它会在用户真实的 Chrome 里开标签（CDP 没有「后台标签」，
+  // 那是扩展才有的能力），跑太勤就是骚扰。
+  sweep_local_recipes: async () => {
+    // 【能力关着时连运行记录都不建】定时表是三种形态共用的，SaaS 上这条每 6 小时空跑一次。
+    // 若照常 withRun，运行中心里每天会多出 4 条「扫了 0 个配方」——那是纯噪音，
+    // 而运行记录的价值恰恰在于「每一条都值得看一眼」。
+    if (!editionCan('localBrowser')) return { detail: '本形态不驱动本机浏览器，跳过' };
+    return withRun('sweep_local_recipes', undefined, async () => {
+      const r = await sweepLocalRecipes();
+      return { detail: `扫 ${r.scanned} 个配方：成功 ${r.ok} / 重学 ${r.relearned} / 跳过(待登录) ${r.skipped}` };
+    });
+  },
+
   purge_retention: async () =>
     withRun('purge_retention', undefined, async () => {
       const r = await sweepRetention();

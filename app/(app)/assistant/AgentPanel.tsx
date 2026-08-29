@@ -5,6 +5,7 @@ import { Icon } from '@/components/icons';
 import { actStartAgent, actDecideAgentStep, actCancelAgent, actGetAgentRun, actAppendNote } from './agent-actions';
 import { DispatchAuth, DEFAULT_AUTH, type DispatchAuthValue } from '@/components/DispatchAuth';
 import type { AgentTurn } from '@/lib/agent/run';
+import { SaveAsSkillButton } from '@/components/SaveAsSkillButton';
 
 // 执行面板：一句话 → AI 自己查、自己做，写操作停下来等你点头。
 //
@@ -223,6 +224,10 @@ export function AgentPanel({
               </li>
             ))}
           </ol>
+
+          {/* 跑通了才值得存做法。失败/中止的不给这个按钮——存下来的是错的走法。
+              别人派的也不给：技能带着工具白名单，得由亲手跑过的人决定要不要留 */}
+          {turn.status === 'done' && turn.mine && <SaveAsSkillButton runId={turn.runId} />}
 
           {/* 不是我发起的：确认/追问都做不了（服务端会拒），所以一个按钮都不摆——
               摆一排点了必定报错的按钮，正是 /runs 不放确认按钮所防的事 */}

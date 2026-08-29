@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { ChunkErrorRecovery } from '@/components/ChunkErrorRecovery';
+import { DesktopClientProbe } from '@/components/DesktopClientProbe';
 
 // 分享卡片的绝对地址基准。**不配等于把 og:image 指向 http://localhost:3000**——
 // Next 在 metadataBase 缺席时就是这么回落的，生产上表现为「链接发到 X/微信没有封面图」，
@@ -33,6 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="zh-CN">
       <body>
         <ChunkErrorRecovery />
+        <DesktopClientProbe />
         {children}
       </body>
     </html>

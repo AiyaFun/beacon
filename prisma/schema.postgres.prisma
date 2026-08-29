@@ -64,6 +64,22 @@ model Workspace {
   // 它是唯一一个由服务端指定 URL、让用户已登录的浏览器去打开的能力，
   // 属于「用户得知道自己开了什么」的那一类，不能靠默认值替他决定。
   browserReadEnabled Boolean @default(false)
+  // 本机命令执行（localShell 能力）。**默认全关**——形态允许 ≠ 默认开。
+  // shellRoot 为空时哪怕开了也不许跑：没有工作目录就没有边界。
+  shellEnabled       Boolean  @default(false)
+  // JSON string[]：允许直接执行的命令名（argv[0]）
+  shellAllow         String   @default("[]")
+  shellRoot          String?
+  // 'allowlist'=只跑清单里的命令（默认）｜'full'=不限命令（仍限目录、仍有超时与输出上限）
+  // 【别和 Member.shellMode 搞混】那个是「外壳模式」(工作台/任务台)，跟命令执行毫无关系。
+  // 名字叫 shellExecMode 就是为了在 grep 时一眼分得开。
+  shellExecMode      String   @default("allowlist")
+  // 单条命令超时（秒）。装东西动辄几分钟，20 秒的默认值会把 npm/pip install 直接废掉
+  shellTimeoutSec    Int      @default(20)
+  // 本机浏览器驱动（localBrowser 能力）：连用户自己开着的 Chrome 的调试端点。
+  // **为空 = 关闭**——不再单设一个布尔开关，「没有端点」本身就是最清楚的关闭状态。
+  // 典型值 http://127.0.0.1:9222（Chrome 用 --remote-debugging-port=9222 启动）
+  browserCdpUrl      String?
   createdAt        DateTime @default(now())
 
   tenant          Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
@@ -80,6 +96,8 @@ model Workspace {
   ingestTokens    IngestToken[]
   agentRuns       AgentRun[]
   taskPresets     TaskPreset[]
+  procedureSkills ProcedureSkill[]
+  scrapeRecipes   ScrapeRecipe[]
   publishPlans    PublishPlan[]
   workflowRuns    WorkflowRun[]
   scheduledAgents ScheduledAgent[]
@@ -1659,6 +1677,90 @@ model TaskPreset {
 // 确认闸管的是**动作发生之前**（这一步要不要做），产物清单管的是**之后**
 //（做出来的东西对不对）。两道闸互补，不能互相替代：预授权跑完的那些没有前一道，
 // 更需要后一道。
+// ─── 流程技能（2026-08-29）───────────────────────────────────────────────
+//
+// 【它和 ContentSkill 不是一回事】ContentSkill 是**提示词模板**（一句提示 + 占位符），
+// 这里是**做法**：一次跑通的任务留下的有序步骤。刻意不合表——ContentSkill 那边写着
+// 「模板是数据不是代码」，而做法天然更靠近代码，混在一起会让那条约束失效。
+//
+// 【怎么来的】某次 AgentRun 跑到 done 之后，用户点「存成技能」，模型读那次的
+// messages（含完整工具调用轨迹）提炼出来。原料一直都在，只是以前没人用。
+//
+// 【怎么用】重放**不另起执行引擎**：把步骤当作指引拼进 agentSystemPrompt，
+// 用 startAgentRun 正常起一次运行。这样乐观锁迁移、授权三档、预算、确认闸
+// 一个都不绕过——自己写一套步骤执行器等于把所有闸门重做一遍，必漏。
+//
+// 【绝不扩权】toolAllowlist 是**提炼时与来源运行求过交集**的结果，重放时再与
+// 当前用户的权限求一次交集。技能不能成为提权通道：谁都不能靠「存一个技能」
+// 让自己用上本来没权限的工具。
+// ─── 任意站点采集配方（2026-08-29）────────────────────────────────────────
+//
+// 【和 ParserIncident 那套的分工】那套治的是**已知平台的已知字段**改版失效
+// （指纹是 platform+scope+field，学不了新站点）。这里管的是**用户自己指的站点**：
+// 给个网址、说要抓什么，驱动浏览器学一次，存成配方；下次直接按配方抓；
+// 抓不到就再学一次（version+1，旧版留着可回滚）。
+//
+// 【学习复用现成的，不另造一套】骨架上传、模型推断、verifyAgainstSkeleton 机器验证
+// 全部走 lib/ingest/parser-learn.ts 那条链路。自己再写一套验证等于把「模型指到旁边
+// 那个数字」的老事故（抖音关注数被当成粉丝数）重演一遍。
+//
+// 【origin 是授权单位，不是展示字段】插件按 origin 向 Chrome 申请单站点权限
+// （optional_host_permissions），所以它必须是规范化过的 origin，不能塞整个 URL。
+model ScrapeRecipe {
+  id          String   @id @default(cuid())
+  tenantId    String
+  workspaceId String
+  name        String
+  // 站点 origin，如 https://www.xiaohongshu.com —— 单站点授权与匹配都按它
+  origin      String
+  // 更细的路径匹配（可选），如 /explore/*
+  pathPattern String?
+  // JSON: { key: string; label: string }[] —— 用户要抓的字段（人话）
+  fields      String   @default("[]")
+  // JSON: { key: string; selectors: string[]; anchors: string[] }[] —— 学到的取数规则
+  rules       String   @default("[]")
+  // 每进化一次 +1。旧版本进 ScrapeRecipeVersion，坏了能回滚
+  version     Int      @default(1)
+  // learning=还没学会 | active=能用 | broken=连续抓不到，等重新学
+  status      String   @default("learning")
+  // 连续抓不到几次。达到 RECIPE_BROKEN_AT 转 broken 并触发重学
+  failCount   Int      @default(0)
+  lastOkAt    DateTime?
+  lastFailAt  DateTime?
+  createdBy   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, workspaceId])
+  @@index([workspaceId, origin])
+}
+
+model ProcedureSkill {
+  id          String   @id @default(cuid())
+  tenantId    String
+  workspaceId String
+  name        String
+  description String
+  // 重放时派出去的那句话（提炼自来源运行的 goal，用户可改）
+  goal        String
+  // JSON: { tool: string; why: string }[]  ——「第几步用了什么工具、为了什么」
+  steps       String   @default("[]")
+  // JSON string[]：这个技能只许用这些工具。**已与来源运行求过交集**
+  toolAllowlist String @default("[]")
+  // 从哪次运行提炼的。松引用不加外键：那次运行被清掉了技能还在
+  sourceRunId String?
+  createdBy   String
+  usedCount   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, workspaceId])
+}
+
 model AgentArtifact {
   id     String @id @default(cuid())
   runId  String

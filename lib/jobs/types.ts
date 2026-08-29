@@ -18,7 +18,8 @@ export type JobName =
   | 'purge_retention' // 广播：全库到期数据清理（保留期承诺的兑现闸，见 lib/legal/retention.ts）
   | 'run_scheduled_agents' // 广播：扫到点的定时智能体并跑（用户自定义计划，三道闸见 lib/workflow/schedule.ts）
   | 'run_agent_loop' // 事件：把一次 AI 执行往前推（payload.runId），见 lib/agent/kick.ts
-  | 'tick_agent_runs'; // 广播：AI 执行兜底巡检（额度重置后接着跑、跑飞的接手），见 lib/agent/tick.ts
+  | 'tick_agent_runs' // 广播：AI 执行兜底巡检（额度重置后接着跑、跑飞的接手），见 lib/agent/tick.ts
+  | 'sweep_local_recipes'; // 广播：AI 执行兜底巡检（额度重置后接着跑、跑飞的接手），见 lib/agent/tick.ts
 
 export type JobPayload = Record<string, unknown>;
 
@@ -58,4 +59,7 @@ export const JOB_TRACK: Record<JobName, JobTrack> = {
   run_agent_loop: 'event',
   // 广播型：扫全表找卡住的执行（等额度到点了、跑它的进程没了），不按租户分批
   tick_agent_runs: 'broadcast',
+  // 广播型：扫全表找配了浏览器端点的工作区。整机版专用（SaaS 够不到用户浏览器，
+  // 处理器里 can('localBrowser') 会直接返回空）
+  sweep_local_recipes: 'broadcast',
 };

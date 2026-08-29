@@ -17,6 +17,9 @@ import { BrowserReadSwitch } from '../extension/BrowserReadSwitch';
 import { readAllowlistLabels } from '@/lib/browser-task/read-allowlist';
 import { fetchCatalog } from '@/lib/market/catalog';
 import { HubHeader } from '@/components/HubHeader';
+import { ProcedureList, type ProcView } from './ProcedureList';
+import { can as canEdition } from '@/lib/edition';
+import { RecipeList } from './RecipeList';
 
 export const dynamic = 'force-dynamic';
 
@@ -47,6 +50,28 @@ export default async function SkillsPage({
 
   const installed = skills.filter((k) => k.installed).length;
   const custom = skills.filter((k) => !k.isBuiltin).length;
+
+  // 采集配方。与做法技能放同一页：两者都是「AI 学会的东西」，分两处用户要找两遍
+  const recipes = (await prisma.scrapeRecipe.findMany({
+    where: { workspaceId: s.workspaceId },
+    orderBy: { updatedAt: 'desc' },
+    take: 50,
+    select: { id: true, name: true, origin: true, status: true, version: true, failCount: true, fields: true },
+  })).map((r) => ({
+    id: r.id, name: r.name, origin: r.origin, status: r.status, version: r.version, failCount: r.failCount,
+    fields: (() => { try { return (JSON.parse(r.fields) as { label: string }[]).map((f) => f.label); } catch { return []; } })(),
+  }));
+
+  // 做法技能（流程技能）。与 ContentSkill 分表，见 lib/skill/distill.ts 的说明
+  const procedures: ProcView[] = (await prisma.procedureSkill.findMany({
+    where: { workspaceId: s.workspaceId },
+    orderBy: [{ usedCount: 'desc' }, { createdAt: 'desc' }],
+    take: 50,
+    select: { id: true, name: true, description: true, steps: true, usedCount: true },
+  })).map((p) => ({
+    id: p.id, name: p.name, description: p.description, usedCount: p.usedCount,
+    steps: (() => { try { return JSON.parse(p.steps) as { tool: string; why: string }[]; } catch { return []; } })(),
+  }));
 
   return (
     <>
@@ -85,6 +110,14 @@ export default async function SkillsPage({
       )}
 
       <SkillCenter skills={skills} readOnly={readOnly} />
+
+      <div style={{ marginTop: 16 }}>
+        <ProcedureList items={procedures} readOnly={readOnly} />
+      </div>
+
+      <div style={{ marginTop: 16 }}>
+        <RecipeList items={recipes} readOnly={readOnly} canRun={canEdition('localBrowser')} />
+      </div>
     </>
   );
 }

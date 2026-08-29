@@ -96,15 +96,33 @@ function take(srcDir: string, name: string, os: Os) {
   console.log(`收集 ${os}/${arch}: ${name} → ${outName}（${mb(size)} MB）`);
 }
 
+// 【只收当前版本的产物】Tauri 不清理上一版，bundle 目录里堆着历史包是常态。
+// 2026-08-29 真出过事：nsis 目录里同时躺着 1.2.0 和 1.2.1 两个 exe，两个都被收进来、
+// 写成同一个输出文件名，清单里就出现**两条 win/x64 且 sha256 不同**——第一条挂的是旧文件
+// 的哈希，磁盘上却是后写的那个。用户照校验值一验，会以为下载的文件被人动过手脚。
+// 版本对不上的一律不收：宁可某个平台缺席（页面会如实说「还没有」），也不能贴错标签。
+const ofVersion = (f: string) => f.includes(version);
+
 // Mac：dmg 优先（拖进 Applications 的标准装法）
-for (const [d, f] of findAll('dmg', (f) => f.toLowerCase().endsWith('.dmg'))) take(d, f, 'mac');
+for (const [d, f] of findAll('dmg', (f) => ofVersion(f) && f.toLowerCase().endsWith('.dmg'))) take(d, f, 'mac');
 // Windows：msi 与 nsis(.exe) 都收，用户按习惯选
-for (const [d, f] of findAll('msi', (f) => f.toLowerCase().endsWith('.msi'))) take(d, f, 'win');
-for (const [d, f] of findAll('nsis', (f) => f.toLowerCase().endsWith('.exe'))) take(d, f, 'win');
+for (const [d, f] of findAll('msi', (f) => ofVersion(f) && f.toLowerCase().endsWith('.msi'))) take(d, f, 'win');
+for (const [d, f] of findAll('nsis', (f) => ofVersion(f) && f.toLowerCase().endsWith('.exe'))) take(d, f, 'win');
 
 // 合并：这次收到的覆盖同 os+arch+ext 的旧条目；旧版本号的其它平台条目
 // **只在版本号没变时保留**——版本变了还留着上一版的 Windows 包，
 // 下载页会把「1.2.0」的标题挂在 1.1.0 的文件上，那是骗人。
+// 【兜底去重】同 os+arch+ext 只留一条。上面的版本过滤是第一道，这里防的是
+// 「同一版本在两个 bundle 目录各有一份」这类情况——清单里出现两条同名不同哈希的记录，
+// 比缺一个平台危险得多。
+const dedup: Build[] = [];
+for (const b of found) {
+  const i = dedup.findIndex((x) => x.os === b.os && x.arch === b.arch && x.ext === b.ext);
+  if (i >= 0) { console.warn(`⚠️ ${b.os}/${b.arch}.${b.ext} 收到多份，保留最后一份：${b.file}`); dedup[i] = b; }
+  else dedup.push(b);
+}
+found.length = 0; found.push(...dedup);
+
 const keep = version === prevVersion
   ? prev.filter((p) => !found.some((f) => f.os === p.os && f.arch === p.arch && f.ext === p.ext))
   : [];

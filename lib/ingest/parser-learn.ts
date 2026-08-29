@@ -210,6 +210,34 @@ export function selectorTokens(selector: string): string[] {
  * 判据刻意保守：token 长度 ≥3 才参与（避免 `.a` 这类误配），
  * 纯标签选择器（div > span，一个 token 都没有）不算通过——那是结构猜测，改版最先碎的就是它。
  */
+// ── 锚点不许是人名（2026-08-29）────────────────────────────────────────
+//
+// 【为什么这条必须有，而且必须在咽喉处】
+// 脱敏规则是「纯数字→NUM、**连续 4 个以上**中文→CJK」，所以两三个字的中文原样保留——
+// 这是刻意的，因为「粉丝」「点赞」「标题」全是两个字，把阈值降到 2 等于抹掉所有可用锚点。
+// 代价是**两三个字的人名也原样保留**，可能被模型选成锚点。
+//
+// 而 activeRulePack() **没有租户过滤**：解析规则是全局下发到每个用户插件的。
+// 一个人名混进规则，就会被推送给所有人——这不是「某个租户的数据留在自己库里」，
+// 是跨租户分发。所以判据放进 verifyAgainstSkeleton：两条学习链路
+//（插件自学习 / 任意站点配方）都走它，谁也绕不过去。
+//
+// 【判据与它的边界，说清楚】按「常见姓氏打头 + 长度 2~3 + 全中文」拦。
+// 这挡得住绝大多数中文姓名，但**挡不住外文名**（"John Smith" 这类在骨架里也原样保留，
+// 而按空格+大写去猜会误杀 "Sign In"、"Read More" 这类真标签）。
+// 误杀的代价只是少一个锚点候选——选择器仍在，其它锚点仍在；漏放的代价是跨租户泄一个名字。
+// 两边不对等，所以宁可误杀。
+const SURNAMES = '赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜戚谢邹喻柏水窦章云苏潘葛奚范彭郎鲁韦昌马苗凤花方俞任袁柳鲍史唐费廉岑薛雷贺倪汤滕殷罗毕郝邬安常乐于时傅皮卞齐康伍余元卜顾孟平黄和穆萧尹姚邵湛汪祁毛禹狄米贝明臧计伏成戴谈宋茅庞熊纪舒屈项祝董梁杜阮蓝闵席季麻强贾路娄危江童颜郭梅盛林刁钟徐邱骆高夏蔡田樊胡凌霍虞万支柯昝管卢莫房裘缪干解应宗丁宣贲邓郁单杭洪包诸左石崔吉钮龚程嵇邢滑裴陆荣翁荀羊於惠甄曲家封芮羿储靳汲邴糜松井段富巫乌焦巴弓牧隗山谷车侯宓蓬全郗班仰秋仲伊宫宁仇栾暴甘钭厉戎祖武符刘景詹束龙叶幸司韶郜黎蓟薄印宿白怀蒲邰从鄂索咸籍赖卓蔺屠蒙池乔阴鬱胥能苍双闻莘党翟谭贡劳逄';
+
+/** 这个锚点像不像一个人名。见上面那段的判据与边界。 */
+export function looksLikePersonalName(raw: string): boolean {
+  const t = String(raw ?? '').trim();
+  if (t.length < 2 || t.length > 3) return false;
+  if (!/^[\u4e00-\u9fa5]+$/.test(t)) return false; // 只判全中文
+  return SURNAMES.includes(t[0]);
+}
+
+
 export function verifyAgainstSkeleton(
   skeleton: string,
   selectors: string[],
@@ -219,7 +247,9 @@ export function verifyAgainstSkeleton(
     const tokens = selectorTokens(sel);
     return tokens.length > 0 && tokens.every((t) => skeleton.includes(t));
   });
-  const okAnchors = anchors.filter((a) => a.length >= 2 && skeleton.includes(a));
+  // 【人名一律不收】见上面 looksLikePersonalName 那段：规则包是全局下发的，
+  // 一个人名混进去会被推送给所有用户。这一层是咽喉——两条学习链路都走这里。
+  const okAnchors = anchors.filter((a) => a.length >= 2 && skeleton.includes(a) && !looksLikePersonalName(a));
   return { selectors: okSelectors, anchors: okAnchors, pass: okSelectors.length > 0 || okAnchors.length > 0 };
 }
 

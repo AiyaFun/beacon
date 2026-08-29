@@ -8,6 +8,8 @@ import { Icon } from '@/components/icons';
 import { AutomationCard, type LastRun } from './AutomationCard';
 import { readAutomationConfig, AUTOMATION_ITEMS } from '@/lib/jobs/automation';
 import { HubHeader } from '@/components/HubHeader';
+import { can as canEdition } from '@/lib/edition';
+import { LocalShellCard } from './LocalShellCard';
 
 export const dynamic = 'force-dynamic';
 
@@ -45,6 +47,12 @@ export default async function SettingsPage() {
   const enabledJobs = AUTOMATION_ITEMS.filter((i) => automationConfig[i.key] !== false).length;
   const failedRecently = Object.values(lastRuns).filter((r) => r?.status === 'failed').length;
 
+  // 本机命令执行的现有配置（只有整机版会用到，SaaS 取了也不渲染）
+  const shellCfg = (await prisma.workspace.findUnique({
+    where: { id: s.workspaceId },
+    select: { shellEnabled: true, shellAllow: true, shellRoot: true, shellExecMode: true, shellTimeoutSec: true, browserCdpUrl: true },
+  })) ?? { shellEnabled: false, shellAllow: '[]', shellRoot: null, shellExecMode: 'allowlist', shellTimeoutSec: 20, browserCdpUrl: null };
+
   return (
     <>
       <HubHeader
@@ -70,6 +78,20 @@ export default async function SettingsPage() {
         style={{ marginBottom: 16 }}
       >
         <AutomationCard config={automationConfig} lastRuns={lastRuns} />
+
+        {/* 本机命令执行：只在整机版/私有化出现。SaaS 连这张卡都不该看见——
+            看得见开关却永远开不了，只会让人反复来问「为什么我开不了」 */}
+        {canEdition('localShell') && (
+          <LocalShellCard
+            enabled={shellCfg.shellEnabled}
+            allow={(() => { try { return JSON.parse(shellCfg.shellAllow) as string[]; } catch { return []; } })()}
+            root={shellCfg.shellRoot}
+            mode={shellCfg.shellExecMode}
+            timeoutSec={shellCfg.shellTimeoutSec}
+            cdpUrl={shellCfg.browserCdpUrl}
+            canBrowser={canEdition('localBrowser')}
+          />
+        )}
       </Card>
 
       <Card title="数据源" sub="开源自建为主，商业 API 兜底，双源冗余">

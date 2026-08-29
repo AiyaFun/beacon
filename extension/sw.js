@@ -236,6 +236,103 @@ async function refreshParserRules() {
   }
 }
 
+
+// ── 任意站点采集配方（0.9.11）─────────────────────────────────────────────
+//
+// 【与逐平台解析器的分工】那些是写死的；这里的站点由用户自己指定，插件事先什么都不知道。
+// 所以三件事必须成立：
+//   ① **权限当场按单个站点申请**（optional_host_permissions + chrome.permissions.request）。
+//      不申请 <all_urls>：那会让装机提示变成「读取和更改你在所有网站上的数据」，
+//      用户装的时候就该看到我们只要他指定的那个站。
+//   ② 没授权就什么都不做——不试探、不注入，连页面地址都不看。
+//   ③ 取不到就如实说取不到并交骨架去学，绝不猜（猜出来的数会污染库且看不出是猜的）。
+
+/** 拉这个工作区的配方并缓存。失败保留上一份——没网时不该把已学会的配方清掉。 */
+async function refreshScrapeRecipes() {
+  const { host, token } = await getConfig();
+  if (!token) return { ok: false, error: '未配置采集令牌' };
+  try {
+    const res = await apiFetch(`${host}/api/ingest/recipe`, { headers: { 'x-beacon-ingest-token': token } });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const data = await res.json().catch(() => ({}));
+    if (!data || !Array.isArray(data.recipes)) return { ok: false, error: '配方格式不对' };
+    await chrome.storage.local.set({ scrapeRecipes: { list: data.recipes, at: Date.now() } });
+    return { ok: true, count: data.recipes.length };
+  } catch (e) {
+    return { ok: false, error: netError(e, host) };
+  }
+}
+
+/** 当前页面匹配哪个配方。只比 origin 与路径前缀，不做复杂匹配——看不懂的匹配规则比没有更糟。 */
+async function recipeForUrl(url) {
+  try {
+    const { scrapeRecipes } = await chrome.storage.local.get('scrapeRecipes');
+    const list = (scrapeRecipes && scrapeRecipes.list) || [];
+    const u = new URL(url);
+    return list.find((r) => {
+      if (r.origin !== u.origin) return false;
+      if (!r.pathPattern) return true;
+      const base = String(r.pathPattern).replace(/\*+$/, '');
+      return u.pathname.startsWith(base);
+    }) || null;
+  } catch { return null; }
+}
+
+/** 这个站点授权了吗。**没授权一律返回 false，不去申请**——申请必须由用户点击触发。 */
+async function hasSiteGrant(origin) {
+  try { return await chrome.permissions.contains({ origins: [`${origin}/*`] }); }
+  catch { return false; }
+}
+
+/** 申请单个站点的权限。只能在用户手势里调（Chrome 强制），所以入口在侧栏按钮。 */
+async function requestSiteGrant(origin) {
+  try { return await chrome.permissions.request({ origins: [`${origin}/*`] }); }
+  catch { return false; }
+}
+
+/**
+ * 在当前标签页跑一次配方。
+ * 没授权就直接返回，让界面去引导用户点授权按钮——**绝不在这里偷偷申请**。
+ */
+async function runRecipeOnTab(tabId, url) {
+  const recipe = await recipeForUrl(url);
+  if (!recipe) return { ok: false, error: '这个页面没有对应的采集配方' };
+  if (!(await hasSiteGrant(recipe.origin))) {
+    return { ok: false, needGrant: true, origin: recipe.origin, error: `还没授权 ${recipe.origin}` };
+  }
+  try {
+    // 把配方塞进页面再注入执行器：executeScript 的 files 形式没法传参
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      func: (r) => { window.__beaconRecipe = r; },
+      args: [recipe],
+    });
+    const [res] = await chrome.scripting.executeScript({ target: { tabId }, files: ['tools/recipe-run.js'] });
+    const out = res && res.result;
+    if (!out) return { ok: false, error: '执行器没有返回结果' };
+
+    const { host, token } = await getConfig();
+    const post = (body) => apiFetch(`${host}/api/ingest/recipe`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-beacon-ingest-token': token },
+      body: JSON.stringify(body),
+    });
+
+    // 还没学会 / 站点改版了 → 交骨架去学，这就是「进化」那一环
+    if (out.mode === 'learn' || out.mode === 'stale') {
+      const r = await post({ kind: 'learn', recipeId: recipe.id, skeleton: out.skeleton });
+      const j = await r.json().catch(() => ({}));
+      if (out.mode === 'stale') await post({ kind: 'result', recipeId: recipe.id, ok: false });
+      return { ok: !!j.ok, learned: j.learned || 0, mode: out.mode, error: j.error };
+    }
+
+    await post({ kind: 'result', recipeId: recipe.id, ok: true });
+    return { ok: true, mode: 'scrape', values: out.values, got: out.got, want: out.want };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+}
+
 // ── 一键发布：拉待填充任务 / 报回执 ───────────────────────────────────────────
 //
 // 与采集回传复用同一枚工作区令牌。插件在这条链路上**只做填表**，
@@ -2216,6 +2313,21 @@ function respond(promise, sendResponse, what) {
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  // ── 任意站点采集配方（0.9.11）。挂在**已有的** onMessage 上：
+  //    再加一个 addListener 会把主通道顶掉（0.9.x 踩过，测试桩只留最后一个）。
+  if (msg?.type === 'beacon-recipes-refresh') {
+    respond(refreshScrapeRecipes(), sendResponse, '拉取采集配方');
+    return true;
+  }
+  if (msg?.type === 'beacon-recipe-run') {
+    respond(runRecipeOnTab(msg.tabId, msg.url), sendResponse, '按配方采集');
+    return true;
+  }
+  // 授权申请必须在用户手势里发起（Chrome 强制），所以它只能由侧栏按钮打过来
+  if (msg?.type === 'beacon-recipe-grant') {
+    respond(requestSiteGrant(msg.origin).then((ok) => ({ ok, origin: msg.origin })), sendResponse, '申请站点授权');
+    return true;
+  }
   if (msg?.type === 'beacon-get-config') {
     respond(getConfig(), sendResponse, '读取配置');
     return true;

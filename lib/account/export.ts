@@ -98,6 +98,8 @@ export async function buildAccountExport(opts: { tenantId: string; memberId: str
     workflowInstalls,
     schedules,
     taskPresets,
+    procedureSkills,
+    scrapeRecipes,
     coverStyles,
     orders,
     complianceFeedback,
@@ -169,6 +171,10 @@ export async function buildAccountExport(opts: { tenantId: string; memberId: str
     // 一键任务：和定时、自建智能体一样是**用户自己配出来的资产**——
     // 不导的话他搬到别处要凭记忆把每张卡的目标与授权范围重配一遍
     prisma.taskPreset.findMany({ where: byWorkspace, orderBy: [{ sort: 'asc' }, { createdAt: 'asc' }] }),
+    // 做法技能：名字、说明、步骤都是从他自己跑通的任务里长出来的，搬走了才接得上
+    prisma.procedureSkill.findMany({ where: byWorkspace, orderBy: { createdAt: 'asc' } }),
+    // 任意站点采集配方：站点、要抓什么、学到的规则——搬走了才能在别处接着用
+    prisma.scrapeRecipe.findMany({ where: byWorkspace, orderBy: { createdAt: 'asc' } }),
     // 封面风格库：名字与画面描述都是用户自己写的（存量漏项，2026-08-22 上线前排查补上）
     prisma.coverStylePreset.findMany({ where: byWorkspace, orderBy: { createdAt: 'asc' } }),
     prisma.paymentOrder.findMany({ where: { tenantId }, orderBy: { createdAt: 'asc' } }),
@@ -310,6 +316,29 @@ export async function buildAccountExport(opts: { tenantId: string; memberId: str
         id: c.id, name: c.name, description: c.description, createdAt: c.createdAt,
       })),
       // 一键任务：目标、让谁干、授权到什么程度——三样都是他配的，缺一样搬过去就得重想一遍
+      // 采集配方：连学到的规则一起导出——只导站点和字段名的话，换个地方还得重学一遍
+      scrapeRecipes: scrapeRecipes.map((r) => ({
+        id: r.id,
+        name: r.name,
+        origin: r.origin,
+        pathPattern: r.pathPattern,
+        fields: parseJson<{ key: string; label: string }[]>(r.fields, []),
+        rules: parseJson<{ key: string; selectors: string[]; anchors: string[] }[]>(r.rules, []),
+        version: r.version,
+        status: r.status,
+        createdAt: r.createdAt,
+      })),
+      // 做法技能：步骤与工具白名单一并导出——只导名字的话，换个地方重建不出同一个技能
+      procedureSkills: procedureSkills.map((p) => ({
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        goal: p.goal,
+        steps: parseJson<{ tool: string; why: string }[]>(p.steps, []),
+        toolAllowlist: parseJson<string[]>(p.toolAllowlist, []),
+        usedCount: p.usedCount,
+        createdAt: p.createdAt,
+      })),
       taskPresets: taskPresets.map((p) => ({
         id: p.id,
         title: p.title,

@@ -110,12 +110,6 @@ export default async function DesktopPage() {
         sub="功能一模一样 · 差别只在怎么打开、能不能连本机"
         style={{ marginBottom: 16 }}
       >
-        <p className="small muted" style={{ margin: '0 0 12px', lineHeight: 1.9 }}>
-          桌面客户端装的<b>就是这个网页</b>：同一个工作区、同一批数据、同一套功能，
-          没有「客户端才有」的能力。它解决的是另一类问题——不跟十几个标签页挤在一起、
-          关掉窗口还在后台待命、开机自己起来。<b>只用浏览器完全够用，不装不影响任何功能。</b>
-        </p>
-
         <div className="grid grid-4" style={{ gap: 10 }}>
           {DESKTOP_EXTRAS.map(([t, d]) => (
             <div key={t} className="card" style={{ padding: 12 }}>
