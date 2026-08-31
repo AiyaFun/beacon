@@ -225,6 +225,8 @@ export async function loadOwnWorks(accountId: string, take = 120): Promise<OwnWo
   const works: OwnWork[] = [];
   for (const r of records) {
     if (!r.title) continue; // 发布记录的 title 可空（补链接时可能只填了 URL）
+    // 旧稿回收的判据是「发出去够久了」（RECYCLE_MIN_AGE_DAYS），没有发布时间就算不出「够久」
+    if (!r.publishedAt) continue;
     works.push({
       id: r.id,
       source: 'publish',

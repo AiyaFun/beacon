@@ -31,7 +31,7 @@ vi.mock('@/lib/memory/core', () => ({ buildMemoryContext: async () => '' }));
 const { startAgentRun, transition, cancelAgentRun, getAgentRunView } = await import('@/lib/agent/run');
 const { settleAgentKicks } = await import('@/lib/agent/kick');
 const { MAX_CONCURRENT_RUNS, MAX_QUEUED_RUNS, decideQueue, promoteQueued } = await import('@/lib/agent/queue');
-const { notifyRefId } = await import('@/lib/agent/notify-run');
+const { notifyRefId, notifyRunStatus } = await import('@/lib/agent/notify-run');
 const { tickAgentRuns, cancelStaleQueued } = await import('@/lib/agent/tick');
 
 let ctx: { tenantId: string; workspaceId: string; accountId: string; memberId: string; role: string };
@@ -252,10 +252,45 @@ describe('跑完了叫我一声', () => {
     expect(await prisma.notification.count({ where: { refId: notifyRefId(run.id, 'done', 1) } })).toBe(1);
   });
 
+  // ── 一次执行里可以确认很多次（2026-08-30 修）──────────────────────────────
+  //
+  // 【这条守的是去重键里的 occurrence】原来的键只到 (runId, status, episode)，
+  // 而 **episode 只在「已结束的运行被追问续跑」时才 +1**。一次执行**里面**，
+  // awaiting_confirm 完全可能出现很多次：确认一个写操作 → 接着跑 → 又撞上第二个。
+  //（「建一份草稿 + 排一条发布计划」就是两个写操作，再普通不过。）
+  //
+  // 于是第二次之后的「等你确认」全部被静默吞掉，两条通道一起死：
+  // 站内红点不出，群机器人回执也没了（echoRunToChat 拿 notifyRunStatus 的返回值当去重判据）。
+  // 任务停在 awaiting_confirm，**没有任何人知道它在等谁**。
+  it('🔒 同一段里第二次「等你确认」也要叫一次（否则任务静默卡死）', async () => {
+    const run = await seedRun('running');
+    // 第一次等确认（此时 steps=0）
+    await transition(run.id, 'running', 'awaiting_confirm', { pending: '{"name":"create_draft"}' });
+    expect(await prisma.notification.count()).toBe(1);
+
+    // 用户确认 → 接着跑 → 又写了两行流水 → 撞上第二个写操作
+    await transition(run.id, 'awaiting_confirm', 'running', {});
+    await transition(run.id, 'running', 'awaiting_confirm', { pending: '{"name":"create_publish_plan"}', steps: 2 });
+
+    expect(
+      await prisma.notification.count(),
+      '第二次等确认被去重键吞掉了——任务会停在那儿而没人知道',
+    ).toBe(2);
+  });
+
+  it('🔒 但同一次确认被重复触发时仍然只叫一次（重投/自愈是常态）', async () => {
+    const run = await seedRun('running');
+    await transition(run.id, 'running', 'awaiting_confirm', { pending: '{}' });
+    // 叫醒重投：状态已经不是 running，循环早退，流水位置不变 → 同一个 refId
+    await notifyRunStatus(run.id, 'awaiting_confirm');
+    await notifyRunStatus(run.id, 'awaiting_confirm');
+    expect(await prisma.notification.count(), '同一次确认叫了不止一遍').toBe(1);
+  });
+
   it('等确认的通知写明是在等谁，不用第二人称（同事点不动那个按钮）', async () => {
     const run = await seedRun('running');
     await transition(run.id, 'running', 'awaiting_confirm', { pending: '{}' });
-    const note = await prisma.notification.findFirst({ where: { refId: notifyRefId(run.id, 'awaiting_confirm', 0) } });
+    const note = await prisma.notification.findFirst({ where: { refId: notifyRefId(run.id, 'awaiting_confirm', 0, 0) } });
     expect(note?.title).toContain('张三');
     // 必须带 runId：不带的话点过去是空白助手页，那次运行再也找不回来
     expect(note?.link).toBe(`/assistant?run=${run.id}`);

@@ -62,7 +62,11 @@ describe('执行移除', () => {
     await seedCommentQuestion(workspaceId, 'douyin', 'abc', '这个怎么收费呢');
     await seedReaderComment(workspaceId, 'douyin', 'abc', '这条视频的配色真好看');
     const r = await purgeRemovedAccountData('douyin', 'abc');
-    expect(r).toEqual({ accounts: 1, posts: 2, watchlistItems: 1, runs: 1, commentQuestions: 1, readerComments: 1 });
+    expect(r).toEqual({
+      accounts: 1, posts: 2, watchlistItems: 1, runs: 1, commentQuestions: 1, readerComments: 1,
+      // 站点类那三项在**账号**移除里恒为 0：站点停采与账号停采是两条互不相干的路
+      scrapeRecords: 0, scrapeRecipes: 0, aiCitations: 0, clips: 0,
+    });
     expect(await prisma.competitorAccount.count()).toBe(0);
     expect(await prisma.crawledPost.count()).toBe(0);
     expect(await prisma.watchlistItem.count()).toBe(0);
@@ -76,7 +80,10 @@ describe('执行移除', () => {
 
   it('库里本来就没有这个账号 → 零删除且不报错（收到申请但从没采过是常态）', async () => {
     expect(await purgeRemovedAccountData('douyin', 'never-seen'))
-      .toEqual({ accounts: 0, posts: 0, watchlistItems: 0, runs: 0, commentQuestions: 0, readerComments: 0 });
+      .toEqual({
+        accounts: 0, posts: 0, watchlistItems: 0, runs: 0, commentQuestions: 0, readerComments: 0,
+        scrapeRecords: 0, scrapeRecipes: 0, aiCitations: 0, clips: 0,
+      });
   });
 
   it('只删被申请的那个账号，同平台其他账号不受影响', async () => {
@@ -182,7 +189,10 @@ describe('申请状态流转', () => {
     });
     const r = await resolveRemovalRequest(req.id, 'removed');
     expect(r.ok).toBe(true);
-    expect(r.purged).toEqual({ accounts: 1, posts: 2, watchlistItems: 1, runs: 1, commentQuestions: 0, readerComments: 0 });
+    expect(r.purged).toEqual({
+      accounts: 1, posts: 2, watchlistItems: 1, runs: 1, commentQuestions: 0, readerComments: 0,
+      scrapeRecords: 0, scrapeRecipes: 0, aiCitations: 0, clips: 0,
+    });
     const after = await prisma.dataRemovalRequest.findUnique({ where: { id: req.id } });
     expect(after?.status).toBe('removed');
     expect(after?.resolvedAt).toBeTruthy();

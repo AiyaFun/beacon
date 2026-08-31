@@ -98,6 +98,8 @@ model Workspace {
   taskPresets     TaskPreset[]
   procedureSkills  ProcedureSkill[]
   scrapeRecipes   ScrapeRecipe[]
+  scrapeRecords   ScrapeRecord[]
+  aiCitations     AiCitation[]
   publishPlans    PublishPlan[]
   workflowRuns    WorkflowRun[]
   scheduledAgents ScheduledAgent[]
@@ -1052,7 +1054,18 @@ model PublishRecord {
   // 恒等于 platformItemId==null，写入时同步不许漂移；单列出来是为了 /data 顶部能一次 count
   // 出「N 篇缺链接学不到数据」并给补链接入口。
   needsBackfill  Boolean  @default(false)
-  publishedAt    DateTime @default(now())
+  // 发布时间。**可空**：插件从小红书笔记页/B站视频页/YouTube 播放页回填时
+  // 采不到这个字段（那几个解析器结构上就不产出它）。2026-08-30 之前这里写的是
+  // `post.publishedAt ?? new Date()`，把**回填那一刻**当成发布时间存进库，
+  // 而库里没有任何字段标记这是猜的。后果三处、全部静默：
+  //   ① /data 的「发布时段分析」把这些作品全归到用户点回填的那个时辰，
+  //      页面上印出「你的最佳发布时段是 深夜/凌晨」——那是他熬夜回填的时间；
+  //   ② 逐日曲线的 D+0 携带这条作品**全生命周期**的累计播放，被判成「首日爆发」；
+  //   ③ 拿这个 D+0 去比基线，ratio≥2 就发「🚀 爆款加速」通知甚至短信——
+  //      对一条其实发了三个月的老作品。
+  // 同一个函数 12 行之下的台账注释正写着「回填时间不能冒充发布时间」，
+  // 那条路如实传 null，落库这条路却补了 now()。
+  publishedAt    DateTime?
   metrics        String   @default("{}")
   fromRecommend  Boolean  @default(false) // 归因：是否来自产品推荐
 
@@ -1093,7 +1106,8 @@ model Notification {
   // 【为什么需要】「等你确认」只有发起人点得动，而红点是工作区级的——
   // 不定向的话，同事也会看到一条他推不动的通知。
   memberId    String?
-  refId       String? // 关联对象（如 publishId），用于同一对象去重
+  refId       String? // 关联对象（如 publishId）。**本身不去重**——DB 上没有唯一约束，
+  // notify() 也只在调用方显式传 once: true 时才查一次重。别照字面理解成「写了就不会重复」。
   title       String
   body        String   @default("")
   link        String?
@@ -1257,6 +1271,14 @@ model LlmCallLog {
   //
   // 松引用不加外键：账本是只增不减的事实记录，不该被运行记录的到期清理级联带走。
   runId            String?
+  // 这次调用是**定时任务**替用户跑的吗（值 = JobName），用户当场发起的为空。
+  //
+  // 【为什么要这一列】退款政策用「本单生效窗口内有没有真实 AI 调用」判断用户消耗没消耗
+  //（lib/pay/order.ts consumedCountForOrder）。而 daily_recommend(05:00)、
+  // optimize_memory(05:30)、generate_reviews(09:00) 这些是系统替他跑的：
+  // 用户 23:00 买了永久买断去睡觉，早上想退 —— 已经「消耗」了，自助全额退变成转人工。
+  // 他什么都没做。归因写进账本，退款判据才能把这部分剔出去。
+  byJob            String?
   createdAt        DateTime @default(now())
 
   @@index([tenantId, createdAt])
@@ -1714,8 +1736,12 @@ model ScrapeRecipe {
   pathPattern String?
   // JSON: { key: string; label: string }[] —— 用户要抓的字段（人话）
   fields      String   @default("[]")
-  // JSON: { key: string; selectors: string[]; anchors: string[] }[] —— 学到的取数规则
+  // JSON: { key, selectors, anchors, jsonPaths? }[] —— 学到的取数规则
   rules       String   @default("[]")
+  // JSON: { readySelector?, scrollScreens?, rowSelector? } —— 页面级选项。
+  // 【为什么一个 JSON 列而不是三个列】这三样只跟着配方整读整写、从不单独查询，
+  // 而且还会继续长（分页、视口…）。每加一样开一次迁移不划算。
+  options     String   @default("{}")
   // 每进化一次 +1。旧版本进 ScrapeRecipeVersion，坏了能回滚
   version     Int      @default(1)
   // learning=还没学会 | active=能用 | broken=连续抓不到，等重新学
@@ -2179,4 +2205,120 @@ model ApiToken {
   member Member @relation(fields: [memberId], references: [id], onDelete: Cascade)
 
   @@index([memberId, revokedAt])
+}
+
+// 采集配方**抓到的数**（2026-08-29 补）。
+//
+// 【为什么必须有这张表】在它之前，两条采集路抓到的值都是原地丢掉的：
+//   · 定时扫描（lib/scrape/sweep.ts）只拿 values 数了个长度，用来判配方好没好；
+//   · 插件（extension/sw.js）连传都没传，POST 里只有 {kind:'result', ok:true}。
+// 也就是说「每 6 小时把配方跑一遍」实质是**配方健康检查**，不是采集。
+// 用户以为数据在积累，库里一个字都没有——这条路上最贵的一个误解。
+//
+// 【为什么每次成功都写一行，同值也写】与增长快照同一条口径（那次专门推翻过「同值不写」）：
+// 同值不写会让「这个数一直没变」和「这段时间根本没采」在数据上长得一模一样，
+// 而这两件事的处置完全相反。多存几行的代价远小于分不清。
+//
+// 【为什么不接 CollectionRun 台账】台账的两个维度是「哪个账号」和「覆盖了哪几天发布的内容」。
+// 任意站点的配方既没有账号、也没有发布时间，塞进去两个维度都是空值——
+// 而台账的价值正是那两个维度。这里自带 capturedAt，已经回答了「什么时候采的」。
+//
+// 🔒 留存：任意站点的内容没有预审过，所以必须有硬上限。见 lib/legal/retention.ts。
+model ScrapeRecord {
+  id          String   @id @default(cuid())
+  tenantId    String
+  workspaceId String
+  recipeId    String
+  // 真正打开的那个网址（AI 可能指定某一页，未必等于 recipeUrl(origin, pathPattern)）
+  url         String
+  // JSON: Record<string,string> —— 页面级标量。单值上限 200 字符（pick 里已截）
+  values      String   @default("{}")
+  // JSON: Record<string,string>[] —— 列表行（给了 rowSelector、或 JSON 响应里是数组时）。
+  // 上限 50 行，与既有翻页采集的服务端硬上限同一个数
+  rows        String   @default("[]")
+  rowCount    Int      @default(0)
+  // 这次取到几个 / 配方要几个。got < want 是「页面照常出数、只是少了几列」那种最难发现的坏
+  got         Int      @default(0)
+  want        Int      @default(0)
+  // server=定时扫描 | plugin_home=插件当场 | manual=页面上点「跑一次」
+  channel     String
+  // 抓的那一刻。**不是** createdAt——插件可能攒一会儿才回传
+  capturedAt  DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, recipeId, capturedAt])
+  @@index([tenantId, capturedAt])
+}
+
+// AI 爬虫来访计数（2026-08-29）。
+//
+// 【为什么要这张表】GEO 这条链上最大的病灶是**评分与真实被引用率零校准**：
+// 打了一套 100 分的量表，却从来不知道分数对不对。这张表是这条链上唯一能提供
+// **反馈信号**的东西——AI 爬虫到底来没来、来的是谁、爬了哪几页。
+// 没有它，所有 GEO 建议都只是「照着论文抄的应该」。
+//
+// 【为什么按天聚合而不是一条一行】爬虫是高频的，一条一行会让这张表迅速变成
+// 库里最大的一张，而我们要回答的问题（「这个月 GPTBot 来过几次」）不需要单条记录。
+// 聚合的代价是丢失单次细节，而那些细节没有任何一个问题需要它。
+//
+// 【为什么不带 tenantId / workspaceId】它记的是**这个部署自己的站**被谁爬了，
+// 不属于任何一个租户。与 HotItem / CrawledPost 同类，是全局表，因此不启用 RLS
+// （见 02-rls.sql 开头那段），也不进数据导出（那是「用户配的东西」，这不是）。
+model AiCrawlerHit {
+  id      String @id @default(cuid())
+  // robots.txt 里的那个名字，取自 lib/geo/ai-crawler.ts 的 AI_AGENTS.token
+  agent   String
+  // training | search | user_fetch —— 三种用途拦错哪一档代价完全不同，必须留着
+  purpose String
+  // 被爬的路径（不含查询串：查询串里可能有参数，而我们只想知道哪一页）
+  path    String
+  // 北京时间的逻辑日 YYYY-MM-DD。**不能用 UTC**：容器跑在 UTC，
+  // 按 UTC 分日会让北京时间清晨那几个小时算进前一天（本库为此专门立过 lib/beijing.ts）
+  day     String
+  count   Int      @default(1)
+  firstAt DateTime @default(now())
+  lastAt  DateTime @default(now())
+
+  @@unique([agent, path, day])
+  @@index([day])
+}
+
+// AI 引用回执：AI 的回答里引了谁，其中有没有你自己的（2026-08-29）。
+//
+// 【和 AiCrawlerHit 的分工】那张回答「有没有被**看见**」（爬虫来过没有），
+// 这张回答「有没有被**用上**」（回答里真的引了你）。后者是 GEO 的终点，
+// 但它**永远是样本不是统计**——只能一次问一句、看一次结果。
+// 因此界面上**不许出百分比**：n=1 印成「引用率 33%」是这条路上最难被发现的错。
+//
+// 【为什么连「不是我的」也记】同一个问题下 AI 引了哪几个平台，能直接指导选题
+// （「这类问题它只引公众号」比任何评分都有用）。但**只记平台与链接，不记作者、不排榜**。
+model AiCitation {
+  id          String @id @default(cuid())
+  tenantId    String
+  workspaceId String
+  // 豆包 / 腾讯元宝 …
+  engine      String
+  // 那一页回答的地址（留档，便于用户自己回去看）
+  answerUrl   String
+  // 用户问的那句话（页面上抓到的，截断）
+  question    String @default("")
+  // 被引用的那条内容
+  sourceUrl   String
+  sourceTitle String @default("")
+  // parsePublishUrl 认出来的平台与作品 ID。**认不出的候选根本不会进来**（绝不按 host 猜）
+  platform       String @default("")
+  platformItemId String @default("")
+  // 是不是你自己的。**只有精确命中 PublishRecord 才为 true**，没命中就是 false，不存在「可能是」
+  isMine          Boolean @default(false)
+  matchedRecordId String?
+  matchedAccountId String?
+  capturedAt   DateTime @default(now())
+  createdAt    DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, capturedAt])
+  @@index([workspaceId, isMine])
 }

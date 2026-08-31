@@ -9,7 +9,6 @@ import { MobileNav } from './MobileNav';
 import { NotificationBell } from './NotificationBell';
 import { visibleNav } from '@/lib/nav';
 import { can } from '@/lib/edition';
-import { PLAN_LABEL } from '@/lib/plan-label';
 
 export async function Topbar() {
   const session = await getSessionOrNull();

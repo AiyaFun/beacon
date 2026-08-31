@@ -1,7 +1,7 @@
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { parseJson } from '@/lib/json';
-import { PageHead, Card, Stat } from '@/components/ui';
+import { Card, Stat } from '@/components/ui';
 import { MaterialEditor } from './MaterialEditor';
 import type { MaterialItem, MaterialType } from './types';
 import { AssetTabs } from '@/components/AssetTabs';

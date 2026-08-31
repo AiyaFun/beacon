@@ -17,6 +17,21 @@ const BLOCKING_STATUSES = ['pending', 'verified', 'removed'];
 // 两者执行的动作完全不同，见 isRemovalRequested 与 resolveRemovalRequest 里的分叉。
 export const ACCOUNT_KIND = 'account';
 export const COMMENT_KIND = 'comment';
+/**
+ * 站点权利人：「别再抓我这个网站」。
+ *
+ * 【为什么必须单开一类，而不是塞进 account】前两类的主体都是**平台上的一个账号**
+ * （platform + handle）。任意站点采集配方面对的是**一个网站**，它没有平台、没有 handle——
+ * 硬塞进 account 会让 `isRemovalRequested('site', 'example.com')` 这种调用看起来合法，
+ * 而 account 那条闸是按平台账号写的，两者的执行动作完全不同。
+ *
+ * 【这一类是 2026-08-29 补的欠账】批二做「配方抓到的数落库」时，我在 PRD 里写了
+ * 「移除申请停采闸留给批四」，批四做完却没做它——于是有一段时间里，
+ * 任意站点的内容被存进库，而站点权利人**没有任何办法让我们停下来**。
+ */
+export const SITE_KIND = 'site';
+/** 站点类申请占用的 platform 值。它不是内容平台，只是这一类的固定标记。 */
+export const SITE_PLATFORM = 'site';
 
 // ── handle 的「同一个号」口径 ──────────────────────────────────────────────
 //
@@ -100,6 +115,166 @@ export async function isRemovalRequested(platform: string, handle: string): Prom
   return hit !== null;
 }
 
+// ── 站点级停采 ──────────────────────────────────────────────────────────
+//
+// 【与账号级的区别】账号级问的是「这个号的内容还采不采」；站点级问的是
+// 「这个域名还去不去」。后者的判据只有一个：**主机名**。
+
+/**
+ * 归一到「入库该长什么样」：只留主机名、转小写、去掉开头的 `www.`。
+ *
+ * 【为什么归到主机名而不是完整 origin】站点权利人说的是「别抓我的站」，
+ * 而 `http://` 与 `https://`、带不带 `www.` 是同一个站。按完整 origin 存的话，
+ * 他写 `https://www.example.com`，我们照样去抓 `http://example.com`——
+ * 这道闸就成了看起来在执行、实际拦不住的那种。
+ */
+export function canonicalRemovalSite(raw: string): string {
+  const t = String(raw ?? '').trim();
+  if (!t) return '';
+  let host = t;
+  try {
+    host = new URL(t.includes('://') ? t : `https://${t}`).hostname;
+  } catch {
+    host = t.replace(/^[a-z]+:\/\//i, '').split('/')[0];
+  }
+  return host.toLowerCase().replace(/^www\./, '');
+}
+
+/**
+ * 这个站点被要求停采了吗。
+ *
+ * 【子域按点分段从右往左比】站点权利人申请 `example.com`，`blog.example.com` 也该停——
+ * 那是同一个人的站。但**绝不能用裸 includes/endsWith**：
+ * `endsWith('example.com')` 会把 `notexample.com` 也算进去，
+ * 那是拿一个人的权利去停掉另一个人的站，比漏拦更坏。
+ * 这条判据与 lib/scrape/recipe.ts 的域名黑名单是同一套写法。
+ */
+export async function isSiteRemovalRequested(origin: string): Promise<boolean> {
+  const host = canonicalRemovalSite(origin);
+  if (!host) return false;
+
+  const rows = await prisma.dataRemovalRequest.findMany({
+    where: { kind: SITE_KIND, status: { in: BLOCKING_STATUSES } },
+    select: { handle: true },
+  });
+  const parts = host.split('.');
+  return rows.some((r) => {
+    const asked = canonicalRemovalSite(r.handle);
+    if (!asked) return false;
+    if (asked === host) return true;
+    const segs = asked.split('.');
+    // 必须落在点分段边界上：notexample.com 的段是 ['notexample','com']，
+    // 与 ['example','com'] 的尾段比对不相等 → 不误停
+    return parts.length > segs.length && parts.slice(-segs.length).join('.') === asked;
+  });
+}
+
+/**
+ * 站点被确认停采后，移除已经存下来的东西。
+ *
+ * 删什么：这个站点下的**采集记录**（ScrapeRecord，存的是它页面上的字段值）。
+ * 配方本身**不删、改成 stopped**：配方是用户自己写的东西（他要抓哪几个字段），
+ * 删掉等于处置了第三方的资产；停掉就已经兑现了「不再采你」。
+ * 而**留着一条明确标注「已停采」的配方**，比让它无声消失更好——
+ * 用户会知道为什么它不跑了，否则他只会重新建一个一模一样的。
+ */
+/**
+ * 命中这个站点的配方 id。
+ *
+ * 【为什么单独抽出来】删和「数一数将要删什么」必须用**同一段**匹配逻辑。
+ * 各写一份的结局这个文件里就有先例：运营脚本曾经自己抄了一份删除实现，
+ * 注释写着「与 lib 同一套语义」，实际差了三处（见 scripts/removal-requests.ts 文件头）。
+ * dry-run 报的数与真删的数对不上，比不给 dry-run 更坏。
+ *
+ * origin 字段存的是完整 origin（https://www.example.com），这里按主机名匹配，
+ * 所以先取候选再在内存里按点分段判据过滤——**不用 SQL 的 contains**，
+ * 那会让 notexample.com 一起中招。
+ */
+export async function siteRecipeIdsFor(origin: string): Promise<string[]> {
+  const host = canonicalRemovalSite(origin);
+  if (!host) return [];
+  const all = await prisma.scrapeRecipe.findMany({ select: { id: true, origin: true } });
+  return all.filter((r) => sameSiteOrSub(canonicalRemovalSite(r.origin), host)).map((r) => r.id);
+}
+
+/** dry-run：数一数站点类会删掉什么。与 purgeRemovedSiteData 共用同一段匹配。 */
+export async function countRemovedSiteData(origin: string): Promise<{ records: number; recipes: number; clips: number }> {
+  const ids = await siteRecipeIdsFor(origin);
+  // 【不能在这里早退】一个站点完全可能「没有配方、但有剪藏」——用户从来没为它建过配方，
+  // 只是在群里发过几条它的链接。早退会让 dry-run 报「0 条」，运营据此以为没东西可删。
+  const clips = (await siteClippedIds(origin)).length;
+  if (ids.length === 0) return { records: 0, recipes: 0, clips };
+  return {
+    records: await prisma.scrapeRecord.count({ where: { recipeId: { in: ids } } }),
+    // 只数还没停的：已经 stopped 的再「停」一次不是这次的效果
+    recipes: await prisma.scrapeRecipe.count({ where: { id: { in: ids }, status: { not: 'stopped' } } }),
+    // 剪藏正文也要数进来：dry-run 报的数与真正执行时删掉的必须是同一批，
+    // 否则运营看着「0 条」按了执行，实际删了一堆——或者反过来
+    clips,
+  };
+}
+
+/** dry-run：数一数 comment 类会删掉几条。与 purgeOneComment 同一条判据（平台 + 正文全等）。 */
+export async function countRemovedComment(platform: string, commentText: string): Promise<number> {
+  const text = (commentText ?? '').trim();
+  if (!text) return 0;
+  return prisma.readerComment.count({ where: { platform, text } });
+}
+
+/**
+ * 从这个站点剪藏来的正文（lib/clip 那条路存进 InspirationItem 的）。
+ *
+ * 【为什么单独一段】剪藏是**第四条**从站点取内容的路，而它存的是**他人作品的正文全文**——
+ * 比配方那几个字段值敏感得多。原来它既没挂停采闸，也不在任何清理路径里：
+ * 站点权利人申请之后，我们嘴上说「删除已经从该站取到的数据」，正文却原封不动留着。
+ *
+ * 【为什么按 url 前缀匹配而不是 platform】剪藏来的条目 platform 可能为空（手动录入），
+ * url 才是唯一能定位到站点的字段。子域一并算上，与 sameSiteOrSub 同一条口径。
+ */
+async function siteClippedIds(origin: string): Promise<string[]> {
+  // 与 siteRecipeIdsFor 同一套归一（去 www.、小写、容忍不带协议的写法）——
+  // 两处用不同的归一，等于同一个申请在两张表上匹配到不同的范围
+  const host = canonicalRemovalSite(origin);
+  if (!host) return [];
+  // 先按 host 粗筛（数据库能用上索引/少扫），再在内存里按段精确比——
+  // 裸 contains 会把 notexample.com 也捞进来，那是拿一个人的权利删另一个人的东西
+  const rows = await prisma.inspirationItem.findMany({
+    where: { url: { contains: host } },
+    select: { id: true, url: true },
+  });
+  return rows.filter((r) => {
+    try { return sameSiteOrSub(canonicalRemovalSite(new URL(r.url!).host), host); } catch { return false; }
+  }).map((r) => r.id);
+}
+
+export async function purgeRemovedSiteData(origin: string): Promise<{ records: number; recipes: number; clips: number }> {
+  const hitIds = await siteRecipeIdsFor(origin);
+  const clipIds = await siteClippedIds(origin);
+  if (hitIds.length === 0 && clipIds.length === 0) return { records: 0, recipes: 0, clips: 0 };
+
+  const records = hitIds.length
+    ? (await prisma.scrapeRecord.deleteMany({ where: { recipeId: { in: hitIds } } })).count
+    : 0;
+  const recipes = hitIds.length
+    ? (await prisma.scrapeRecipe.updateMany({ where: { id: { in: hitIds } }, data: { status: 'stopped' } })).count
+    : 0;
+  // 剪藏是**删**不是停：配方是用户自己写的东西（停掉就已经不再采了），
+  // 而这些是从该站点取回来的正文本身，承诺里写的就是「删除已经从该站取到的数据」。
+  const clips = clipIds.length
+    ? (await prisma.inspirationItem.deleteMany({ where: { id: { in: clipIds } } })).count
+    : 0;
+  return { records, recipes, clips };
+}
+
+/** host 等于 asked，或者是它的子域（按点分段比，不用 endsWith）。 */
+function sameSiteOrSub(host: string, asked: string): boolean {
+  if (!host || !asked) return false;
+  if (host === asked) return true;
+  const parts = host.split('.');
+  const segs = asked.split('.');
+  return parts.length > segs.length && parts.slice(-segs.length).join('.') === asked;
+}
+
 /** 只删申请人自己写的那一条评论正文。返回真实删除行数。 */
 export async function purgeOneComment(
   platform: string,
@@ -136,6 +311,20 @@ export type PurgeResult = {
   commentQuestions: number;
   /** 该账号作品评论区留存的读者原声正文（ReaderComment，scope='rival'） */
   readerComments: number;
+  /** 站点级停采时删掉的采集记录（ScrapeRecord） */
+  scrapeRecords: number;
+  /** 站点级停采时停掉的配方（ScrapeRecipe → status='stopped'，**不删**） */
+  scrapeRecipes: number;
+  /** 随被删作品一并清掉的 AI 引用回执（AiCitation） */
+  aiCitations: number;
+  /**
+   * 站点级停采时删掉的**剪藏正文**（InspirationItem）。
+   *
+   * 与上面 scrapeRecipes 的处置**刻意不同**：配方是用户自己写的取数规则，停掉就已经不再采了；
+   * 而这些是从该站点取回来的**正文全文**，承诺里写的是「删除已经从该站取到的数据」，
+   * 所以它是删不是停。
+   */
+  clips: number;
 };
 
 export async function purgeRemovedAccountData(
@@ -184,7 +373,12 @@ export async function purgeRemovedAccountData(
       })).count;
     }
   }
-  if (!account) return { accounts: 0, posts: 0, watchlistItems: 0, runs: 0, commentQuestions, readerComments };
+  if (!account) {
+    return {
+      accounts: 0, posts: 0, watchlistItems: 0, runs: 0, commentQuestions, readerComments,
+      scrapeRecords: 0, scrapeRecipes: 0, aiCitations: 0, clips: 0,
+    };
+  }
 
   const posts = await prisma.crawledPost.count({ where: { competitorId: account.id } });
   const watchlistItems = await prisma.watchlistItem.count({ where: { competitorId: account.id } });
@@ -192,9 +386,23 @@ export async function purgeRemovedAccountData(
   const { count: runs } = await prisma.collectionRun.deleteMany({
     where: { scope: 'rival', targetId: account.id },
   });
+  // 【AI 引用回执要在删作品**之前**清】它按 (platform, platformItemId) 指向这些作品；
+  // 作品一删（级联），就再也查不出「哪些回执指向了它」，那些行会永远留在库里，
+  // 而它们存的正是这个账号的作品标题与链接——属于承诺要移除的相关信息。
+  const itemIds = (await prisma.crawledPost.findMany({
+    where: { competitorId: account.id },
+    select: { platformItemId: true },
+  })).map((p) => p.platformItemId).filter((x): x is string => !!x);
+  const aiCitations = itemIds.length === 0 ? 0 : (await prisma.aiCitation.deleteMany({
+    where: { platform, platformItemId: { in: itemIds } },
+  })).count;
+
   // 其余级联由 schema 保证（CrawledPost.competitor / WatchlistItem.competitor 均 onDelete: Cascade）
   await prisma.competitorAccount.delete({ where: { id: account.id } });
-  return { accounts: 1, posts, watchlistItems, runs, commentQuestions, readerComments };
+  return {
+    accounts: 1, posts, watchlistItems, runs, commentQuestions, readerComments,
+    scrapeRecords: 0, scrapeRecipes: 0, aiCitations, clips: 0,
+  };
 }
 
 /**
@@ -222,7 +430,22 @@ export async function resolveRemovalRequest(
     const { readerComments } = await purgeOneComment(req.platform, req.commentText ?? '');
     return {
       ok: true,
-      purged: { accounts: 0, posts: 0, watchlistItems: 0, runs: 0, commentQuestions: 0, readerComments },
+      purged: {
+        accounts: 0, posts: 0, watchlistItems: 0, runs: 0, commentQuestions: 0, readerComments,
+        scrapeRecords: 0, scrapeRecipes: 0, aiCitations: 0, clips: 0,
+      },
+    };
+  }
+
+  // 站点权利人那类：停这个域名、删它下面的采集记录，**不碰**任何平台账号档案。
+  if (req.kind === SITE_KIND) {
+    const r = await purgeRemovedSiteData(req.handle);
+    return {
+      ok: true,
+      purged: {
+        accounts: 0, posts: 0, watchlistItems: 0, runs: 0, commentQuestions: 0, readerComments: 0,
+        scrapeRecords: r.records, scrapeRecipes: r.recipes, aiCitations: 0, clips: r.clips,
+      },
     };
   }
 

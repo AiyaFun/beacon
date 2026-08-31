@@ -1,4 +1,4 @@
-import { PageHead } from '@/components/ui';
+
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { getWechatConfig } from '@/lib/wechat-auth';
@@ -60,7 +60,6 @@ export default async function AccountSecurityPage(props: { searchParams: Promise
     ? Boolean((await prisma.member.findUnique({ where: { id: s.memberId }, select: { oaIdentity: true } }))?.oaIdentity)
 
     : false;
-
 
   return (
     <>

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { MAX_SCROLL_SCREENS } from '@/lib/browser/local';
 import {
   COMMENT_TEXT_PURGE_DAYS, MAX_COMMENT_TEXT_LEN,
   MAX_COMMENT_TEXTS_PER_RUN, MAX_READER_COMMENTS_PER_WORKSPACE,
@@ -229,8 +230,12 @@ describe('主页滚动翻页：三份政策都必须说，且与「评论不翻�
   it('🔒 三份政策都写明滚动行为与三个上限（且上限就写在滚动那段旁边）', () => {
     for (const [name, text] of ALL_POLICIES) {
       expect(text, `${name} 没披露主页滚动加载`).toMatch(/向下滚动/);
-      const i = text.indexOf('向下滚动');
-      const around = text.slice(Math.max(0, i - 400), i + 900);
+      // 【锚在「主页作品列表」上，不锚在第一个「向下滚动」上】
+      // 2026-08-29 采集配方那段也写了「向下滚动」（CDP 那条路的滚动，上限是另一组数），
+      // 于是「第一个出现的位置」被它占了，这条守卫开始查错段落。
+      // 政策里会有不止一处滚动说明是正常的——每一处都该带自己那组上限，见下一条。
+      const i = text.indexOf('主页作品列表') >= 0 ? text.indexOf('主页作品列表') : text.indexOf('向下滚动');
+      const around = text.slice(Math.max(0, i - 400), i + 1200);
       for (const n of ['12', '30', '50']) {
         expect(around, `${name} 的滚动说明附近缺上限 ${n}`).toContain(n);
       }
@@ -345,5 +350,157 @@ describe('「打开指定网址并读取正文」：政策与代码必须对得�
     for (const [name, text] of ALL_POLICIES) {
       expect(text, `${name} 没说清不回传截图`).toMatch(/不含截图|不回传截图/);
     }
+  });
+});
+
+// 政策里现在有**两处**滚动说明（插件采竞对主页 / 整机版驱动本机浏览器跑配方），
+// 它们的上限是两组不同的数。上面那条只查了主页那处——这条补上「每一处都要带自己那组上限」，
+// 否则将来再加第三处滚动，它可以完全不写上限而两条守卫都绿。
+describe('每一处滚动说明都要带自己那组上限', () => {
+  it('🔒 配方那处（整机版本机浏览器）写明了屏数与行数上限', () => {
+    const web = read('app/(public)/legal/privacy/page.tsx');
+    const i = web.indexOf('采集配方');
+    expect(i, '政策里没有采集配方那一段').toBeGreaterThan(0);
+    const around = web.slice(i, i + 2400);
+    expect(around, '配方段落里没写滚动').toContain('向下滚动');
+    expect(around, '没写屏数上限').toContain('15 屏');
+    expect(around, '没写行数上限').toContain('50');
+    expect(around, '没说清滚动不等于点击').toContain('不点击任何按钮');
+  });
+
+  // ── 2026-08-30：这条守卫原来守的是 `/\d/` ─────────────────────────────────
+  //
+  // 「附近有没有数字」在一个 1500 字的窗口里几乎恒真——版本号 0.9.10、
+  // 「单张 1MB」、「300 字」随便哪一个都够。新增一段**完全没有上限**的滚动说明照样绿。
+  // 判据改成两条都要成立：
+  //   ① 附近有真正的**上限措辞**（最多 / 不超过 / 上限），不是随便一个数字；
+  //   ② 那几个数字与**代码里的常量对得上**——政策上写 12 次、代码改成 40 次时要红。
+  it('🔒 政策里出现的每一处「向下滚动」附近都得有数字上限', () => {
+    const web = read('app/(public)/legal/privacy/page.tsx');
+    let from = 0;
+    let seen = 0;
+    for (;;) {
+      const i = web.indexOf('向下滚动', from);
+      if (i < 0) break;
+      seen += 1;
+      // 【作用域必须是同一个 <li>，不能是「附近 N 个字符」】
+      // 第一版用的是 slice(i-600, i+900)。变异验证当场抓到：在 2.1 节末尾新插一段
+      // **完全没有上限**的滚动说明，窗口往前 600 字捞到了**邻居条目**的「最多 12 次」，
+      // 于是照样绿。一个条目就是一项披露，上限必须写在它自己这一条里。
+      const liStart = web.lastIndexOf('<li>', i);
+      const liEnd = web.indexOf('</li>', i);
+      // 【先把 -1 挡掉再切】否则 slice(-1, …) / slice(…, -1) 会切出一段谁也没想要的文本，
+      // 而断言可能恰好在那段上成立——这正是本项目归档的第八种假绿
+      //（见 tests/fake-green-guard.test.ts；这一段刚写完就被它抓了一次）。
+      if (liStart < 0 || liEnd < 0) {
+        throw new Error(`第 ${seen} 处滚动说明不在任何 <li> 里，这条守卫的作用域判断要跟着改`);
+      }
+      const item = web.slice(liStart, liEnd);
+      expect(
+        /(最多|不超过|上限)\s*[0-9]/.test(item),
+        `第 ${seen} 处滚动说明**这一条里**没有上限措辞。`
+        + '（只看「附近有没有数字」是不够的：版本号、字数限制，甚至隔壁条目的上限，'
+        + '都会让那种判据恒真。）',
+      ).toBe(true);
+      from = i + 1;
+    }
+    expect(seen, '一处滚动说明都没找到，这条守卫自己坏了').toBeGreaterThanOrEqual(2);
+  });
+
+  it('🔒 政策上写的滚动上限与代码里的常量对得上', () => {
+    // 【为什么要绑常量】只验「政策里写了个数」防不住「代码把 12 改成 40 而政策没动」——
+    // 那时对外承诺的上限就成了假的，而且不会有任何东西变红。
+    const web = read('app/(public)/legal/privacy/page.tsx');
+
+    // ① 插件侧（主页作品列表的懒加载）：轮数与墙钟预算
+    const common = read('extension/content/common.js');
+    const rounds = /const DEEP_MAX_ROUNDS = (\d+);/.exec(common)?.[1];
+    const budgetMs = /const DEEP_BUDGET_MS = (\d+);/.exec(common)?.[1];
+    expect(rounds, '插件里的滚动轮数常量不见了，这条守卫要跟着改').toBeTruthy();
+    expect(budgetMs).toBeTruthy();
+    expect(web, `政策里的滚动次数上限与 DEEP_MAX_ROUNDS(${rounds}) 对不上`)
+      .toContain(`最多 ${rounds} 次`);
+    expect(web, `政策里的滚动时长上限与 DEEP_BUDGET_MS(${budgetMs}ms) 对不上`)
+      .toContain(`不超过 ${Number(budgetMs) / 1000} 秒`);
+
+    // ② 服务端/CDP 侧（整机版的有界滚动）：屏数
+    expect(web, `政策里的屏数上限与 MAX_SCROLL_SCREENS(${MAX_SCROLL_SCREENS}) 对不上`)
+      .toContain(`最多 ${MAX_SCROLL_SCREENS} 屏`);
+  });
+});
+
+// ── 承诺「可以关掉」的开关，界面上必须真的能关（2026-08-30 修）──────────────
+//
+// 隐私政策写着「一个**每 10 分钟的轮询**（可在插件设置页关闭）」，
+// sw.js 的 armTaskPollAlarm 也确实读 `taskPoll` 并在它变化时重设闹钟，
+// 连它上面那行注释都写着「用户可以在设置页关掉它」——
+// 而**全项目没有任何地方写这个键**：设置页上从来就没有这个开关。
+// 三处都以为有，只有界面没有。用户找遍设置也关不掉一个我们承诺他能关的后台请求。
+//
+// 这与「写了没接」是同一形状，只是缺的那一半在界面上而不是在调用点上。
+describe('🔒 政策里说「可关闭」的，设置页上要真的写得了', () => {
+  const optsJs = read('extension/options.js');
+  const optsHtml = read('extension/options.html');
+  const sw = read('extension/sw.js');
+
+  /** 存储键 → 政策里那句承诺的关键词。加一个「可关闭」的能力就往这里加一行。 */
+  const SWITCHES: [string, string][] = [
+    ['taskPoll', '每 10 分钟的轮询'],
+    ['scheduledCollect', '每日定时采集'],
+    ['commentCollectOwn', '评论'],
+    ['autoClickPublish', '代点发布'],
+  ];
+
+  it.each(SWITCHES)('%s：政策里确实承诺了可关', (key, phrase) => {
+    const web = read('app/(public)/legal/privacy/page.tsx');
+    const md = read('extension/store/privacy.md');
+    expect(
+      web.includes(phrase) || md.includes(phrase),
+      `政策里找不到「${phrase}」——要么承诺没了（那这条守卫该删），要么措辞改了`,
+    ).toBe(true);
+  });
+
+  it.each(SWITCHES)('%s：设置页上有控件，且真的写得进 storage', (key) => {
+    expect(optsHtml, `设置页上没有 id="${key}" 这个控件`).toContain(`id="${key}"`);
+    // 【必须验「写」而不只是「读」】只读不写正是这次的缺陷形状：
+    // sw.js 读得好好的，而没有任何地方写它，于是那个开关等于不存在。
+    expect(
+      optsJs,
+      `${key} 只有读没有写——设置页上摆了个控件却存不进去，和没有一样`,
+    ).toMatch(new RegExp(`chrome\\.storage\\.sync\\.set\\(\\{[^}]*\\b${key}\\b`));
+  });
+
+  it('🔒 sw.js 里每个读 storage 开关的键，设置页都得写得了它', () => {
+    // 这条是上面那张表的兜底：**新加一个开关时不必记得来改这份清单**，
+    // 只要 sw.js 读了某个 sync 键、而 options.js 从来不写它，这里就会红。
+    const readKeys = new Set<string>();
+    for (const m of sw.matchAll(/chrome\.storage\.sync\.get\(\[([^\]]*)\]\)/g)) {
+      for (const raw of m[1].split(',')) {
+        const k = raw.trim().replace(/^['"]|['"]$/g, '');
+        if (k) readKeys.add(k);
+      }
+    }
+    expect(readKeys.size, '一个 sync 读取都没扫到，扫描逻辑坏了').toBeGreaterThan(5);
+
+    /** 不该由设置页控制的键，每条写明理由。 */
+    const NOT_A_SETTING: Record<string, string> = {
+      host: '服务器地址，由令牌桥或用户手填，不是开关（options.js 里另有 hostEl 在写）',
+      token: '采集令牌，同上（tokenEl 在写）',
+      selfAccountId: '回填账号绑定，由侧栏与 popup 三个入口写，不在设置页',
+      scheduledCollectHour: '时刻选择，由 scheduledCollectHourEl 写（不是 checkbox 那套判据）',
+      selfAutoHour: '同上',
+      wechatRiskAck: '风险确认，由 popup 的一次性弹窗写，刻意不放进设置页',
+    };
+    const unwritable = [...readKeys].filter(
+      (k) => !NOT_A_SETTING[k]
+        && !new RegExp(`chrome\\.storage\\.sync\\.set\\(\\{[^}]*\\b${k}\\b`).test(optsJs)
+        && !optsJs.includes(`${k}:`),
+    );
+    expect(
+      unwritable,
+      `sw.js 读了这些 sync 键，但设置页写不了它们：${unwritable.join(', ')}。\n`
+      + '要么补上控件，要么在本用例的 NOT_A_SETTING 里写明为什么不该由用户控制。\n'
+      + '（这次真踩的是 taskPoll：政策承诺「可在插件设置页关闭」，而那个开关根本不存在。）',
+    ).toEqual([]);
   });
 });

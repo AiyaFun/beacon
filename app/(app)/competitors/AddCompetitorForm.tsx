@@ -22,7 +22,10 @@ const HANDLE_HINT: Record<string, { placeholder: string; hint: string }> = {
   tiktok: { placeholder: '用户名（@后面部分）', hint: '主页链接 tiktok.com/@ 后面那串，如 @mrbeast 填 mrbeast' },
 };
 
-export function AddCompetitorForm() {
+export function AddCompetitorForm({ sourceStatus = {} }: {
+  /** 每个平台现在取不取得到数据：server=服务端可取 / plugin=要装插件 / none=没有通道 */
+  sourceStatus?: Record<string, string>;
+} = {}) {
   const [platform, setPlatform] = useState(PLATFORM_LIST[0].key as string);
   const [handle, setHandle] = useState('');
   const [name, setName] = useState('');
@@ -102,6 +105,20 @@ export function AddCompetitorForm() {
           </span>
         )}
       </div>
+      {/* 【加之前就说，不是加完才发现】选到一个没有数据源的平台时当场提示——
+          这是用户最容易得出「产品坏了」结论的那一刻，而真相是这条通道还不存在。
+          注意**不拦着他加**：他可能就是想先记下来，等通道开了再采。 */}
+      {sourceStatus[platform] === 'none' && (
+        <p className="small" style={{ margin: 0, color: 'var(--amber, #b45309)', lineHeight: 1.85 }}>
+          <b>这个平台现在没有数据源</b>——服务端取不到，采集助手也采不了。
+          加进来可以先记着，但<b>不会有作品数据</b>。这不是故障。
+        </p>
+      )}
+      {sourceStatus[platform] === 'plugin' && (
+        <p className="small muted" style={{ margin: 0, lineHeight: 1.85 }}>
+          这个平台服务端拿不到数据，要装<b>采集助手</b>浏览器插件后由它去采。
+        </p>
+      )}
       <div className="row wrap" style={{ gap: 8 }}>
         <select className="select" style={{ maxWidth: 120 }} value={platform} onChange={(e) => { setPlatform(e.target.value); setMsg(null); }}>
           {PLATFORM_LIST.map((p) => (

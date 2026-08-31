@@ -5,7 +5,8 @@ import { listPlans, buildPublishPlan } from '../publish/plan';
 import { TASK_STATUS_LABEL, capOf, channelLabel } from '../publish/capability';
 import { runCover } from '../cover/run';
 import { convene } from '../advisor/panel';
-import type { AgentTool } from './tools';
+import type { AgentTool } from './tool-types';
+import { clamp, num, str } from './tool-types';
 
 // ── 产出与发布类工具 ────────────────────────────────────────────────────────
 //
@@ -16,12 +17,6 @@ import type { AgentTool } from './tools';
 //   · 「已填进后台」与「已发布」是两个词，绝不许合并——插件只能把内容填进去，
 //     点不点发布是用户的事。合并的后果是用户以为稿子已经出去了。
 
-const str = (v: unknown, fallback = ''): string => (typeof v === 'string' ? v.trim() : fallback);
-const num = (v: unknown, fallback: number): number => {
-  const n = typeof v === 'number' ? v : Number(v);
-  return Number.isFinite(n) ? n : fallback;
-};
-const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 
 const listPublishPlans: AgentTool = {
   name: 'list_publish_plans',

@@ -5,10 +5,11 @@ import { parseJson, engagementRate, type Metrics } from '@/lib/json';
 import { heatForSort } from '@/lib/insight/heat';
 import { platformName, PLATFORMS, PLATFORM_LIST } from '@/lib/constants';
 import { relTime } from '@/lib/format';
-import { PageHead, Card, Stat, Fold, Empty } from '@/components/ui';
+import { Card, Stat, Fold, Empty } from '@/components/ui';
 import { ActionButton } from '@/components/ActionButton';
 import { actCrawlCompetitors } from './actions';
 import { AddCompetitorForm } from './AddCompetitorForm';
+import { competitorSourceStatus } from '@/lib/adapters/registry';
 import { BatchCollectButton } from './BatchCollectButton';
 import { CompetitorTopPosts } from './CompetitorTopPosts';
 import { CompetitorRoster, type RosterRow } from './CompetitorRoster';
@@ -266,7 +267,14 @@ export default async function CompetitorsPage({
           sub={`粘主页链接自动识别 · 支持 ${PLATFORM_LIST.length} 个平台`}
           defaultOpen={allWatchlist.length === 0}
         >
-          <AddCompetitorForm />
+          {/* 【把「这个平台有没有数据源」放到他真正会痛的那一刻】
+              设置页里也有这张表，但没人会先去设置页看一眼再来加竞对。
+              加完才发现空白，他的结论是「产品坏了」——而真相是这条通道还不存在。 */}
+          <AddCompetitorForm
+            sourceStatus={Object.fromEntries(
+              PLATFORM_LIST.map((p) => [p.key, competitorSourceStatus(p.key)]),
+            )}
+          />
         </Fold>
 
         {wechatAccounts.length > 0 && (

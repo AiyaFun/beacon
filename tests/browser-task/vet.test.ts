@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { prisma } from '@/lib/db';
 import { vetBrowserTaskArgs, resolveCompetitorRef } from '@/lib/browser-task/vet';
+import { AGENT_TOOLS } from '@/lib/agent/tools';
+import { between, orderedBefore } from '../helpers/anchor';
 
 // 浏览器任务的三道闸收口（2026-08-26）。
 //
@@ -124,5 +126,48 @@ describe('闸只有一份：两个入口都必须走 vet.ts', () => {
     for (const banned of ['beacon_click', 'beacon_fill', 'beacon_execute_script', 'beacon_open_url']) {
       expect(mcp).not.toContain(`name: '${banned}'`);
     }
+  });
+});
+
+// ── 对外调用面也要过角色闸与工具开关（2026-08-30 补）─────────────────────────
+//
+// 派浏览器任务在 AI 工具表里标的是 `action: 'competitor.manage'`，executeCall 会按
+// 发起人角色判一次；网页那条路走 requireRole。而 /api/v1/browser-tasks 此前
+// **一道角色闸都没有**——同一件事，网页会被拦下、API 不会。
+//
+// 【为什么「今天够不着」不是不挂闸的理由】这条路由只在 appliance/private 存在，
+// 而那两个形态里 viewer 目前不可被授予（assignableRoles）——所以今天大概率触发不了。
+// 但那是**两道无关约束恰好互相收口**的结果：哪天 assignableRoles 放开、
+// 或者库里留着一个切换形态之前建的 viewer，这个口子就开了，
+// 而那时没有任何东西会提醒我们。本项目的既有做法是「闸挂每一条路」。
+describe('🔒 /api/v1/browser-tasks 的闸与网页/AI 那两条路一致', () => {
+  const route = fs.readFileSync(path.join(process.cwd(), 'app/api/v1/browser-tasks/route.ts'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+  it('挂了角色闸，且用的是与 AI 工具表同一个动作', () => {
+    const tool = AGENT_TOOLS.find((t) => t.name === 'dispatch_browser_task');
+    expect(tool, 'dispatch_browser_task 不在工具表里了，这条守卫要跟着改').toBeTruthy();
+    expect(route, 'API 这条路没有角色闸').toContain('can(auth.ctx.role,');
+    expect(
+      route,
+      `AI 那条路判的是 ${tool!.action}，API 这条判的必须是同一个——` +
+      '两条路对同一件事用不同的权限判据，等于其中一条是漏的',
+    ).toContain(`can(auth.ctx.role, '${tool!.action}')`);
+  });
+
+  it('工作区关掉这个能力时 API 也不派（只在界面上关等于摆设）', () => {
+    expect(route).toContain('disabledTools(');
+    expect(route).toContain("off.includes('dispatch_browser_task')");
+  });
+
+  it('闸在真正入队之前（判完再派等于已经派了）', () => {
+    orderedBefore(route, "can(auth.ctx.role, 'competitor.manage')", 'enqueueBrowserTask(');
+    orderedBefore(route, "off.includes('dispatch_browser_task')", 'enqueueBrowserTask(');
+  });
+
+  it('拒绝时回 403 并说清原因（静默 200 会让调用方以为派成功了）', () => {
+    const seg = between(route, "can(auth.ctx.role, 'competitor.manage')", 'const body =');
+    expect(seg).toContain('403');
+    expect(seg).toContain('没有派发采集任务的权限');
   });
 });

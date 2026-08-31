@@ -86,9 +86,21 @@ export function competitorTrend(snapshots: CompetitorSnapshotInput[]): Competito
   for (const k of COUNT_KEYS) {
     const a = last[k];
     const b = first[k];
-    if (a == null && b == null) continue;
+    // 【两端都要有才算得出净增】原来这里是 `if (a == null && b == null) continue`，
+    // 只在**两端都没有**时跳过。于是首末观测有一端缺这一项时：
+    //   · 首次没采到、末次采到了 → `a - 0 = a`，把**这条作品的累计总数**印成「本段净增」
+    //     （抖音主页给不了收藏数、详情页给得了，这种一端有一端无的情形是常态）；
+    //   · 首次采到了、末次没采到 → `0 - b` 钳成 0 → 印成「没涨」，而事实是「不知道」。
+    // 两种都是把「不知道」说成一个确定的数。
+    //
+    // 讽刺的是同一屏下面那张记录表十几行之外就写着「⚠️ 原来这里是 metrics[metric] ?? 0 ——
+    // 把『这次没采到这一项』印成 0」——那处修过了，这处没有。
+    //
+    // 现在：**任一端缺失就不写这个键**，界面上显示「—」（没有净增可言），
+    // 而不是一个编出来的数字。
+    if (a == null || b == null) continue;
     // 平台回收流量导致的负增长钳 0（与自有作品的 clampDiff 同口径）
-    growth[k] = Math.max(0, (a ?? 0) - (b ?? 0));
+    growth[k] = Math.max(0, a - b);
   }
   return {
     points,

@@ -15,8 +15,11 @@ async function mkTenant(plan: string, planExpiresAt: Date | null) {
 
 // ⚠️ createMany，别退回逐条 create 的循环——用例要造几千条，逐条就是几千个来回，
 // 单条用例逼近 15s 默认超时，机器一忙整套测试就红一片（同 tests/quota.test.ts 的说明）。
-async function logCalls(tenantId: string, n: number) {
-  const row = { tenantId, provider: 'openai', model: 'gpt-4o-mini', fn: 'scoring', mocked: false, costUsd: 0.001 };
+// 【source 是 2026-08-30 加的】在那之前配额计数器不分来源，一个桶两套上限——
+// 于是「自带 Key 的调用照样把平台额度顶满」。分桶之后，要验 BYOK 那一档的上限，
+// 就必须真的记 BYOK 调用；不传时留 'unknown'（历史行的形状，按平台那一档播种）。
+async function logCalls(tenantId: string, n: number, source: 'platform' | 'byok' | 'unknown' = 'unknown') {
+  const row = { tenantId, provider: 'openai', model: 'gpt-4o-mini', fn: 'scoring', mocked: false, source, costUsd: 0.001 };
   await prisma.llmCallLog.createMany({ data: Array.from({ length: n }, () => ({ ...row })) });
 }
 
@@ -108,7 +111,11 @@ describe('quota × 套餐到期（懒判断，无需 cron）', () => {
 
   it('🔒 套餐到期后 BYOK 同样收口到 free 档（2026-07 起 BYOK 权益跟档位走，到期即回落）', async () => {
     const t = await mkTenant('personal', past());
-    await logCalls(t.id, 100);
+    // 两个桶各自打满：平台那 100 次验「到期后按 free 档 30/天 拦」，
+    // BYOK 那 100 次验「到期后 BYOK 也从 5000 回落到 30」——
+    // 计数器分桶之后，拿平台的调用去验 BYOK 的上限已经不成立了
+    await logCalls(t.id, 100, 'platform');
+    await logCalls(t.id, 100, 'byok');
     await expect(assertLlmQuota(t.id, 'platform')).rejects.toThrow();
     await expect(assertLlmQuota(t.id, 'byok')).rejects.toThrow(QuotaExceededError); // free 档 BYOK 限 30/天
   });

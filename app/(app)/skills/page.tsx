@@ -1,7 +1,7 @@
 import { getSession } from '@/lib/session';
 import { can } from '@/lib/rbac';
 import { listSkillsForTenant } from '@/lib/skills';
-import { PageHead, Stat, Card } from '@/components/ui';
+import { Stat, Card } from '@/components/ui';
 import { SkillCenter } from './SkillCenter';
 import { Market } from './Market';
 import { RoleTabs } from '@/components/RoleTabs';
@@ -52,15 +52,58 @@ export default async function SkillsPage({
   const custom = skills.filter((k) => !k.isBuiltin).length;
 
   // 采集配方。与做法技能放同一页：两者都是「AI 学会的东西」，分两处用户要找两遍
-  const recipes = (await prisma.scrapeRecipe.findMany({
+  const recipeRows = await prisma.scrapeRecipe.findMany({
     where: { workspaceId: s.workspaceId },
     orderBy: { updatedAt: 'desc' },
     take: 50,
     select: { id: true, name: true, origin: true, status: true, version: true, failCount: true, fields: true },
-  })).map((r) => ({
-    id: r.id, name: r.name, origin: r.origin, status: r.status, version: r.version, failCount: r.failCount,
-    fields: (() => { try { return (JSON.parse(r.fields) as { label: string }[]).map((f) => f.label); } catch { return []; } })(),
-  }));
+  });
+
+  // 每个配方**最近抓到的那一条** + 总条数。
+  //
+  // 【为什么值得多查这两下】配方卡上原来只有状态和「跑一次」，看不到抓到了什么。
+  // 而这条路上最贵的误解正是「以为数据在积累」——在落库补上之前，
+  // 库里其实一个字都没有，而卡片照样显示「能用」。有数据就印数据、
+  // 没数据就明说没有，这个误解才不会再发生。
+  const recipeIds = recipeRows.map((r) => r.id);
+  const [lastRecords, counts] = recipeIds.length === 0 ? [[], []] : await Promise.all([
+    // 每个配方取最近一条：条数最多 50，直接按 recipeId 分组取首条比 N 次查询省
+    prisma.scrapeRecord.findMany({
+      where: { workspaceId: s.workspaceId, recipeId: { in: recipeIds } },
+      orderBy: { capturedAt: 'desc' },
+      take: 200,
+      select: { recipeId: true, capturedAt: true, values: true, got: true, want: true, rowCount: true },
+    }),
+    prisma.scrapeRecord.groupBy({
+      by: ['recipeId'],
+      where: { workspaceId: s.workspaceId, recipeId: { in: recipeIds } },
+      _count: { _all: true },
+    }),
+  ]);
+  const latest = new Map<string, (typeof lastRecords)[number]>();
+  for (const rec of lastRecords) if (!latest.has(rec.recipeId)) latest.set(rec.recipeId, rec);
+  const totalBy = new Map(counts.map((c) => [c.recipeId, c._count._all]));
+
+  const recipes = recipeRows.map((r) => {
+    const labels = (() => {
+      try { return (JSON.parse(r.fields) as { key: string; label: string }[]); } catch { return []; }
+    })();
+    const rec = latest.get(r.id);
+    const pairs: [string, string][] = rec
+      ? Object.entries((() => { try { return JSON.parse(rec.values) as Record<string, string>; } catch { return {}; } })())
+        // key 是 f1/f2，用户看不懂——换回他自己写的那个人话标签
+        .map(([k, v]) => [labels.find((f) => f.key === k)?.label ?? k, v] as [string, string])
+        .slice(0, 4)
+      : [];
+    return {
+      id: r.id, name: r.name, origin: r.origin, status: r.status, version: r.version, failCount: r.failCount,
+      fields: labels.map((f) => f.label),
+      last: rec
+        ? { at: rec.capturedAt, got: rec.got, want: rec.want, rowCount: rec.rowCount, pairs }
+        : null,
+      total: totalBy.get(r.id) ?? 0,
+    };
+  });
 
   // 做法技能（流程技能）。与 ContentSkill 分表，见 lib/skill/distill.ts 的说明
   const procedures: ProcView[] = (await prisma.procedureSkill.findMany({
@@ -80,7 +123,6 @@ export default async function SkillsPage({
         hint={`${AGENT_ROLES.skill.oneLine} · 装上后创作工坊一键用，AI 助手也会自己挑着用`}
         tabs={<RoleTabs active="skill" inline />}
       />
-
 
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
         <Stat label="可用技能" value={skills.length} foot="内置 + 本团队自定义" />

@@ -5,43 +5,13 @@ import Link from 'next/link';
 import { Icon } from '@/components/icons';
 import { Overlay } from '@/components/Overlay';
 import { TierBadge } from '@/components/ui';
-import {
-  COVER_SPEC_OPTIONS,
-  specForPlatform,
-  coverSpec,
-  planCoverJobs,
-  WECHAT_MAIN_SPEC,
-  WECHAT_SQUARE_SPEC,
-} from '@/lib/cover/specs';
-import {
-  COVER_STYLE_OPTIONS,
-  COVER_FONTS,
-  COVER_DECORS,
-  DEFAULT_COVER_FONT,
-  rankStylesForPersona,
-} from '@/lib/cover/styles';
-import {
-  MAX_SUBJECT_IMAGES,
-  MAX_BACKGROUND_IMAGES,
-  COVER_TITLE_SOFT_MAX,
-  COVER_TITLE_HARD_MAX,
-  COVER_SUBTITLE_HARD_MAX,
-  COVER_EXTRA_HARD_MAX,
-  MAX_COVER_IMAGES,
-} from '@/lib/cover/rules';
+import { COVER_SPEC_OPTIONS, specForPlatform, coverSpec, planCoverJobs, WECHAT_MAIN_SPEC, WECHAT_SQUARE_SPEC } from '@/lib/cover/specs';
+import { COVER_STYLE_OPTIONS, COVER_FONTS, COVER_DECORS, DEFAULT_COVER_FONT, rankStylesForPersona } from '@/lib/cover/styles';
+import { MAX_SUBJECT_IMAGES, MAX_BACKGROUND_IMAGES, COVER_TITLE_SOFT_MAX, COVER_TITLE_HARD_MAX, COVER_SUBTITLE_HARD_MAX, COVER_EXTRA_HARD_MAX, MAX_COVER_IMAGES } from '@/lib/cover/rules';
 import { PortraitConsentText } from '@/components/PortraitConsent';
 import { prepareReferenceImage, downloadImage } from '@/lib/cover/client-image';
 import type { MediaAssetSummary } from '@/lib/media/store';
-import {
-  actSaveLibraryAsset,
-  actListLibrary,
-  actDeleteAsset,
-  actDraftCovers,
-  actSetDraftCover,
-  actSaveStylePreset,
-  actDeleteStylePreset,
-  type StylePreset,
-} from './cover-actions';
+import { actSaveLibraryAsset, actDeleteAsset, actDraftCovers, actSetDraftCover, actSaveStylePreset, actDeleteStylePreset, type StylePreset } from './cover-actions';
 
 // 封面工位（「标题与封面」tab 顶部）。外部封面工具要用户想四件事：比例、标题、风格、素材；
 // 这里四件事都有默认来源：比例按草稿平台、大字用采纳的标题 / 标题矩阵带入、风格按人设赛道推荐、

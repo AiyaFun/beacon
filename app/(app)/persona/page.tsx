@@ -1,10 +1,10 @@
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
-import { readPersona, personaCompleteness, type PersonaCard } from '@/lib/persona';
-import { readFingerprint, type FingerprintItem, type StyleFingerprint } from '@/lib/style';
+import { readPersona, personaCompleteness } from '@/lib/persona';
+import { readFingerprint, type FingerprintItem } from '@/lib/style';
 import { MEMORY_TYPES, platformName } from '@/lib/constants';
 import { relTime } from '@/lib/format';
-import { PageHead, Card, Meter, Empty, Stat } from '@/components/ui';
+import { Card, Meter, Empty, Stat } from '@/components/ui';
 import { Icon } from '@/components/icons';
 import { personaLearningProposals } from '@/lib/memory/optimize';
 import { PersonaEditor } from './PersonaEditor';
@@ -112,7 +112,6 @@ export default async function PersonaPage({
         hint="记忆越用越懂你的账号；数据只提议，人设你说了算"
         tabs={<AssetTabs active="persona" inline />}
       />
-
 
       <PageTabs
         variant="sub"

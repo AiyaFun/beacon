@@ -3,7 +3,7 @@ import { getSession } from '@/lib/session';
 import { parseJson, toJson, type Metrics } from '@/lib/json';
 import { platformName, platformColor } from '@/lib/constants';
 import { fmtNum, fmtDate } from '@/lib/format';
-import { PageHead, Card, Stat, Meter, Empty } from '@/components/ui';
+import { Card, Stat, Meter, Empty } from '@/components/ui';
 import { Icon } from '@/components/icons';
 import { CopyText } from '@/components/CopyText';
 import { Backfill } from './Backfill';
@@ -42,9 +42,44 @@ import { PageTabs } from '@/components/PageTabs';
 import { EffectTabs } from '@/components/insight/EffectTabs';
 import { GenesPanel } from '@/components/insight/GenesPanel';
 import { AlgorithmPanel } from '@/components/insight/AlgorithmPanel';
+import { CitationCard } from '@/components/insight/CitationCard';
 import { HubHeader } from '@/components/HubHeader';
 
+/**
+ * 表格里的一个数字格。
+ *
+ * 【为什么不用 fmtNum】它内部是 `n ?? 0`——展示总量时那是对的（没有就是 0 条），
+ * 但**逐条作品的指标格**不是：「这次没采到评论数」和「真的零评论」是两件事，
+ * 而用户拿这张表做的正是「哪条互动差」的判断。
+ * 与同一行的完播率（早就是「—」）、竞对页的同名指标（也是「—」）对齐。
+ */
+function numCell(v: number | undefined | null) {
+  if (v === undefined || v === null) {
+    return <span className="muted" title="这次没有采到这一项（不是 0）——去作品详情页重采一次">—</span>;
+  }
+  return fmtNum(v);
+}
+
 export const dynamic = 'force-dynamic';
+
+/** AI 引用回执：取最近 30 条 + 总计。计数与「是我的」分开数，**绝不算比率**。 */
+async function CitationSection() {
+  const s = await getSession();
+  const [rows, total, mine] = await Promise.all([
+    prisma.aiCitation.findMany({
+      where: { workspaceId: s.workspaceId },
+      orderBy: { capturedAt: 'desc' },
+      take: 30,
+      select: {
+        id: true, engine: true, question: true, sourceTitle: true,
+        sourceUrl: true, platform: true, isMine: true, capturedAt: true,
+      },
+    }),
+    prisma.aiCitation.count({ where: { workspaceId: s.workspaceId } }),
+    prisma.aiCitation.count({ where: { workspaceId: s.workspaceId, isMine: true } }),
+  ]);
+  return <CitationCard rows={rows} total={total} mine={mine} />;
+}
 
 const PAGE_SIZE = 50;
 
@@ -71,7 +106,12 @@ export default async function DataPage({
         {view === 'genes' ? (
           <GenesPanel />
         ) : (
-          <AlgorithmPanel platform={typeof sp.platform === 'string' ? sp.platform : undefined} />
+          <>
+            <AlgorithmPanel platform={typeof sp.platform === 'string' ? sp.platform : undefined} />
+            {/* 【紧挨着放】上面那张是第三方统计口径，这张是用户自己实测到的第一方数据。
+                「评分与真实被引用率零校准」这个病灶，靠的就是这两张并排看 */}
+            <CitationSection />
+          </>
         )}
       </>
     );
@@ -180,8 +220,13 @@ export default async function DataPage({
     readAudience(s.accountId, audiencePlatform),
   ]);
 
-  // 数据体检在全量记录上做（数据质量与时间段无关）
-  const healthIssues = checkDataHealth(records, now);
+  // 数据体检在全量记录上做（数据质量与时间段无关）。
+  // 【没有发布时间的不进体检】它判的是「发了这么久还没数据」这类陈旧问题，
+  // 而「这么久」需要发布时间；缺了它按今天算，会把老作品判成刚发的。
+  const healthIssues = checkDataHealth(
+    records.filter((r): r is typeof r & { publishedAt: Date } => r.publishedAt !== null),
+    now,
+  );
 
   // 记在**本工作区其它账号**名下的作品数。本页所有查询都按 accountId 过滤，
   // 挂错账号 = 这页永远看不见（2026-07-25 与 07-27 两次真机事故都是这个），
@@ -344,7 +389,6 @@ export default async function DataPage({
         <Stat label="发布篇数" value={publishCount} foot={`当前筛选 · ${range === 'all' ? '全部' : range}`} />
         <Stat label="采纳并发布" value={adoptedPublished} foot="来自 AI 推荐的篇数" />
       </div>
-
 
       {/* 次级：这一页顶上已经有「数据看板 / 什么跑得动 / 平台怎么想」那一层了，
           两条一模一样的标签条叠着分不出层级（2026-08-26 用户说的「重复」的一种） */}
@@ -551,11 +595,16 @@ export default async function DataPage({
                             );
                           })()}
                         </td>
-                        <td style={{ textAlign: 'right', fontWeight: 600 }} className="mono">{fmtNum(m.views)}</td>
-                        <td style={{ textAlign: 'right' }} className="mono">{fmtNum(m.likes)}</td>
-                        <td style={{ textAlign: 'right' }} className="mono">{fmtNum(m.comments)}</td>
-                        <td style={{ textAlign: 'right' }} className="mono">{fmtNum(m.shares)}</td>
-                        <td style={{ textAlign: 'right' }} className="mono">{fmtNum(m.collects)}</td>
+                        {/* 【没采到这一项印「—」，不印 0】fmtNum 内部是 `n ?? 0`，
+                            于是「这次没采到评论数」和「真的零评论」在表格里长得一模一样。
+                            同一行右边的完播率早就写成「—」了，竞对页同一指标也是「—」——
+                            只有自有作品这几列把缺席说成了 0。这是本项目「缺席不许当成 0」
+                            那条口径在这一页上漏掉的一处。 */}
+                        <td style={{ textAlign: 'right', fontWeight: 600 }} className="mono">{numCell(m.views)}</td>
+                        <td style={{ textAlign: 'right' }} className="mono">{numCell(m.likes)}</td>
+                        <td style={{ textAlign: 'right' }} className="mono">{numCell(m.comments)}</td>
+                        <td style={{ textAlign: 'right' }} className="mono">{numCell(m.shares)}</td>
+                        <td style={{ textAlign: 'right' }} className="mono">{numCell(m.collects)}</td>
                         <td style={{ textAlign: 'right' }} className="mono">
                           {typeof m.completion === 'number' ? `${Math.round(m.completion * 100)}%` : '—'}
                         </td>
@@ -575,9 +624,13 @@ export default async function DataPage({
                           </span>
                         </td>
                         <td>
+                          {/* publishedAt 可空：没有发布时间就没有逐日趋势可画。
+                              下游 toDailySeries 会返回空序列，曲线如实显示「数据不足」，
+                              而不是从今天起画一条假的（那正是 2026-08-30 之前把回填时间
+                              当发布时间存下来所导致的：D+0 上挂着全生命周期的累计播放）。 */}
                           <div className="stack" style={{ gap: 6 }}>
                             <TrendCell
-                              publishedAt={r.publishedAt.toISOString()}
+                              publishedAt={r.publishedAt ? r.publishedAt.toISOString() : null}
                               snapshots={r.snapshots.map((sn) => ({
                                 takenAt: sn.takenAt.toISOString(),
                                 metrics: sn.metrics,

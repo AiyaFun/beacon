@@ -2,12 +2,12 @@ import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { can } from '@/lib/rbac';
 import { platformName, COMPLIANCE_TIERS } from '@/lib/constants';
-import { PageHead, Card, Stat, TierBadge, Fold } from '@/components/ui';
+import { Card, Stat, TierBadge, Fold } from '@/components/ui';
 import { Icon } from '@/components/icons';
 import { Checker } from './Checker';
 import { WordManager } from './WordManager';
 import { FeedbackPanel } from './FeedbackPanel';
-import type { CustomWord, FeedbackItem } from './actions';
+import type { CustomWord } from './actions';
 import { MakeTabs } from '@/components/MakeTabs';
 import { HubHeader } from '@/components/HubHeader';
 

@@ -37,7 +37,15 @@ describe('edition()', () => {
 });
 
 describe('能力矩阵', () => {
-  const EXPECTED: Record<string, Partial<Record<Capability, boolean>>> = {
+  // 【2026-08-30：这里原来是 Partial<...>，于是漏了 4 格也没人知道】
+  // 用例自称「逐格钉死」，实际只写了 11 个 Capability 里的 7 个——
+  // 漏掉的恰好是 passwordLogin 与三个 local*（整机版的本机发布/命令/浏览器），
+  // 而那三个正是「SaaS 恒关」这条安全边界的落点：矩阵里把它们改成 true，
+  // 云端版就会开出本机命令执行，而这组用例一声不吭。
+  //
+  // 去掉 Partial 之后，**加一个新 Capability 而不在这里逐形态写明，tsc 直接不过**——
+  // 这比再写一条「覆盖率」用例可靠：它在编译期拦，而不是等谁去跑测试。
+  const EXPECTED: Record<'saas' | 'appliance' | 'private', Record<Capability, boolean>> = {
     saas: {
       payment: true,
       smsLogin: true,
@@ -46,6 +54,10 @@ describe('能力矩阵', () => {
       quotaBilling: true,
       setupWizard: false,
       botInboundWs: false,
+      passwordLogin: false,
+      localPublisher: false,
+      localShell: false,
+      localBrowser: false,
     },
     appliance: {
       payment: false,
@@ -55,6 +67,10 @@ describe('能力矩阵', () => {
       quotaBilling: false,
       setupWizard: true,
       botInboundWs: true,
+      passwordLogin: true,
+      localPublisher: true,
+      localShell: true,
+      localBrowser: true,
     },
     private: {
       payment: false,
@@ -64,6 +80,10 @@ describe('能力矩阵', () => {
       quotaBilling: false,
       setupWizard: true,
       botInboundWs: false,
+      passwordLogin: true,
+      localPublisher: true,
+      localShell: true,
+      localBrowser: true,
     },
   };
 

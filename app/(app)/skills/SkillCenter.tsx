@@ -9,7 +9,7 @@ import type { SkillSummary } from '@/lib/skills';
 type CustomOutputKind = 'markdown' | 'html' | 'text';
 // client-safe：只引平台名映射，不引 lib/skills/index（那会把 prisma 拖进客户端包）
 import { SKILL_PLATFORM_OPTIONS, skillPlatformName } from '@/lib/skills/platform';
-import { actInstallSkill, actUninstallSkill, actCreateSkill, actImportSkillFromUrl } from './actions';
+import { actInstallSkill, actUninstallSkill, actCreateSkill, actImportSkillFromUrl, actExportSkill } from './actions';
 
 // 技能中心交互层：安装/卸载 + 创建自定义技能的折叠表单。
 // readOnly（viewer）时只展示，不出现任何操作按钮——server action 侧另有 RBAC 硬拦。
@@ -39,6 +39,8 @@ export function SkillCenter({ skills, readOnly }: { skills: SkillSummary[]; read
   const [form, setForm] = useState(EMPTY_FORM);
   const [importUrl, setImportUrl] = useState('');
   const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  /** 导出结果就地展示：把 JSON 甩到别处等于让用户自己去找 */
+  const [exported, setExported] = useState<{ name: string; json: string } | null>(null);
   const router = useRouter();
 
   function done(r: { ok: boolean; error?: string }) {
@@ -102,7 +104,29 @@ export function SkillCenter({ skills, readOnly }: { skills: SkillSummary[]; read
               </div>
             </div>
             <div className="small muted" style={{ flex: 1 }}>{skl.description}</div>
-            {!readOnly && (
+            {/* 导出结果就地显示。**不做自动下载**：Artifact/沙箱里 <a download> 是无效的，
+          而「点了没反应」比多一步复制更糟。给一个可全选的文本框最稳。 */}
+      {exported && (
+        <div className="card" style={{ padding: 12, marginTop: 12 }}>
+          <div className="row-between" style={{ marginBottom: 6 }}>
+            <b className="small">「{exported.name}」的技能包（beaconPack）</b>
+            <button className="btn btn-sm btn-ghost" onClick={() => setExported(null)}>关掉</button>
+          </div>
+          <textarea
+            className="input mono"
+            readOnly
+            rows={8}
+            style={{ width: '100%', fontSize: 12 }}
+            value={exported.json}
+            onFocus={(e) => e.currentTarget.select()}
+          />
+          <p className="small muted" style={{ margin: '6px 0 0', lineHeight: 1.8 }}>
+            全选复制发给别人，对方在「从链接导入」旁边粘贴即可装上。
+          </p>
+        </div>
+      )}
+
+      {!readOnly && (
               <div>
                 {/* 只暗被点的这一张：disabled={pending} 会让全部卡片的按钮一起灰掉，
                     看上去像整页坏了。装/卸各自独立，别的卡没理由陪着不可点。 */}
@@ -113,6 +137,28 @@ export function SkillCenter({ skills, readOnly }: { skills: SkillSummary[]; read
                 >
                   {busyId === skl.id && pending ? '处理中…' : skl.installed ? '卸载' : '安装'}
                 </button>
+                {/* 【导出】此前技能包是「能装不能导」：市场里能装别人的，自己做的分享不出去，
+                    而 exportSkillPack 早就写好了、只是没有任何入口（2026-08-29 扫出来的）。
+                    只给自定义技能：内置的导出去没有意义，对方装上还是同一份。 */}
+                {!skl.isBuiltin && (
+                  <button
+                    className="btn btn-sm btn-ghost"
+                    style={{ marginLeft: 6 }}
+                    disabled={busyId === skl.id && pending}
+                    onClick={() => {
+                      setBusyId(skl.id);
+                      setExported(null);
+                      start(async () => {
+                        const r = await actExportSkill(skl.id);
+                        setBusyId(null);
+                        if (r.ok && r.json) setExported({ name: skl.name, json: r.json });
+                        else setErr(r.error ?? '导出失败');
+                      });
+                    }}
+                  >
+                    导出
+                  </button>
+                )}
               </div>
             )}
           </div>

@@ -2,14 +2,14 @@
 
 import { useState, useMemo, useCallback } from 'react';
 import Link from 'next/link';
-import { parseJson, engagementRate, type Metrics } from '@/lib/json';
-import { heatForSort } from '@/lib/insight/heat';
 import { displayKeys, absenceNote } from '@/lib/insight/platform-metrics';
 import { platformName, platformColor } from '@/lib/constants';
 import { fmtNum, fmtDate } from '@/lib/format';
 import { Icon } from '@/components/icons';
 import { CompetitorTrendCell } from './CompetitorTrendCell';
 import { beijingDayKey } from '@/lib/beijing';
+import { topPostsCsv } from './top-posts-csv';
+import { analyzePosts, filterPosts, sortPosts } from './top-posts-view';
 
 type CompetitorPost = {
   id: string;
@@ -137,99 +137,37 @@ export function CompetitorTopPosts({
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  // 逐条算出展示所需的量：真实绝对数 + 互动量（排序用）+ 互动率（有播放量才有）
-  const postsWithAnalysis = useMemo(() => {
-    const now = Date.now();
-    return topPosts.map((p) => {
-      const m = parseJson<Metrics>(p.metrics, {});
-      const views = m.views ?? 0;
-      const likes = m.likes ?? 0;
-      const comments = m.comments ?? 0;
-      const collects = m.collects ?? 0;
-      const shares = m.shares ?? 0;
-      const coins = m.coins ?? 0;
-      const danmaku = m.danmaku ?? 0;
+  // 取数 / 筛选 / 排序都在 ./top-posts-view（纯函数，有覆盖）。
+  // 这里只负责把 props 和几个 useState 喂进去，并保留 memo 边界。
+  //
+  // 【now 为什么钉在 topPosts 上】它参与算「发出来多久了」。每次渲染取一次 Date.now()
+  // 会让 useMemo 的依赖每次都变，等于没有 memo；而这个页面上「几点几分」不影响任何显示，
+  // 只影响时间窗归属，跟着数据一起刷新就够了。
+  const now = useMemo(() => Date.now(), [topPosts]);
+  const postsWithAnalysis = useMemo(
+    () => analyzePosts(topPosts, snapsByPostMap, now).map((p) => ({
+      ...p,
+      growth: postGrowth[p.id],
+      snaps: snapsByPostMap[p.id] ?? [],
+    })),
+    [topPosts, snapsByPostMap, postGrowth, now],
+  );
 
-      // ⚠️ 这四项都可能**算不出来**，算不出来一律 null 而不是 0。
-      // 抖音（以及一切公开页不给播放量的平台）上：播放量根本没有 → 互动率、赞播比是 null；
-      // 主页只采到点赞、没采到评论 → 评赞比也是 null。
-      // 从前这里一律给 0，页面就照着渲染出「互动率 0.0%」「赞播比 0.0%」——
-      // 那不是「这条作品互动差」，是我们把「没这项数据」写成了「这项数据是零」。
-      const rate = engagementRate(m);
-      // 互动量：榜的默认排序口径。每个平台都拿得到（至少有点赞），
-      // 不像 hotScore 那样在没有播放量的平台上恒为 0。
-      const interaction = heatForSort(m);
+  const filteredPosts = useMemo(
+    () => filterPosts(postsWithAnalysis, timeRange, searchQuery),
+    [postsWithAnalysis, timeRange, searchQuery],
+  );
 
-      // 评估增速 (基于最新两次快照的播放/增量)
-      const snaps = snapsByPostMap[p.id] || [];
-      let growthDelta = 0;
-      if (snaps.length >= 2) {
-        const lastSnap = parseJson<Metrics>(snaps[snaps.length - 1].metrics, {});
-        const prevSnap = parseJson<Metrics>(snaps[snaps.length - 2].metrics, {});
-        growthDelta = (lastSnap.views ?? 0) - (prevSnap.views ?? 0);
-      }
+  const sortedPosts = useMemo(() => sortPosts(filteredPosts, sortBy), [filteredPosts, sortBy]);
 
-      // 计算发布时间跨度
-      const pubTime = p.publishedAt ? new Date(p.publishedAt).getTime() : 0;
-      const ageHours = pubTime > 0 ? Math.max(1, (now - pubTime) / 3600000) : 9999;
-
-      // 清理标题
-      const cleanTitle = p.title.replace(/^【[^】]+】\s*/, '');
-
-      return {
-        ...p,
-        cleanTitle,
-        m,
-        views,
-        likes,
-        comments,
-        collects,
-        shares,
-        coins,
-        danmaku,
-        rate,
-        interaction,
-        growth: postGrowth[p.id],
-        growthDelta,
-        ageHours,
-        snaps,
-      };
-    });
-  }, [topPosts, snapsByPostMap, postGrowth]);
-
-  // 时间维度过滤 + 搜索过滤
-  const filteredPosts = useMemo(() => {
-    return postsWithAnalysis.filter((p) => {
-      // 时间过滤
-      if (timeRange === '24h' && p.ageHours > 24) return false;
-      if (timeRange === '7d' && p.ageHours > 24 * 7) return false;
-      if (timeRange === '30d' && p.ageHours > 24 * 30) return false;
-
-      // 搜索过滤
-      if (searchQuery.trim()) {
-        const q = searchQuery.trim().toLowerCase();
-        const matchTitle = p.cleanTitle.toLowerCase().includes(q);
-        const matchAuthor = p.competitor.name.toLowerCase().includes(q);
-        if (!matchTitle && !matchAuthor) return false;
-      }
-
-      return true;
-    });
-  }, [postsWithAnalysis, timeRange, searchQuery]);
-
-  // 排序逻辑
-  const sortedPosts = useMemo(() => {
-    const list = [...filteredPosts];
-    list.sort((a, b) => {
-      if (sortBy === 'views') return b.views - a.views;
-      // 按互动率排序时，算不出来的排在最后（而不是当成 0 混在「互动率最低」那一堆里——
-      // 那会让用户以为抖音这些作品是「互动垫底」，其实只是没有播放量这个分母）
-      if (sortBy === 'engagement') return (b.rate ?? -1) - (a.rate ?? -1);
-      if (sortBy === 'growth') return b.growthDelta - a.growthDelta;
-      return b.interaction - a.interaction; // 默认：互动量（赞+评+藏+转）
-    });
-    return list;
-  }, [filteredPosts, sortBy]);
+  // 【为什么要单独数这个】选了时间窗时，「发布时间没采到」的作品一条都进不来
+  //（见 ./top-posts-view 的 inWindow：不知道是不是这段时间发的，就不替用户断言它是）。
+  // 不说破的话，用户切一下时间窗发现少了几条，界面上没有任何东西解释——
+  // 他只会以为是数据丢了。这一行就是那个解释。
+  const undatedHidden = useMemo(
+    () => (timeRange === 'all' ? 0 : postsWithAnalysis.filter((p) => p.ageHours === null).length),
+    [postsWithAnalysis, timeRange],
+  );
 
   // 选框控制
   const toggleSelect = (id: string) => {
@@ -252,25 +190,8 @@ export function CompetitorTopPosts({
   // CSV 导出功能
   const exportCSV = () => {
     if (sortedPosts.length === 0) return;
-    const headers = ['排名', '平台', '作品标题', '创作者', '播放量', '点赞量', '评论量', '收藏量', '转发量', '互动量', '互动率', '发布时间'];
-    const rows = sortedPosts.map((p, idx) => [
-      idx + 1,
-      platformName(p.platform),
-      `"${p.cleanTitle.replace(/"/g, '""')}"`,
-      `"${p.competitor.name.replace(/"/g, '""')}"`,
-      // 播放量拿不到就导出空格，不导 0——导成 0 的表格发给别人，对方无从分辨
-      // 「这条真没人看」和「这个平台不给播放量」
-      p.views > 0 ? p.views : '',
-      p.likes,
-      p.comments,
-      p.collects,
-      p.shares,
-      p.interaction < 0 ? '' : p.interaction,
-      p.rate === null ? '' : `${(p.rate * 100).toFixed(2)}%`,
-      p.publishedAt ? fmtDate(p.publishedAt) : '未记录',
-    ]);
-    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    // 拼 CSV 的活在 ./top-posts-csv（纯函数，有覆盖）；这里只管把它交给浏览器下载
+    const blob = new Blob([topPostsCsv(sortedPosts)], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
@@ -278,6 +199,7 @@ export function CompetitorTopPosts({
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   if (topPosts.length === 0) {
@@ -415,6 +337,14 @@ export function CompetitorTopPosts({
             <span>
               已筛选 <b style={{ color: 'var(--brand)' }}>{sortedPosts.length}</b> 条作品 (全量 {topPosts.length} 条)
             </span>
+            {undatedHidden > 0 && (
+              <span
+                className="badge"
+                title="这些作品的发布时间没有采集到。「近 24 小时 / 7 天 / 30 天」问的是这段时间里发的，而我们并不知道它们是不是，所以不替你断言。换成「全部」就能看到。"
+              >
+                另有 {undatedHidden} 条没采到发布时间，不在此时间窗内
+              </span>
+            )}
             {selectedIds.size > 0 && (
               <span className="badge badge-brand" style={{ fontWeight: 600 }}>
                 已勾选 {selectedIds.size} 项

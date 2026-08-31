@@ -263,12 +263,36 @@ export async function getUsageBill(tenantId: string): Promise<UsageBill> {
 // 注意计数器**不按 source 分**：账本也不分（LlmCallLog 没记 source），
 // 一次调用就是一次调用；分档只体现在拿去比的 limit 上。
 
-function dayKey(tenantId: string): string {
-  return `quota:llm:${tenantId}:d:${beijingDayKey()}`;
+/**
+ * 计数器按 **(租户, 来源)** 分桶。
+ *
+ * ── 为什么必须分（2026-08-30 修）──
+ * `tierFor(plan, source)` 早就给 byok 与 platform **两套不同的上限**了
+ *（byok 那套只是「防跑飞的护栏」，因为 token 钱是用户自己出的），
+ * 而计数器键里**没有 source**——一个桶、两套上限。后果是：
+ *   · 用户在「接入与密钥」配了自己的 Key，每一次调用**照样把平台那个计数器顶高**；
+ *   · 顶满之后他看到的提示是「…或在『接入与密钥』配置自己的 API Key 后**不占用平台额度**」，
+ *     而他正是这么做的。这句话与实际行为直接相反。
+ *   · 反过来也不对：byok 的护栏读到的是被平台调用污染过的数。
+ */
+function dayKey(tenantId: string, source: QuotaSource): string {
+  return `quota:llm:${tenantId}:${source}:d:${beijingDayKey()}`;
 }
 
-function monthKey(tenantId: string): string {
-  return `quota:llm:${tenantId}:m:${beijingMonthKey()}`;
+function monthKey(tenantId: string, source: QuotaSource): string {
+  return `quota:llm:${tenantId}:${source}:m:${beijingMonthKey()}`;
+}
+
+/**
+ * 播种时该数哪些历史行。
+ *
+ * 【为什么 platform 要连 unknown 一起数】`LlmCallLog.source` 是后加的列，
+ * 加之前的历史行都是 'unknown'。只数 'platform' 会让升级后的第一个周期少算一批，
+ * 用户白拿一点额度；而把 unknown 算进 byok 才是真的错（那些绝大多数是平台垫付的）。
+ * 计数器每个周期重新播种，所以这点偏差不会累积。
+ */
+function seedSourceFilter(source: QuotaSource) {
+  return source === 'platform' ? { in: ['platform', 'unknown'] } : source;
 }
 
 // 计数器活到本周期结束再多留 1 小时（容忍时钟漂移），之后重新从账本播种。
@@ -297,13 +321,15 @@ export async function assertLlmQuota(tenantId: string | null, source: QuotaSourc
   const tier = tierFor(plan, source);
 
   // 账本只用来给计数器播种（key 首次出现时用一次），不参与放行判断
+  // 播种也必须按 source 分——键分了桶而播种不分，等于把两边的历史用量都算进每一个桶
+  const src = seedSourceFilter(source);
   const [dailySeed, monthlySeed] = await Promise.all([
-    prisma.llmCallLog.count({ where: { tenantId, mocked: false, createdAt: { gte: startOfDay() } } }),
-    prisma.llmCallLog.count({ where: { tenantId, mocked: false, createdAt: { gte: startOfMonth() } } }),
+    prisma.llmCallLog.count({ where: { tenantId, mocked: false, source: src, createdAt: { gte: startOfDay() } } }),
+    prisma.llmCallLog.count({ where: { tenantId, mocked: false, source: src, createdAt: { gte: startOfMonth() } } }),
   ]);
 
-  const mk = monthKey(tenantId);
-  const dk = dayKey(tenantId);
+  const mk = monthKey(tenantId, source);
+  const dk = dayKey(tenantId, source);
 
   let month: { ok: boolean; used: number };
   let day: { ok: boolean; used: number };
@@ -349,9 +375,11 @@ export async function assertLlmQuota(tenantId: string | null, source: QuotaSourc
 // 不还的话，全降级 N 次后仪表盘显示 0/N 却被拦死。
 // 底层 release（lib/ratelimit.ts）进程内与 Redis 路径都防御性不减到负数、
 // key 不存在/已过期则 no-op；Redis 路径无真实例，Lua 与 reserve 同风格但未实测。
-export async function releaseLlmQuota(tenantId: string | null): Promise<void> {
+export async function releaseLlmQuota(tenantId: string | null, source: QuotaSource): Promise<void> {
   if (!tenantId || !quotaEnabled()) return; // 跳过条件与 assertLlmQuota 一致：没占过就没得还
-  await Promise.all([releaseQuota(dayKey(tenantId)), releaseQuota(monthKey(tenantId))]);
+  // 【source 必须与当初占的时候一致】计数器按 (租户, 来源) 分桶，
+  // 占 byok 的桶却还 platform 的桶 = 前者永久泄漏、后者被还成负数
+  await Promise.all([releaseQuota(dayKey(tenantId, source)), releaseQuota(monthKey(tenantId, source))]);
 }
 
 // ── 图像专属日上限 ──────────────────────────────────────
@@ -374,8 +402,8 @@ export function imageDailyCapFor(plan: string, source: QuotaSource): number {
   return IMAGE_DAILY_CAPS.platform[plan] ?? IMAGE_DAILY_CAPS.platform.free;
 }
 
-function imageDayKey(tenantId: string): string {
-  return dayKey(tenantId).replace(':llm:', ':img:');
+function imageDayKey(tenantId: string, source: QuotaSource): string {
+  return dayKey(tenantId, source).replace(':llm:', ':img:');
 }
 
 async function imageDailySeed(tenantId: string): Promise<number> {
@@ -403,7 +431,7 @@ export async function assertImageDailyCap(tenantId: string | null, source: Quota
       ? `今日 AI 出图已达 ${cap} 张上限（自带 Key 的防滥用护栏），明日 0 点重置。`
       : `今日 AI 出图额度已用完（${cap} 张/天）。可在「接入与密钥」配置自己的火山方舟 Key 后按自带 Key 额度出图。`;
   try {
-    const r = await reserveQuota(imageDayKey(tenantId), seed, cap, msUntil(endOfDay()));
+    const r = await reserveQuota(imageDayKey(tenantId, source), seed, cap, msUntil(endOfDay()));
     if (!r.ok) throw new QuotaExceededError(msg, 'image');
   } catch (err) {
     if (err instanceof QuotaExceededError) throw err;
@@ -413,7 +441,7 @@ export async function assertImageDailyCap(tenantId: string | null, source: Quota
   }
 }
 
-export async function releaseImageDailyCap(tenantId: string | null): Promise<void> {
+export async function releaseImageDailyCap(tenantId: string | null, source: QuotaSource): Promise<void> {
   if (!tenantId || !quotaEnabled()) return;
-  await releaseQuota(imageDayKey(tenantId));
+  await releaseQuota(imageDayKey(tenantId, source));
 }

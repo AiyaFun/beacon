@@ -1,7 +1,7 @@
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { can } from '@/lib/rbac';
-import { Card, Stat, Empty, Meter } from '@/components/ui';
+import { Card, Stat, Empty } from '@/components/ui';
 import { Icon } from '@/components/icons';
 import { tierFor, getUsageBill } from '@/lib/quota';
 import { beijingStartOfMonth } from '@/lib/beijing';

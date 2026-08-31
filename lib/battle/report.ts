@@ -59,7 +59,8 @@ export type BattleReport = {
   ideas: BattleIdea[];
   fixes: BattleFix[];
   rivals: BattleRival[];
-  recentWorks: { title: string; platform: string; views: number | null; at: Date }[];
+  /** at 可空：插件从某些页面回填时采不到发布时间，如实留空而不是写成回填当天 */
+  recentWorks: { title: string; platform: string; views: number | null; at: Date | null }[];
   counts: { ownWorks7d: number; watchedRivals: number };
 };
 

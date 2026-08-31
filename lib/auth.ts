@@ -1,3 +1,4 @@
+import { cache } from 'react';
 import crypto from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import { prisma } from './db';
@@ -265,7 +266,27 @@ export async function tenantSuspendedMessage(tenantId: string): Promise<string |
     : '该工作区已被平台暂停使用，如有疑问请联系平台客服。';
 }
 
-export async function getMemberByToken(token: string | undefined, preferredAccountId?: string): Promise<AuthedMember | null> {
+/**
+ * 会话解析。**按 (token, preferredAccountId) 做请求内记忆化**（React cache）。
+ *
+ * 【为什么必须记忆化】它内部要打 5 次库，而 `getSession()` 全站有 223 个调用点——
+ * 一次页面渲染里，布局调一次、页面调一次、每个服务端子组件再各调一次。
+ * 也就是说**每多一层服务端组件，就多 5 次数据库往返**，而它们查的是同一个东西。
+ * 这不报错、不变红，只表现为「每个页面都慢那么一点」——最难被归因的一类损耗。
+ * （2026-08-29 量出来的：全站 React cache() 使用次数为 0。）
+ *
+ * 【为什么缓存在这一层，而不是 getSession()】`getSession()` 每次都重新读 cookie。
+ * 有的 server action 会先读会话、再 `store.set(ACCOUNT_COOKIE, …)` 切账号；
+ * 如果缓存在 getSession() 那一层，切完账号后同一请求里再读就会拿到**旧账号**。
+ * 缓存在这里，参数变了缓存键就变，**切账号天然是一次 miss**——安全由构造保证，
+ * 而不是靠「记得别在切完之后再读」。
+ *
+ * 【cache 的作用域】React 的 cache() 是**每个请求**一份，请求结束即弃：
+ * 不会跨用户、不会跨请求，也不需要失效逻辑。
+ */
+export const getMemberByToken = cache(getMemberByTokenUncached);
+
+async function getMemberByTokenUncached(token: string | undefined, preferredAccountId?: string): Promise<AuthedMember | null> {
   if (!token) return null;
   const session = await prisma.authSession.findUnique({ where: { token }, include: { member: true } });
   if (!session || session.expiresAt < new Date()) return null;

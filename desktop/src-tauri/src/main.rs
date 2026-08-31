@@ -82,12 +82,39 @@ fn chrome_running() -> bool {
     }
 }
 
-fn launch_collect_browser(_app: &tauri::AppHandle) -> Result<String, String> {
+/// 调试端口通不通。
+///
+/// 【为什么必须先探这一下，而不是先看 Chrome 在不在跑】
+/// 原来的顺序是「Chrome 在跑 → 报错让他退出」。但一个**已经照做过一次**的用户，
+/// 他的 Chrome 正是带着调试端口开着的——却仍然被告知「请先完全退出 Chrome」。
+/// 于是他要么白关一次浏览器（几十个标签），要么以为这功能坏了。
+/// 端口通 = 事情已经成了，此时唯一正确的回答是「不用做任何事」。
+fn debug_port_open() -> bool {
+    // 只做一次极短的 TCP 连接，不发 HTTP 请求：我们要判断的只是「有没有人在听」。
+    // 判不出来时按「不通」处理——多一句提示的代价，远小于让他以为配好了却采不到。
+    std::net::TcpStream::connect_timeout(
+        &"127.0.0.1:9222".parse().expect("固定字面量，解析不会失败"),
+        std::time::Duration::from_millis(400),
+    )
+    .is_ok()
+}
+
+fn launch_collect_browser(_app: &tauri::AppHandle) -> Result<(String, bool), String> {
+    // 【先探端口】三种状态要分清楚，给三种不同的话：
+    //   端口通           → 已经好了，什么都别做
+    //   端口不通 + 在跑  → 必须先完全退出（Chrome 的硬限制）
+    //   端口不通 + 没跑  → 直接带端口起
+    // 第二个返回值 = 这次是不是我们刚起的（false 表示本来就开着）。
+    // 分开是为了不对一个什么都没做的用户说「已启动」——那会让他以为自己的浏览器被重启了。
+    if debug_port_open() {
+        return Ok(("http://127.0.0.1:9222".to_string(), false));
+    }
+
     let chrome = find_chrome().ok_or_else(|| "没找到 Chrome。请先安装 Google Chrome。".to_string())?;
 
     if chrome_running() {
         return Err(
-            "Chrome 正开着。运行中的 Chrome 没法再打开调试端口（这是 Chrome 的限制）。\n\n             请先完全退出 Chrome（macOS 按 ⌘Q，不是关窗口），再点一次这里。\n             重开后它会恢复你原来的标签页，登录态也都还在。"
+            "Chrome 正开着，但它没有打开调试端口。运行中的 Chrome 没法再打开（这是 Chrome 的限制）。\n\n             请先完全退出 Chrome（macOS 按 ⌘Q，不是关窗口），再点一次这里。\n             重开后它会恢复你原来的标签页，登录态也都还在。\n\n             想以后不用每次这样：托盘里的「生成采集浏览器快捷方式」会在桌面放一个启动器，\n             以后用它开 Chrome 就一直带着调试端口。"
                 .to_string(),
         );
     }
@@ -98,7 +125,46 @@ fn launch_collect_browser(_app: &tauri::AppHandle) -> Result<String, String> {
         .arg("--no-default-browser-check")
         .spawn()
         .map_err(|e| format!("启动不了 Chrome：{e}"))?;
-    Ok("http://127.0.0.1:9222".to_string())
+    Ok(("http://127.0.0.1:9222".to_string(), true))
+}
+
+/// 在桌面放一个「带调试端口启动 Chrome」的启动器。
+///
+/// 【为什么这件事值得做】真正的摩擦不是「点一下托盘」，而是**每次都得先完全退出 Chrome**——
+/// 因为他日常是从 Dock/开始菜单打开的，那样起来的 Chrome 没有调试端口。
+/// 给他一个启动器，以后**从一开始就带着端口**，那一步就永远不用做了。
+///
+/// 【为什么是桌面上的一个文件，而不是改系统设置】写 LaunchAgent、改默认浏览器、
+/// 替换 Dock 图标都是**不可见且不好撤销**的改动。一个他看得见、能拖走、能删掉的文件，
+/// 是同样效果里侵入性最小的形态。
+fn write_browser_shortcut() -> Result<String, String> {
+    let chrome = find_chrome().ok_or_else(|| "没找到 Chrome。请先安装 Google Chrome。".to_string())?;
+    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))
+        .map_err(|_| "找不到你的用户目录".to_string())?;
+    let desktop = std::path::Path::new(&home).join("Desktop");
+    let dir = if desktop.is_dir() { desktop } else { std::path::Path::new(&home).to_path_buf() };
+
+    #[cfg(target_os = "windows")]
+    let (file, body) = (
+        dir.join("采集浏览器.bat"),
+        format!("@echo off\r\nstart \"\" \"{}\" --remote-debugging-port=9222 --no-default-browser-check\r\n",
+            chrome.display()),
+    );
+    #[cfg(not(target_os = "windows"))]
+    let (file, body) = (
+        dir.join("采集浏览器.command"),
+        format!("#!/bin/sh\n# 用调试端口启动 Chrome，烽火台才连得上。\n# 以后就用这个启动器开 Chrome，不必每次先退出。\nexec \"{}\" --remote-debugging-port=9222 --no-default-browser-check\n",
+            chrome.display()),
+    );
+
+    std::fs::write(&file, body).map_err(|e| format!("写不了启动器：{e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // 不可执行的 .command 双击只会用文本编辑器打开——那等于没做
+        let _ = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755));
+    }
+    Ok(file.display().to_string())
 }
 
 fn main() {
@@ -112,8 +178,9 @@ fn main() {
             let show = MenuItem::with_id(app, "show", "打开烽火台", true, None::<&str>)?;
             let data = MenuItem::with_id(app, "data", "打开本地数据目录", true, None::<&str>)?;
             let collect = MenuItem::with_id(app, "collect", "启动采集浏览器", true, None::<&str>)?;
+            let shortcut = MenuItem::with_id(app, "shortcut", "生成采集浏览器快捷方式", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &collect, &data, &quit])?;
+            let menu = Menu::with_items(app, &[&show, &collect, &shortcut, &data, &quit])?;
             TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
@@ -133,11 +200,33 @@ fn main() {
                             let _ = app.opener().open_path(dir.to_string_lossy(), None::<&str>);
                         }
                     }
-                    // 起一个独立 profile 的采集浏览器（不影响他正开着的那个 Chrome）。
+                    // 用**他自己的默认 profile** 带调试端口起 Chrome（见 launch_collect_browser
+                    // 的说明：独立 profile 是干净的，但每个站点都要重登一次，而采集的价值
+                    // 恰恰在于读登录后才看得见的内容）。
                     // 成功/失败都要让他看见：静默失败会让他一直以为「点了没反应」。
                     "collect" => {
                         let msg = match launch_collect_browser(app) {
-                            Ok(url) => format!("采集浏览器已启动。请到「设置 → 本机命令执行」把调试端点填成 {url}"),
+                            // 本来就开着的时候**不能说「已启动」**——他什么都没做，
+                            // 那句话会让他以为自己的浏览器刚被重启了一次
+                            Ok((url, false)) => format!(
+                                "采集浏览器已经在用调试端口跑着了，不用做任何事。\n调试端点：{url}\n（如果设置里还没填，去「设置 → 本机命令执行」填上就行。）"
+                            ),
+                            Ok((url, true)) => format!("采集浏览器已启动。请到「设置 → 本机命令执行」把调试端点填成 {url}"),
+                            Err(e) => e,
+                        };
+                        if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.show();
+                            let _ = w.set_focus();
+                            let _ = w.eval(&format!("window.alert({})", serde_json::to_string(&msg).unwrap_or_else(|_| "\"操作完成\"".into())));
+                        }
+                    }
+                    // 桌面上放一个启动器：以后从它开 Chrome 就一直带着调试端口，
+                    // 再不用每次先完全退出——那才是这条路上最大的摩擦
+                    "shortcut" => {
+                        let msg = match write_browser_shortcut() {
+                            Ok(path) => format!(
+                                "启动器已生成：{path}\n\n以后用它打开 Chrome（不要从 Dock/开始菜单开），调试端口就一直是开的。\n它只是一个普通文件，不想要了直接删掉即可。"
+                            ),
                             Err(e) => e,
                         };
                         if let Some(w) = app.get_webview_window("main") {

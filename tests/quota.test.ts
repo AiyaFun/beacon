@@ -57,13 +57,22 @@ async function mkTenant(plan = 'free') {
 // 单条用例耗时 14.6s，而默认超时 15s——机器稍有负载就翻车，
 // 于是整套测试隔三差五红一片，真正的失败反而被淹没（2026-07-28 连着三轮误报）。
 // createMany 一条语句写完，同样是 5000 行，测的东西一点没变。
-async function logCalls(tenantId: string, n: number, opts: { mocked?: boolean; at?: Date } = {}) {
+// 【source 是 2026-08-30 加的参数】在那之前计数器**不分来源**，一个桶两套上限——
+// 于是「自带 Key 的调用照样把平台额度顶满」，而超额文案写的是
+// 「配置自己的 API Key 后不占用平台额度」。分桶之后，要验 BYOK 的护栏
+// 就必须真的记 BYOK 调用；不传时留 'unknown'（历史行的形状，按平台那一档播种）。
+async function logCalls(
+  tenantId: string,
+  n: number,
+  opts: { mocked?: boolean; at?: Date; source?: 'platform' | 'byok' | 'unknown' } = {},
+) {
   const row = {
     tenantId,
     provider: 'openai',
     model: 'gpt-4o-mini',
     fn: 'scoring',
     mocked: opts.mocked ?? false,
+    source: opts.source ?? 'unknown',
     costUsd: 0.001,
     ...(opts.at ? { createdAt: opts.at } : {}),
   };
@@ -241,25 +250,25 @@ describe('quota · BYOK 分档（free 收口 / 付费豁免）', () => {
 
   it('🔒 free 租户自带 Key 超 30 次/天 → 拦（否则 free+BYOK=全功能白用，自带 Key 版没人买）', async () => {
     const t = await mkTenant('free');
-    await logCalls(t.id, 30);
+    await logCalls(t.id, 30, { source: 'byok' });
     await expect(assertLlmQuota(t.id, 'byok')).rejects.toThrow(QuotaExceededError);
   });
 
   it('free 档 BYOK 超额文案引导购买「自带 Key 版」而非「联系排查」', async () => {
     const t = await mkTenant('free');
-    await logCalls(t.id, 30);
+    await logCalls(t.id, 30, { source: 'byok' });
     await expect(assertLlmQuota(t.id, 'byok')).rejects.toThrow(/自带 Key 版/);
   });
 
   it('BYOK 超 5000 仍拦（防跑飞护栏真的生效）', async () => {
     const t = await mkTenant('byok');
-    await logCalls(t.id, 5_000);
+    await logCalls(t.id, 5_000, { source: 'byok' });
     await expect(assertLlmQuota(t.id, 'byok')).rejects.toThrow(/安全上限/);
   });
 
   it('付费档 BYOK 超额文案是「安全上限」而非「额度已用尽」（用户自付费，措辞不该像催升级）', async () => {
     const t = await mkTenant('personal');
-    await logCalls(t.id, 5_000);
+    await logCalls(t.id, 5_000, { source: 'byok' });
     await expect(assertLlmQuota(t.id, 'byok')).rejects.toThrow(/异常调用|安全上限/);
   });
 });
@@ -292,7 +301,7 @@ describe('quota · 降级归还名额（调用失败不占名额）', () => {
     const t = await mkTenant('free');
     useDeadProvider();
     await llmComplete(t.id, 'chat', [{ role: 'user', content: '你好' }]); // 占 1 还 1 → 计数器落在 0
-    for (let i = 0; i < 5; i++) await releaseLlmQuota(t.id); // 多余归还应停在 0 而不是 -5
+    for (let i = 0; i < 5; i++) await releaseLlmQuota(t.id, 'platform'); // 多余归还应停在 0 而不是 -5
     // 若被减成负数，下面就能放行超过 30 次；正确行为是恰好 30 次后被拦
     for (let i = 0; i < 30; i++) await assertLlmQuota(t.id, 'platform');
     await expect(assertLlmQuota(t.id, 'platform')).rejects.toThrow(QuotaExceededError);
@@ -319,6 +328,9 @@ describe('quota · 降级归还名额（调用失败不占名额）', () => {
         model: 'deepseek-chat',
         fn: 'chat',
         mocked: false,
+        // 计数器按来源分桶（2026-08-30）：要验 BYOK 的护栏就得记 BYOK 调用，
+        // 记成 unknown 会去播种平台那一桶，这条用例就永远碰不到 5000 边界
+        source: 'byok',
         costUsd: 0.001,
       })),
     });
@@ -395,5 +407,60 @@ describe('quota · getUsageBill 消耗账单', () => {
     expect(bill.monthlyUsed).toBe(0);
     expect(bill.byFn).toEqual([]);
     expect(bill.recentDays).toHaveLength(7);
+  });
+});
+
+// ── 自带 Key 不占平台额度（2026-08-30 修）────────────────────────────────────
+//
+// ── 缺陷 ──
+// `tierFor(plan, source)` 早就给 byok 与 platform **两套不同的上限**了，
+// 而计数器键 `quota:llm:<tenant>:d:<day>` 里**没有 source**——一个桶、两套上限。
+// 于是用户在「接入与密钥」配了自己的 Key，每次调用照样把平台那个计数器顶高；
+// 顶满后看到的提示恰恰是「…或在『接入与密钥』配置自己的 API Key 后**不占用平台额度**」。
+// 这句话与实际行为直接相反，而且它就写在 lib/quota.ts:107 里。
+describe('quota · 两个桶不许互相污染', () => {
+  beforeEach(() => vi.stubEnv('BEACON_QUOTA_ENABLED', '1'));
+
+  it('🔒 BYOK 把自己的桶用满，platform 仍然放行', async () => {
+    const t = await mkTenant('personal'); // 付费档：byok 护栏 5000，platform 额度小得多
+    await logCalls(t.id, 5_000, { source: 'byok' });
+    await expect(assertLlmQuota(t.id, 'byok'), 'byok 桶该满了').rejects.toThrow(QuotaExceededError);
+    await expect(
+      assertLlmQuota(t.id, 'platform'),
+      '自带 Key 的调用把平台额度也吃掉了——而超额文案承诺的正好相反',
+    ).resolves.toBeUndefined();
+  });
+
+  it('🔒 平台额度用满，自带 Key 仍然能用（这才是那句文案的意思）', async () => {
+    const t = await mkTenant('free'); // free: platform 30/天
+    await logCalls(t.id, 30, { source: 'platform' });
+    await expect(assertLlmQuota(t.id, 'platform')).rejects.toThrow(QuotaExceededError);
+    await expect(
+      assertLlmQuota(t.id, 'byok'),
+      '文案说「配置自己的 API Key 后不占用平台额度」，那么平台满了它就该还能用',
+    ).resolves.toBeUndefined();
+  });
+
+  it('🔒 归还也要还到同一个桶（占 byok 还 platform = 一个泄漏一个变负）', async () => {
+    const t = await mkTenant('free');
+    await logCalls(t.id, 29, { source: 'platform' });
+    await assertLlmQuota(t.id, 'platform');           // 第 30 次，占满
+    await expect(assertLlmQuota(t.id, 'platform')).rejects.toThrow(QuotaExceededError);
+    await releaseLlmQuota(t.id, 'byok');              // 还错桶：不该把 platform 放开
+    await expect(
+      assertLlmQuota(t.id, 'platform'),
+      '还到别的桶却把这个桶放开了，说明 release 没按 source 分',
+    ).rejects.toThrow(QuotaExceededError);
+    await releaseLlmQuota(t.id, 'platform');          // 还对桶：这次该放行
+    await expect(assertLlmQuota(t.id, 'platform')).resolves.toBeUndefined();
+  });
+
+  it('历史行（source=unknown）按平台那一档播种，不算进 BYOK', async () => {
+    // LlmCallLog.source 是后加的列。只数 'platform' 会让升级后第一个周期少算一批；
+    // 把 unknown 算进 byok 才是真的错（那些绝大多数是平台垫付的）。
+    const t = await mkTenant('free');
+    await logCalls(t.id, 30, { source: 'unknown' });
+    await expect(assertLlmQuota(t.id, 'platform'), 'unknown 没被算进平台档').rejects.toThrow(QuotaExceededError);
+    await expect(assertLlmQuota(t.id, 'byok'), 'unknown 被误算进了 BYOK 档').resolves.toBeUndefined();
   });
 });

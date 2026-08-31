@@ -100,6 +100,8 @@ export async function buildAccountExport(opts: { tenantId: string; memberId: str
     taskPresets,
     procedureSkills,
     scrapeRecipes,
+    scrapeRecords,
+    aiCitations,
     coverStyles,
     orders,
     complianceFeedback,
@@ -175,6 +177,15 @@ export async function buildAccountExport(opts: { tenantId: string; memberId: str
     prisma.procedureSkill.findMany({ where: byWorkspace, orderBy: { createdAt: 'asc' } }),
     // 任意站点采集配方：站点、要抓什么、学到的规则——搬走了才能在别处接着用
     prisma.scrapeRecipe.findMany({ where: byWorkspace, orderBy: { createdAt: 'asc' } }),
+    // 配方**抓到的数**。配方是「怎么抓」，这些才是「抓到了什么」——
+    // 只导配方不导数据，等于让他把工具搬走、把成果留下。
+    // 【为什么带上限】这张表按天增长（每配方每 6 小时一行），全量导会让导出文件失控；
+    // 而它本来就只留 90 天，取最近这批足够回答「我采到过什么」。
+    prisma.scrapeRecord.findMany({
+      where: byWorkspace, orderBy: { capturedAt: 'desc' }, take: 5_000,
+    }),
+    // AI 引用回执：「我的哪篇内容被 AI 引用过」是他自己的经营事实，搬走了才接得上
+    prisma.aiCitation.findMany({ where: byWorkspace, orderBy: { capturedAt: 'desc' }, take: 5_000 }),
     // 封面风格库：名字与画面描述都是用户自己写的（存量漏项，2026-08-22 上线前排查补上）
     prisma.coverStylePreset.findMany({ where: byWorkspace, orderBy: { createdAt: 'asc' } }),
     prisma.paymentOrder.findMany({ where: { tenantId }, orderBy: { createdAt: 'asc' } }),
@@ -338,6 +349,30 @@ export async function buildAccountExport(opts: { tenantId: string; memberId: str
         toolAllowlist: parseJson<string[]>(p.toolAllowlist, []),
         usedCount: p.usedCount,
         createdAt: p.createdAt,
+      })),
+      aiCitations: aiCitations.map((c) => ({
+        id: c.id,
+        engine: c.engine,
+        question: c.question,
+        answerUrl: c.answerUrl,
+        sourceUrl: c.sourceUrl,
+        sourceTitle: c.sourceTitle,
+        platform: c.platform,
+        isMine: c.isMine,
+        capturedAt: c.capturedAt,
+      })),
+      // 采集到的数：值、取到几个、什么时候、走的哪条通道
+      scrapeRecords: scrapeRecords.map((r) => ({
+        id: r.id,
+        recipeId: r.recipeId,
+        url: r.url,
+        values: parseJson<Record<string, string>>(r.values, {}),
+        rows: parseJson<Record<string, string>[]>(r.rows, []),
+        rowCount: r.rowCount,
+        got: r.got,
+        want: r.want,
+        channel: r.channel,
+        capturedAt: r.capturedAt,
       })),
       taskPresets: taskPresets.map((p) => ({
         id: p.id,

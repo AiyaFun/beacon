@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from 'react';
 import { Card } from '@/components/ui';
-import { actSaveShellPolicy } from './shell-actions';
+import { actSaveShellPolicy, actDetectCdp } from './shell-actions';
 
 /**
  * 本机命令执行的开关与白名单（只在整机版/私有化出现）。
@@ -21,6 +21,8 @@ export function LocalShellCard({
   const [full, setFull] = useState(mode === 'full');
   const [secs, setSecs] = useState(String(timeoutSec));
   const [cdp, setCdp] = useState(cdpUrl ?? '');
+  const [detecting, setDetecting] = useState(false);
+  const [detect, setDetect] = useState<{ ok: boolean; text: string } | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [pending, start] = useTransition();
 
@@ -88,9 +90,31 @@ export function LocalShellCard({
             浏览器调试端点（留空 = 关闭；只能填本机地址）
             <input className="input" value={cdp} onChange={(e) => setCdp(e.target.value)} placeholder="http://127.0.0.1:9222" />
           </label>
+          {/* 【能探到就别让人手打】原来的流程是托盘弹一句「请填成 http://127.0.0.1:9222」，
+              用户切窗口手打一遍——打成 localhost:9222 少了协议、或打成 9223，
+              都会得到一个「看起来配好了、采集时才报错」的状态 */}
+          <div className="row" style={{ gap: 8, marginTop: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+            <button
+              type="button" className="btn btn-sm" disabled={detecting}
+              onClick={() => {
+                setDetect(null); setDetecting(true);
+                void actDetectCdp().then((r) => {
+                  setDetecting(false);
+                  if (r.ok && r.url) { setCdp(r.url.split('（')[0]); setDetect({ ok: true, text: `找到了：${r.url}` }); }
+                  else setDetect({ ok: false, text: r.error ?? '没找到' });
+                });
+              }}
+            >
+              {detecting ? '找着…' : '自动检测'}
+            </button>
+            {detect && (
+              <span className="small" style={{ color: detect.ok ? 'var(--text-2)' : 'var(--red)' }}>{detect.text}</span>
+            )}
+          </div>
           <p className="small muted" style={{ margin: '6px 0 0', lineHeight: 1.85 }}>
-            <b>推荐做法：</b>在桌面客户端的托盘菜单点<b>「启动采集浏览器」</b>，
-            端点就是上面这个默认值，什么都不用敲。
+            <b>推荐做法：</b>在桌面客户端的托盘菜单点<b>「启动采集浏览器」</b>，回来点上面的<b>「自动检测」</b>，
+            什么都不用敲。托盘里还有<b>「生成采集浏览器快捷方式」</b>——
+            在桌面放一个启动器，以后用它开 Chrome 就一直带着调试端口，不必每次先完全退出。
           </p>
           {/* 【必须说破的两件事】不写清楚，用户上线才会撞上，而且都会先怀疑是我们坏了：
               ① Chrome 同一个 profile 只跑一个进程，**运行中的 Chrome 无法再打开调试端口**——

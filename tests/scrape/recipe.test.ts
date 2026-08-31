@@ -3,6 +3,7 @@ import { complianceCheck, robotsAllows, vetOrigin, recipeUrl, RECIPE_BROKEN_AT, 
 import { vetCdpUrl } from '@/lib/browser/local';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { between } from '../helpers/anchor';
 
 // 任意站点采集配方（2026-08-29）。
 //
@@ -77,8 +78,10 @@ describe('学到的规则必须过机器验证', () => {
   const src = read('lib/scrape/recipe.ts');
 
   it('复用 verifyAgainstSkeleton，不另造一套验证', () => {
-    expect(src).toContain("import { verifyAgainstSkeleton");
-    expect(src).toContain('const v = verifyAgainstSkeleton(');
+    // 【锚在调用上，不锚在 import 的写法上】import 换成多行、加一个名字，
+    // 都不该让这条守卫假失效——它要证明的是「验证是复用的」，不是「import 长什么样」
+    expect(src).toContain('verifyAgainstSkeleton(');
+    expect(src).toContain("from '../ingest/parser-learn'");
   });
 
   it('一条都没过验证时不落库（宁可字段空着，也不要一条会抓到隔壁数字的规则）', () => {
@@ -116,7 +119,7 @@ describe('落库与隔离', () => {
   });
 });
 
-// ── 插件侧（0.9.11）────────────────────────────────────────────────────
+// ── 插件侧（0.9.12）────────────────────────────────────────────────────
 // 这一层的判据只能是源码级：Chrome 扩展跑不进 vitest。
 // 但每一条都对应一个**改了就会出事、而且不报错**的点。
 describe('插件：任意站点的权限与执行', () => {
@@ -275,7 +278,7 @@ describe('设置界面：配得上才用得上', () => {
 
 describe('登录墙：带他到登录页，但那一步永远由他自己完成', () => {
   const src = read('lib/browser/local.ts');
-  const tools = read('lib/agent/tools.ts');
+  const tools = read('lib/agent/tools-local.ts');
 
   it('把页面推到前台（别让用户自己再找一遍网址）', () => {
     expect(src).toContain('await page.bringToFront()');
@@ -292,12 +295,13 @@ describe('登录墙：带他到登录页，但那一步永远由他自己完成'
   });
 
   it('等待期间反复重判，登完自动继续', () => {
-    const i = src.indexOf('const deadline = Date.now()');
-    const j = src.indexOf('if (wall.walled) {', i);
-    const loop = src.slice(i, j);
+    const loop = between(src, 'const deadline = Date.now()', 'if (wall.walled) {');
     expect(loop).toContain('while (Date.now() < deadline)');
     expect(loop).toContain('LOGIN_WALL_FN');
-    expect(loop).toContain('if (!wall.walled) break;');
+    // 墙没了就走。2026-08-29 起还多一条出口：等待途中页面变成**验证码页**也要停——
+    // 那是站点在盘问他，继续轮询没有意义，而且该给的建议从「去登录」变成「等一会儿」
+    expect(loop).toMatch(/if \(!wall\.walled/);
+    expect(loop).toContain("wall.kind !== 'login'");
   });
 
   it('上层用结构化字段判登录墙，不靠匹配报错文案', () => {
@@ -323,15 +327,27 @@ describe('定时扫描：只有真卡住才重学', () => {
     // 第一版写的是 `got === 0 || r.status === 'broken'`——一个已经恢复的配方
     // 每轮都被重学一遍，白烧调用还可能越学越差
     expect(src).not.toMatch(/got === 0 \|\| r\.status === 'broken'/);
-    expect(src).toContain('if (got === 0) {');
+    // 重学的判据只看「这次有没有抓到东西」，不看它此刻标着什么状态。
+    // 列表页往往没有任何页面级标量，所以「有没有抓到」= 标量或行至少有一样
+    expect(src).toContain('if (got === 0 && rowCount === 0) {');
   });
 
   it('部分字段缺失也不算跑好（页面照常出数、只是少了几列，是最难发现的坏）', () => {
-    expect(src).toContain('await recordScrapeResult(r.id, ws.id, got === want);');
+    // 标量页仍按 got === want 判；纯列表页没有页面级标量，改看有没有行——
+    // 否则一次满载的列表采集会被判成失败然后拿去重学
+    expect(src).toMatch(/const fine = rowCount > 0 \? .+ : got === want;/);
+    expect(src).toContain('await recordScrapeResult(r.id, ws.id, fine);');
+    // 【标量那一半绝不能松】nonNull 那支必须仍是严格相等：
+    // 改成 `got > 0` 的话，「页面照常出数、只是少了几列」这种最难发现的坏就再也判不出来了
+    expect(src).not.toMatch(/const fine = .+got > 0 : /);
+    // 【行那一半的已知缺口要写在代码里】有行就算好 = 50 行退化成 1 行也判「好」。
+    // 认出这种退化要有基线，这里暂时没有——缺口必须留在注释里，不许假装不存在
+    expect(src).toContain('已知不足');
   });
 
   it('无人值守绝不抢焦点', () => {
-    expect(src).toContain('await browseLocal(vet.url!, url, rules, 0);');
+    // 第四个参数（等登录秒数）必须是 0。锚点只认到那个 0 为止，后面还有别的参数不该让它红
+    expect(src).toMatch(/browseLocal\(vet\.url!, url, rules, 0[,)]/);
     // 【必须先剥注释】文件头的说明里就写着「交互式那条路会 bringToFront」——
     // 直接全文匹配会被自己的注释绊倒（这轮第二次栽在同一件事上）
     const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
@@ -454,7 +470,7 @@ describe('配方界面', () => {
 
   it('当场点的「跑一次」会等登录（人就在键盘前），定时跑不等', () => {
     expect(act).toContain('await browseLocal(vet.url!, url, rules, 90)');
-    expect(read('lib/scrape/sweep.ts')).toContain('await browseLocal(vet.url!, url, rules, 0)');
+    expect(read('lib/scrape/sweep.ts')).toMatch(/browseLocal\(vet\.url!, url, rules, 0[,)]/);
   });
 });
 
@@ -491,7 +507,7 @@ describe('拼网址：一处实现，三处共用', () => {
   it('三处调用点都走 helper，没人再自己拼', () => {
     // 2026-08-29：同一表达式散在三处，**其中导出脚本那处连尾部通配符都没削**——
     // 那份脚本是用户拿走自己用的东西，错在那里我们既看不见也修不了
-    for (const f of ['lib/agent/tools.ts', 'lib/scrape/sweep.ts', 'app/(app)/skills/recipe-actions.ts']) {
+    for (const f of ['lib/agent/tools-local.ts', 'lib/scrape/sweep.ts', 'app/(app)/skills/recipe-actions.ts']) {
       expect(read(f), `${f} 还在自己拼网址`).not.toMatch(/`\$\{r\.origin\}\$\{r\.pathPattern/);
       expect(read(f), `${f} 没用 recipeUrl`).toContain('recipeUrl(');
     }
@@ -535,7 +551,7 @@ describe('连不上浏览器 ≠ 配方坏了', () => {
 describe('并发与上限', () => {
   const local = read('lib/browser/local.ts');
   const sweep = read('lib/scrape/sweep.ts');
-  const tools = read('lib/agent/tools.ts');
+  const tools = read('lib/agent/tools-local.ts');
 
   it('定时扫描在有人用浏览器时整轮让位', () => {
     // 用户当场点的动作不该跟定时任务抢他的浏览器；跳过一轮的代价远小于「标签一下子弹出好几个」
@@ -563,5 +579,54 @@ describe('并发与上限', () => {
     const j = tools.indexOf('prisma.scrapeRecipe.create');
     expect(i).toBeGreaterThan(-1);
     expect(j).toBeGreaterThan(i); // 判据必须在 create 之前
+  });
+});
+
+// ── 说「读取内容」就得真的回内容（2026-08-29 补）─────────────────────────────
+//
+// browse_local 的工具描述写的是「打开一个网址并**读取内容**」，而在补上这一段之前，
+// 没给配方时它只回一个标题，summary 是「（没给配方，只读了标题）」。
+// 模型拿不到任何正文，于是要么瞎猜、要么再调一次别的工具。
+// 这是「文案与实际行为相反」的同一类——本项目为此专门做过一轮审计。
+describe('browse_local 真的读内容', () => {
+  const src = read('lib/browser/local.ts');
+  const tools = read('lib/agent/tools-local.ts');
+
+  it('用既有的正文提取器，不另建一套', () => {
+    // lib/clip/extract.ts 已经把导航/侧栏/页脚/推荐位剔掉了，且是零依赖纯函数。
+    // 直接 innerText 会把「关注我们／相关阅读／版权声明」一起交给模型去总结。
+    expect(src).toContain("from '../clip/extract'");
+    expect(src).toContain('extractArticle(html');
+  });
+
+  it('正文有硬上限（没有上限的读会烧光上下文，而那表现为「它突然忘了前面在干什么」）', () => {
+    expect(src).toContain('MAX_PAGE_TEXT_CHARS');
+    const m = /MAX_PAGE_TEXT_CHARS = ([\d_]+)/.exec(src);
+    expect(m, '没找到正文上限的定义').toBeTruthy();
+    expect(Number(m![1].replace(/_/g, ''))).toBeLessThanOrEqual(20_000);
+    expect(src).toContain('maxChars: MAX_PAGE_TEXT_CHARS');
+  });
+
+  it('取正文失败不影响骨架与取值这两件正事', () => {
+    // 提取器是纯正则，喂一份畸形 HTML 不该把整次采集带走
+    const i = src.indexOf('const html = (await page.content())');
+    expect(i).toBeGreaterThan(0);
+    expect(src.slice(i - 200, i)).toContain('try {');
+  });
+
+  it('正文真的进了工具返回（只回 title 等于没读）', () => {
+    const i = tools.indexOf("data: { title: page.title, values: page.values");
+    expect(i, '没找到 browse_local 的返回').toBeGreaterThan(0);
+    expect(tools.slice(i, i + 120)).toContain('text: page.text');
+  });
+
+  it('summary 里不再有「只读了标题」这句话', () => {
+    expect(tools).not.toContain('只读了标题');
+  });
+
+  it('正文只回给模型，不落库（与剪藏不同：那是用户显式指定要存的）', () => {
+    // 这一段之后不许出现任何写库调用——正文是任意站点的内容，留存要另外过合规
+    const i = src.indexOf('const art = extractArticle(html');
+    expect(src.slice(i)).not.toMatch(/prisma\./);
   });
 });

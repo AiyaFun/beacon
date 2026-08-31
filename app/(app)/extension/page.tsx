@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { Card, Stat, Empty, Fold } from '@/components/ui';
-import { AGENT_ROLES } from '@/lib/agent/roles';
+
 import { Icon } from '@/components/icons';
 import { BROWSER_CARDS, storeLinks, storeVersion, storeIsBehind, readDownloadsManifest, type BrowserCard } from '@/lib/downloads';
 import { prisma } from '@/lib/db';
@@ -252,7 +252,6 @@ export default async function ExtensionPage() {
           <Empty icon="📦" text="还没打包安装包。在项目根目录执行 npm run pack:ext 生成 zip 后刷新本页。" />
         )}
       </Fold>
-
 
       {/* 合规边界与数据源机制是**看一次就够**的参考说明，折起来——
           它们此前和「等浏览器做的活」「AI 能力」并排铺在 grid 里，

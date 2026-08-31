@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from './db';
 import { toJson, parseJson, type Metrics } from './json';
 import { heatForSort, normalizedHeat } from './insight/heat';
@@ -52,13 +53,37 @@ export async function ingestHot(): Promise<{ inserted: number; degraded: string[
     if (!r.degraded) {
       await prisma.hotItem.deleteMany({ where: { source: r.source, isMock: true } });
     }
-    const seenTitles = new Set<string>();
-    for (const e of r.entries) {
-      seenTitles.add(e.title);
+    // ── 批量入库（2026-08-29 从「每条两次查询、完全串行」改过来）──
+    //
+    // 【改之前是什么样】对每一条榜单条目：findUnique 看在不在 → 在就 update、不在就 create。
+    // 也就是**每条 2 次查询、首尾相接**。九个源 × 约 50 条 ≈ 每轮 900 次串行往返，
+    // 而这个 job 每 30 分钟跑一次。它不报错、不超时，只是一直在那儿慢慢跑。
+    //
+    // 【改成什么】一次查回这一源的全部已有条目 → 内存里分成「要改的」和「要新建的」
+    // → 新建走一次 createMany → 要改的分批并发。
+    // 查询次数从 2N 降到 1 + 1 + N/BATCH 批。
+    //
+    // 【为什么 update 不能也合成一条】每行的 rank/heat/lifecycle 都不一样，
+    // Prisma 没有「一条语句更新多行不同值」。写裸 SQL 能做到，但这个项目栽过
+    // `$queryRaw` 不吃 `?schema=beacon` 导致生产 42P01 的事故——为这点收益不值得。
+    // 改成分批并发即可：串行的是等待，不是计算。
+    const seenTitles = new Set<string>(r.entries.map((e) => e.title));
+
+    // 同一批里可能有重复标题（源自己给重了）。不去重的话 createMany 会撞 source_title 唯一键，
+    // **整批失败**——而失败的是「这一源这一轮全部入库」，比少一条严重得多
+    const uniqueEntries = [...new Map(r.entries.map((e) => [e.title, e])).values()];
+
+    const existingRows = await prisma.hotItem.findMany({
+      where: { source: r.source, title: { in: [...seenTitles] } },
+      select: { id: true, title: true, peakHeat: true, peakRank: true, firstSeenAt: true },
+    });
+    const existingByTitle = new Map(existingRows.map((x) => [x.title, x]));
+
+    const toCreate: Prisma.HotItemCreateManyInput[] = [];
+    const toUpdate: { id: string; data: Record<string, unknown> }[] = [];
+    for (const e of uniqueEntries) {
       const heat = e.heat ?? 0;
-      const existing = await prisma.hotItem.findUnique({
-        where: { source_title: { source: e.source, title: e.title } },
-      });
+      const existing = existingByTitle.get(e.title);
       if (existing) {
         const peakHeat = Math.max(existing.peakHeat ?? 0, heat);
         const peakRank = Math.min(existing.peakRank ?? e.rank, e.rank);
@@ -66,19 +91,27 @@ export async function ingestHot(): Promise<{ inserted: number; degraded: string[
           { heat, peakHeat, firstSeenAt: existing.firstSeenAt, lastSeenAt: now, source: e.source },
           now,
         );
-        await prisma.hotItem.update({
-          where: { id: existing.id },
+        toUpdate.push({
+          id: existing.id,
           data: { rank: e.rank, heat, url: e.url, extra: toJson(e.extra ?? {}), isMock: r.degraded, fetchedAt: now, lastSeenAt: now, peakRank, peakHeat, lifecycle },
         });
       } else {
-        await prisma.hotItem.create({
-          data: {
-            source: e.source, rank: e.rank, title: e.title, url: e.url, heat, extra: toJson(e.extra ?? {}),
-            isMock: r.degraded, fetchedAt: now, firstSeenAt: now, lastSeenAt: now, peakRank: e.rank, peakHeat: heat, lifecycle: 'rising',
-          },
+        toCreate.push({
+          source: e.source, rank: e.rank, title: e.title, url: e.url, heat, extra: toJson(e.extra ?? {}),
+          isMock: r.degraded, fetchedAt: now, firstSeenAt: now, lastSeenAt: now, peakRank: e.rank, peakHeat: heat, lifecycle: 'rising',
         });
       }
       inserted++;
+    }
+
+    if (toCreate.length > 0) await prisma.hotItem.createMany({ data: toCreate });
+    // 分批并发：一次全放出去会把连接池打满，反而更慢（还可能挤掉正在服务用户的请求）
+    const UPDATE_CONCURRENCY = 20;
+    for (let i = 0; i < toUpdate.length; i += UPDATE_CONCURRENCY) {
+      await Promise.all(
+        toUpdate.slice(i, i + UPDATE_CONCURRENCY)
+          .map((u) => prisma.hotItem.update({ where: { id: u.id }, data: u.data })),
+      );
     }
     // 不在本轮榜单上的旧条目 → 标记 cooling/faded（分批处理，避免一次全量加载）
     const STALE_BATCH = 500;

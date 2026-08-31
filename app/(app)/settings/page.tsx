@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { sourceHealthBoard } from '@/lib/adapters/registry';
+import { platformName } from '@/lib/constants';
 import { embedderInfo } from '@/lib/vector/embed';
 import { Card, Stat } from '@/components/ui';
 import { Icon } from '@/components/icons';
@@ -94,7 +95,65 @@ export default async function SettingsPage() {
         )}
       </Card>
 
-      <Card title="数据源" sub="开源自建为主，商业 API 兜底，双源冗余">
+      {/* ── 竞对数据源（2026-08-29 补）──
+          隐私政策里写着「未配置时…**界面上会显示为数据源未启用**」，
+          而 sourceHealthBoard() 返回的 competitor 那一半此前**一处都没渲染过**——
+          那句承诺零代码兑现。用户看到的是「加了竞对、点进去空白」，界面上不说为什么。
+          这比没有这个功能更伤：没有功能他不会失望，有入口点了没数据他会认为产品坏了。 */}
+      <Card title="竞对数据源" sub="每个平台现在到底取不取得到数据 · 服务端 / 要插件 / 没有">
+        <div className="stack" style={{ gap: 8 }}>
+          {board.competitor.map((c) => {
+            // 三态分开说：「要装插件」他能自己解决，「真的没有」他做什么都没用。
+            // 合并成「未启用」等于把能解决的问题说成解决不了的。
+            const label = c.status === 'server'
+              ? { text: '服务端可取', cls: 'badge-green', foot: c.name }
+              : c.status === 'plugin'
+                ? { text: '要装采集助手', cls: 'badge-amber', foot: '这个平台服务端拿不到，装上浏览器插件后由它采' }
+                : { text: '暂无数据源', cls: 'badge-gray', foot: '服务端没有通道，插件也采不了——加了竞对也不会有数据' };
+            return (
+              <div key={c.platform} className="row-between wrap" style={{ gap: 8, padding: '6px 0' }}>
+                <span className="row" style={{ gap: 8, alignItems: 'center' }}>
+                  <span className={`dot ${c.status === 'server' ? 'dot-green' : 'dot-amber'}`} />
+                  <span className="small">{platformName(c.platform)}</span>
+                  <span className={`badge ${label.cls}`}>{label.text}</span>
+                </span>
+                <span className="small muted">{label.foot}</span>
+              </div>
+            );
+          })}
+        </div>
+        <p className="small muted" style={{ margin: '10px 0 0', lineHeight: 1.85 }}>
+          标着<b>暂无数据源</b>的平台，现在加了竞对也不会有数据——这不是故障，是这条通道还不存在。
+        </p>
+
+        {/* ── 自建 RSSHub（2026-08-31 补）──
+            它是竞对链上唯一一条「你自己部署、可能已经死掉」的通道，而且是**一个共享实例**，
+            逐平台各显示一次没有意义。不把它单独摆出来的话，「这个容器该留还是该停」
+            只能靠人去服务器上 docker ps —— 而它的 health() 此前还是个无条件返回 ok 的桩，
+            即便被调用也永远说「好」。 */}
+        <div
+          className="row-between wrap"
+          style={{ gap: 8, marginTop: 10, paddingTop: 10, borderTop: '1px dashed var(--border)' }}
+        >
+          <span className="row" style={{ gap: 8, alignItems: 'center' }}>
+            <span className={`dot ${board.rsshub.ok ? 'dot-green' : board.rsshub.configured ? 'dot-red' : 'dot-amber'}`} />
+            <span className="small">自建 RSSHub（备用通道）</span>
+            <span className={`badge ${board.rsshub.ok ? 'badge-green' : board.rsshub.configured ? 'badge-red' : 'badge-gray'}`}>
+              {board.rsshub.ok ? '在跑' : board.rsshub.configured ? '连不上' : '未配置'}
+            </span>
+          </span>
+          <span className="small muted">{board.rsshub.detail}</span>
+        </div>
+        {board.rsshub.configured && !board.rsshub.ok && (
+          <p className="small" style={{ margin: '6px 0 0', color: 'var(--danger)', lineHeight: 1.85 }}>
+            配了地址但连不上——上面标着 <code>rsshub</code> 的那几条链现在实际走的是主源，
+            主源没配的话就是取不到。要么把容器起回来，要么把 <code>BEACON_RSSHUB_BASE_URL</code> 拿掉，
+            <b>别让它挂在链上当摆设</b>。
+          </p>
+        )}
+      </Card>
+
+      <Card title="热榜数据源" sub="开源自建为主，商业 API 兜底，双源冗余">
         <div className="stack" style={{ gap: 8 }}>
           {board.hot.map((h) => (
             <div key={h.name} className="row-between wrap" style={{ gap: 8, padding: '6px 0' }}>

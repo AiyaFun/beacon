@@ -285,6 +285,18 @@ function systemPrompt(personaBlock: string, memoryBlock: string, toolNames: stri
     '- 用户拒绝某一步时，不要重复请求同一个操作，换个思路或直接告诉他你的建议。',
     '- 工具返回里标了「示例数据」的内容，转述时必须一并说明它是示例，不能当成真实数据下结论。',
     '- 全部做完后，用中文简短说清楚你做了什么、结果如何。别复述 JSON。',
+    // ── 事前计划（2026-08-29）──
+    // 【为什么要这一段】此前用户看到的是 appendStep 的**事后**步骤流：每做完一步冒一行。
+    // 一件要跑七八分钟的活，前几十秒他看到的是空白——不知道要做几步、也不知道还剩多少。
+    // 让模型先把打算做的事说出来，等待就从「白屏」变成「看着它推进」。
+    // 【为什么是「说出来」而不是新造一个计划字段】计划要是落成结构化数据，就得有人保证
+    // 它和实际执行对得上——而模型完全可能中途改主意（那往往是对的）。
+    // 计划只是给人看的一句话，实际做了什么以步骤流为准，两者不必强行一致。
+    '',
+    '开工前先说计划：',
+    '- 需要**两步以上**才能完成的活，第一句话先列出你打算怎么做（三到六条，每条一行，用「1. 2. 3.」）。',
+    '- 一句话能答的、或只需一次工具调用的，**不要列计划**——那只是噪音。',
+    '- 计划是给用户看的，不是合同：中途发现更好的路就改，改了在结果里说一声即可。',
     // 光在工具清单里列出 list_agents/list_skills 是不够的：模型会倾向于自己一步步做，
     // 那几个工具就成了摆设。派活次序从 lib/agent/roles.ts 生成——**界面上写给用户看的
     // 那四类分工，和模型看到的是同一份**，改一句话两头一起变，不会出现「帮助页说
@@ -1226,6 +1238,27 @@ async function loop(ctx: ToolContext, runId: string): Promise<void> {
       const tool = toolByName(call.name);
       await appendStep(runId, ++seq, { kind: 'tool_call', tool: call.name, args: parseJson(call.arguments, {}) });
 
+      // 单个工具在这次任务里的次数上限（run_advisor 一次就是十几次模型调用，
+      // 连开三场会诊就把预算清空了，而用户要的只是一篇稿子）。
+      // 如实回灌给模型而不是抛错：它会换个做法或告诉用户，而抛错会让它以为是
+      // 临时故障再重试一遍——那是白白多烧一次。
+      //
+      // 【必须在确认闸**之前**（2026-08-30 修）】原来它在下面、紧挨着 executeCall。
+      // 而 PER_RUN_TOOL_CAP 里那几个工具（run_advisor / generate_topics / run_agent /
+      // generate_image）**全都是 write**，于是在默认授权档（每一步都要确认）下：
+      // 确认分支在这里就 break 了，永远走不到那道闸；而用户点了确认之后走的是
+      // decidePendingCall，那条路直接 executeCall，同样没有这道闸。
+      // 结果是这几个上限**一次都没生效过**——写了、也有用例，就是够不着。
+      //
+      // 挪到确认之前还顺带免掉一个不该出现的场面：超了上限就**根本不去问用户**，
+      // 而不是先弹一张确认卡、等他点了同意再告诉他「这一步不能执行」。
+      const capped = await toolCapReason(runId, call.name);
+      if (capped) {
+        await appendStep(runId, ++seq, { kind: 'tool_result', tool: call.name, args: parseJson(call.arguments, {}), result: capped, ok: false });
+        messages.push({ role: 'tool', toolCallId: call.id, content: toJson({ ok: false, error: capped }) });
+        continue;
+      }
+
       if (tool && (await mustConfirm(ctx, runId, tool, call)) && can(ctx.role, tool.action)) {
         // 停在这一步等人。**同一批里排在它后面的调用也一起等**——
         // 先斩后奏地把后面的读操作跑完，会让确认弹层出现在一堆已经发生的事之后。
@@ -1266,17 +1299,6 @@ async function loop(ctx: ToolContext, runId: string): Promise<void> {
       // 于是**两条推理线同时推同一次运行**：各读一份 messages、重复执行同一批工具
       //（真的重复建草稿、真的重复烧额度）、用同一段 seq 写流水、最后互相覆盖。
       await patchRun(runId, 'running', { leaseUntil: new Date(Date.now() + LEASE_MS) });
-
-      // 单个工具在这次任务里的次数上限（run_advisor 一次就是十几次模型调用，
-      // 连开三场会诊就把预算清空了，而用户要的只是一篇稿子）。
-      // 如实回灌给模型而不是抛错：它会换个做法或告诉用户，而抛错会让它以为是
-      // 临时故障再重试一遍——那是白白多烧一次。
-      const capped = await toolCapReason(runId, call.name);
-      if (capped) {
-        await appendStep(runId, ++seq, { kind: 'tool_result', tool: call.name, args: parseJson(call.arguments, {}), result: capped, ok: false });
-        messages.push({ role: 'tool', toolCallId: call.id, content: toJson({ ok: false, error: capped }) });
-        continue;
-      }
 
       const executed = await executeCall(ctx, call);
       await appendStep(runId, ++seq, {

@@ -15,7 +15,6 @@ import { writeMemory } from '@/lib/memory/core';
 import { analyzeHotFit, type HotFitAnalysis } from '@/lib/topic/combine';
 import { requireRole, RbacError } from '@/lib/rbac';
 import { QuotaExceededError } from '@/lib/quota';
-import { isDemoTenant } from '@/lib/demo/guard';
 
 const ACCOUNT_COOKIE_OPTS = { httpOnly: true, sameSite: 'lax', maxAge: 180 * 24 * 3600, path: '/' } as const;
 

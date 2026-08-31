@@ -1,0 +1,49 @@
+# 部署到生产时 rsync 的排除清单。
+#
+# 用法（在本地工程根目录）：
+#   rsync -az --delete-after --exclude-from=deploy/rsync-exclude.txt \
+#     ./ root@<生产机>:/var/www/beacon/
+#
+# 【为什么这份清单必须在仓库里】2026-08-28 与 2026-08-31 两次同一个事故：
+# rsync 少了 `deploy/private`，签名私钥被同步到公网服务器。
+# 两次的根因都不是「文档没写」，而是**清单只存在于 ~/.claude/skills/beacon-deploy/SKILL.md**
+# ——那个 skill 不在仓库里。换台机器、换个人、或者那个 skill 没装，清单就不存在了，
+# 于是同一个错原样再犯一次。放进仓库，它才会跟着代码走。
+#
+# 部署闸门（scripts/deploy-gate.sh 闸门 2/4）是**兜底**不是防线：
+# 它拦得住构建，但那时私钥已经落在公网机器的磁盘上了。
+
+# ── 绝不能上生产的 ──────────────────────────────────────────────
+# 签名凭据（Developer ID .p12 / App Store Connect .p8）。
+# 同时也在 .dockerignore 里——Dockerfile 是 `COPY . .`，
+# 万一它出现在服务器上，会被烤进镜像层，而镜像层删不掉。
+deploy/private
+
+# 服务器有自己的那份，覆盖过去会把生产配置换成本地的
+.env
+.env.*
+
+# ── 服务器独有、覆盖/删除会弄坏正在跑的东西 ────────────────────
+# 部署配置本身（host/key/remotePath 都在里面，只该住在服务器上）
+deploy.config.json
+# xray 容器挂载的二进制与配置（YouTube 热榜的出海代理靠它）
+deploy/xray-bin
+deploy/xray-config.json
+# TLS 证书与 acme 校验目录，由服务器上的续期流程维护
+deploy/certs
+deploy/acme-webroot
+
+# ── 传上去也没用、只会浪费带宽或弄坏构建 ──────────────────────
+.git
+node_modules
+# 服务器自己构建
+.next
+# 【必须排】它会被拷进构建上下文，导致类型检查撞上已删除的页面（2026-08-25 真踩）
+.next-verify
+# Tauri 子项目：src-tauri/target 近 1GB，服务器构建用不到
+desktop
+# 本地开发的 SQLite 库
+prisma/*.db
+prisma/*.db-journal
+.DS_Store
+tsconfig.tsbuildinfo

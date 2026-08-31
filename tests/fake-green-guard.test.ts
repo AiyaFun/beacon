@@ -270,3 +270,87 @@ describe('扫源码的守卫不许是假绿', () => {
     expect(assertions(probe, ['SRC']), '断言抽取坏了').toHaveLength(1);
   });
 });
+
+// ── 第八种形状：indexOf 返回 -1 切出整个文件（2026-08-30 新增）────────────────
+//
+// 【真踩过】tests/agent/shell-gate.test.ts 里原来是：
+//
+//     const i = tools.indexOf("name: 'run_shell',");
+//     expect(tools.slice(Math.max(0, i - 300), i)).toContain('write: true');
+//
+// 把 run_shell 从 tools.ts 搬到 tools-local.ts 之后，indexOf 返回 **-1**，
+// `Math.max(0, -301)` = 0，`slice(0, -1)` = **整个文件少一个字符** ——
+// 里面当然找得到 `write: true`。**工具从这个文件里消失了，守卫是绿的。**
+//
+// 这是最坏的一种：它不是「被守的代码坏了却不红」，而是「被守的代码**没了**，
+// 守卫反而更容易绿」——因为搜索范围从 300 字符扩大到了整个文件。
+//
+// 【判据】一个 `x.indexOf(...)` 的结果，被当作 `.slice(…, i)` 的**终点**，
+// 或者拿去和另一个 indexOf 比先后，而这中间没有任何一处验过它不是 -1。
+// 修法是走 tests/helpers/anchor.ts 的 at/before/after/between/orderedBefore ——
+// 那几个函数找不到锚点就抛，-1 在结构上不可能出现。
+describe('第八种假绿：indexOf 没验 -1', () => {
+  /** `.slice(` 的顶层参数（手写括号配平——正则处理不了 `Math.max(0, i - 300)` 这种嵌套）。 */
+  function sliceArgs(win: string): string[][] {
+    const out: string[][] = [];
+    for (const m of win.matchAll(/\.slice\(/g)) {
+      let i = m.index! + m[0].length, depth = 1, cur = '', args: string[] = [];
+      while (i < win.length && depth > 0) {
+        const c = win[i];
+        if (c === '(') depth++;
+        else if (c === ')') { depth--; if (depth === 0) break; }
+        if (depth === 1 && c === ',') { args.push(cur); cur = ''; } else cur += c;
+        i++;
+      }
+      args.push(cur);
+      out.push(args.map((a) => a.trim()));
+    }
+    return out;
+  }
+
+  const findings: string[] = [];
+  let scanned = 0;
+  for (const f of walk(path.join(ROOT, 'tests'))) {
+    // 【跳过本文件】它讲的就是这些形状，注释里和「判据本身认得出」那条用例的样本里
+    // 必然写着一模一样的坏代码。不跳过的话这道守卫会永远报自己——
+    // 而一条恒红的守卫等于没有守卫（本项目对「告警恒亮」有过明确判断）。
+    // 判据的可信度不靠扫自己，靠下面那条拿样本直接喂 sliceArgs 的用例。
+    if (path.basename(f) === 'fake-green-guard.test.ts') continue;
+    // 剥注释：注释里贴的坏例子不是代码
+    const lines = stripComments(fs.readFileSync(f, 'utf8')).split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const m = /(?:const|let)\s+(\w+)\s*=\s*\w+\.indexOf\(/.exec(lines[i]);
+      if (!m) continue;
+      scanned++;
+      const v = m[1];
+      const win = lines.slice(i, i + 10).join('\n');
+      // 验过 -1 的放过：expect(v).toBeGreaterThan(…) / v < 0 ? … / if (v < 0)
+      const ok = new RegExp(`expect\\(\\s*${v}\\s*[,)][\\s\\S]{0,80}(toBeGreaterThan|toBeGreaterThanOrEqual)`).test(win)
+        || new RegExp(`${v}\\s*(>|>=|!==|===|<)\\s*-?\\d+\\s*(\\?|\\)|&&|\\|\\|)`).test(win)
+        || new RegExp(`if\\s*\\(\\s*${v}\\s*<\\s*0`).test(win);
+      if (ok) continue;
+      const asEnd = sliceArgs(win).some((a) => a.length === 2 && a[1] === v);
+      const asOrder = new RegExp(`expect\\(\\s*${v}\\s*[,)][\\s\\S]{0,60}toBeLessThan`).test(win);
+      if (asEnd || asOrder) findings.push(`  ${path.relative(ROOT, f)}:${i + 1}  ${lines[i].trim().slice(0, 80)}`);
+    }
+  }
+
+  it('没有「indexOf 结果当 slice 终点 / 比先后」却不验 -1 的写法', () => {
+    expect(findings, '以下写法在锚点消失时会变绿（-1 让 slice 切出整个文件）：\n'
+      + `${findings.join('\n')}\n\n改用 tests/helpers/anchor.ts 的 before/after/between/orderedBefore。`).toEqual([]);
+  });
+
+  it('这条守卫真的扫到东西了（扫不到会静默全过）', () => {
+    expect(scanned, '一处 indexOf 都没扫到，扫描逻辑坏了').toBeGreaterThan(30);
+  });
+
+  it('判据本身认得出这种假绿（判据坏了也会静默全过）', () => {
+    // 拿真实踩过的那段当样本：判据一旦失效，这里先红
+    const bad = `const i = tools.indexOf("name: 'run_shell',");\n`
+      + `expect(tools.slice(Math.max(0, i - 300), i)).toContain('write: true');`;
+    expect(sliceArgs(bad).some((a) => a.length === 2 && a[1] === 'i'), '括号配平坏了：认不出嵌套的 Math.max').toBe(true);
+    // 而正确写法（终点不是 indexOf 的结果）不该被判成违规
+    const good = `const i = tools.indexOf('x');\nexpect(tools.slice(i, i + 300)).toContain('y');`;
+    expect(sliceArgs(good).some((a) => a.length === 2 && a[1] === 'i')).toBe(false);
+  });
+});

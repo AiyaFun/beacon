@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server';
+
 import { prisma } from '@/lib/db';
 import { log } from '@/lib/logger';
 import { readBotSecrets } from '@/lib/bot';

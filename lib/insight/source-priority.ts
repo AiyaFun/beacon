@@ -34,7 +34,7 @@ export type SnapshotLike = {
  */
 export function pickAuthoritativeSnapshot<T extends SnapshotLike>(
   snapshots: T[],
-  publishedAt: Date,
+  publishedAt: Date | null,
 ): T | null {
   // 没有任何可用指标的快照不参与竞选。它不是「一个更可信的 0」，而是「没有观测」——
   // 让它顶掉一条有值的记录等于凭空把数据抹成 0，比选错来源严重得多。
@@ -47,7 +47,10 @@ export function pickAuthoritativeSnapshot<T extends SnapshotLike>(
   let best: T | null = null;
   let bestDay = -Infinity;
   for (const s of usable) {
-    const day = logicalDay(publishedAt, s.takenAt, s.milestone);
+    // 【不知道发布时间时，逻辑日一律当同一天】原来的口径是「先比逻辑日、同日再比来源可信度」。
+    // publishedAt 为空时 logicalDay 返回 null——那不是「第 0 天」，是「没有这个坐标」。
+    // 退化成「只比来源可信度、再比新旧」，正是这条规则在缺少日维度时的自然形态。
+    const day = logicalDay(publishedAt, s.takenAt, s.milestone) ?? 0;
     if (best === null || day > bestDay) {
       best = s;
       bestDay = day;
@@ -68,7 +71,7 @@ export function pickAuthoritativeSnapshot<T extends SnapshotLike>(
 export function authoritativeMetrics(
   fallbackMetricsJson: string,
   snapshots: SnapshotLike[],
-  publishedAt: Date,
+  publishedAt: Date | null,
 ): Metrics {
   const pick = pickAuthoritativeSnapshot(snapshots, publishedAt);
   return parseJson<Metrics>(pick ? pick.metrics : fallbackMetricsJson, {});

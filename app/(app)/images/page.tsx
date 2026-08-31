@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { getSession } from '@/lib/session';
 import { can } from '@/lib/rbac';
-import { PageHead, Card, Stat, Fold } from '@/components/ui';
+import { Stat, Fold } from '@/components/ui';
 import { imageConfigured, imageSource } from '@/lib/llm/image';
 import { getImageQuotaStatus } from '@/lib/quota';
 import { listLibrary, listGenerated } from '@/lib/media/store';

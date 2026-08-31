@@ -3,9 +3,9 @@
 import { revalidatePath } from 'next/cache';
 import { getSession } from '@/lib/session';
 import { fetchCatalog, markInstalled } from '@/lib/market/catalog';
-import { installFromUrl, checkUpdates } from '@/lib/market/install';
+import { installFromUrl, checkUpdates, exportSkillPack } from '@/lib/market/install';
 import { requireRole } from '@/lib/rbac';
-import { installSkill, uninstallSkill, createCustomSkill, type SkillOutputKind } from '@/lib/skills';
+import { installSkill, uninstallSkill, createCustomSkill } from '@/lib/skills';
 import { importSkillFromUrl } from '@/lib/skills/import';
 import { prisma } from '@/lib/db';
 import { assertNotDemo } from '@/lib/demo/guard';
@@ -126,4 +126,23 @@ export async function actCheckSkillUpdates() {
   const s = await getSession();
   requireRole(s, 'content.view');
   return { ok: true as const, updates: await checkUpdates(s.tenantId) };
+}
+
+/**
+ * 把一个技能导出成可分享的 beaconPack 包。
+ *
+ * 【为什么补这个】`exportSkillPack` 2026-08-29 被全库「写了没接」扫描查出：
+ * 建好了、能跑，但**没有任何入口**。而工作流那边是对称通的（actExportWorkflow）——
+ * 于是技能包变成「能装不能导」：用户能从市场装别人的，却分享不出自己的，
+ * 而市场本来就把技能包当作可分发单位之一（beaconPack:1 的 kind='skill'）。
+ *
+ * 不是空承诺（界面上没说过技能能导出），但是个半成品能力。
+ * 按这个项目的规矩：**要么接上它，要么删掉它**——这里选接上。
+ */
+export async function actExportSkill(skillId: string): Promise<{ ok: boolean; json?: string; error?: string }> {
+  const s = await getSession();
+  // 与导入/新建同级：导出的是提示词模板本身，属于工作区资产
+  requireRole(s, 'content.create');
+  const json = await exportSkillPack(s.tenantId, String(skillId ?? ''));
+  return json ? { ok: true, json } : { ok: false, error: '技能不存在，或不属于这个工作区' };
 }

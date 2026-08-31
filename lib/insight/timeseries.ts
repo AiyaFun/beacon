@@ -37,13 +37,22 @@ export type DeltaPoint = {
 
 // 逻辑日：milestone 标签优先（官方/适配器逐日点），否则按 takenAt-publishedAt 折算（插件/手动点）。
 // 兼容历史遗留标签 T+48h→2、T+7d→7。
-export function logicalDay(publishedAt: Date, takenAt: Date, milestone: string | null): number {
+/**
+ * 这条快照落在发布后第几天。
+ *
+ * 【publishedAt 可空 → 返回 null】不知道哪天发的，就没有「发布后第 N 天」这回事。
+ * 2026-08-30 之前发布时间缺失会被补成回填当天，于是建档时那条快照落在 D+0，
+ * 却携带这条作品**全生命周期**的累计播放——曲线形态一律被判成「首日爆发」。
+ * 返回 null 让调用方明确处理，而不是拿一个编出来的 0 继续算。
+ */
+export function logicalDay(publishedAt: Date | null, takenAt: Date, milestone: string | null): number | null {
   if (milestone) {
     const m = /^D\+(\d+)$/.exec(milestone);
     if (m) return Number(m[1]);
     if (milestone === 'T+48h') return 2;
     if (milestone === 'T+7d') return 7;
   }
+  if (!publishedAt) return null;
   const diff = takenAt.getTime() - publishedAt.getTime();
   return Math.max(0, Math.floor(diff / DAY_MS));
 }
@@ -57,10 +66,18 @@ export function logicalDay(publishedAt: Date, takenAt: Date, milestone: string |
 //
 // ⚠️ 比较只在**同一逻辑日内**发生。跨天绝不比可信度：官方 D+1 的 1000 不该压过手填 D+30 的 50 万，
 // 那是两个时点的观测，不是冲突。跨天的取舍由 day 分组天然完成。
-export function toDailySeries(snapshots: SnapshotInput[], publishedAt: Date): DaySeriesPoint[] {
+export function toDailySeries(snapshots: SnapshotInput[], publishedAt: Date | null): DaySeriesPoint[] {
+  // 【不知道哪天发的 → 没有序列】「发布后第 N 天」这个坐标轴不存在时，
+  // 硬凑一条曲线出来只会让下游得出确定的错误结论：
+  //   · analyzeCurveShape 看到 D+0 携带全生命周期的累计播放 → 判「首日爆发」
+  //   · sameWindowBaseline 拿它去比同窗 → ratio≥2 → 发「🚀 爆款加速」通知甚至短信，
+  //     而那可能是一条三个月前就发了的老作品。
+  // 返回空序列，下游一律走「数据不足」那条分支——那才是事实。
+  if (!publishedAt) return [];
   const byDay = new Map<number, DaySeriesPoint>();
   for (const s of snapshots) {
     const day = logicalDay(publishedAt, s.takenAt, s.milestone);
+    if (day === null) continue; // publishedAt 已经判过了，这里只可能是 milestone 异常
     const prev = byDay.get(day);
     if (prev) {
       const cmp = sourceRank(s.source) - sourceRank(prev.source);

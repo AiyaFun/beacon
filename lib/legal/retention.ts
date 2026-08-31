@@ -1,10 +1,16 @@
 import { prisma } from '../db';
 import { expireStaleTasks } from '../browser-task';
 import { purgeParserScreenshots } from '../ingest/parser-learn';
+import { purgeExpiredScrapeRecords } from '../scrape/record';
+import { purgeExpiredCrawlerHits } from '../geo/crawler-log';
+import { purgeExpiredCitations } from '../geo/citation';
 import { purgeExpiredCovers } from '../media/store';
 import { purgeExpiredComments } from '../ingest/reader-comments';
 import { pruneStaleQuestions } from '../ingest/comment-questions';
-import { purgeRemovedAccountData, type PurgeResult } from './removal';
+import {
+  purgeRemovedAccountData, purgeRemovedSiteData, purgeOneComment,
+  SITE_KIND, COMMENT_KIND, type PurgeResult,
+} from './removal';
 
 // 保留期的**兑现闸**：把散在各写入路径上的到期清理，收成一次全库扫描（由 purge_retention 定时跑）。
 //
@@ -51,6 +57,32 @@ export const ORPHANED_LLM_LOG_RETENTION_DAYS = 190;
  */
 export const RUN_LOG_RETENTION_DAYS = 90;
 
+/**
+ * 注销存根（AccountDeletion）留多久。
+ *
+ * ── 政策承诺的是下限，不是删除 ──
+ * 隐私政策写的是「已完成交易的凭证按《电子商务法》第三十一条保存**不少于三年**」——
+ * 它承诺的是一个**地板**，没有承诺到期删除。所以这条清理不是在兑现某句承诺，
+ * 是在兑现另一条法律义务：《个人信息保护法》第十九条要求保存期限为
+ *「实现处理目的所必要的**最短时间**」。永远留着与那一条相悖。
+ *
+ * ── 为什么按 deletedAt 算是安全的 ──
+ * 电商法的三年从**交易完成之日**起算，而不是注销之日。但先付款才谈得上注销，
+ * 所以 `deletedAt` 必然晚于这条存根里任何一笔交易的 `paidAt`——
+ * 按 deletedAt 算只会**留得更久**，不可能早删。
+ *
+ * ── 为什么是 1125 而不是 1095 ──
+ * 与 ORPHANED_LLM_LOG_RETENTION_DAYS 取 190 而不是 183 同一条理由：
+ * 法条说的是「不**少于**三年」，早删一天是违法，晚删一个月只是多留一会儿。
+ * 两侧代价不对称时往长了取。
+ *
+ * ── 一并说清没有做的事 ──
+ * 没有区分「有交易的」与「没交易的（免费用户注销）」。后者其实没有电商法义务，
+ * 本可以更早删。但这条记录同时还是「我们确实执行了他的删除请求」的凭据，
+ * 三年不算过分——**用一个数字而不是两个**，少一个以后要记的东西。
+ */
+export const ACCOUNT_DELETION_RETENTION_DAYS = 1125;
+
 export type RetentionSweep = {
   /** 到期物理删除的读者原声正文条数（ReaderComment） */
   readerComments: number;
@@ -66,6 +98,14 @@ export type RetentionSweep = {
   browserTasks: { expired: number; purged: number };
   /** 解析自学习：清空的超期失败现场截图张数（只清 screenshot 列，事件与骨架保留） */
   parserScreenshots: number;
+  /** 任意站点采集配方抓到的数：到期物理删除的条数（ScrapeRecord） */
+  scrapeRecords: number;
+  /** AI 爬虫来访计数：到期物理删除的行数（AiCrawlerHit） */
+  crawlerHits: number;
+  /** AI 引用回执：到期物理删除的条数（AiCitation） */
+  citations: number;
+  /** 注销存根：到期物理删除的条数（AccountDeletion，见 ACCOUNT_DELETION_RETENTION_DAYS） */
+  accountDeletions: number;
   /** 已核验移除申请的重扫：扫了几条申请，以及这一趟补删掉了什么 */
   removals: { swept: number; purged: PurgeResult };
   /**
@@ -77,6 +117,7 @@ export type RetentionSweep = {
 
 const EMPTY_PURGE: PurgeResult = {
   accounts: 0, posts: 0, watchlistItems: 0, runs: 0, commentQuestions: 0, readerComments: 0,
+  scrapeRecords: 0, scrapeRecipes: 0, aiCitations: 0, clips: 0,
 };
 
 /** 全库到期清理。不接 workspaceId：它扫的正是「已经没人再写入」的那些工作区。 */
@@ -159,22 +200,69 @@ export async function sweepRetention(): Promise<RetentionSweep> {
   //      只清 screenshot 列——事件与脱敏骨架留着，运维台还要靠它们看历史。
   const parserScreenshots = await step('parser_screenshots', () => purgeParserScreenshots(), 0);
 
+  // ③.8 任意站点采集配方抓到的数：满 SCRAPE_RECORD_RETENTION_DAYS 天物理删除。
+  //      【为什么这条比平台数据更该短】平台数据是**按平台预先审过**的（通道分级、去标识化、
+  //      移除申请）；配方是用户指哪儿抓哪儿，没法预审。所以取舍是「存得少、存得短」——
+  //      只存 fields 声明过的那几个字段值（正文只回给模型不落库），90 天到期删。
+  const scrapeRecords = await step('scrape_records', () => purgeExpiredScrapeRecords(), 0);
+
+  // ③.9 AI 爬虫来访计数：满 CRAWLER_HIT_RETENTION_DAYS 天删。
+  //      它是聚合计数（一个爬虫一条路径一天一行），单行很小，但只增不减的表
+  //      迟早会变成库里最大的那张——运行记录那一条就是这么来的。
+  const crawlerHits = await step('crawler_hits', () => purgeExpiredCrawlerHits(), 0);
+
+  // ③.95 AI 引用回执：与爬虫计数同档。它存的是**别人页面上的链接与标题**，
+  //       更该有个期限——留着不用的第三方内容没有任何理由。
+  const citations = await step('ai_citations', () => purgeExpiredCitations(), 0);
+
+  // 注销存根：过了法定留存期就物理删除（《个保法》第十九条的最短必要期限）。
+  // ⚠️ 这一步删的是**交易凭证**，删错了拿不回来。所以判据只有一条、没有任何 OR 分支：
+  // deletedAt 早于 cutoff。别为「顺手清理测试数据」之类的理由往里加条件。
+  const accountDeletions = await step('account_deletions', async () => {
+    const cutoff = new Date(Date.now() - ACCOUNT_DELETION_RETENTION_DAYS * 86_400_000);
+    const r = await prisma.accountDeletion.deleteMany({ where: { deletedAt: { lt: cutoff } } });
+    return r.count;
+  }, 0);
+
   // ④ 已核验移除申请的重扫。resolveRemovalRequest 在流转那一刻已经删过一遍，这是**第二道**：
-  //    停采闸只挂在两条竞对通道上（lib/pipeline.ts、lib/ingest/competitor.ts），
-  //    评论回传那条（app/api/ingest/questions）没过闸，被移除账号作品下的评论正文仍可能重新写进来。
+  //    2026-08-30 之前停采闸只挂在两条竞对通道上（lib/pipeline.ts、lib/ingest/competitor.ts），
+  //    评论回传那条（app/api/ingest/questions）没过闸——那条现在补上了，但这道重扫**仍然要留着**：
+  //    ① 闸是「从今往后不再写入」，重扫是「已经写进来的要清掉」，两件事；
+  //    ② 三条路里再漏一条的成本，正是这道重扫在兜。
   //    「核验后其名下作品的评论正文与提问会一并删除」是对权利人的承诺，不能只在流转的那一秒成立。
   //    ⚠️ 只扫 verified/removed。pending 是「待核验**先停采**」，核验没过就动手删数据，
   //    等于让任何人靠一张表单删掉别人的档案——那是比漏删更坏的错误。
   const removals = await step('removal_resweep', async () => {
     const reqs = await prisma.dataRemovalRequest.findMany({
       where: { status: { in: ['verified', 'removed'] } },
-      select: { id: true, platform: true, handle: true },
+      // 【kind 必须取出来】不取的话下面分不出这是账号申请还是站点申请，
+      // 而站点申请拿去跑 purgeRemovedAccountData 是**一条都删不掉**的空转：
+      // 它按 platform+handle 找竞对档案，而站点申请的 platform 是 'site'。
+      // 那种失败不报错，只表现为「重扫每天都在跑，站点的数据却一直在」。
+      // commentText 也要取：comment 类靠它按原文定位那一条。不取的话这一类在重扫里
+      // 同样是空转——而重扫本来就是「流转那一刻万一漏了」的第二道防线
+      select: { id: true, platform: true, handle: true, kind: true, commentText: true },
       orderBy: { createdAt: 'asc' },
     });
     const purged: PurgeResult = { ...EMPTY_PURGE };
     for (const req of reqs) {
       // 单条申请出错不该让其余申请这一轮也不执行（同 daily_recommend 的 per-tenant 隔离）
       try {
+        if (req.kind === SITE_KIND) {
+          const site = await purgeRemovedSiteData(req.handle);
+          purged.scrapeRecords += site.records;
+          purged.scrapeRecipes += site.recipes;
+          continue;
+        }
+        // 【comment 类也要认】不认的话它会掉进下面的 purgeRemovedAccountData，
+        // 而那里是按 author（账号 handle）删评论的，comment 类的 handle 是**作品链接**——
+        // 永远匹配不上，一条都删不掉，且不报错。
+        // 隐私政策写着「读者本人可以要求删除自己那条评论」，不认它就是一句空承诺。
+        if (req.kind === COMMENT_KIND) {
+          const c = await purgeOneComment(req.platform, req.commentText ?? '');
+          purged.readerComments += c.readerComments;
+          continue;
+        }
         const r = await purgeRemovedAccountData(req.platform, req.handle);
         for (const k of Object.keys(purged) as (keyof PurgeResult)[]) purged[k] += r[k];
       } catch (e) {
@@ -184,5 +272,8 @@ export async function sweepRetention(): Promise<RetentionSweep> {
     return { swept: reqs.length, purged };
   }, { swept: 0, purged: { ...EMPTY_PURGE } });
 
-  return { readerComments, covers, commentQuestions, orphanedLlmLogs, runLogs, browserTasks, parserScreenshots, removals, errors };
+  return {
+    readerComments, covers, commentQuestions, orphanedLlmLogs, runLogs, browserTasks,
+    parserScreenshots, scrapeRecords, crawlerHits, citations, accountDeletions, removals, errors,
+  };
 }

@@ -232,14 +232,30 @@ export async function ingestCompetitorData(
   let withMetrics = 0;
   let created = 0;
   let updated = 0;
+  // ── 一次查回这一批已有的作品（2026-08-29 从「每条一次 findUnique」改过来）──
+  //
+  // 【改之前】循环里每条作品都 findUnique 一次，再按情况写 1~2 次。
+  // payload.posts 上限 50 条 ⇒ **一次插件回传最多 150 次串行数据库往返**，
+  // 而这条路在**用户请求路径上**——延迟是他直接等的。
+  //
+  // 【为什么只批量「查」，不批量「写」】写的部分每条数据都不一样
+  //（metrics 要和旧值合并、快照要挂到新建行的 id 上），合不成一条语句；
+  // 而这一批里同一个 platformItemId 只会有一条（唯一键），所以查可以一次拿齐。
+  // 查从 N 次降到 1 次，写保持原样——**先拿掉确定安全的那一半**。
+  const existingPosts = await prisma.crawledPost.findMany({
+    where: {
+      platform: payload.platform,
+      platformItemId: { in: payload.posts.map((p) => p.platformItemId) },
+    },
+    select: { id: true, platformItemId: true, metrics: true },
+  });
+  const existingByItemId = new Map(existingPosts.map((x) => [x.platformItemId, x]));
+
   for (const post of payload.posts) {
     const metrics = post.metrics && Object.keys(post.metrics).length > 0 ? post.metrics : undefined;
     const views = metrics?.views ?? 0;
     const hotScore = Math.round((views / 20000) * 10) / 10;
-    const existing = await prisma.crawledPost.findUnique({
-      where: { platform_platformItemId: { platform: payload.platform, platformItemId: post.platformItemId } },
-      select: { id: true, metrics: true },
-    });
+    const existing = existingByItemId.get(post.platformItemId);
     if (existing) {
       if (metrics) {
         const prev = parseJson<Record<string, number>>(existing.metrics, {});

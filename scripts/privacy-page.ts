@@ -98,8 +98,12 @@ const EXTENSION_SECTION = `
     <td>一次采集<strong>确实没读到目标字段</strong>时（多为平台改版），同一字段每次会话只上报一次</td>
     <td>回传到用户自己配置的服务器，仅用于修复解析规则并以规则包下发。
         骨架里<strong>只有形状没有内容</strong>：标签名、类名、<code>data-*</code>/<code>aria-*</code> 的
-        <strong>属性名（不含属性值）</strong>，文本被替换成形状（数字→NUM，三字以上中文→CJK，
+        <strong>属性名</strong>，文本被替换成形状（数字→NUM，三字以上中文→CJK，
         只保留「粉丝」「获赞」这类两字以内的界面标签词）。
+        <strong>属性值只带两种</strong>：<code>role</code>（只收 ARIA 标准词表内的值）与
+        <code>data-testid</code> 一类测试标识（只收字母开头、长度 3–40 的标识符形状，
+        排除 <code>user-8823</code> 这种以数字结尾的实例 ID）——类名被混淆成随机哈希时，
+        它们是仅剩的稳定定位依据。两道闸在服务端再执行一次。
         <strong>不含</strong>正文、标题、昵称、头像、链接、图片、用户 ID。服务端收到后再脱敏一次并限制大小</td>
   </tr>
   <tr>
@@ -115,7 +119,8 @@ const EXTENSION_SECTION = `
     <td><strong>用户自己写好的发布内容</strong>（一键发布，0.9.4 新增）</td>
     <td>用户在自己的创作后台点「填入本页」时</td>
     <td>不外发：只把用户在烽火台里写好的标题与正文<strong>填进该页表单</strong>。
-        扩展<strong>永远不点击发布按钮</strong>——发布必须由用户本人完成</td>
+        <strong>默认不点击发布按钮</strong>；用户可在插件设置里显式开启「代点发布」（默认关），
+        开启后仅在标题与正文都填成功、且认出明确的发布按钮时才点，点击前有 5 秒倒计时可取消</td>
   </tr>
   <tr>
     <td>用户填写的服务器地址与<strong>采集令牌</strong></td>

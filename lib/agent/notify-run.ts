@@ -30,6 +30,8 @@ type RunForNotify = {
   goal: string;
   status: string;
   episode: number;
+  /** 流水位置。做去重键的 occurrence 用，见 notifyRefId 的说明 */
+  steps: number;
   error: string | null;
   answer: string | null;
 };
@@ -90,14 +92,16 @@ export async function notifyRunStatus(runId: string, status: AgentRunStatus): Pr
       where: { id: runId },
       select: {
         id: true, workspaceId: true, accountId: true, memberId: true,
-        goal: true, status: true, episode: true, error: true, answer: true,
+        goal: true, status: true, episode: true, error: true, answer: true, steps: true,
       },
     })) as RunForNotify | null;
     // 状态对不上说明这次迁移已经被后来的变化盖过去了，那就让后来那次去通知
     if (!run || run.status !== status) return false;
 
-    const refId = notifyRefId(run.id, status, run.episode);
-    // 去重：同一段里同一个状态只叫一次。重复触发是常态（叫醒重投、自愈顺手也踢了一次）
+    // 去重键带上 steps：同一次确认重复触发时它不变，而**下一次**确认一定是新的流水位置。
+    // 只按 (runId, status, episode) 去重的话，一次执行里第二次「等你确认」会被静默吞掉。
+    const refId = notifyRefId(run.id, status, run.episode, run.steps);
+    // 去重：同一段里同一次状态只叫一次。重复触发是常态（叫醒重投、自愈顺手也踢了一次）
     const already = await prisma.notification.count({ where: { workspaceId: run.workspaceId, refId } });
     if (already > 0) return false;
 
@@ -125,7 +129,24 @@ export async function notifyRunStatus(runId: string, status: AgentRunStatus): Pr
   }
 }
 
-/** 去重键。格式统一在这里，别在调用点手写字符串。 */
-export function notifyRefId(runId: string, status: string, episode: number): string {
-  return `agentrun:${runId}:${status}:${episode}`;
+/**
+ * 去重键。格式统一在这里，别在调用点手写字符串。
+ *
+ * ── 为什么要带 occurrence（2026-08-30 修）──
+ * 原来的键是 `(runId, status, episode)`。而 **episode 只在「已结束的运行被追问续跑」
+ * 时才 +1**（lib/agent/run.ts 的 appendUserNote）——一次执行**里面**，
+ * `awaiting_confirm` 完全可能出现很多次：确认一个写操作 → 接着跑 → 又撞上第二个写操作。
+ *
+ * 于是第二次之后的「等你确认」全部被当成重复而静默丢弃。后果是两条通道一起死：
+ *   · 站内红点不出；
+ *   · 群机器人回执也没了——echoRunToChat 正是拿 notifyRunStatus 的返回值当去重判据的。
+ * 任务就停在 awaiting_confirm 那儿，**没有任何人知道它在等谁**。
+ * 而「一件任务里有两个写操作」是再普通不过的情形（建草稿 + 排发布计划）。
+ *
+ * 【occurrence 取什么】用 `steps`：同一次确认被重复触发时它不变
+ *（重投时 run.status 已经不是 running，循环直接早退，不会再写流水），
+ * 而新的一次确认一定伴随新的流水行。这样既保住了原来要防的重复，又分得开两次不同的确认。
+ */
+export function notifyRefId(runId: string, status: string, episode: number, occurrence = 0): string {
+  return `agentrun:${runId}:${status}:${episode}:${occurrence}`;
 }

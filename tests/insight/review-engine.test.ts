@@ -76,7 +76,7 @@ describe('generateArticleReview 三合一回流', () => {
       const p = await prisma.publishRecord.create({
         data: { accountId, platform: 'douyin', platformItemId: `peer${i}`, title: `p${i}`, publishedAt: new Date(pub.getTime() - (i + 1) * 5 * 86_400_000) },
       });
-      await addSnaps(p.id, p.publishedAt, [[1, 60000], [3, 100000]]);
+      await addSnaps(p.id, p.publishedAt!, [[1, 60000], [3, 100000]]);
     }
 
     const r = await generateArticleReview({ tenantId, accountId, workspaceId, publishId: rec.id });
@@ -136,7 +136,7 @@ describe('generateArticleReview 三合一回流', () => {
       const p = await prisma.publishRecord.create({
         data: { accountId, platform: 'douyin', platformItemId: `peer${i}`, title: `p${i}`, publishedAt: new Date(pub.getTime() - (i + 1) * 5 * 86_400_000) },
       });
-      await addSnaps(p.id, p.publishedAt, [[1, 60000], [3, 100000]]);
+      await addSnaps(p.id, p.publishedAt!, [[1, 60000], [3, 100000]]);
     }
 
     await generateArticleReview({ tenantId, accountId, workspaceId, publishId: rec.id });

@@ -56,7 +56,11 @@ describe('competitorTrend · 观测序列', () => {
       snap('2026-07-02T00:00:00Z', { views: 50 }),
     ]);
     expect(r.sample).toBe(2);
-    expect(r.growth?.views).toBe(50);
+    // 【2026-08-30 改了这条断言：它原来把缺陷当成了期望行为】
+    // 原来断的是 `growth.views === 50`——而 50 是**第二次观测的累计播放**，
+    // 不是这段时间涨了多少。首点没有 views（JSON 坏了），这段的净增**根本算不出来**。
+    // 这条用例的本意是「坏 JSON 不抛异常」，那句 50 是顺手写上的，而它恰好写死了 bug。
+    expect(r.growth?.views, '一端没有数据时不该给出净增').toBeUndefined();
   });
 });
 

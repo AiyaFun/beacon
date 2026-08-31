@@ -14,12 +14,13 @@ export type JobName =
   | 'optimize_memory' // 批租户：记忆持续学习优化
   | 'generate_reviews' // 批租户：发布满 7 天自动生成 AI 复盘
   | 'weekly_review' // 批租户：每周运营复盘
-  | 'plan_expiry_notice' // 批租户：套餐/试用到期前后的续费提醒
+  | 'plan_expiry_notice' // 批租户：套餐/试用到期前后的续费提醒（顺带对账未终态的退款单）
+  | 'reconcile_orders' // 广播：对账「待支付」订单（回调丢了 + 用户关页面 = 钱收了不发货）
   | 'purge_retention' // 广播：全库到期数据清理（保留期承诺的兑现闸，见 lib/legal/retention.ts）
   | 'run_scheduled_agents' // 广播：扫到点的定时智能体并跑（用户自定义计划，三道闸见 lib/workflow/schedule.ts）
   | 'run_agent_loop' // 事件：把一次 AI 执行往前推（payload.runId），见 lib/agent/kick.ts
   | 'tick_agent_runs' // 广播：AI 执行兜底巡检（额度重置后接着跑、跑飞的接手），见 lib/agent/tick.ts
-  | 'sweep_local_recipes'; // 广播：AI 执行兜底巡检（额度重置后接着跑、跑飞的接手），见 lib/agent/tick.ts
+  | 'sweep_local_recipes'; // 广播：每 6 小时用本机 Chrome 把采集配方跑一遍，见 lib/scrape/sweep.ts
 
 export type JobPayload = Record<string, unknown>;
 
@@ -51,6 +52,8 @@ export const JOB_TRACK: Record<JobName, JobTrack> = {
   generate_reviews: 'batch_tenant',
   weekly_review: 'batch_tenant',
   plan_expiry_notice: 'batch_tenant',
+  // 广播而非批租户：它扫的是全局订单表，按租户遍历既慢又会漏掉「刚下单还没成为活跃租户」的那些
+  reconcile_orders: 'broadcast',
   // 广播而非批租户：它扫的正是「已经没人再写入」的工作区，按活跃租户遍历会漏掉的恰好是最该清的那些。
   purge_retention: 'broadcast',
   // 广播型：它自己扫全表找到点的计划，不需要外层按租户分批

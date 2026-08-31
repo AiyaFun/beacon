@@ -4,7 +4,8 @@ import { stepsSchema, stepLabel, stepCostly, STEP_KINDS } from '../workflow/step
 import { createSchedule, clampScheduleTime, normalizeWeekdays, MAX_SCHEDULES } from '../workflow/schedule-create';
 import { scheduleWhen } from '../workflow/schedule-format';
 import { listInstalledSkills } from '../skills';
-import type { AgentTool } from './tools';
+import type { AgentTool } from './tool-types';
+import { num, str } from './tool-types';
 
 // ── 起草制：AI 出草案，落库仍然要用户点头 ──────────────────────────────────
 //
@@ -20,11 +21,6 @@ import type { AgentTool } from './tools';
 // 这与之前 list_schedules 的「只读」不是矛盾：那时是**完全不给**，现在是
 // **给了但必须过人这一关**。两者的共同点是：模型永远不能单独把这份合约签下去。
 
-const str = (v: unknown, fallback = ''): string => (typeof v === 'string' ? v.trim() : fallback);
-const num = (v: unknown, fallback: number): number => {
-  const n = typeof v === 'number' ? v : Number(v);
-  return Number.isFinite(n) ? n : fallback;
-};
 
 const draftSchedule: AgentTool = {
   name: 'draft_schedule',

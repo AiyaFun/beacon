@@ -18,7 +18,31 @@
 import { prisma } from '../db';
 import { llmComplete } from '../llm/gateway';
 import { notify } from '../notify';
-import { verifyAgainstSkeleton, sanitizeSkeleton, serializeSkeleton, MAX_SKELETON_CHARS } from '../ingest/parser-learn';
+import { isSiteRemovalRequested } from '../legal/removal';
+import {
+  verifyAgainstSkeleton, sanitizeSkeleton, serializeSkeleton, selectorTokens, MAX_SKELETON_CHARS,
+} from '../ingest/parser-learn';
+
+/**
+ * 一条 JSON 路径是不是真的在这次捕获里见过。
+ * 带 `*` 的把通配位换成「一段非点字符」再比——仍然是在真实材料上比，不是放行。
+ */
+export function pathSeenInHints(hints: string, path: string): boolean {
+  const p = String(path ?? '').trim();
+  if (!p || p.length > 200) return false;
+  if (!p.includes('*')) return hints.includes(`${p} =`);
+  const re = new RegExp(
+    `^${p.split('*').map((x) => x.replace(/[.*+?^\${}()|[\]\\]/g, '\\$&')).join('[^.]+')} =`,
+    'm',
+  );
+  return re.test(hints);
+}
+
+/** 一个选择器是不是由骨架里真实出现过的 token 组成。与规则同一条判据。 */
+export function selectorSeenInSkeleton(skeleton: string, selector: string): boolean {
+  const tokens = selectorTokens(selector);
+  return tokens.length > 0 && tokens.every((t) => skeleton.includes(t));
+}
 
 /** 连续抓不到几次算坏掉、要重新学。1 次就重学太敏感（网络抖动也算），3 次是经验值。 */
 export const RECIPE_BROKEN_AT = 3;
@@ -34,7 +58,40 @@ export const RECIPE_BROKEN_AT = 3;
 export const MAX_RECIPES_PER_WORKSPACE = 50;
 
 export type RecipeField = { key: string; label: string };
-export type RecipeRule = { key: string; selectors: string[]; anchors: string[] };
+export type RecipeRule = {
+  key: string;
+  selectors: string[];
+  anchors: string[];
+  /** 从被动捕获的 JSON 响应里取值的路径（CDP 路专有；插件端会自然退回选择器与锚点） */
+  jsonPaths?: string[];
+};
+
+/**
+ * 配方的页面级选项，存 ScrapeRecipe.options（JSON）。
+ * 【为什么是一个 JSON 列而不是三个列】这三样都只会跟着配方整读整写，从不单独查询；
+ * 而它们还会继续长（分页、字符集、视口…）。每加一样开一次迁移不划算。
+ */
+export type RecipeOptions = {
+  /** 等到它出现才算就绪。没有它就只能固定等 1500ms，慢一点就抓到骨架屏 */
+  readySelector?: string;
+  /** 往下滚几屏（0=不滚）。列表页首屏之外的内容只能靠它 */
+  scrollScreens?: number;
+  /** 列表的行容器。⚠️ 行边界判错 = 跨条目串数，所以必须显式指定，绝不由代码猜 */
+  rowSelector?: string;
+};
+
+/** 读配方选项。坏数据一律当空——一个写坏的选项不该让整个配方跑不了。 */
+export function parseOptions(raw: string | null | undefined): RecipeOptions {
+  try {
+    const o = JSON.parse(String(raw ?? '{}')) as RecipeOptions;
+    if (!o || typeof o !== 'object' || Array.isArray(o)) return {};
+    return {
+      readySelector: typeof o.readySelector === 'string' ? o.readySelector.slice(0, 200) : undefined,
+      scrollScreens: Number.isFinite(o.scrollScreens) ? Math.min(Math.max(Number(o.scrollScreens), 0), 15) : undefined,
+      rowSelector: typeof o.rowSelector === 'string' ? o.rowSelector.slice(0, 200) : undefined,
+    };
+  } catch { return {}; }
+}
 
 // ── 合规闸 ────────────────────────────────────────────────────────────
 //
@@ -104,12 +161,24 @@ export async function robotsAllows(origin: string, path = '/'): Promise<{ ok: bo
   }
 }
 
-/** 建一个配方前的完整检查。两道闸都过才算能建。 */
+/**
+ * 建一个配方前的完整检查。**三道闸都过才算能建。**
+ *
+ * 第三道是 2026-08-29 补的欠账：站点权利人可以要求「别再抓我的站」，
+ * 而在补上之前，任意站点的内容被存进库，**他没有任何办法让我们停下来**。
+ * 与账号级停采同一条纪律：pending 也先停——宁可少采几天，也不在核验期间继续采。
+ */
 export async function vetOrigin(origin: string, path = '/'): Promise<{ ok: boolean; reason?: string }> {
   const c = complianceCheck(origin);
   if (!c.ok) return c;
+  if (await isSiteRemovalRequested(origin)) return { ok: false, reason: SITE_STOPPED_REASON };
   return robotsAllows(origin, path);
 }
+
+/** 停采的说法收成一处：三个调用点要说同一句话，否则用户会以为是三种不同的错。 */
+export const SITE_STOPPED_REASON =
+  '这个站点的权利人已经要求停止采集，我们不再抓取它。（如果你就是站点权利人、想撤回这个申请，'
+  + '请到「数据移除申请」页说明。）';
 
 /**
  * 由配方拼出要打开的网址。
@@ -136,6 +205,12 @@ type LearnInput = {
   recipeId: string;
   /** 插件传上来的原始骨架（服务端会再脱敏一次——客户端上传的一律不信） */
   skeleton: unknown;
+  /**
+   * 被动捕获到的 JSON 响应摘要（只有路径名 + 值的形状）。只有 CDP 那条路有。
+   * 【为什么值得给模型】同一份数据在响应里是稳定的结构（`data.items.0.title`），
+   * 改版时比 DOM 稳一个数量级，而列表在那儿天然就是数组。
+   */
+  jsonHints?: string;
 };
 
 /**
@@ -160,25 +235,43 @@ export async function learnFromSkeleton(input: LearnInput): Promise<{ ok: boolea
   if (fields.length === 0) return { ok: false, learned: 0, error: '这个配方没说要抓什么字段' };
 
   const prompt = [
-    '下面是一个网页的结构骨架（已脱敏：数字变成 NUM、中文变成 CJK，只保留标签、类名与文本形状）。',
-    '请为每个字段给出能取到它的 CSS 选择器与文本锚点。',
+    '下面是一个网页的结构骨架（已脱敏：数字变成 NUM、中文变成 CJK，只保留标签、类名、',
+    'role/data-testid 与文本形状）。请为每个字段给出能取到它的规则。',
     '',
     `站点：${recipe.origin}`,
     `要抓的字段：${fields.map((f) => `${f.key}(${f.label})`).join('、')}`,
     '',
     '骨架：',
     skeleton,
+    ...(input.jsonHints ? [
+      '',
+      '这个页面自己请求到的 JSON 响应（路径 = 值的形状）：',
+      input.jsonHints,
+    ] : []),
     '',
-    '只输出 JSON：{"rules":[{"key":"字段key","selectors":["css选择器"],"anchors":["页面上紧挨着它的固定文字"]}]}',
-    '选择器与锚点都必须**确实出现在上面的骨架里**，不要凭经验编。',
+    '只输出 JSON：',
+    '{"rules":[{"key":"字段key","selectors":["css选择器"],"anchors":["紧挨着它的固定文字"],'
+      + '"jsonPaths":["JSON里的路径"]}],'
+      + '"options":{"readySelector":"等它出现就算加载好了","rowSelector":"列表里一行的容器","scrollScreens":0}}',
+    '',
+    '几条要求：',
+    '· 选择器、锚点、JSON 路径都必须**确实出现在上面给的材料里**，不要凭经验编。',
+    '· 类名看起来像随机哈希（如 css-1x2y3z、_3aBcD）时，优先用 [role=…] 或 [data-testid=…]，',
+    '  它们在改版后活得久得多。',
+    '· 页面是列表时给 rowSelector（**一行**的容器，不是整个列表的容器）；不是列表就不要给。',
+    '· 首屏就能看全的页面 scrollScreens 给 0；要往下滚才有更多内容的，给一个 1..15 的数。',
   ].join('\n');
 
   let proposed: RecipeRule[] = [];
+  let proposedOptions: RecipeOptions | null = null;
   try {
     const r = await llmComplete(input.tenantId, 'agent', [{ role: 'user', content: prompt }], { json: true, temperature: 0.2 });
     if (r.mocked) return { ok: false, learned: 0, error: '示例模型学不出真规则，请先配好模型渠道' };
-    const j = JSON.parse((r.text ?? '').replace(/^```(?:json)?\s*|\s*```$/g, '')) as { rules?: RecipeRule[] };
+    const j = JSON.parse((r.text ?? '').replace(/^```(?:json)?\s*|\s*```$/g, '')) as {
+      rules?: RecipeRule[]; options?: RecipeOptions;
+    };
     proposed = Array.isArray(j?.rules) ? j.rules : [];
+    proposedOptions = j?.options ?? null;
   } catch {
     return { ok: false, learned: 0, error: '模型没给出可用的规则' };
   }
@@ -193,17 +286,41 @@ export async function learnFromSkeleton(input: LearnInput): Promise<{ ok: boolea
       Array.isArray(p.selectors) ? p.selectors.map(String) : [],
       Array.isArray(p.anchors) ? p.anchors.map(String) : [],
     );
-    if (v.pass) verified.push({ key: f.key, selectors: v.selectors, anchors: v.anchors });
+    // 【JSON 路径同样要逐字对上真实捕获】不验的话模型可以编一条谁也对不上的路径，
+    // 而它看起来完全合法——与「模型指到旁边那个数字」是同一类错，只是换了个介质。
+    // 带 `*` 的路径把通配位换成「一段非点字符」再比，仍然是在真实材料上比。
+    const jsonPaths = (Array.isArray(p.jsonPaths) ? p.jsonPaths.map(String) : [])
+      .filter((path) => pathSeenInHints(input.jsonHints ?? '', path))
+      .slice(0, 4);
+    if (v.pass || jsonPaths.length > 0) {
+      verified.push({
+        key: f.key, selectors: v.selectors, anchors: v.anchors,
+        ...(jsonPaths.length ? { jsonPaths } : {}),
+      });
+    }
   }
 
   if (verified.length === 0) {
     return { ok: false, learned: 0, error: '模型给的规则一条都没通过校验，这一版不落库' };
   }
 
+  // 【选项也过一道闸】readySelector / rowSelector 是要拿去 querySelector 的，
+  // 模型编一个不存在的选择器不会报错——只会让每次抓取都等满超时、或者一行都取不到。
+  // 判据与规则同源：token 必须出现在骨架里。
+  const opts = parseOptions(JSON.stringify(proposedOptions ?? {}));
+  const keptOpts: RecipeOptions = {
+    ...(opts.readySelector && selectorSeenInSkeleton(skeleton, opts.readySelector)
+      ? { readySelector: opts.readySelector } : {}),
+    ...(opts.rowSelector && selectorSeenInSkeleton(skeleton, opts.rowSelector)
+      ? { rowSelector: opts.rowSelector } : {}),
+    ...(opts.scrollScreens ? { scrollScreens: opts.scrollScreens } : {}),
+  };
+
   await prisma.scrapeRecipe.update({
     where: { id: recipe.id },
     data: {
       rules: JSON.stringify(verified),
+      options: JSON.stringify(keptOpts),
       status: 'active',
       failCount: 0,
       version: { increment: 1 },
@@ -220,7 +337,7 @@ export async function learnFromSkeleton(input: LearnInput): Promise<{ ok: boolea
  * 于是学出一堆「请登录」的规则存进去。两个错叠在一起，排查时完全看不出源头。
  *
  * 【为什么只通知一次】挂了定时的话每天都会撞上同一个登录墙。每次都通知就是每日刷屏，
- * 用户三天后就不看通知了——那比不通知更糟。靠 refId 去重（notify 内部按 refId 合并），
+ * 用户三天后就不看通知了——那比不通知更糟。靠 refId 去重（notify 的 once 选项，见那里的说明），
  * 且只在**状态从别的值变成 needs_login 的那一次**发。
  */
 export async function markNeedsLogin(
@@ -254,6 +371,107 @@ export async function markNeedsLogin(
   return { notified: first };
 }
 
+/**
+ * 撞上验证码 / 风控页：**跳过、标记、只通知一次**——与登录墙同一套处置。
+ *
+ * 【为什么不算失败】和登录墙同一条理由：配方可能好好的，只是这一次站点没让我们看。
+ * 计进 failCount 会把完好的配方推去重学，而重学时学习器看到的是一张验证码页，
+ * 于是学出一堆「请输入验证码」的规则——两个错叠在一起，排查时完全看不出源头。
+ *
+ * 【为什么和 needs_login 分成两个状态】处置一样，但**给用户的下一步完全不同**：
+ * 登录墙要他去登录，风控要他等一会儿或把频率调低。合成一个状态就必然给错建议，
+ * 而给错建议会让他反复去做一件没用的事。
+ */
+export async function markRateLimited(
+  recipeId: string,
+  workspaceId: string,
+  origin: string,
+): Promise<{ notified: boolean }> {
+  const cur = await prisma.scrapeRecipe.findFirst({
+    where: { id: recipeId, workspaceId },
+    select: { status: true, name: true },
+  });
+  if (!cur) return { notified: false };
+
+  const first = cur.status !== 'rate_limited';
+  await prisma.scrapeRecipe.update({
+    where: { id: recipeId },
+    // failCount 刻意**不动**：这不是失败
+    data: { status: 'rate_limited', lastFailAt: new Date() },
+  });
+
+  if (first) {
+    await notify({
+      workspaceId,
+      kind: 'system',
+      refId: `recipe-ratelimit:${recipeId}`,
+      title: `「${cur.name}」这次被站点拦下了`,
+      body: `采集 ${origin} 时遇到人机验证或「访问过于频繁」。已经跳过，不算配方坏了。`
+        + '过一阵子会自动再试；一直这样的话把采集频率调低一些。',
+      link: '/skills',
+    });
+  }
+  return { notified: first };
+}
+
+/**
+ * 一个配方「久未成功」多少天算该提醒。
+ *
+ * 【为什么需要这条，而 needs_login 不够】登录墙判据认的是**明显的登录页**。
+ * 但登录态过期最常见的形态不是跳登录页，而是**同一个页面渲染成了未登录视图**——
+ * 结构还在、字段没了。那条路上我们只会看到「一个字段都没取到」，
+ * 于是判成站点改版、拿去重学；重学时看到的仍是未登录视图，学出来的规则永远取不到值。
+ * 表现就是「它一直在自己修，一直修不好」，而真正要做的只是去登录一次。
+ *
+ * 所以补一条**时间维度**的判据：一个曾经好过的配方连着这么多天没成功过，
+ * 就明确提醒「先看看是不是登录态过期了」——这是我们能给出的最有用的一句话。
+ */
+export const RECIPE_STALE_DAYS = 3;
+
+/**
+ * 久未成功的配方：提醒一次，让用户先去看登录态。
+ *
+ * 【只提醒不改状态】它可能真的是站点改版了。改状态等于替用户下结论，
+ * 而我们并不知道是哪一种——能确定的只有「它已经三天没成过了」这个事实。
+ * 记录事实、给出最可能的下一步，不做推断（与采集台账同一条口径）。
+ *
+ * 【为什么要 lastOkAt 不为空才提醒】从来没成功过的配方是「还没学会」，
+ * 那是另一件事（status=learning），提醒他去检查登录态只会把人带偏。
+ */
+export async function noticeStaleRecipes(workspaceId: string, now = Date.now()): Promise<number> {
+  const cutoff = new Date(now - RECIPE_STALE_DAYS * 86_400_000);
+  const stale = await prisma.scrapeRecipe.findMany({
+    where: {
+      workspaceId,
+      status: { in: ['active', 'broken'] },
+      lastOkAt: { not: null, lt: cutoff },
+    },
+    select: { id: true, name: true, origin: true, lastOkAt: true },
+    take: 20,
+  });
+
+  for (const r of stale) {
+    const days = Math.floor((now - (r.lastOkAt?.getTime() ?? now)) / 86_400_000);
+    await notify({
+      workspaceId,
+      kind: 'system',
+      // 【refId 带天数 + once】天数让「情况恶化」能再响一次（3 天 → 10 天是两条不同的提醒），
+      // once 让**同一天里**只响一次。
+      // 原来这里只有天数，注释写的是「不带的话 notify 会按 refId 合并」——
+      // 而 notify 从来不合并（它就是个裸 create）。于是 `20 */6 * * *` 一天 4 轮，
+      // 同一天的 days 相同却发 4 条一模一样的，把真正要人动手的通知挤出可见列表。
+      refId: `recipe-stale:${r.id}:${days}`,
+      once: true,
+      title: `「${r.name}」已经 ${days} 天没采到数据了`,
+      body: `最可能的原因是 ${r.origin} 的登录态过期了——登录态过期时页面往往不跳登录页，`
+        + '而是原地渲染成未登录的样子，我们只会看到「字段都没了」。'
+        + '请在那台电脑的 Chrome 里打开这个站点看一眼；确实已登录的话，那就是站点改版，会自动重学。',
+      link: '/skills',
+    });
+  }
+  return stale.length;
+}
+
 // ── 进化：抓不到就重新学 ──────────────────────────────────────────────
 
 /**
@@ -273,7 +491,7 @@ export async function recordScrapeResult(
   if (ok) {
     await prisma.scrapeRecipe.update({
       where: { id: recipeId },
-      // 采到了就说明登录也补上了——needs_login 一并恢复
+      // 采到了就说明登录/风控都过去了——needs_login 与 rate_limited 一并恢复
       data: { failCount: 0, status: 'active', lastOkAt: new Date() },
     });
     return { status: 'active', shouldRelearn: false };

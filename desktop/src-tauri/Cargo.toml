@@ -1,6 +1,6 @@
 [package]
 name = "beacon-desktop"
-version = "1.2.1"
+version = "1.2.4"
 description = "烽火台整机版的桌面壳：窗口 + 托盘 + 开机自启，界面就是本机 localhost 的完整 Web 界面"
 edition = "2021"
 

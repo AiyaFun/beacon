@@ -1,3 +1,4 @@
+import { cache } from 'react';
 import { prisma } from '@/lib/db';
 import type { RunStatus } from './badge';
 import { platformName } from '@/lib/constants';
@@ -199,8 +200,24 @@ export type ListRunsOpts = {
   takePerKind?: number;
 };
 
-export async function listRuns(workspaceId: string, opts: ListRunsOpts = {}): Promise<RunEntry[]> {
-  const take = opts.takePerKind ?? 20;
+/**
+ * 跑动记录列表。**按 (workspaceId, take) 做请求内记忆化**。
+ *
+ * 【为什么】首页那一次渲染里它被调了**两次、参数一模一样**：
+ * 一次在 `TenantShell`（侧栏的「最近」），一次在 `app/(app)/page.tsx`（进行中的运行）。
+ * 而它内部打 6 次库——白白多 6 次往返。
+ *
+ * 【为什么不直接给 listRuns 套 cache()】React 的 cache() 按**参数身份**比，
+ * 而这里第二个参数是个对象字面量（`{ takePerKind: 8 }`），两次调用是两个不同的对象，
+ * 永远命中不了。所以把缓存下沉到只吃原始值的那一层。
+ */
+export function listRuns(workspaceId: string, opts: ListRunsOpts = {}): Promise<RunEntry[]> {
+  return listRunsCached(workspaceId, opts.takePerKind ?? 20);
+}
+
+const listRunsCached = cache(listRunsUncached);
+
+async function listRunsUncached(workspaceId: string, take: number): Promise<RunEntry[]> {
 
   const [agents, workflows, collects, plans, accounts, browserTasks] = await Promise.all([
     prisma.agentRun.findMany({

@@ -12,6 +12,7 @@ import { supportsMarkdown, hasMarkdownMarkers, mdLiteToHtml, mdLiteToPlain } fro
 import { copyRichText } from '@/lib/clipboard/rich';
 import { AIGC_LABEL } from '@/lib/compliance/aigc';
 import { actRewrite, actSaveHumanVersion, actCoachDiagnose, actCoachOptimize, actDeflavor, type CoachDiagnoseResult } from './actions';
+import { applyLinePrefix as applyLinePrefixAt, wrapSelection as wrapSelectionAt, type EditResult } from './md-lite-edit';
 
 type Hit = { word: string; tier: string; action: string; start: number; end: number; suggestion?: string; platform?: string };
 type RewriteResult = {
@@ -175,36 +176,20 @@ export function Rewriter({
   const markerMismatch = !mdOn && hasMarkdownMarkers(text);
 
   /** 在光标所在行的行首插入记号（## / - / >）。多行选区则每一行都加。 */
-  function applyLinePrefix(prefix: string) {
+  /** 工具条按钮：读选区 → 交给纯函数算 → 写回去。算的部分在 ./md-lite-edit（有覆盖）。 */
+  function runEdit(fn: (t: string, s: number, e: number) => EditResult) {
     const ta = taRef.current;
     if (!ta) return;
-    const { selectionStart: s, selectionEnd: e } = ta;
-    const lineStart = text.lastIndexOf('\n', s - 1) + 1;
-    const lineEnd = text.indexOf('\n', e) === -1 ? text.length : text.indexOf('\n', e);
-    const block = text.slice(lineStart, lineEnd);
-    const next = block.split('\n').map((l) => (l.startsWith(prefix) ? l : prefix + l)).join('\n');
-    const value = text.slice(0, lineStart) + next + text.slice(lineEnd);
-    setText(value);
-    const delta = next.length - block.length;
+    const r = fn(text, ta.selectionStart, ta.selectionEnd);
+    setText(r.value);
     requestAnimationFrame(() => {
       ta.focus();
-      ta.setSelectionRange(s + prefix.length, e + delta);
+      ta.setSelectionRange(r.selStart, r.selEnd);
     });
   }
 
-  /** 用记号包住选区（**加粗**）。没选中就插入一对记号并把光标放中间。 */
-  function wrapSelection(mark: string) {
-    const ta = taRef.current;
-    if (!ta) return;
-    const { selectionStart: s, selectionEnd: e } = ta;
-    const picked = text.slice(s, e);
-    const value = `${text.slice(0, s)}${mark}${picked}${mark}${text.slice(e)}`;
-    setText(value);
-    requestAnimationFrame(() => {
-      ta.focus();
-      ta.setSelectionRange(s + mark.length, s + mark.length + picked.length);
-    });
-  }
+  const applyLinePrefix = (prefix: string) => runEdit((t, s, e) => applyLinePrefixAt(t, s, e, prefix));
+  const wrapSelection = (mark: string) => runEdit((t, s, e) => wrapSelectionAt(t, s, e, mark));
 
   async function copyPreviewRich() {
     const html = mdLiteToHtml(text);

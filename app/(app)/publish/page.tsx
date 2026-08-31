@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
-import { PageHead, Card, Stat, Fold } from '@/components/ui';
+import { Card, Stat, Fold } from '@/components/ui';
 import { fmtDate } from '@/lib/format';
 import { platformName } from '@/lib/constants';
 import { can } from '@/lib/edition';

@@ -15,7 +15,11 @@ const OVER_RATIO = 2; // ≥ 基线 2 倍 → 爆款加速
 const UNDER_RATIO = 0.3; // ≤ 基线 0.3 倍 → 明显低于预期
 const MIN_PEERS = 3;
 
-function toSeries(snaps: { takenAt: Date; metrics: string; source: string | null; milestone: string | null }[], pub: Date): DaySeriesPoint[] {
+// pub 可空：不知道哪天发的就没有「发布后第 N 天」，toDailySeries 会返回空序列，
+// 于是下面的 series.length < 1 直接 return null——**不对这条作品发任何告警**。
+// 这正是要防的：拿一条编出来的 D+0（携带全生命周期累计播放）去比同窗基线，
+// ratio 轻松 ≥2，用户会为一条三个月前的老作品收到「🚀 爆款加速」通知甚至短信。
+function toSeries(snaps: { takenAt: Date; metrics: string; source: string | null; milestone: string | null }[], pub: Date | null): DaySeriesPoint[] {
   return toDailySeries(snaps.map((s) => ({ takenAt: s.takenAt, metrics: parseJson<Metrics>(s.metrics, {}), source: s.source, milestone: s.milestone })), pub);
 }
 

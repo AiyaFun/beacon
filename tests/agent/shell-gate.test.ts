@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { checkCommand, runCommand, insideRoot, readTextFile, writeTextFile, listDir, FILE_LIMITS, SHELL_DEFAULTS } from '@/lib/agent/shell';
+import { before } from '../helpers/anchor';
 
 // 本机命令执行的闸门（2026-08-29）。这是这个项目里**最危险的一段代码**：
 // 它在用户机器上跑命令。所以这里几乎全是真跑，不是源码级断言——
@@ -142,10 +143,14 @@ describe('源码级：几条改了就等于没防的', () => {
     expect(src).not.toMatch(/env:\s*process\.env/);
   });
 
+  // 【这条曾经是假绿，2026-08-30 拆 tools.ts 时当场撞出来】
+  // 原来写的是 `tools.slice(Math.max(0, i - 300), i)`。run_shell 搬到 tools-local.ts 之后
+  // indexOf 返回 -1 → Math.max(0, -301) = 0 → slice(0, -1) = **整个文件**，
+  // 里面当然找得到 `write: true`。**工具从这个文件里消失了，守卫却是绿的。**
+  // 现在走 before()，锚点找不到就抛（见 tests/helpers/anchor.ts）。
   it('工具标了 write:true（否则「确认每一步」档形同虚设）', () => {
-    const tools = readFileSync(join(process.cwd(), 'lib/agent/tools.ts'), 'utf8');
-    const i = tools.indexOf("name: 'run_shell',");
-    expect(tools.slice(Math.max(0, i - 300), i)).toContain('write: true');
+    const tools = readFileSync(join(process.cwd(), 'lib/agent/tools-local.ts'), 'utf8');
+    expect(before(tools, "name: 'run_shell',", 300)).toContain('write: true');
   });
 });
 

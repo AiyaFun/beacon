@@ -6,10 +6,9 @@ import { PageHead } from '@/components/ui';
 import { AssistantTabs } from './AssistantTabs';
 import { availableTools } from '@/lib/agent/run';
 import { disabledTools } from '@/lib/agent/tool-config';
-import { AGENT_ROLES } from '@/lib/agent/roles';
+
 import { RoleLadder } from '@/components/RoleLadder';
 import { listSelectableModels } from '@/lib/llm/selectable';
-import { HubHeader } from '@/components/HubHeader';
 
 export const dynamic = 'force-dynamic';
 
@@ -66,7 +65,6 @@ export default async function AssistantPage({
           </span>
         </div>
       )}
-
 
       <AssistantTabs
         accountName={accountName}

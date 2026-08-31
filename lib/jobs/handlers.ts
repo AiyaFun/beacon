@@ -16,11 +16,14 @@ import { evaluateAndAlert } from '../insight/alert';
 import { DEMO_TENANT_ID, DEMO_WORKSPACE_ID } from '../demo/guard';
 import { DAY_MS } from '../pay/plan';
 import { expiryNoticeFor, sentStagesFrom, EXPIRED_GRACE_DAYS } from '../pay/expiry';
+import { reconcilePendingRefunds, reconcilePendingOrders } from '../pay/order';
 import { sweepRetention } from '../legal/retention';
 import { automationAllows } from './automation';
 import { JOB_TRACK, type JobHandler, type JobName } from './types';
 import { sweepLocalRecipes } from '../scrape/sweep';
+import { suggestProcedures } from '../skill/distill';
 import { can as editionCan } from '../edition';
+import { runInJob } from './current';
 
 // 各任务的实际处理逻辑，包一层 JobRun 记账（可观测性）。
 
@@ -76,7 +79,10 @@ async function withRun(name: JobName, tenantId: string | undefined, fn: () => Pr
     data: { name, track: JOB_TRACK[name], status: 'running', tenantId },
   });
   try {
-    const r = await fn();
+    // 【把任务名挂进异步上下文】期间发生的 LLM 调用会被记成这个任务名下的，
+    // 退款判据据此把「系统替他跑的」从「他自己用掉的」里剔出去。
+    // 挂在 withRun 这一处就够了——每个 job 都从这里进（见 HANDLERS 里每一条）。
+    const r = await runInJob(name, fn);
     await prisma.jobRun.update({
       where: { id: run.id },
       data: { status: 'ok', detail: r.detail, finishedAt: new Date(), durationMs: Date.now() - startedAt },
@@ -305,6 +311,8 @@ export const HANDLERS: Record<JobName, JobHandler> = {
       for (const rec of records) {
         // 工作区关闭了「数据自动同步」→ 跳过（缺省开）
         if (!automationAllows(rec.account.workspace.automationConfig, 'autoBackfill')) continue;
+        // 回流里程碑是「发布后 T+48h / T+7d」，没有发布时间就没有里程碑可言
+        if (!rec.publishedAt) continue;
         const milestone = dueMilestone(rec.publishedAt, rec.snapshots, now);
         if (milestone) due.push({ rec, milestone });
       }
@@ -385,12 +393,17 @@ export const HANDLERS: Record<JobName, JobHandler> = {
 
   // 批租户型：记忆持续学习优化。回流(backfill_metrics)之后跑 → 用最新绩效反哺，
   // 去重/生效/遗忘一遍，并把「本轮学到了什么」推到订阅了 learning_summary 的机器人。
+  // 记忆优化那一轮顺带扫一遍「做重复了的活」。
+  // 【为什么搭这趟车而不是新开一个 cron】它们是同一件事的两半：那边沉淀「知道什么」，
+  // 这边沉淀「会做什么」，都是每天一次、都按工作区遍历、都受 automationAllows 管。
+  // 新开一个 cron 等于把同一次遍历跑两遍，还多一个要维护的时刻。
   optimize_memory: async () =>
     withRun('optimize_memory', undefined, async () => {
       const workspaces = await prisma.workspace.findMany({ select: { id: true, automationConfig: true } });
       let touched = 0;
       let abandoned = 0;
       let embedded = 0;
+      let suggested = 0;
       for (const w of workspaces) {
         if (!automationAllows(w.automationConfig, 'optimizeMemory')) continue;
         // W-4 创作过程信号：先把「起了初稿却长期没做完」的选题记成落地难，
@@ -399,6 +412,12 @@ export const HANDLERS: Record<JobName, JobHandler> = {
         if (w.id !== DEMO_WORKSPACE_ID) {
           abandoned += (await learnFromAbandonedDrafts(w.id).catch(() => ({ marked: 0 }))).marked;
         }
+        // 「做重复了的活」建议存成技能。**失败不连累记忆优化**——
+        // 它只是个建议，不该因为一条通知发不出去让整轮沉淀白跑
+        if (w.id !== DEMO_WORKSPACE_ID) {
+          suggested += (await suggestProcedures(w.id).catch(() => ({ suggested: 0 }))).suggested;
+        }
+
         const r = await optimizeWorkspaceMemory(w.id);
         embedded += r.embedded; // 换嵌入模型后的向量自愈，只进 detail 不打扰用户
         if (r.merged || r.promoted || r.retired) {
@@ -412,7 +431,7 @@ export const HANDLERS: Record<JobName, JobHandler> = {
         }
       }
       return {
-        detail: `${workspaces.length} 工作区 / ${touched} 个有更新${abandoned ? ` / 搁置草稿 ${abandoned} 篇计入落地难信号` : ''}${embedded ? ` / 补算向量 ${embedded} 条` : ''}`,
+        detail: `${workspaces.length} 工作区 / ${touched} 个有更新${abandoned ? ` / 搁置草稿 ${abandoned} 篇计入落地难信号` : ''}${embedded ? ` / 补算向量 ${embedded} 条` : ''}${suggested ? ` / 建议存成技能 ${suggested} 条` : ''}`,
       };
     }),
 
@@ -436,8 +455,44 @@ export const HANDLERS: Record<JobName, JobHandler> = {
   // 不依赖本任务是否跑过——任务漏跑也不会出现「到期了却全无提示」。
   // 手动续费模式下到期是静默发生的（effectivePlan 懒判断），没有这条任务，
   // 用户只会在第二天发现「额度突然不够了」，而付费协议承诺过会提醒。
+  // 待支付订单对账。**兜的是「钱收了、套餐没发」这一种**：
+  // syncOrderFromWechat 唯一的生产调用点是「用户正盯着二维码」那个轮询，
+  // 而付完就关页面是最正常的操作——回调再一丢，那一单就永远停在 created。
+  // 与退款对账是同一个形状，只是这一侧更急（用户已经付了钱在等东西）。
+  reconcile_orders: async () =>
+    withRun('reconcile_orders', undefined, async () => {
+      // 没有计费面的形态跑它只会白报错（企业私有化版没有支付通道）
+      if (!editionCan('payment')) return { detail: '这个版本没有计费面，跳过' };
+      const r = await reconcilePendingOrders();
+      // 【发货了一定要留声】这条路上「补发了一单」是需要人知道的事：
+      // 它意味着刚刚有一次回调真的丢了，多来几次就该去查反代与回调地址。
+      if (r.fulfilled > 0) console.warn('[job:reconcile_orders] 对账补发了待支付订单（说明支付回调有丢失）:', r);
+      return { detail: `待支付订单 ${r.scanned} 单，补发 ${r.fulfilled} 单` };
+    }),
+
   plan_expiry_notice: async () =>
     withRun('plan_expiry_notice', undefined, async () => {
+      // 【顺带把没终态的退款单对一遍账】搭这趟车而不是新开 cron：
+      // 同属计费域、同样每日一次、同样只有 SaaS 有。
+      // 为什么必须有：退款是异步的，用户点完就走，没人会守着页面等结果；
+      // 而 syncRefundFromWechat 此前**一个调用点都没有**（2026-08-29 全库扫描查出），
+      // 那句「回调丢了也能兑现」在退款这条路上是假的。
+      // 对账失败不该连累续费提醒——它是这个 job 的主业。
+      //
+      // 【但绝不能静默】第一版写的是 `.catch(() => ({ scanned: 0, settled: 0 }))`，
+      // 于是「对账整体炸了」和「一条待对账的都没有」在 JobRun 上长得**一模一样**：
+      // detail 里印着「退款对账 0/0」，任务记绿，一行日志都没有。
+      // 而这条路兜的是钱——退款打出去了、套餐没收回，最不该是不可观测的那一类。
+      // 本项目旁路失败的既有约定就是记一条 warn（见 lib/ingest/collection-run.ts）。
+      const refunds = editionCan('payment')
+        ? await reconcilePendingRefunds().catch((e) => {
+            console.warn('[job:plan_expiry_notice] 退款对账失败（不影响续费提醒）:', (e as Error).message);
+            // -1 而不是 0：印在 detail 里时「-1」一眼看得出是「没跑成」，
+            // 而 0 会被读成「没有待对账的」——这两件事的处置完全相反
+            return { scanned: -1, settled: 0 };
+          })
+        : { scanned: 0, settled: 0 };
+
       const now = new Date();
       // 只捞窗口内的租户：将到期 8 天内（比最早的 d7 档多留 1 天余量）或刚过期不久。
       // 买断（99 年）、无到期日（运营手工开通）都天然落在窗口外。
@@ -497,7 +552,17 @@ export const HANDLERS: Record<JobName, JobHandler> = {
           console.warn(`[job:plan_expiry_notice] tenant ${t.id} failed:`, (e as Error).message);
         }
       }
-      return { detail: `扫描 ${tenants.length} 个到期窗口内租户 / 提醒 ${notified} 个${failed ? ` / 失败 ${failed}` : ''}` };
+      return {
+        detail: `扫描 ${tenants.length} 个到期窗口内租户 / 提醒 ${notified} 个${failed ? ` / 失败 ${failed}` : ''}`
+          // 【三种情况要分得开】没跑成（-1）／跑了但没东西对（0）／对了 N 单。
+          // 只写 `scanned > 0` 的话，「炸了」和「没东西」都印成一片空白——
+          // 那正是这次要修的那个静默（而且是我上一版自己写出来的）。
+          + (refunds.scanned < 0
+            ? ' / 退款对账**没跑成**（见日志）'
+            : refunds.scanned > 0
+              ? ` / 退款对账 ${refunds.scanned} 单（落定 ${refunds.settled}）`
+              : ''),
+      };
     }),
 
   // 广播型：保留期兑现闸。清单与理由都在 lib/legal/retention.ts，这里只负责把它跑起来。
@@ -515,7 +580,13 @@ export const HANDLERS: Record<JobName, JobHandler> = {
     if (!editionCan('localBrowser')) return { detail: '本形态不驱动本机浏览器，跳过' };
     return withRun('sweep_local_recipes', undefined, async () => {
       const r = await sweepLocalRecipes();
-      return { detail: `扫 ${r.scanned} 个配方：成功 ${r.ok} / 重学 ${r.relearned} / 跳过(待登录) ${r.skipped}` };
+      // 【「入库 N 条」必须印出来】在补上落库之前，这行只报「成功 N」，
+      // 而那个「成功」说的是配方还能用，不是采到了数据——两件事长得一样，用户会读成后者。
+      return {
+        detail: `扫 ${r.scanned} 个配方：入库 ${r.saved} 条 / 配方正常 ${r.ok}`
+          + ` / 重学 ${r.relearned} / 跳过(待登录或被拦) ${r.skipped}`
+          + (r.stale > 0 ? ` / 久未成功已提醒 ${r.stale}` : ''),
+      };
     });
   },
 
@@ -528,6 +599,10 @@ export const HANDLERS: Record<JobName, JobHandler> = {
         ` / 运行记录 AI ${r.runLogs.agentRuns} 工作流 ${r.runLogs.workflowRuns}` +
         ` / 浏览器任务 过期 ${r.browserTasks.expired} 清理 ${r.browserTasks.purged}` +
         ` / 解析截图清空 ${r.parserScreenshots}` +
+        ` / 采集记录 ${r.scrapeRecords}` +
+        ` / 爬虫计数 ${r.crawlerHits}` +
+        ` / 引用回执 ${r.citations}` +
+        ` / 注销存根 ${r.accountDeletions}` +
         ` / 移除申请重扫 ${r.removals.swept} 条`;
       if (r.errors.length > 0) {
         throw new Error(`${detail}；失败步骤：${r.errors.map((e) => `${e.step}(${e.message})`).join('，')}`);

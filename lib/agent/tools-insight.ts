@@ -7,7 +7,8 @@ import { loadGeneProfile } from '../insight/genes';
 import { readerVoice, KIND_LABEL } from '../insight/reader-voice';
 import { buildBaseline, diagnose } from '../algorithm/coach';
 import { platformName } from '../constants';
-import type { AgentTool } from './tools';
+import type { AgentTool } from './tool-types';
+import { clamp, num, str } from './tool-types';
 
 // ── 数据与洞察类工具 ────────────────────────────────────────────────────────
 //
@@ -21,12 +22,6 @@ import type { AgentTool } from './tools';
 //   ② 顺手把 absenceNote() 一起带上——只给 null，模型分不清「平台没有」「没采到」
 //      「真的是 0」，它会自己挑一个说法，而那个说法多半是错的。
 
-const num = (v: unknown, fallback: number): number => {
-  const n = typeof v === 'number' ? v : Number(v);
-  return Number.isFinite(n) ? n : fallback;
-};
-const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
-const str = (v: unknown, fallback = ''): string => (typeof v === 'string' ? v.trim() : fallback);
 
 /** 展示给模型的计数指标。跟 /data 页同一套键，不多不少。 */
 const COUNT_KEYS: MetricCountKey[] = ['views', 'likes', 'comments', 'shares', 'collects'];

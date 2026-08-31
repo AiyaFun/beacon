@@ -241,13 +241,15 @@ export async function llmImage(
   try {
     await assertLlmQuota(tenantId, provider.source);
   } catch (e) {
-    await releaseImageDailyCap(tenantId);
+    await releaseImageDailyCap(tenantId, provider.source);
     if (e instanceof QuotaExceededError) return { ok: false, reason: 'quota', error: e.message };
     throw e;
   }
 
   const giveBack = async () => {
-    await Promise.all([releaseLlmQuota(tenantId), releaseImageDailyCap(tenantId)]);
+    // source 必须与上面 assertLlmQuota(tenantId, provider.source) 用的是同一个，
+    // 否则占的是一个桶、还的是另一个桶
+    await Promise.all([releaseLlmQuota(tenantId, provider.source), releaseImageDailyCap(tenantId, provider.source)]);
   };
 
   try {

@@ -6,7 +6,8 @@ import { writeMemory, recentlyLearnedMemories } from '../memory/core';
 import { clipUrl } from '../clip';
 import { platformOfLink } from '../clip/platform';
 import { platformName } from '../constants';
-import type { AgentTool } from './tools';
+import type { AgentTool } from './tool-types';
+import { clamp, num, str } from './tool-types';
 
 // ── 内容与记忆类工具 ────────────────────────────────────────────────────────
 //
@@ -17,12 +18,6 @@ import type { AgentTool } from './tools';
 // 所以规矩是：租户/工作区/账号一律取自 ToolContext，**绝不接受模型传来的 id**。
 // 模型能决定的只有「查什么、写什么内容」，不能决定「在谁的地盘上查/写」。
 
-const str = (v: unknown, fallback = ''): string => (typeof v === 'string' ? v.trim() : fallback);
-const num = (v: unknown, fallback: number): number => {
-  const n = typeof v === 'number' ? v : Number(v);
-  return Number.isFinite(n) ? n : fallback;
-};
-const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 
 const complianceCheck: AgentTool = {
   name: 'compliance_check',

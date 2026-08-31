@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { requireRole } from '@/lib/rbac';
-import { toJson, parseJson } from '@/lib/json';
+import { toJson } from '@/lib/json';
 import { readBotSecrets, writeBotSecrets, testPush } from '@/lib/bot';
 import { BOT_PROVIDERS, PUSH_EVENTS, sanitizeAllowCommands, type BotSecrets } from '@/lib/bot/types';
 

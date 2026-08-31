@@ -312,6 +312,14 @@
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z"/></svg>
         <span>补齐前 20 条作品详情</span>
       </button>
+      <!-- 任意站点采集配方（0.9.11 写好、2026-08-30 才补上入口）。
+           在这之前 sw.js 里三条消息的接收方都在，而**没有任何界面发过它们**——
+           整个功能对用户是不存在的。默认隐藏，只在当前页确实匹配到配方时露出。 -->
+      <button id="spRecipe" class="btn-action" style="display:none; margin-top:6px; background:linear-gradient(135deg,#7c3aed,#6d28d9)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M4 12h10"/><path d="M4 17h7"/><path d="M17 14l3 3-3 3"/></svg>
+        <span id="spRecipeLabel">按采集配方抓这一页</span>
+      </button>
+      <div id="spRecipeMsg" style="display:none; margin-top:6px; font-size:11px; color:var(--text-3); line-height:1.5"></div>
       <button id="spCollectSelf" class="btn-action" style="display:none; margin-top:6px; background:linear-gradient(135deg,#2563eb,#1d4ed8)">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 21h16"/></svg>
         <span>这是我的作品 · 回填数据看板</span>

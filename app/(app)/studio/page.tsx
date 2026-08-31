@@ -3,7 +3,7 @@ import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { platformName, platformColor } from '@/lib/constants';
 import { relTime } from '@/lib/format';
-import { PageHead, Card, Empty } from '@/components/ui';
+import { Card, Empty } from '@/components/ui';
 import { Icon } from '@/components/icons';
 import { listInstalledSkills } from '@/lib/skills';
 import { Rewriter } from './Rewriter';

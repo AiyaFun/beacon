@@ -782,7 +782,9 @@ function beaconTextShape(raw) {
     .replace(/(\d+(?:\.\d+)?)|([一-龥]+)|([A-Za-z]{3,})/g, (m, num, cjk, en) => {
       if (num) return 'NUM';
       if (cjk) return cjk.length <= 2 ? cjk : 'CJK';
-      if (en) return 'EN';
+      // 【幂等】NUM/CJK/EN 是成形记号，不是英文单词。服务端会再成形一遍，
+      // 不认它们的话「粉丝 NUM万」会变成「粉丝 EN万」（与服务端同一处修复，两边口径必须一致）
+      if (en) return en === 'NUM' || en === 'CJK' || en === 'EN' ? en : 'EN';
       return m;
     })
     .slice(0, 24);

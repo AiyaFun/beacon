@@ -76,7 +76,10 @@ function TrendBody({
   });
 
   const label = METRICS.find((m) => m.key === metric)?.label ?? '';
-  const growth = trend.growth?.[metric] ?? 0;
+  // 【?? 0 会把「算不出来」印成「没涨」】首末观测有一端没采到这一项时，
+  // competitorTrend 刻意不写这个键——那表示「这段时间涨了多少，我们不知道」。
+  // 印成 0 就又把缺席说成了一个确定的结论。
+  const growth = trend.growth?.[metric] ?? null;
   const irregular = trend.points.some((p) => p.gapDays !== null && p.gapDays > 3);
 
   return (
@@ -98,7 +101,9 @@ function TrendBody({
       <TrendChart points={points} label={label} xUnit="observation" showDelta={false} />
       <div className="small muted" style={{ marginTop: 4, lineHeight: 1.6 }}>
         横轴是<b>第几次采集</b>（不是发布后第几天）：{trend.sample} 次观测跨 {trend.spanDays} 天，
-        {label}净增 <b className="mono">{fmtNum(growth)}</b>。
+        {growth === null
+          ? <>首末两次观测里有一次没采到{label}，<b>这段时间涨了多少算不出来</b>。</>
+          : <>{label}净增 <b className="mono">{fmtNum(growth)}</b>。</>}
         {irregular && '采集间隔不均匀，两点之间的落差是这段时间的累计变化，不代表日增。'}
       </div>
       {/* 数据记录：每次采集一行，标明**从哪采的**、这次多少、比上次多多少。

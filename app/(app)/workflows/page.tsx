@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
-import { PageHead, Card, Stat, Fold } from '@/components/ui';
+import { Card, Fold } from '@/components/ui';
 import { can } from '@/lib/rbac';
 import { backgroundSchedulerRuns } from '@/lib/jobs/queue';
 import { listTemplates, preinstallBuiltinTemplates } from '@/lib/workflow/market';

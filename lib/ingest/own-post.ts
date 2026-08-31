@@ -143,8 +143,13 @@ async function applyMetrics(
   // 都被填成「回填当天」——发布时段分析（analyzePublishTiming）按小时分组，全是回填那一刻的时辰；
   // 趋势图的「发布后第 N 天」也跟着全错。现在采集端能从后台页读到真实发表时间了，
   // 就用它把这些记录纠回去。单向（只前移）保证收敛，也不会被某次误读推到未来。
+  //
+  // 【2026-08-30 补：库里本来就没有时也要补上】原来的条件要求 existingPublishedAt 为真，
+  // 而自从「采不到就存 null」之后，**最该补的那种情形反而不满足条件**——
+  // 库里没有发布时间、这次回传学到了，正是自愈要做的事。
+  // 判据变成：这次带了时间，且（库里没有 ‖ 这次的更早）。仍然只前移，不改晚。
   const fillDate =
-    fix?.publishedAt && fix.existingPublishedAt && fix.publishedAt < fix.existingPublishedAt
+    fix?.publishedAt && (!fix.existingPublishedAt || fix.publishedAt < fix.existingPublishedAt)
       ? { publishedAt: fix.publishedAt }
       : {};
   await prisma.publishRecord.update({ where: { id: recordId }, data: { metrics: toJson(merged), ...fillTitle, ...fillDate } });
@@ -249,6 +254,23 @@ export async function ingestOwnPostData(workspaceId: string, payload: OwnPostIng
   let skipped = 0;
   let moved = 0;
 
+  // ── 一次查回这一批已登记的作品（2026-08-29）──
+  // 与竞对回传那条同一个改法：原来每条作品 findFirst 一次，而这条路同样**在用户请求路径上**。
+  // 查一次拿齐，写的部分保持原样（每条的 metrics 合并逻辑都不同，合不成一条语句）。
+  const existingRecords = await prisma.publishRecord.findMany({
+    where: {
+      platformItemId: { in: payload.posts.map((p) => p.platformItemId) },
+      accountId: { in: accountIds },
+    },
+    select: { id: true, accountId: true, metrics: true, platform: true, title: true, publishedAt: true, platformItemId: true },
+  });
+  // 同一个 platformItemId 在本工作区理论上只有一条；真有多条时取第一条，
+  // 与原来的 findFirst 行为一致（不换语义，只换查法）
+  const existingByItemId = new Map<string, (typeof existingRecords)[number]>();
+  for (const r of existingRecords) {
+    if (r.platformItemId && !existingByItemId.has(r.platformItemId)) existingByItemId.set(r.platformItemId, r);
+  }
+
   for (const post of payload.posts) {
     const metrics: Metrics = post.metrics ?? {};
     if (Object.keys(metrics).length === 0) {
@@ -256,10 +278,7 @@ export async function ingestOwnPostData(workspaceId: string, payload: OwnPostIng
       continue;
     }
     // 已登记？（跨本工作区账号，按 platformItemId 唯一对齐）
-    const existing = await prisma.publishRecord.findFirst({
-      where: { platformItemId: post.platformItemId, accountId: { in: accountIds } },
-      select: { id: true, accountId: true, metrics: true, platform: true, title: true, publishedAt: true },
-    });
+    const existing = existingByItemId.get(post.platformItemId) ?? null;
     if (existing) {
       // 修正历史误挂：之前的版本会把记录挂到「第一个活跃账号」上，平台可能完全对不上。
       // 只有在**记录自己的 platform 与本次回传一致、而它所在账号的平台不一致**时才搬——
@@ -276,7 +295,9 @@ export async function ingestOwnPostData(workspaceId: string, payload: OwnPostIng
         title: post.title,
         existingTitle: existing.title,
         publishedAt: post.publishedAt,
-        existingPublishedAt: existing.publishedAt,
+        // existing.publishedAt 可空（采不到就如实留空）。applyMetrics 用 undefined 表示
+        // 「这次没带」，两者语义一致，都表示「没有可用来前移的时间」
+        existingPublishedAt: existing.publishedAt ?? undefined,
       });
       updated++;
     } else {
@@ -288,7 +309,12 @@ export async function ingestOwnPostData(workspaceId: string, payload: OwnPostIng
           title: post.title ?? null,
           needsBackfill: false,
           fromRecommend: false,
-          publishedAt: post.publishedAt ?? new Date(),
+          // 【采不到就存 null，绝不拿回填时间冒充】小红书笔记页、B站视频页、
+          // YouTube 播放页的解析器结构上就不产出这个字段，而「这是我的作品」按钮
+          // 在这几个页面上都是露出的——这是常态不是边角。
+          // 原来这里是 `?? new Date()`，与 12 行之下台账那句
+          //「回填时间不能冒充发布时间，那正是 0.4.7 之前所犯的错」直接矛盾。
+          publishedAt: post.publishedAt ?? null,
           metrics: toJson(metrics),
         },
       });

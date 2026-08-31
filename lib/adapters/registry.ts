@@ -6,8 +6,9 @@ import { Hot60sAdapter } from './hot60s';
 import { BaiduHotAdapter } from './baidu';
 import { YouTubeHotAdapter } from './youtube-hot';
 import { MockHotAdapter, MockCompetitorAdapter } from './mock';
+import { PLUGIN_COLLECTABLE } from '../ingest/competitor';
 import { realCompetitorAdapter } from './competitor-real';
-import { rssHubAdapter } from './rsshub';
+import { rssHubAdapter, rssHubStatus } from './rsshub';
 
 // 数据源注册与主备切换（双源冗余 + 熔断降级）。
 // 热榜：自建 DailyHot(若配置) → 60s 公开实例(免 key) → Mock(兜底)。
@@ -137,6 +138,31 @@ export async function fetchCompetitorPosts(platform: string, handle: string): Pr
 }
 
 // 数据源健康看板（供设置页/概览页显示新鲜度）
+/**
+ * 一个平台的竞对数据**现在到底取不取得到**。
+ *
+ * 【为什么必须有这个，而且必须显示出来】隐私政策里写着
+ * 「未配置时对应平台不取数（**界面上会显示为数据源未启用**）」——
+ * 而 2026-08-29 查出来：`sourceHealthBoard()` 返回的 competitor 那一半
+ * **一处都没渲染过**，那句承诺零代码兑现。
+ * 用户看到的是「加了竞对、点进去空白」，而界面上不说为什么——
+ * 这比没有这个功能更伤：没有功能他不会失望，有入口点了没数据他会认为产品坏了。
+ *
+ * 【三态，不是两态】「要装插件」和「真的没有数据源」对用户是完全不同的两件事：
+ * 前者他能自己解决，后者他做什么都没用。合并成「未启用」等于把能解决的问题
+ * 说成了解决不了的。
+ */
+export type CompetitorSourceStatus = 'server' | 'plugin' | 'none';
+
+export function competitorSourceStatus(platform: string): CompetitorSourceStatus {
+  if (competitorChain(platform).length > 0) return 'server';
+  // 【直接用那份名单，不再抄一遍】原来这里写了一个同内容的 PLUGIN_ONLY，
+  // 打算再配一条「两份要一致」的守卫——但这个项目已经反复证明：
+  // 靠守卫维持两份清单一致，不如只留一份。确认过无循环依赖（ingest/competitor
+  // 的依赖链里没有 adapters/registry）。
+  return PLUGIN_COLLECTABLE.has(platform) ? 'plugin' : 'none';
+}
+
 export async function sourceHealthBoard() {
   const hot = hotAdapters();
   const hotHealth = await Promise.all(
@@ -147,7 +173,13 @@ export async function sourceHealthBoard() {
     const primary = chain[0] ?? new MockCompetitorAdapter(p.key);
     // name 显示整条链（如 "tikhub → rsshub"），kind 取主源——设置页据此标注通道性质
     const name = chain.length > 1 ? chain.map((a) => a.name).join(' → ') : primary.name;
-    return { platform: p.key, name, kind: primary.kind };
+    return { platform: p.key, name, kind: primary.kind, status: competitorSourceStatus(p.key) };
   });
-  return { hot: hotHealth, competitor: competitorHealth };
+  // 自建 RSSHub 单独一行：它是**一个共享实例**，逐平台各探一次没有意义。
+  // 【为什么要有这一行】它是竞对链上唯一一条「用户自己部署、可能已经死掉」的通道。
+  // 不显示的话，「这个容器该留还是该停」在产品里根本答不了——只能靠人去翻 docker ps。
+  const rsshub = await rssHubStatus().catch(() => ({
+    configured: false, ok: false, detail: '探测本身失败',
+  }));
+  return { hot: hotHealth, competitor: competitorHealth, rsshub };
 }

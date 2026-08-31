@@ -298,6 +298,32 @@ describe('🔒 签名凭据只许待在会被剥离的路径下', () => {
     }
   });
 
+  // ── 2026-08-31：同一件事又发生了一次，所以判据得换个地方 ──────────────
+  //
+  // 上面那条对 skill 的检查有个 `if (existsSync)` ——**那正是它这次没帮上忙的原因**。
+  // exclude 清单只存在于 ~/.claude/skills/beacon-deploy/SKILL.md，而那个 skill 不在仓库里。
+  // 换台机器、换个人、或者那个 skill 没装，清单就不存在，同一个错原样再犯：
+  // 签名私钥又被 rsync 到了公网服务器（闸门拦住了构建，但那时它已经落盘 70 秒）。
+  //
+  // 判据从「某个 skill 里写没写」搬到「仓库里有没有这份清单」——它才会跟着代码走。
+  it('🔒 排除清单在仓库里，不依赖某个 skill 装没装', () => {
+    const list = read('deploy/rsync-exclude.txt');
+    expect(list, '签名凭据目录不在排除清单里——这正是两次事故的直接原因')
+      .toMatch(/^deploy\/private$/m);
+    for (const must of ['.env', '.next-verify', 'deploy/xray-bin', 'deploy.config.json']) {
+      expect(list, `${must} 不在排除清单里`).toContain(must);
+    }
+  });
+
+  it('🔒 构建上下文也排掉（镜像层删不掉，烤进去就永远在）', () => {
+    // Dockerfile 是 `COPY . .`：万一 deploy/private 出现在服务器上，
+    // 下一次构建就会把私钥烤进镜像层。同一台机器上另一个项目的容器里
+    // 就躺着一份两个月前烤进去的 Apple AuthKey——那份删不掉了。
+    expect(read('.dockerignore'), '.dockerignore 没排 deploy/private').toMatch(/^deploy\/private$/m);
+    expect(read('Dockerfile'), 'Dockerfile 不再是 COPY . . 了，这条守卫的前提要重新想')
+      .toMatch(/^COPY \. \.$/m);
+  });
+
   it('绝不提交明文私钥：只许有加密的 .p12 与公开的 .cer', () => {
     const dir = join(process.cwd(), 'deploy', 'private', 'signing');
     if (!existsSync(dir)) return;

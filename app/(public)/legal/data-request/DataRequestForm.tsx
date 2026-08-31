@@ -4,7 +4,7 @@ import { useState, useTransition } from 'react';
 import { PLATFORM_LIST } from '@/lib/constants';
 import { actSubmitDataRemoval } from './actions';
 
-type Kind = 'account' | 'comment';
+type Kind = 'account' | 'comment' | 'site';
 
 export function DataRequestForm() {
   const [kind, setKind] = useState<Kind>('account');
@@ -17,6 +17,8 @@ export function DataRequestForm() {
   const [error, setError] = useState('');
   const [pending, start] = useTransition();
   const isComment = kind === 'comment';
+  // 站点类的主体是一个域名，不是平台上的账号——所以它不选平台
+  const isSite = kind === 'site';
 
   function submit() {
     setError('');
@@ -57,13 +59,20 @@ export function DataRequestForm() {
           >
             <option value="account">我是被监控账号的权利人（停止采集并删除该账号的全部数据）</option>
             <option value="comment">我在别人的作品下留过言，要求删除我自己的那条评论</option>
+            <option value="site">我是某个网站的权利人，要求不要再抓取我的站</option>
           </select>
           <div className="small muted" style={{ marginTop: 6, lineHeight: 1.7 }}>
             {isComment
               ? '只删你指明的那一条评论正文。不会影响作品作者，也不会停止对该作者的采集——那是另一个人的事，不能由你的申请决定。'
-              : '核实后会停止全平台对该账号的采集，并删除已收集的档案、作品数据、订阅关系与其作品评论区留存的内容。'}
+              : isSite
+                ? '核实后会停止抓取这个域名（含它的子域），并删除已经从它页面上取到的数据。'
+                  + '用户为它建的采集配方会被停用而不是删除——那是用户自己写的东西，停掉就已经不再采你了。'
+                : '核实后会停止全平台对该账号的采集，并删除已收集的档案、作品数据、订阅关系与其作品评论区留存的内容。'}
           </div>
         </div>
+        {/* 站点类不选平台：它的主体是域名。硬要选一个的话，那个值会进库、进去重键、
+            进执行分叉，是纯粹的噪音 */}
+        {!isSite && (
         <div className="field">
           <label className="field-label">所在平台 <span style={{ color: 'var(--red)' }}>*</span></label>
           <select className="input" value={platform} onChange={(e) => setPlatform(e.target.value)}>
@@ -73,14 +82,17 @@ export function DataRequestForm() {
             ))}
           </select>
         </div>
+        )}
         <div className="field">
           <label className="field-label">
-            {isComment ? '评论所在的作品链接' : '被监控账号主页链接 / 标识'}{' '}
+            {isComment ? '评论所在的作品链接' : isSite ? '你的网站域名' : '被监控账号主页链接 / 标识'}{' '}
             <span style={{ color: 'var(--red)' }}>*</span>
           </label>
           <input
             className="input"
-            placeholder={isComment ? '你留言的那条视频 / 笔记 / 文章的链接' : '如账号主页 URL 或用户名，便于我们定位'}
+            placeholder={isComment ? '你留言的那条视频 / 笔记 / 文章的链接'
+              : isSite ? '如 example.com（写主域名即可，子域一并停止）'
+                : '如账号主页 URL 或用户名，便于我们定位'}
             value={handle}
             onChange={(e) => setHandle(e.target.value)}
             maxLength={200}

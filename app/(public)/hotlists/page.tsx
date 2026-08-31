@@ -1,10 +1,12 @@
+import { headers } from 'next/headers';
+import { recordCrawlerHitAsync } from '@/lib/geo/crawler-log';
 import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { parseJson } from '@/lib/json';
 import { HOT_SOURCES } from '@/lib/constants';
 import { fmtNum, relTime } from '@/lib/format';
 import { getSessionOrNull } from '@/lib/session';
-import { PageHead, Card, Empty } from '@/components/ui';
+import { Card, Empty } from '@/components/ui';
 import { ActionButton } from '@/components/ActionButton';
 import { HotFitAnalyzer } from './HotFitAnalyzer';
 import { actIngestHot } from '@/app/(app)/actions';
@@ -13,10 +15,20 @@ import { HubHeader } from '@/components/HubHeader';
 
 export const dynamic = 'force-dynamic';
 
+// 【这一页也记一笔 AI 爬虫】robots.txt / sitemap.xml 回答的是「谁来看规则」，
+// 这里回答的是「谁真的来读内容」——后者才是 GEO 上真正要紧的那个问题。
+// 这一页本来就是 force-dynamic，所以读一次请求头零额外代价；
+// 而普通访客的 UA 认不出来，直接返回不写库（见 lib/geo/crawler-log.ts）。
+
 // 热点聚合中心：登录用户可「重新采集 / 账号×热点结合分析」；游客只读浏览公开热榜（演示页）。
 // 🔒 游客路径**绝不触发任何 llmComplete / 写操作**：结合分析（烧 LLM）与重新采集（写库+外部采集）
 // 只对登录用户渲染；对应 server action 也各自 getSession()+requireRole 自守卫，双保险。
 export default async function HotlistsPage() {
+  try {
+    const h = await headers();
+    recordCrawlerHitAsync(h.get('user-agent'), '/hotlists');
+  } catch { /* 拿不到请求头就不记，绝不影响这一页 */ }
+
   const session = await getSessionOrNull();
   const isGuest = !session;
 

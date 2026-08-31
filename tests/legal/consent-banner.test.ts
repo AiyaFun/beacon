@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { LEGAL_VERSION } from '@/lib/legal';
+import { before } from '../helpers/anchor';
 
 // 政策更新告知 —— 隐私政策第九节「重大变更时会通过站内通知或弹窗方式告知」的兑现。
 //
@@ -34,8 +35,7 @@ describe('🔒 consentVersion 不再是只写不读', () => {
   });
 
   it('🔒 演示租户不打扰', () => {
-    const at = SHELL.indexOf('<LegalUpdateBanner');
-    expect(SHELL.slice(Math.max(0, at - 120), at)).toContain('!demo');
+    expect(before(SHELL, '<LegalUpdateBanner', 120)).toContain('!demo');
   });
 });
 

@@ -41,6 +41,26 @@ export async function POST(req: Request) {
   }
 
   const p = parsed.data;
+
+  // 【账号停采闸：这是第三条路】竞对采集两条路（lib/ingest/competitor.ts 与 lib/pipeline.ts）
+  // 都挂了 isRemovalRequested，唯独**评论回传**这条没挂——而它存的是
+  // 评论正文（ReaderComment）与读者提问，都挂在这个被申请移除的账号名下。
+  //
+  // 公开页承诺的是「收到申请即**先停止**对该账号的新增采集（不等核验完成）」。
+  // 少挂这一条，那句承诺对评论这条链路就是假的：申请人看着「已受理」，
+  // 我们仍在往他名下的作品上攒评论。
+  //
+  // 【为什么只拦 rival，不拦 own】移除申请页的名字就是「被监控账号移除申请」——
+  // 它管的是「我们不要再监控某个账号」。scope='own' 是用户在读**自己**作品下的评论，
+  // 不属于监控；把它一起拦掉只会在同名撞车时把用户自己的功能弄坏。
+  if (p.scope !== 'own' && p.handle) {
+    const { isRemovalRequested } = await import('@/lib/legal/removal');
+    if (await isRemovalRequested(p.platform, p.handle)) {
+      log.warn('评论回传被停采闸拦下', { platform: p.platform });
+      return json({ ok: false, error: '这个账号已申请停止采集，我们不再收集它的数据。' }, 403);
+    }
+  }
+
   const r = await ingestCommentQuestions(ws.id, p);
   if (!r.ok) return json(r, 400);
 

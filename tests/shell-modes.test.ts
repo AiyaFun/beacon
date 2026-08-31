@@ -240,3 +240,28 @@ describe('出口与布局', () => {
     expect(code('components/TenantShell.tsx')).toMatch(/<NextSteps nav=\{shellNav\} \/>/);
   });
 });
+
+// ── 退役的列不许还在被查（2026-08-29 第五轮扫描）────────────────────────
+//
+// `lib/shell.ts` 的文件头写着「Member.shellMode 列保留但**不再读**（删列要迁移，
+// 读死值零成本）」——而 `TenantShell` 当时**每次渲染都还在查它**，
+// 查出来的 `member` 变量在整个 95 行的文件里一次都没被用过。
+// 于是每一次已登录页面渲染都白跑一趟数据库；说的和做的对不上，
+// 而这种「多查一次」既不报错、也不变红、更不会有人投诉。
+describe('单壳化：退役的列不许还在被查', () => {
+  const read = (p: string) => fs.readFileSync(path.join(process.cwd(), p), 'utf8');
+
+  it('🔒 TenantShell 不再查 shellMode', () => {
+    const src = read('components/TenantShell.tsx');
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    expect(code, 'TenantShell 又开始查 shellMode 了——它已经退役，查了也没人用').not.toContain('shellMode');
+  });
+
+  it('🔒 全站没有任何地方再读它（shell.ts 的「不再读」必须是真的）', () => {
+    const files = ['components/TenantShell.tsx', 'lib/shell.ts', 'lib/nav.ts'];
+    for (const f of files) {
+      const code = read(f).replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+      expect(code, `${f} 里还在读 shellMode`).not.toMatch(/shellMode\s*:\s*true/);
+    }
+  });
+});

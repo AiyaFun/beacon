@@ -4,6 +4,8 @@ import { resolveApiToken, apiEnabled } from '@/lib/api/token';
 import { enqueueBrowserTask, BROWSER_TASK_KINDS, KIND_LABEL } from '@/lib/browser-task';
 import { vetBrowserTaskArgs, resolveCompetitorRef } from '@/lib/browser-task/vet';
 import { checkRateLimit, getClientIp, ipKey } from '@/lib/ratelimit';
+import { can } from '@/lib/rbac';
+import { disabledTools } from '@/lib/agent/tool-config';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -42,6 +44,37 @@ export async function POST(req: Request) {
 
   const auth = await resolveApiToken(req.headers.get('authorization'));
   if (!auth) return unauthorized();
+
+  // 【角色闸：与网页/AI 那两条路同一个动作】派浏览器任务在 AI 工具表里标的是
+  // `action: 'competitor.manage'`（lib/agent/tools.ts），executeCall 会按发起人的角色判一次；
+  // 网页那条路也走 requireRole。而这条对外调用面此前**一道角色闸都没有**——
+  // 同一件事，网页会被拦下、API 不会。
+  //
+  // 【今天够不够得着，不是挂不挂闸的理由】这条路由只在 appliance/private 形态存在，
+  // 而那两个形态里 viewer 目前不可被授予（lib/rbac.ts assignableRoles）——
+  // 所以今天大概率触发不了。但那是**两道无关约束恰好互相收口**的结果：
+  // 哪天 assignableRoles 放开、或者存量库里留着一个切换形态之前建的 viewer，
+  // 这个口子就开了，而那时没有任何东西会提醒我们。本项目的既有做法是「闸挂每一条路」。
+  if (!can(auth.ctx.role, 'competitor.manage')) {
+    return NextResponse.json(
+      { ok: false, error: '这个令牌所属成员的角色没有派发采集任务的权限' },
+      { status: 403 },
+    );
+  }
+
+  // 工作区把这个能力关掉了就不派——与 AI 那条路同一判据（lib/agent/run.ts executeCall
+  // 里的 offTools）。只在界面上关、而 API 照发，那个开关对外就是个摆设。
+  const off = disabledTools(
+    (await prisma.workspace.findUnique({
+      where: { id: auth.ctx.workspaceId }, select: { agentToolConfig: true },
+    }))?.agentToolConfig,
+  );
+  if (off.includes('dispatch_browser_task')) {
+    return NextResponse.json(
+      { ok: false, error: '这个工作区关闭了「派活给浏览器插件」' },
+      { status: 403 },
+    );
+  }
 
   const body = (await req.json().catch(() => ({}))) as {
     kind?: unknown; competitor?: unknown; platform?: unknown; url?: unknown; limit?: unknown;

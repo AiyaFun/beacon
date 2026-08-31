@@ -1,7 +1,7 @@
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { parseJson } from '@/lib/json';
-import { PageHead, Stat, Fold } from '@/components/ui';
+import { Fold } from '@/components/ui';
 import { Icon } from '@/components/icons';
 import { LibraryBoard, type LibraryItem } from './LibraryBoard';
 import { VideoAnalyzeCard } from './VideoAnalyzeCard';

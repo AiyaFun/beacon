@@ -116,7 +116,9 @@ const UNDER = -50;
 const MIN_PEERS = 3;
 
 type SnapRow = { takenAt: Date; metrics: string; source: string | null; milestone: string | null };
-function toSeries(snaps: SnapRow[], publishedAt: Date): DaySeriesPoint[] {
+// publishedAt 可空：没有它就没有逐日坐标轴，序列为空 → curve.shape='insufficient' →
+// 复盘如实说「数据不足」，而不是把 D+0 的累计播放判成「首日爆发型」。
+function toSeries(snaps: SnapRow[], publishedAt: Date | null): DaySeriesPoint[] {
   return toDailySeries(
     snaps.map((s) => ({ takenAt: s.takenAt, metrics: parseJson<Metrics>(s.metrics, {}), source: s.source, milestone: s.milestone })),
     publishedAt,

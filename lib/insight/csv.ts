@@ -4,20 +4,14 @@ import { logicalDay } from './timeseries';
 import { sourceTier, SOURCE_TIER_LABEL } from './source-tier';
 import { pickAuthoritativeSnapshot } from './source-priority';
 import { beijingDayKey } from '../beijing';
+import { buildCsv } from '../csv';
 
 // 数据导出（纯函数）。CSV 带 UTF-8 BOM 供 Excel 直接双开不乱码；字段做转义。
 // 两种粒度：发布明细（每篇一行）、逐日快照（每篇×每逻辑日一行，含来源）。
 
-// RFC4180 转义：含逗号/引号/换行的字段用双引号包裹并把内部引号翻倍
-function esc(v: string | number): string {
-  const s = String(v ?? '');
-  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-}
-
-export function buildCsv(headers: string[], rows: (string | number)[][]): string {
-  const lines = [headers, ...rows].map((row) => row.map(esc).join(','));
-  return '﻿' + lines.join('\r\n'); // BOM + CRLF
-}
+// 转义与拼装住在 lib/csv.ts（零依赖，客户端组件也要用；且那里补了公式注入的处置）。
+// 这里 re-export，既有 `from './csv'` 的引用不必改。
+export { buildCsv, escapeCell } from '../csv';
 
 // 来源分档口径住在 source-tier.ts（零依赖，避免 timeseries ↔ csv 循环导入）。
 // 这里 re-export，既有 `from './csv'` 的引用不必改。
@@ -26,7 +20,8 @@ export { sourceTier, SOURCE_TIER_LABEL, type SourceTier } from './source-tier';
 export type CsvRecord = {
   platform: string;
   title: string | null;
-  publishedAt: Date;
+  /** 可空：插件从某些页面回填时采不到发布时间，如实留空而不是写成回填当天 */
+  publishedAt: Date | null;
   fromRecommend: boolean;
   metrics: string;
   snapshots: { takenAt: Date; metrics: string; source: string | null; milestone: string | null }[];
@@ -35,8 +30,10 @@ export type CsvRecord = {
 // 导出的日期与页面上看到的必须是同一天：一律北京时间的逻辑日（见 lib/beijing.ts）。
 // 用 toISOString() 切出来的是 UTC 日，早上八点前发的作品会被导成前一天，
 // 用户拿这份 CSV 跟平台后台对账时对不上，而且只在早上对不上。
-function fmtDate(d: Date): string {
-  return beijingDayKey(d);
+function fmtDate(d: Date | null): string {
+  // 【拿不到就写「未记录」，不写空】空格子在 Excel 里会被读成「这天是空的」，
+  // 而事实是「我们不知道是哪天」——与竞对榜单导出同一条口径
+  return d ? beijingDayKey(d) : '未记录';
 }
 
 const M = (m: Metrics) => [m.views ?? 0, m.likes ?? 0, m.comments ?? 0, m.shares ?? 0, m.collects ?? 0, m.completion ?? ''];

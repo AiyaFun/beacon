@@ -47,10 +47,14 @@ export async function TenantShell({
     const oses = [...new Set(m.builds.map((b) => DESKTOP_OS_LABEL[b.os]))];
     return { version: m.version, platforms: oses.join(' · ') };
   };
-  const [account, member, platformAdmin] = await Promise.all([
+  // 【删掉了一次白查】原来这里还查一次 `member.shellMode`（注释写着「用户上次选的外壳」），
+  // 但 2026-08-26 单壳化之后这个值**没有任何人用**：下面的外壳是写死的
+  // （shell-taskdeck + visibleTaskNav()），查出来的 `member` 变量整个文件一次都没引用。
+  // 于是每一次已登录页面渲染都白跑一趟数据库。
+  // lib/shell.ts 的文件头其实已经写明「Member.shellMode 列保留但**不再读**」——
+  // 说的和做的对不上，而这种「多查一次」既不报错也不变红。
+  const [account, platformAdmin] = await Promise.all([
     prisma.creatorAccount.findUnique({ where: { id: session.accountId }, select: { name: true } }),
-    // 用户上次选的外壳。cookie 没有时用它——换台电脑、清了缓存，选过的那套还在
-    prisma.member.findUnique({ where: { id: session.memberId }, select: { shellMode: true } }),
     // 运维台入口跟着账号区走（原来在顶栏）。普通用户连这个链接的存在都看不到
     resolvePlatformAdmin(session.memberId),
   ]);

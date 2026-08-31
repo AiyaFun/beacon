@@ -739,3 +739,91 @@ try {
 } catch { /* ignore */ }
 
 updateCurrentTabInfo();
+
+// ── 任意站点采集配方（2026-08-30 补上入口）──────────────────────────────────
+//
+// 【这段是在补一个「写了没接」】sw.js 从 0.9.11 起就有三条消息的接收方
+//（beacon-recipes-refresh / beacon-recipe-run / beacon-recipe-grant）、
+// runRecipeOnTab / refreshScrapeRecipes / requestSiteGrant 四个函数、
+// 以及 tools/recipe-run.js 这个执行器——而**没有任何界面发过那三条消息**。
+// 也就是说这个功能写好了、也记着「已上线」，用户却一个入口都点不到。
+// 现在由 tests/extension/message-wired.test.ts 常驻盯着这一类。
+//
+// 【授权为什么在这里调，不发给 sw.js】chrome.permissions.request 必须在**用户手势**里调，
+// 而 MV3 里 service worker 的 onMessage 处理器不是手势上下文——转发过去会被 Chrome 拒掉。
+// sw.js 里那条 beacon-recipe-grant 的注释以为转发能保住手势，不成立，所以那条已经删掉。
+// 侧栏是扩展页面，按钮的 click 里直接调才作数。
+
+const spRecipeBtn = document.getElementById('spRecipe');
+const spRecipeMsg = document.getElementById('spRecipeMsg');
+const spRecipeLabel = document.getElementById('spRecipeLabel');
+
+function spRecipeSay(text, show = true) {
+  if (!spRecipeMsg) return;
+  spRecipeMsg.textContent = text;
+  spRecipeMsg.style.display = show && text ? 'block' : 'none';
+}
+
+/** 当前页匹配到配方才露出按钮。匹配判定在 sw.js（配方缓存在那边），这里只问一句。 */
+async function spRefreshRecipeButton() {
+  if (!spRecipeBtn) return;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.url || !/^https?:/.test(tab.url)) { spRecipeBtn.style.display = 'none'; spRecipeSay('', false); return; }
+    const r = await ask({ type: 'beacon-recipe-match', url: tab.url });
+    if (r?.ok && r.recipe) {
+      spRecipeBtn.style.display = '';
+      spRecipeLabel.textContent = r.granted ? `按配方采集：${r.recipe.name}` : `授权并采集：${r.recipe.name}`;
+      // 【没授权时要先说清楚】用户点下去会弹 Chrome 的权限框，事先不说会显得很突兀
+      spRecipeSay(r.granted ? '' : `首次使用需要你授权插件读取 ${r.recipe.origin}（只这一个站点）`, !r.granted);
+    } else {
+      spRecipeBtn.style.display = 'none';
+      spRecipeSay('', false);
+    }
+  } catch { spRecipeBtn.style.display = 'none'; }
+}
+
+spRecipeBtn?.addEventListener('click', async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id || !tab.url) return;
+  spRecipeBtn.disabled = true;
+  try {
+    const m = await ask({ type: 'beacon-recipe-match', url: tab.url });
+    if (!m?.ok || !m.recipe) { spRecipeSay('这个页面没有对应的采集配方'); return; }
+
+    // 授权必须在这个 click 里直接调（见本段开头的说明）
+    if (!m.granted) {
+      spRecipeSay('正在请求站点授权…');
+      let granted = false;
+      try { granted = await chrome.permissions.request({ origins: [`${m.recipe.origin}/*`] }); }
+      catch (e) { spRecipeSay(`授权没成功：${String(e?.message || e)}`); return; }
+      if (!granted) { spRecipeSay('你拒绝了授权，这一页就不采了'); return; }
+    }
+
+    spRecipeSay('正在按配方抓这一页…');
+    const r = await ask({ type: 'beacon-recipe-run', tabId: tab.id, url: tab.url });
+    // 【按 mode 精确分支】成功抓取返回的也是 mode:'scrape'，只判「有没有 mode」
+    // 会把成功当成「结构变了」报给用户——写这段时对着没读全的返回值写，当场踩了一次。
+    if (r?.ok && (r.mode === 'learn' || r.mode === 'stale')) {
+      // 这次没取到值，交骨架回去学
+      spRecipeSay(`这一页的结构变了或还没学会，已经把页面骨架交回去重新学（学到 ${r.learned || 0} 条规则）`);
+    } else if (r?.ok) {
+      // 【如实说抓到几个字段】只说「成功」的话，取到 1 个和取到 11 个长得一模一样
+      spRecipeSay(`抓到了 ${r.got ?? 0} 个字段${r.rows ? `、${r.rows} 行` : ''}，已经存进站里`);
+    } else if (r?.needGrant) {
+      spRecipeSay(`还需要授权 ${r.origin}，再点一次`);
+    } else {
+      spRecipeSay(r?.error || '没抓成，稍后再试');
+    }
+  } finally {
+    spRecipeBtn.disabled = false;
+    spRefreshRecipeButton();
+  }
+});
+
+// 面板打开时先把配方拉一遍（没网就用上一份缓存，sw.js 那边保证了这点），再判当前页
+ask({ type: 'beacon-recipes-refresh' }).finally(spRefreshRecipeButton);
+try {
+  chrome.tabs.onActivated?.addListener(spRefreshRecipeButton);
+  chrome.tabs.onUpdated?.addListener((_id, c) => { if (c.status === 'complete') spRefreshRecipeButton(); });
+} catch { /* ignore */ }

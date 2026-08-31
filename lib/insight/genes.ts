@@ -48,6 +48,7 @@ export type GeneProfile = {
 
 type Row = {
   platform: string;
+  /** 只收有发布时间的：基因分析要回答「什么时候发、隔多久发」，缺了它无从谈起 */
   publishedAt: Date;
   views: number;
   sourceType: string | null;
@@ -157,7 +158,11 @@ export async function loadGeneProfile(accountId: string): Promise<GeneProfile> {
     : [];
   const byTopic = new Map(topics.map((t) => [t.id, t]));
 
-  const rows: Row[] = records.map((r) => {
+  // 【没有发布时间的不进基因分析】这里算的是「什么时候发、隔多久发、什么角度跑得好」，
+  // 三个问题里两个直接依赖发布时间。把它们按回填当天算进去，等于用一批假时间训练结论。
+  const rows: Row[] = records
+    .filter((r): r is typeof r & { publishedAt: Date } => r.publishedAt !== null)
+    .map((r) => {
     const t = r.topicId ? byTopic.get(r.topicId) : undefined;
     return {
       platform: r.platform,

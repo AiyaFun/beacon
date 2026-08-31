@@ -2,15 +2,11 @@ import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { parseJson } from '@/lib/json';
-import {
-  TOPIC_DIMENSIONS, TOPIC_STATES, TOPIC_QUEUES, TOPIC_SOURCE_LABEL, platformName,
-} from '@/lib/constants';
+import { TOPIC_DIMENSIONS, TOPIC_STATES, TOPIC_QUEUES, TOPIC_SOURCE_LABEL, platformName } from '@/lib/constants';
 import { EVERGREEN_MIN_RESERVE } from '@/lib/topic/sources/evergreen';
-import {
-  buildBattleCards, hasBattleContent, formatViews, type BattleCard,
-} from '@/lib/topic/battlecard';
+import { buildBattleCards, hasBattleContent, formatViews, type BattleCard } from '@/lib/topic/battlecard';
 import { BLUE_SEA_BADGE } from '@/lib/topic/bluesea';
-import { PageHead, Card, ScorePill, Empty, Fold } from '@/components/ui';
+import { Card, ScorePill, Empty, Fold } from '@/components/ui';
 import { ActionButton } from '@/components/ActionButton';
 import { Icon } from '@/components/icons';
 import { actGenerate, actReplenishEvergreen } from './actions';

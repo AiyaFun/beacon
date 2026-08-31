@@ -54,8 +54,60 @@ export type SkeletonNode = {
   attrs?: string[];
   /** 文本的形状，如 "NUM万" / "CJK" / "NUM" */
   shape?: string;
+  /**
+   * `role` 的**值**（不是名）。这是**属性值里唯一原样保留的一类**，理由：
+   * ARIA role 是一份固定词表（button / list / article / …），不可能夹带用户信息，
+   * 而它恰恰是类名被混淆成随机哈希时最可靠的定位锚——那正是各家前端改版后的常态。
+   * 词表外的一律丢弃（见 ARIA_ROLES）。
+   */
+  role?: string;
+  /**
+   * `data-testid` / `data-test` / `data-qa` / `data-cy` 的**值**。
+   * 这类值是开发者自己起的标识（`user-followers`、`feed-item`），改版时比类名稳得多。
+   * ⚠️ 但它也可能被塞进用户 ID（`data-testid="user-8823"`），所以**只收看起来像标识符的**：
+   * 字母开头、只含字母数字连字符下划线、不含中文、不是纯数字。见 vetTestId。
+   */
+  tid?: string;
   children?: SkeletonNode[];
 };
+
+/**
+ * ARIA role 的固定词表。**只收词表内的**——不是为了正确性，是为了证明这个字段
+ * 不可能夹带用户信息。站点自己编的 role 值（`role="张三的卡片"`）会被这道闸挡掉。
+ */
+const ARIA_ROLES = new Set([
+  'alert', 'article', 'banner', 'button', 'cell', 'checkbox', 'columnheader', 'combobox',
+  'complementary', 'contentinfo', 'dialog', 'feed', 'figure', 'form', 'grid', 'gridcell',
+  'group', 'heading', 'img', 'link', 'list', 'listbox', 'listitem', 'main', 'menu', 'menubar',
+  'menuitem', 'navigation', 'none', 'option', 'presentation', 'progressbar', 'radio',
+  'radiogroup', 'region', 'row', 'rowgroup', 'rowheader', 'search', 'searchbox', 'separator',
+  'slider', 'spinbutton', 'status', 'switch', 'tab', 'table', 'tablist', 'tabpanel', 'textbox',
+  'timer', 'toolbar', 'tooltip', 'tree', 'treegrid', 'treeitem',
+]);
+
+/** role 值的准入：只认标准词表。词表外一律丢字段（不打回整个节点）。 */
+export function vetRole(raw: unknown): string {
+  const t = String(raw ?? '').trim().toLowerCase();
+  return ARIA_ROLES.has(t) ? t : '';
+}
+
+/**
+ * data-testid 类属性值的准入。
+ *
+ * 【为什么不能原样收】它是开发者自己起的名字，绝大多数是 `feed-item` 这种，
+ * 但完全可能是 `user-8823` 或 `post-张三`。规则包是**全局下发**的
+ *（见 looksLikePersonalName 那段），一个用户 ID 混进去会被推给所有人。
+ * 所以判据是白名单形状而不是黑名单：字母开头、只含 [A-Za-z0-9_-]、长度 3..40、
+ * **且不是纯数字结尾的那种 ID 形状**。
+ */
+export function vetTestId(raw: unknown): string {
+  const t = String(raw ?? '').trim();
+  if (!/^[A-Za-z][A-Za-z0-9_-]{2,39}$/.test(t)) return '';
+  // `user-8823` / `item_12` 这类「标识符 + 数字」极可能是每行都不同的实例 ID：
+  // 拿它当锚点既定位不到下一次，也可能把 ID 带进全局规则包
+  if (/[-_]\d+$/.test(t)) return '';
+  return t;
+}
 
 const TEXT_SHAPE_MAX = 24;
 
@@ -72,7 +124,14 @@ export function textShape(raw: string): string {
     .replace(/(\d+(?:\.\d+)?)|([一-龥]+)|([A-Za-z]{3,})/g, (_m, num, cjk, en) => {
       if (num) return 'NUM';
       if (cjk) return cjk.length <= 2 ? cjk : 'CJK'; // 「粉丝」「获赞」这类短标签要留：它们正是文本锚点
-      if (en) return 'EN';
+      // 【幂等】'NUM' / 'CJK' / 'EN' 是**上一次成形的产物**，不是英文单词。
+      // 客户端（extension/content/common.js 的 beaconTextShape）已经成形过一遍，
+      // 服务端这里是第二遍——不认这三个记号的话，「粉丝 NUM万」会变成「粉丝 EN万」，
+      // 与上面注释里那个「单测抓到的真 bug」**症状完全一样，只是成因不同**
+      //（那次是链式 replace，这次是客户端+服务端两次成形）。
+      // 后果：模型看到的骨架里所有数字位都写着 EN，而提示词告诉它「数字是 NUM」——
+      // 看到的和说好的对不上，它就找不准那个数字位，而且一声不吭。
+      if (en) return en === 'NUM' || en === 'CJK' || en === 'EN' ? en : 'EN';
       return _m;
     })
     .slice(0, TEXT_SHAPE_MAX);
@@ -100,8 +159,32 @@ export function sanitizeSkeleton(raw: unknown, depth = 0): SkeletonNode | null {
       .filter((a): a is string => typeof a === 'string' && ALLOWED_ATTR.test(a))
       .slice(0, 8);
   }
+  // 【三种形状都要认，顺序不能变】
+  //   shape: string   —— 平台解析器那条路（extension/content/common.js）
+  //   text:  string   —— 历史形状
+  //   text:  string[] —— 采集配方那条路（lib/browser/local.ts 与 extension/tools/recipe-run.js
+  //                      的 SKELETON_FN 产出的是一个数组）
+  //
+  // 【为什么数组这一支必须有】2026-08-29 实测：配方骨架的 text 是数组，
+  // 而这里原本只判 `typeof n.text === 'string'`，两条都不匹配 → **整层文本被丢掉**。
+  // 后果是一条静默的链：模型看到的骨架一个字都没有 → 提不出「确实出现在骨架里」的锚点
+  // → verifyAgainstSkeleton 的 okAnchors 恒为空 → 学出来的规则**只有 CSS 类名**。
+  // 而 pick() 的设计是「选择器优先、取不到再用锚点」——锚点这条后路在配方链上从来没存在过，
+  // 于是「自我进化」退化成「每次改版重学一版同样脆的类名」，且 learned:N 照常报成功。
+  //
+  // 【为什么服务端要兼容而不是只改客户端】插件是异步更新的（要过商店审核），
+  // 老版本会继续上传数组形状。只改客户端 = 已装的用户全都还在丢文本。
+  const role = vetRole(n.role);
+  if (role) out.role = role;
+  const tid = vetTestId(n.tid);
+  if (tid) out.tid = tid;
+
   if (typeof n.shape === 'string' && n.shape) out.shape = textShape(n.shape);
   else if (typeof n.text === 'string' && n.text) out.shape = textShape(n.text);
+  else if (Array.isArray(n.text)) {
+    const joined = n.text.filter((t): t is string => typeof t === 'string' && !!t).slice(0, 3).join(' ');
+    if (joined) out.shape = textShape(joined);
+  }
 
   if (Array.isArray(n.children)) {
     const kids = n.children
@@ -202,6 +285,12 @@ export function selectorTokens(selector: string): string[] {
   for (const m of selector.matchAll(/\.([\w-]{3,})/g)) out.push(m[1]);
   for (const m of selector.matchAll(/\[([\w-]{3,})/g)) out.push(m[1]);
   for (const m of selector.matchAll(/#([\w-]{3,})/g)) out.push(m[1]);
+  // 【属性**值**也要验】`[data-testid="user-followers"]` 原来只抽出属性名 `data-testid`，
+  // 而那个名字几乎每个站点都有——于是模型随便编一个值，验证也照过。
+  // 属性选择器的定位能力全在值上，不验值等于这一类规则完全没过闸。
+  for (const m of selector.matchAll(/\[[\w-]+[~^$*|]?=\s*["']?([^\]"']{2,})["']?\]/g)) {
+    out.push(m[1].trim());
+  }
   return out;
 }
 

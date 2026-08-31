@@ -6,6 +6,7 @@ const msgEl = document.getElementById('msg');
 
 const showInPageAiEl = document.getElementById('showInPageAi');
 const autoCollectEl = document.getElementById('autoCollect');
+const taskPollEl = document.getElementById('taskPoll');
 const liveViewEl = document.getElementById('liveView');
 const dailyReminderEl = document.getElementById('dailyReminder');
 
@@ -79,6 +80,7 @@ chrome.storage.sync
     'token',
     'showInPageAi',
     'autoCollect',
+    'taskPoll',
     'dailyReminder',
     'scheduledCollect',
     'scheduledCollectHour',
@@ -95,6 +97,8 @@ chrome.storage.sync
 
     showInPageAiEl.checked = s.showInPageAi !== false;
     autoCollectEl.checked = s.autoCollect !== false;
+    // 默认开：不开的话「AI 派了活」对用户就是个永远不动的待办（与 sw.js armTaskPollAlarm 同一判法）
+    taskPollEl.checked = s.taskPoll !== false;
     // 默认关：只有显式存过 true 才算开（与 autoClickPublish 同款判法）
     liveViewEl.checked = s.liveView === true;
     dailyReminderEl.checked = s.dailyReminder !== false;
@@ -166,6 +170,8 @@ loadAccounts();
 // Event Listeners for Quick Auto-Save Toggles
 showInPageAiEl.addEventListener('change', () => chrome.storage.sync.set({ showInPageAi: showInPageAiEl.checked }));
 autoCollectEl.addEventListener('change', () => chrome.storage.sync.set({ autoCollect: autoCollectEl.checked }));
+// 存进 sync 就够了：sw.js 的 onChanged 监听到 taskPoll 变化会自己重设/清掉闹钟
+taskPollEl.addEventListener('change', () => chrome.storage.sync.set({ taskPoll: taskPollEl.checked }));
 liveViewEl.addEventListener('change', () => chrome.storage.sync.set({ liveView: liveViewEl.checked }));
 dailyReminderEl.addEventListener('change', () => chrome.storage.sync.set({ dailyReminder: dailyReminderEl.checked }));
 
@@ -277,6 +283,7 @@ document.getElementById('save').addEventListener('click', async () => {
     token,
     showInPageAi: showInPageAiEl.checked,
     autoCollect: autoCollectEl.checked,
+    taskPoll: taskPollEl.checked,
     dailyReminder: dailyReminderEl.checked,
     scheduledCollect: scheduledCollectEl.checked,
     scheduledCollectHour: Number(scheduledCollectHourEl.value),

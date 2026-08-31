@@ -5,11 +5,28 @@ import { NAV, reachableRoutes } from '@/lib/nav';
 import { TASK_NAV } from '@/lib/shell';
 import { AGENT_ROLES, AGENT_ROLE_LIST, dispatchOrderBlock } from '@/lib/agent/roles';
 import { AGENT_TOOLS } from '@/lib/agent/tools';
+import { PER_RUN_TOOL_CAP } from '@/lib/agent/budget';
+import { between, orderedBefore } from '../helpers/anchor';
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const read = (p: string) => fs.readFileSync(path.join(ROOT, p), 'utf8');
 /** 断言看的是代码在做什么，不是文件里出现过什么字符串——注释里恰恰会解释这些坑 */
 const code = (p: string) => read(p).replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+/** 生产源码文件（不含测试）。抄一份 oneLine 过去的地方可能在任何一处，所以要全扫。 */
+function allSourceFiles(): string[] {
+  const out: string[] = [];
+  const walk = (d: string) => {
+    for (const e of fs.readdirSync(path.join(process.cwd(), d), { withFileTypes: true })) {
+      if (e.name === 'node_modules' || e.name.startsWith('.')) continue;
+      const rel = `${d}/${e.name}`;
+      if (e.isDirectory()) walk(rel);
+      else if (/\.(ts|tsx)$/.test(e.name) && !e.name.includes('.test.')) out.push(rel);
+    }
+  };
+  for (const d of ['lib', 'app', 'components']) walk(d);
+  return out;
+}
 
 describe('四类干活单位：只有一处定义', () => {
   it('每一类都说清「是什么」「谁决定怎么做」「在哪儿」', () => {
@@ -72,13 +89,60 @@ describe('四类干活单位：只有一处定义', () => {
       // 不与页顶抢位置，所以它保留四张卡的形态
       ['app/(app)/assistant/page.tsx', 'assistant', 'ladder'],
     ];
+    // 【2026-08-30 改了判据】原来这里断的是「页面里有没有 `from '@/lib/agent/roles'` 这行」。
+    // 那是拿**一行 import 冒充「名字来自 roles.ts」**：
+    // 助手页只渲染 <RoleLadder here="assistant" />，名字是 RoleLadder 内部去取的，
+    // 页面自己那行 import 从头到尾没被用过——清死 import 时才暴露出来。
+    // 更糟的是：真有人在这一页把四类的说法写死、同时留着那行没用的 import，它照样绿。
+    //（本会话在自己写的孤儿守卫上踩过同一形状：没被使用的 import 被算成了调用点。）
+    //
+    // 现在断的是它真正要守的三件事：
+    //   ① 页顶/页尾确实挂了那个承担分工说明的组件（原来就有）
+    //   ② 那个组件自己从 roles.ts 取名字（承接关系成立）
+    //   ③ 直接用 AGENT_ROLES 的那种页，描述自己这一类时必须真的从 AGENT_ROLES.<key> 取
+    //
+    // 【③ 第一版也是假绿，变异当场抓到】原来写的是「出现写死的名字 → 断言文件里含 AGENT_ROLES」。
+    // 可技能页别处本来就在用 AGENT_ROLES，断言恒真（「只验存在一处」那种形状）。
+    // 而且「技能」这两个字在技能页正文里到处都是，拿**名字**做判据必然误报——
+    // 能守住的是「这一类的说明有没有从 AGENT_ROLES.<key> 取」这个具体表达式。
+    for (const [, , kind] of pages) {
+      const comp = kind === 'tabs' ? 'components/RoleTabs.tsx' : 'components/RoleLadder.tsx';
+      expect(code(comp), `${comp} 没从 roles.ts 取名字，页面挂了它也白挂`)
+        .toMatch(/from '@\/lib\/agent\/roles'/);
+    }
     for (const [file, key, kind] of pages) {
       const src = code(file);
-      expect(src, `${file} 没引用 roles.ts`).toMatch(/from '@\/lib\/agent\/roles'/);
       const want = kind === 'tabs' ? `RoleTabs active="${key}"` : `RoleLadder here="${key}"`;
       expect(src, `${file} 没挂 ${want}`).toMatch(new RegExp(want));
+
+      // 【这一页描述自己是哪一类时，必须从 AGENT_ROLES 取，不许自己写一句】
+      // 判据只对直接用 AGENT_ROLES 的那种页（tabs）成立；ladder 那种由组件承担，
+      // 已经由上面「组件自己从 roles.ts 取」那一条守住了。
+      if (kind === 'tabs') {
+        expect(
+          src,
+          `${file} 描述「${key}」这一类时没走 AGENT_ROLES.${key}——自己写一句的话，`
+          + 'roles.ts 改了它不会跟着改，界面上的分工与 AI 实际的派活逻辑就分叉了，'
+          + '而这种不一致既不会红也不会 404，只会让用户觉得「这个 AI 不听话」。',
+        ).toContain(`AGENT_ROLES.${key}.`);
+      }
     }
   });
+  // 那几句一句话描述又长又独特，谁也不会不小心打出一模一样的——
+  // 一旦在别处出现，就一定是从 roles.ts 抄过去的第二份，而抄过去的那份不会跟着改。
+  it('🔒 一句话描述不许被抄到 roles.ts 以外的任何地方', () => {
+    const files = allSourceFiles().filter((f) => !f.endsWith('lib/agent/roles.ts'));
+    for (const r of AGENT_ROLE_LIST) {
+      for (const f of files) {
+        expect(
+          code(f),
+          `${f} 里出现了「${r.name}」那句一句话描述的副本。roles.ts 是唯一真相源，`
+          + '抄过去的那份不会跟着改，界面上的分工与 AI 实际的派活逻辑会慢慢分叉。',
+        ).not.toContain(r.oneLine);
+      }
+    }
+  });
+
 
   it('🔒 同一页不许既挂页签又挂分工梯——那是同一屏说两遍', () => {
     // 用户 2026-08-26 截图圈出来的正是这个：/skills 页顶「技能|智能体|能力」三个页签，
@@ -201,4 +265,40 @@ describe('AI 真的认得这四类', () => {
   // 字符串还在、位置也还在 runSkill 之前，扫源码的守卫照过不误，而闸门已经没了。
   // 它们在 tests/agent/skill-tool.test.ts 里以行为验证（真的没调 runSkill、真的没落库），
   // 那四条都做过 mutation：关掉闸门 / 挪到之后 / 照样落库 / 去掉归属校验，全部变红。
+});
+
+// ── 单工具次数上限必须够得着（2026-08-30 修）───────────────────────────────
+//
+// PER_RUN_TOOL_CAP 里那几个工具全都是 write，而默认授权档是「每一步都要确认」。
+// 原来 toolCapReason 挂在确认闸**下面**、紧挨着 executeCall：
+//   · 走确认那条路 → 在 mustConfirm 那里就 break 了，永远到不了 cap 闸；
+//   · 用户点确认之后走 decidePendingCall → 那条路直接 executeCall，也没有这道闸。
+// 于是这几个上限**一次都没生效过**——写了、也有用例，就是够不着。
+// 用例当时是绿的，因为它们直接调 toolCapReason，没有走真实的执行路径。
+describe('🔒 单工具上限：闸要挂在够得着的地方', () => {
+  const runSrc = code('lib/agent/run.ts');
+
+  it('cap 闸在确认闸之前（否则确认档下永远到不了）', () => {
+    orderedBefore(runSrc, 'const capped = await toolCapReason(runId, call.name);',
+      'if (tool && (await mustConfirm(ctx, runId, tool, call))');
+  });
+
+  it('🔒 有上限的工具确实都是 write（这条前提没了就该重新想这道闸挂哪儿）', () => {
+    // 前提变了要么说明有人加了只读的 costly 工具，要么说明 write 标记被改了。
+    // 两种都该让人来看一眼，而不是让上面那条守卫继续绿着。
+    const capped = Object.keys(PER_RUN_TOOL_CAP);
+    expect(capped.length).toBeGreaterThan(2);
+    for (const name of capped) {
+      const t = AGENT_TOOLS.find((x) => x.name === name);
+      expect(t, `PER_RUN_TOOL_CAP 里的 ${name} 不在工具表里`).toBeTruthy();
+      expect(t!.write || t!.costly, `${name} 既不是写操作也不花钱，为什么要限次？`).toBe(true);
+    }
+  });
+
+  it('超了上限就不去问用户（不该弹一张注定被拒的确认卡）', () => {
+    // cap 命中时 continue，压根走不到 mustConfirm
+    const seg = between(runSrc, 'const capped = await toolCapReason(runId, call.name);',
+      'if (tool && (await mustConfirm(ctx, runId, tool, call))');
+    expect(seg).toContain('continue;');
+  });
 });

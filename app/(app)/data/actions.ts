@@ -46,23 +46,48 @@ export async function actBackfill(
     warnings.push('未填发布链接，未解析出作品 ID，这条记录的数据自动回流将不可用（需手动回填）。');
   }
 
-  const metricsJson = toJson({ views: v, likes: l, comments: 0, shares: 0 });
-  // 有作品ID → upsert 到唯一键：同一篇若已被登记发布入口建过骨架，就更新它的 metrics 而非新建，
-  // 杜绝同篇两条记录污染 learn 基线与统计。无作品ID → 建独立记录并打 needsBackfill。
-  const rec =
-    platformItemId !== null
-      ? await prisma.publishRecord.upsert({
-          where: { accountId_platformItemId: { accountId: s.accountId, platformItemId } },
-          create: { accountId: s.accountId, platform, platformItemId, needsBackfill: false, fromRecommend, metrics: metricsJson },
-          // 不覆盖 fromRecommend（登记入口的归因更可信），只更新 metrics 并解除缺链接标记
-          update: { metrics: metricsJson, needsBackfill: false },
-        })
-      : await prisma.publishRecord.create({
-          data: { accountId: s.accountId, platform, platformItemId: null, needsBackfill: true, fromRecommend, metrics: metricsJson },
-        });
-  // 同时落一条回流快照，作为归因时间线的起点
+  // 【只写这个表单真的问过的两项，且必须合并已有值】2026-08-30 之前这里是
+  //   `toJson({ views: v, likes: l, comments: 0, shares: 0 })` + `update: { metrics }`（整包替换）。
+  // 两个错叠在一起：
+  //   ① 表单只有播放量和点赞两个输入框（Backfill.tsx），comments/shares 的 0 是代码补的——
+  //      把「没问过」写成了「观测到 0」；
+  //   ② 整包替换会把插件已经采到的 collects / danmaku / coins / completion / impressions /
+  //      sources 全部抹掉。用户先用插件回填过一条 B站作品（评论 122、收藏 34、完播 42%），
+  //      几天后看到「N 篇缺发布链接」的提醒来补个链接，一提交这些数就没了——
+  //      而他完全不会知道是自己那次「登记」干的。
+  // 同一文件 11 行之下的 actUpdateMetrics 写着一模一样的道理：
+  //「不铺 prev 的话，用户手改一次播放量就会把这些字段整片抹掉」。那处做对了，这处没有。
+  const existing = platformItemId !== null
+    ? await prisma.publishRecord.findUnique({
+        where: { accountId_platformItemId: { accountId: s.accountId, platformItemId } },
+        select: { id: true, metrics: true },
+      })
+    : null;
+  const prev = existing ? parseJson<Metrics>(existing.metrics, {}) : {};
+  const merged: Metrics = { ...prev, views: v, likes: l };
+  const metricsJson = toJson(merged);
+
+  // 有作品ID → 命中唯一键就更新，杜绝同篇两条记录污染 learn 基线与统计。
+  // 无作品ID → 建独立记录并打 needsBackfill。
+  const rec = existing
+    // 不覆盖 fromRecommend（登记入口的归因更可信），只更新 metrics 并解除缺链接标记
+    ? await prisma.publishRecord.update({
+        where: { id: existing.id },
+        data: { metrics: metricsJson, needsBackfill: false },
+      })
+    : await prisma.publishRecord.create({
+        data: {
+          accountId: s.accountId, platform, platformItemId,
+          needsBackfill: platformItemId === null, fromRecommend, metrics: metricsJson,
+        },
+      });
+  // 同时落一条回流快照，作为归因时间线的起点。
+  // 【写合并后的完整值，不是只写这次填的两项】authoritativeMetrics 是**整份挑一条快照**、
+  // 不做跨快照合并（见 lib/insight/source-priority.ts）。只写 {views, likes} 的话，
+  // 这条手填快照一旦当选权威，评论/收藏/完播就在整页上凭空消失。
+  // lib/ingest/own-post.ts 的 applyMetrics 写快照用的也是 merged——快照是「那一刻的完整画面」。
   await prisma.performanceSnapshot.create({
-    data: { publishId: rec.id, metrics: toJson({ views: v, likes: l }) },
+    data: { publishId: rec.id, metrics: metricsJson },
   });
   // 触发账号属性学习（与基线对比、沉淀记忆）
   await learnFromPerformance(s.accountId, s.workspaceId, rec.id).catch(() => {});

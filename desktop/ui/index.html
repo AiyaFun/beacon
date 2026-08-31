@@ -109,7 +109,7 @@
   // 跳进站点时带一次性握手参数：站点据此① 不再劝你下载客户端 ② 有新版时提醒你。
   // 站点读到后会把这两个参数从地址栏抹掉。CLIENT_VERSION 必须与 tauri.conf.json / package.json
   // 的 version 一致——有守卫钉死，改版本号漏改这里会红。
-  const CLIENT_VERSION = '1.2.1';
+  const CLIENT_VERSION = '1.2.4';
   function enter(base) {
     remember(base);
     const sep = base.includes('?') ? '&' : '?';

@@ -362,7 +362,10 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
   };
 
   // 处理窗口边缘/角落拖拽拉伸 Size
-  const onResizeMouseDown = (e: React.MouseEvent, handle: 'bottom-right' | 'top-left' | 'bottom-left') => {
+  // 【只有两个把手】联合类型里原来还有 'bottom-left'，但 onMouseMove 的 if/else 没处理它、
+  // CSS 里也没有 .bottom-left、JSX 里更没渲染过——是规划了没建。留在类型里是个地雷：
+  // 谁哪天把这个把手加进 JSX，拖它会**静默什么都不发生**，而 tsc 不会说一个字。
+  const onResizeMouseDown = (e: React.MouseEvent, handle: 'bottom-right' | 'top-left') => {
     e.preventDefault();
     e.stopPropagation();
     if (isMaximized) return;

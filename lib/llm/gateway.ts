@@ -16,6 +16,7 @@ import { looksVideoCapable, VIDEO_MODEL_HINT } from './ark';
 // 平台渠道的读侧收在一处（文本与图像共用同一份缓存与选路，见该文件顶部注释）
 import { pickPlatformProvider, invalidatePlatformProviderCache } from './platform-providers';
 import { can } from '../edition';
+import { currentJob } from '../jobs/current';
 
 // LLM 网关：按「租户 BYOK 配置 → 平台默认 env → Mock」优先级选 provider，并支持按功能路由。
 // 合规约束（PRD §10.5）：region=overseas 的 provider 仅用于出海内容场景，且生成出口仍过合规检测。
@@ -90,7 +91,7 @@ export async function llmVision(
     await recordUsage(tenantId, 'scoring', result, 'platform');
     return { ok: true, text: result.text, model: result.model };
   } catch (err) {
-    await releaseLlmQuota(tenantId); // 调用失败不占名额，与 llmComplete 同口径
+    await releaseLlmQuota(tenantId, 'platform'); // 调用失败不占名额，与 llmComplete 同口径
     return { ok: false, reason: 'failed', error: (err as Error).message.slice(0, 200) };
   }
 }
@@ -155,7 +156,7 @@ export async function llmVideo(
     await recordUsage(tenantId, 'video', result, 'byok');
     return { ok: true, text: result.text, model: result.model };
   } catch (err) {
-    await releaseLlmQuota(tenantId); // 调用失败不占名额，与 llmComplete/llmVision 同口径
+    await releaseLlmQuota(tenantId, 'byok'); // 调用失败不占名额，与 llmComplete/llmVision 同口径
     return { ok: false, reason: 'failed', error: (err as Error).message.slice(0, 300) };
   }
 }
@@ -320,7 +321,7 @@ export async function llmComplete(
       result = await provider.complete(messages, callOpts);
       if (!isParseableJson(result.text)) {
         log.warn('provider 重试仍非合法 JSON，降级 Mock', { provider: provider.name });
-        if (source !== 'mock') await releaseLlmQuota(tenantId);
+        if (source !== 'mock') await releaseLlmQuota(tenantId, source);
         result = { ...(await mock.complete(messages, opts)), degraded: true };
       }
     }
@@ -330,7 +331,7 @@ export async function llmComplete(
     // mocked=false）不涨；名额不还的话，provider 持续故障时用户会被一个
     // 仪表盘上显示为 0 的用量拦死。platform 与 BYOK 占额路径相同，一并归还。
     log.warn('provider 调用失败，降级 Mock', { provider: provider.name, error: (err as Error).message });
-    if (source !== 'mock') await releaseLlmQuota(tenantId);
+    if (source !== 'mock') await releaseLlmQuota(tenantId, source);
     result = { ...(await mock.complete(messages, opts)), degraded: true };
   }
   await recordUsage(tenantId, fn, result, source, opts?.runId); // 记账（cheap，内部已 try/catch 不抛）
@@ -395,7 +396,7 @@ export async function llmCompleteStream(
         fullText += value;
         controller.enqueue(value);
       } catch (err) {
-        if (source !== 'mock') await releaseLlmQuota(tenantId);
+        if (source !== 'mock') await releaseLlmQuota(tenantId, source);
         controller.error(err);
       }
     },
@@ -418,6 +419,8 @@ async function recordUsage(tenantId: string | null, fn: LlmFunction, r: LlmResul
         tenantId: tenantId ?? undefined,
         fn,
         runId,
+        // 定时任务替用户跑的调用要标出来：退款判据靠它把「系统跑的」与「他自己用的」分开
+        byJob: currentJob() ?? undefined,
         provider: r.provider,
         model: r.model,
         mocked: r.mocked,

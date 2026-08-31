@@ -16,23 +16,72 @@ import path from 'node:path';
 const ROOT = path.resolve(__dirname, '../..');
 const DIRS = ['app', 'components'];
 
-// 这些模块自身或其依赖会碰到 node 内置模块 / prisma / 队列，客户端一律不许直接引。
-// 判据是「它 import 了什么」，不是「它叫什么」——所以下面用实际依赖图来验，而不是靠命名约定。
-const SERVER_ONLY_HINTS = [
-  '@/lib/db',
-  '@/lib/crypto',
-  '@/lib/quota',
-  '@/lib/ratelimit',
-  '@/lib/publish/weibo',
-  '@/lib/publish/wechat-mp',
-  '@/lib/illustration/run',
-  '@/lib/cover/run',
-  '@/lib/llm/gateway',
-  '@/lib/llm/image',
-  'node:crypto',
-  'node:fs',
-  '@prisma/client',
+/**
+ * **真正碰不得的东西**：Node 内置模块与只能在服务端跑的包。
+ * 判据是「顺着 import 走下去会不会碰到它们」，不是「那个文件叫什么名字」。
+ *
+ * 【2026-08-30：这条守卫此前只查直接 import，且清单是手写的】
+ * 上面那段注释写着「用**实际依赖图**来验，而不是靠命名约定」，
+ * 而实现是一张 13 条模块名的清单 + 一条只匹配 `import … from '<那 13 个之一>'` 的正则——
+ * 也就是说它查的恰恰是**命名约定**，而且只查一层。
+ * 变异验证当场证实：在 components/NotificationBell.tsx（'use client'）里加
+ *   `import { SHELL_DEFAULTS } from '@/lib/agent/shell';`
+ *（lib/agent/shell.ts 顶层 import 了 node:child_process 与 node:fs/promises）
+ * → 这三条用例全绿、tsc 也过，只有 next build 才炸。
+ * 而「从服务端模块里取一个常量」正是它注释里记着的那两次真实事故的形状。
+ */
+const FORBIDDEN_LEAVES = [
+  /^node:/,            // node:crypto / node:fs / node:child_process …
+  /^(fs|path|crypto|child_process|dns|net|tls|os|http|https|zlib|worker_threads)$/,
+  /^@prisma\//,
+  /^prisma$/,
+  /^ioredis$/,
+  /^bullmq$/,
+  /^playwright(-core)?$/,
+  /^nodemailer$/,
 ];
+
+/**
+ * 顺着 `@/` 与相对 import 走依赖图，返回第一条「客户端文件 → … → 禁用叶子」的路径。
+ *
+ * 只跟仓库内的模块（`@/` 与 `./`）：第三方包的内部依赖跟不动，也没必要——
+ * 真正会出事的是我们自己的服务端模块被客户端引进去。
+ * 深度有上限：图里有环也不会转不出来。
+ */
+function serverLeakPath(entryRel: string, srcOf: (rel: string) => string | null): string[] | null {
+  const seen = new Set<string>();
+  const stack: { rel: string; path: string[] }[] = [{ rel: entryRel, path: [entryRel] }];
+  while (stack.length) {
+    const cur = stack.pop()!;
+    if (cur.path.length > 12 || seen.has(cur.rel)) continue;
+    seen.add(cur.rel);
+    const src = srcOf(cur.rel);
+    if (src === null) continue;
+    // 【'use server' 是真正的边界，遍历到此为止】客户端 import 一个 server action，
+    // Next.js 在编译期把它换成一次网络调用——action 文件里引的服务端模块**不会进客户端包**。
+    // 不在这里停的话，几乎每个客户端组件都会被报成泄漏（它们本来就该调 action），
+    // 那条守卫就会因为噪音太大而被人关掉。
+    // 「不许从 action 文件里取常量」是另一回事，由下面那条用例单独管。
+    if (cur.rel !== entryRel && /^\s*['"]use server['"]/.test(src)) continue;
+    // 【`import type` 不算依赖】它在编译期被整条擦掉，运行时那条边不存在，
+    // 打不进客户端包。不排除的话，凡是从服务端模块取一个类型的客户端组件都会被误报——
+    // 而那是完全正当的写法。注意只排除**整条**是 type 的：
+    // `import { type A, realThing } from 'x'` 仍然会产生真实的运行时 import。
+    for (const m of src.matchAll(/(?:^|\n)(\s*import\s(?:\s*type\s)?[^\n]*?from\s*['"]([^'"]+)['"])/g)) {
+      const stmt = m[1];
+      const spec = m[2];
+      if (/^\s*import\s+type\s/.test(stmt)) continue;
+      // 'use server' 文件另有一条用例专门管，这里不重复跟进去
+      if (FORBIDDEN_LEAVES.some((re) => re.test(spec))) return [...cur.path, spec];
+      if (!spec.startsWith('@/') && !spec.startsWith('.')) continue;
+      const rel = spec.startsWith('@/')
+        ? spec.slice(2)
+        : path.normalize(path.join(path.dirname(cur.rel), spec));
+      stack.push({ rel, path: [...cur.path, rel] });
+    }
+  }
+  return null;
+}
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -56,20 +105,55 @@ describe("'use client' 文件的依赖安全", () => {
     expect(CLIENT_FILES.length).toBeGreaterThan(20);
   });
 
-  it('🔒 不许直接 import 服务端模块（tsc 与单测都拦不住，只有起 dev 才会炸）', () => {
+  it('🔒 顺着依赖图走下去不许碰到服务端模块（tsc 与单测都拦不住，只有 next build 才炸）', () => {
+    // 解析一个仓库内模块的源码。带扩展名的直接读；不带的按 .ts/.tsx/index 依次试。
+    const cache = new Map<string, string | null>();
+    const srcOf = (rel: string): string | null => {
+      if (cache.has(rel)) return cache.get(rel)!;
+      const cands = [rel, `${rel}.ts`, `${rel}.tsx`, `${rel}/index.ts`, `${rel}/index.tsx`];
+      let out: string | null = null;
+      for (const c of cands) {
+        const abs = path.join(ROOT, c);
+        try {
+          if (fs.statSync(abs).isFile()) { out = fs.readFileSync(abs, 'utf8'); break; }
+        } catch { /* 试下一个 */ }
+      }
+      cache.set(rel, out);
+      return out;
+    };
+
     const bad: string[] = [];
     for (const f of CLIENT_FILES) {
-      for (const m of SERVER_ONLY_HINTS) {
-        // 只看 import/from，不看注释里提到的模块名（本文件自己就在注释里写了它们）
-        const re = new RegExp(`(?:^|\\n)\\s*import[^\\n]*['"]${m.replace(/[/@]/g, '\\$&')}['"]`);
-        if (re.test(f.src)) bad.push(`${f.rel} → ${m}`);
-      }
+      const leak = serverLeakPath(f.rel, srcOf);
+      if (leak) bad.push(leak.join('\n     → '));
     }
     expect(
       bad,
-      `这些客户端组件引了服务端模块，页面会在浏览器里编译失败：\n${bad.join('\n')}\n` +
-        '正解是把要用的常量搬到 client-safe 的纯数据模块，而不是在客户端引服务端文件。',
+      '这些客户端组件顺着 import 走下去会碰到服务端模块，页面在浏览器里编译失败：\n\n'
+      + `${bad.join('\n\n')}\n\n`
+      + '正解是把要用的常量搬到 client-safe 的纯数据模块（如 lib/cover/rules、lib/publish/capability），'
+      + '而不是在客户端引服务端文件。',
     ).toEqual([]);
+  });
+
+  it('🔒 这条守卫真的会顺着依赖走（不是只查直接 import）', () => {
+    // 【为什么要这条】上一版就是「只查直接 import + 手写模块名单」，
+    // 而它的注释写的却是「用实际依赖图来验」。判据与说明不一致时，
+    // 坏掉的一定是判据——所以这里拿一条**人造的两跳链路**喂给同一个函数。
+    const fake: Record<string, string> = {
+      'components/X.tsx': "'use client'\nimport { A } from '@/lib/mid';",
+      'lib/mid.ts': "import { spawn } from 'node:child_process';\nexport const A = 1;",
+    };
+    const leak = serverLeakPath('components/X.tsx', (rel) => fake[rel] ?? fake[`${rel}.ts`] ?? null);
+    expect(leak, '两跳的泄漏没被跟出来——依赖图遍历坏了').toBeTruthy();
+    expect(leak!.join(' → ')).toContain('node:child_process');
+
+    // 反过来：干净的链路不该被误报
+    const clean: Record<string, string> = {
+      'components/Y.tsx': "'use client'\nimport { B } from '@/lib/pure';",
+      'lib/pure.ts': 'export const B = 2;',
+    };
+    expect(serverLeakPath('components/Y.tsx', (rel) => clean[rel] ?? clean[`${rel}.ts`] ?? null)).toBeNull();
   });
 
   it('🔒 server action 文件不许被当成普通模块从客户端取常量', () => {

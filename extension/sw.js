@@ -284,11 +284,8 @@ async function hasSiteGrant(origin) {
   catch { return false; }
 }
 
-/** 申请单个站点的权限。只能在用户手势里调（Chrome 强制），所以入口在侧栏按钮。 */
-async function requestSiteGrant(origin) {
-  try { return await chrome.permissions.request({ origins: [`${origin}/*`] }); }
-  catch { return false; }
-}
+// 【申请授权不在这里】chrome.permissions.request 必须在用户手势里调，而 SW 的
+// onMessage 处理器不是手势上下文。它在 sidepanel.js 的按钮 click 里直接调，见那里的说明。
 
 /**
  * 在当前标签页跑一次配方。
@@ -326,8 +323,16 @@ async function runRecipeOnTab(tabId, url) {
       return { ok: !!j.ok, learned: j.learned || 0, mode: out.mode, error: j.error };
     }
 
+    // 【抓到的值必须回传】在补上这一句之前，这里只报「成不成」，**values 连传都没传**——
+    // 插件那条路的采集结果只活在浏览器里，用户在站里一个字都查不到，
+    // 而侧栏还显示「采集成功」。落库先于报结果：报结果那一步可能把配方标成 broken，
+    // 但这次确实抓到东西了，数据该留下。
+    await post({
+      kind: 'data', recipeId: recipe.id, url,
+      values: out.values || {}, rows: out.rows || [], want: out.want || 0,
+    });
     await post({ kind: 'result', recipeId: recipe.id, ok: true });
-    return { ok: true, mode: 'scrape', values: out.values, got: out.got, want: out.want };
+    return { ok: true, mode: 'scrape', values: out.values, got: out.got, want: out.want, rows: (out.rows || []).length };
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) };
   }
@@ -2323,9 +2328,21 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     respond(runRecipeOnTab(msg.tabId, msg.url), sendResponse, '按配方采集');
     return true;
   }
-  // 授权申请必须在用户手势里发起（Chrome 强制），所以它只能由侧栏按钮打过来
-  if (msg?.type === 'beacon-recipe-grant') {
-    respond(requestSiteGrant(msg.origin).then((ok) => ({ ok, origin: msg.origin })), sendResponse, '申请站点授权');
+  // 【这个页面有配方吗、授权了吗】侧栏靠它决定要不要露出那个按钮、按钮上写什么。
+  //
+  // 【为什么没有「代为申请授权」那条消息】原来这里是 beacon-recipe-grant，把
+  // chrome.permissions.request 转发到 SW 里调，注释写着「必须在用户手势里发起，
+  // 所以由侧栏按钮打过来」——**转发保不住手势**：MV3 里 SW 的 onMessage 处理器
+  // 不是手势上下文，Chrome 会直接拒掉。所以申请那一步改由 sidepanel.js 在 click 里直接调
+  //（侧栏是扩展页面，那里才作数），这条消息随之删掉。
+  if (msg?.type === 'beacon-recipe-match') {
+    respond(
+      recipeForUrl(msg.url).then(async (recipe) => (
+        recipe ? { ok: true, recipe, granted: await hasSiteGrant(recipe.origin) } : { ok: true, recipe: null }
+      )),
+      sendResponse,
+      '匹配采集配方',
+    );
     return true;
   }
   if (msg?.type === 'beacon-get-config') {

@@ -7,6 +7,8 @@ import { safeFetch, type FetchPage } from '../web/fetch';
 import { extractArticle, type ExtractedArticle } from './extract';
 import { platformOfLink, storablePlatform } from './platform';
 import { pruneInspiration } from '../ingest/inspiration';
+import { isSiteRemovalRequested } from '../legal/removal';
+import { SITE_STOPPED_REASON } from '../scrape/recipe';
 
 // 文章剪藏：群里发一条链接或一段长正文 → 抓正文 → 摘要 + 要点 + 结合本账号的分析 → 存进收集箱。
 //
@@ -71,6 +73,21 @@ export async function clipUrl(
   if (!params.fetchPage && !plat.canFetch) {
     return { ok: false, error: `${plat.name}：${plat.hint ?? '服务器抓不到这个平台的正文。'}` };
   }
+
+  // 【站点停采闸：这是第四条路】建配方（lib/scrape/recipe.ts）、本机浏览器
+  // （lib/browser/local.ts）、插件回传（app/api/ingest/recipe/route.ts）三条都挂了，
+  // 唯独**服务端直抓正文**这条没挂——而从站点权利人的角度看，这条恰恰是最像「抓取」的一条。
+  // 隐私政策承诺的是「收到申请即**先停止抓取**（不等核验完成）」，
+  // 少挂一条路，那句承诺就是假的。
+  //
+  // 【为什么不放在 fetchPage 里】fetchPage 是可注入的（单测用它验解析逻辑本身），
+  // 闸挂在那儿会被测试桩绕过。挂在这里：无论谁来抓，都先过这一道。
+  try {
+    const origin = new URL(params.url).origin;
+    if (await isSiteRemovalRequested(origin)) {
+      return { ok: false, error: SITE_STOPPED_REASON };
+    }
+  } catch { /* 网址本身不合法，交给下面的抓取去报错 */ }
 
   let page;
   try {

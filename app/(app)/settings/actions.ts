@@ -5,21 +5,14 @@ import { headers } from 'next/headers';
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { requireRole } from '@/lib/rbac';
-import {
-  isValidPhone,
-  requestLoginCode,
-  consumeVerificationCode,
-  bindPhoneToMember,
-  unbindPhoneFromMember,
-  unbindWechatFromMember,
-} from '@/lib/auth';
+import { isValidPhone, requestLoginCode, consumeVerificationCode, bindPhoneToMember, unbindPhoneFromMember, unbindWechatFromMember } from '@/lib/auth';
 import { assertNotDemo } from '@/lib/demo/guard';
 import { checkRateLimit, getClientIp, ipKey, retryHint } from '@/lib/ratelimit';
 import { isProd } from '@/lib/env';
 import { getSmsProvider } from '@/lib/sms/provider';
 import { encryptKey, decryptKey } from '@/lib/crypto';
 import { channelOf } from '@/lib/publish/capability';
-import { OpenAICompatibleProvider } from '@/lib/llm/openai-compatible';
+
 import { checkVendorEndpoint, canUseOverseas, LLM_FUNCTIONS, looksNonChatModel } from '@/lib/constants';
 import { pingProvider } from '@/lib/llm/connectivity';
 import { parseJson } from '@/lib/json';

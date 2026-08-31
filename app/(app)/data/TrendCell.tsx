@@ -17,12 +17,19 @@ const METRICS: { key: keyof Metrics; label: string }[] = [
 ];
 
 // 单篇趋势的行内展开。用已随页面取回的快照本地计算逐日序列，不额外查库。
-export function TrendCell({ publishedAt, snapshots }: { publishedAt: string | Date; snapshots: RawSnap[] }) {
+export function TrendCell({ publishedAt, snapshots }: { publishedAt: string | Date | null; snapshots: RawSnap[] }) {
   const [open, setOpen] = useState(false);
   const [metric, setMetric] = useState<keyof Metrics>('views');
 
   if (snapshots.length === 0) {
     return <span className="small muted">—</span>;
+  }
+  // 【没有发布时间就没有「发布后第 N 天」这条轴】画不了逐日趋势。
+  // 如实说破，而不是从今天起画一条假的曲线——那正是 2026-08-30 之前
+  // 把回填时间当发布时间存下来所导致的（D+0 上挂着全生命周期的累计播放，
+  // 一律被判成「首日爆发」）。
+  if (!publishedAt) {
+    return <span className="small muted" title="这条作品没有采到发布时间，算不出「发布后第 N 天」">没有发布时间</span>;
   }
 
   return (

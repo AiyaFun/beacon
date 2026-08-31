@@ -61,3 +61,47 @@ export async function actSaveShellPolicy(
     return { ok: false, error: e instanceof Error ? e.message : '保存失败' };
   }
 }
+
+/**
+ * 探一下本机常见的调试端口，找到就直接填好。
+ *
+ * 【为什么值得有这个按钮】原来的流程是：托盘弹一句「请到设置把端点填成 http://127.0.0.1:9222」
+ * → 用户切窗口 → 手打一遍。中间任何一步记错（打成 localhost:9222 少了协议、
+ * 打成 9223）都会得到一个「配好了但连不上」的状态，而那个状态的报错在采集那一刻才出现。
+ * 能探到就没必要让人手打。
+ *
+ * 【为什么只探本机的几个端口】和 vetCdpUrl 同一条边界：端点只能指向本机回环。
+ * 这里连「让用户填一个远程地址去探」的入口都不给。
+ */
+export async function actDetectCdp(): Promise<{ ok: boolean; url?: string; error?: string }> {
+  const s = await getSession();
+  try {
+    if (!can('localBrowser')) return { ok: false, error: '这个版本不提供本机浏览器驱动' };
+    requireRole(s, 'byok.manage');
+
+    // 9222 是 Chrome 的约定端口；后面两个是用户手动指定过其他端口时的常见取值。
+    // 不做端口扫描——那既慢又像在做别的事情
+    for (const port of [9222, 9223, 9333]) {
+      const url = `http://127.0.0.1:${port}`;
+      try {
+        // /json/version 是 CDP 的握手端点：**能连上 ≠ 是个浏览器**，
+        // 本机随便一个服务都可能占着 9222。必须看它答的是不是 CDP
+        const res = await fetch(`${url}/json/version`, { signal: AbortSignal.timeout(1200) });
+        if (!res.ok) continue;
+        const j = (await res.json()) as { Browser?: string; webSocketDebuggerUrl?: string };
+        if (!j?.webSocketDebuggerUrl) continue;
+        const v = vetCdpUrl(url);
+        if (!v.ok) continue;
+        await prisma.workspace.update({ where: { id: s.workspaceId }, data: { browserCdpUrl: v.url } });
+        revalidatePath('/settings');
+        return { ok: true, url: `${v.url}（${j.Browser ?? '浏览器'}）` };
+      } catch { /* 这个端口没有就试下一个，探测失败不是错误 */ }
+    }
+    return {
+      ok: false,
+      error: '没找到带调试端口的浏览器。先用客户端托盘里的「启动采集浏览器」把 Chrome 起起来，再点这里。',
+    };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}

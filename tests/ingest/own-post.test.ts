@@ -224,7 +224,7 @@ describe('own-post · 发布时间只往更早改，绝不改晚', () => {
   it('新建记录直接用回传的发表时间', async () => {
     await ingestAt('2026-07-20T20:30:00');
     const rec = await prisma.publishRecord.findFirst();
-    expect(rec!.publishedAt.toISOString()).toBe(new Date('2026-07-20T20:30:00').toISOString());
+    expect(rec!.publishedAt!.toISOString()).toBe(new Date('2026-07-20T20:30:00').toISOString());
   });
 
   it('🔒 存量记录被填成「回填当天」→ 用真实发表时间纠回去', async () => {
@@ -233,7 +233,7 @@ describe('own-post · 发布时间只往更早改，绝不改晚', () => {
     });
     await ingestAt('2026-07-20T20:30:00');
     const after = await prisma.publishRecord.findUnique({ where: { id: rec.id } });
-    expect(after!.publishedAt.toISOString()).toBe(new Date('2026-07-20T20:30:00').toISOString());
+    expect(after!.publishedAt!.toISOString()).toBe(new Date('2026-07-20T20:30:00').toISOString());
   });
 
   it('🔒 单向：某次误读出一个更晚的时间时不许改（保证收敛）', async () => {
@@ -243,6 +243,43 @@ describe('own-post · 发布时间只往更早改，绝不改晚', () => {
     });
     await ingestAt('2026-07-25T09:00:00');
     const after = await prisma.publishRecord.findUnique({ where: { id: rec.id } });
-    expect(after!.publishedAt.toISOString()).toBe(real.toISOString());
+    expect(after!.publishedAt!.toISOString()).toBe(real.toISOString());
+  });
+});
+
+// ── 采不到发布时间就如实留空（2026-08-30 修）─────────────────────────────────
+//
+// 落库那条路原来写的是 `publishedAt: post.publishedAt ?? new Date()`，
+// 把**回填那一刻**当成发布时间存进库，库里没有任何字段标记这是猜的。
+// 而同一个函数 12 行之下的台账注释正写着「回填时间不能冒充发布时间，
+// 那正是 0.4.7 之前把发布时间写成回填当天所犯的错」——台账那条路传的是 `?? null`。
+//
+// 够得着吗：小红书笔记页、B站视频页、YouTube 播放页/频道页的解析器**结构上就不产出**
+// 这个字段，而「这是我的作品」按钮在这些页上都是露出的。
+describe('发布时间采不到 → 存 null，不存回填当天', () => {
+  it('🔒 不带 publishedAt 时落库为 null', async () => {
+    await ingestOwnPostData(workspaceId, ownPostIngestSchema.parse({
+      platform: 'xiaohongshu',
+      posts: [{ platformItemId: 'note-no-date', metrics: { views: 500 } }],
+    }));
+    const rec = await prisma.publishRecord.findFirst({ where: { platformItemId: 'note-no-date' } });
+    expect(rec, '记录该建起来').not.toBeNull();
+    expect(
+      rec!.publishedAt,
+      '把回填那一刻当成了发布时间——发布时段分析会印出「最佳时段=他熬夜回填的时辰」',
+    ).toBeNull();
+  });
+
+  it('🔒 后来某次回传带了真实时间 → 补上去（自愈仍然有效）', async () => {
+    await ingestOwnPostData(workspaceId, ownPostIngestSchema.parse({
+      platform: 'xiaohongshu', posts: [{ platformItemId: 'note-fix', metrics: { views: 1 } }],
+    }));
+    expect((await prisma.publishRecord.findFirst({ where: { platformItemId: 'note-fix' } }))!.publishedAt).toBeNull();
+    await ingestOwnPostData(workspaceId, ownPostIngestSchema.parse({
+      platform: 'xiaohongshu',
+      posts: [{ platformItemId: 'note-fix', publishedAt: '2026-06-01T10:00:00', metrics: { views: 2 } }],
+    }));
+    const after = await prisma.publishRecord.findFirst({ where: { platformItemId: 'note-fix' } });
+    expect(after!.publishedAt?.toISOString()).toBe(new Date('2026-06-01T10:00:00').toISOString());
   });
 });

@@ -1,4 +1,4 @@
-import { PageHead } from '@/components/ui';
+
 import { FeedbackCard } from '../settings/FeedbackCard';
 import { HubHeader } from '@/components/HubHeader';
 

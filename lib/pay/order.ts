@@ -264,8 +264,63 @@ export async function syncOrderFromWechat(outTradeNo: string, provider: PayProvi
       where: { id: order.id, status: 'created' },
       data: { status: 'closed', closedAt: new Date(), failReason: `微信侧状态 ${q.tradeState}` },
     });
+    return null;
+  }
+
+  // 【二维码过期了、微信侧仍是未支付 → 这张单再也付不了了，本地关掉】
+  //
+  // 不关的话它**永远停在 created**：用户扫码后放弃是最常见的情形，而 code_url 只有 2 小时。
+  // 后果有两条：① 定时对账每轮都要为这些死单再查一次微信，永远查不完；
+  // ② 「待支付订单」在界面与运维台上越堆越多，真正卡住的那一单反而看不出来。
+  //
+  // 【为什么这个判断是安全的】它要求两个**正向**条件同时成立：查单成功返回了 NOTPAY
+  //（不是网络失败——那种情况上面已经 return 了），且二维码时间已过。
+  // 少任何一个都不关：只凭 null 关单会让一次网络抖动关掉一张还能付的单。
+  if (q.tradeState === 'NOTPAY' && order.codeExpiresAt && order.codeExpiresAt.getTime() < Date.now()) {
+    await prisma.paymentOrder.updateMany({
+      where: { id: order.id, status: 'created' },
+      data: { status: 'closed', closedAt: new Date(), failReason: '二维码超时未支付（重新下单会换新单号）' },
+    });
   }
   return null;
+}
+
+/**
+ * 把所有还在「待支付」的订单向微信查一遍。
+ *
+ * 【为什么必须有这个】`syncOrderFromWechat` 的注释写着「回调丢了也能正常发货」，
+ * 而它**唯一的生产调用点是 actPollOrder**——也就是「用户正盯着二维码那个页面」。
+ * 用户扫码付完就关页面是再正常不过的操作，于是真实的失败路径是：
+ * 回调丢了（反代过滤 Wechatpay-* 头、我们 5s 没应答完、公网抖动——这几种它自己的注释就写着）
+ * ＋ 用户关了页面 = **钱收了，套餐永远不发**，而且没有任何地方会报错。
+ *
+ * 这与退款那侧是同一个形状：`reconcilePendingRefunds` 就是为此而加的
+ *（2026-08-29 查出 syncRefundFromWechat 零调用点）。当时留下的注释说
+ *「支付那侧是对称的：syncOrderFromWechat 由 actPollOrder 轮询」——
+ * 那句话只在用户不关页面时成立，所以这一侧同样需要服务端定期对账。
+ *
+ * 【窗口为什么是 7 天】二维码 2 小时就失效，超过这个时间还没终态的单，
+ * 要么是回调丢了（这几天内查得到 SUCCESS），要么是没付（会被上面那段关掉）。
+ * 再老的单微信侧也早已自动关闭，留着只是白查。
+ */
+export async function reconcilePendingOrders(
+  provider: PayProvider = getPayProvider(),
+  now = Date.now(),
+): Promise<{ scanned: number; fulfilled: number }> {
+  const pending = await prisma.paymentOrder.findMany({
+    where: { status: 'created', createdAt: { gte: new Date(now - 7 * 86_400_000) } },
+    select: { outTradeNo: true },
+    // 上限：一轮对账不该无限拉长。剩下的下一轮继续——它们不会消失
+    take: 200,
+    orderBy: { createdAt: 'asc' },
+  });
+  let fulfilled = 0;
+  for (const o of pending) {
+    // 单条失败不该让其余的这一轮也不对账（与退款对账、daily_recommend 同款隔离）
+    const r = await syncOrderFromWechat(o.outTradeNo, provider).catch(() => null);
+    if (r?.ok) fulfilled += 1;
+  }
+  return { scanned: pending.length, fulfilled };
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -290,10 +345,31 @@ function isSafelyRecoverable(
   return a !== null && b !== null && a === b;
 }
 
-/** 本单生效窗口内的真实（非 Mock）AI 调用次数——退款「是否使用」的判据。 */
+/**
+ * 本单生效窗口内**用户自己**用掉的真实（非 Mock）AI 调用次数——退款「是否使用」的判据。
+ *
+ * ── 为什么要排除定时任务（2026-08-30 修）──
+ * 原来数的是租户名下**所有**非 Mock 调用。而这些是系统替他跑的、他碰都没碰：
+ *   daily_recommend(05:00) / replenish_evergreen(05:20) / optimize_memory(05:30) /
+ *   generate_reviews(09:00) / weekly_review(周一 08:00) / run_scheduled_agents(每 10 分钟)
+ *
+ * 于是：用户 23:00 买了 ¥2999 永久买断，去睡觉；05:00 定时任务替他跑了一轮推荐；
+ * 早上他想退款 → consumedCount > 0 → 按 refundPolicyFor 的口径，买断已用要**转人工**。
+ * 他什么都没做，睡了一觉，自助全额退款的权利就没了——而这是我们自己替他花掉的。
+ *
+ * 【byJob 为空 = 用户当场发起】归因在 lib/jobs/current.ts（AsyncLocalStorage），
+ * 由 withRun 一处挂上，账本在 recordUsage 里记下。
+ * 历史行没有这一列（null），会被算成用户消耗——那是保守的一边：
+ * 宁可少退一点也不能凭空多退，何况这一列上线后新单都是准的。
+ */
 async function consumedCountForOrder(order: { tenantId: string; paidAt: Date | null; createdAt: Date }): Promise<number> {
   return prisma.llmCallLog.count({
-    where: { tenantId: order.tenantId, mocked: false, createdAt: { gte: order.paidAt ?? order.createdAt } },
+    where: {
+      tenantId: order.tenantId,
+      mocked: false,
+      byJob: null, // 定时任务替他跑的不算他消耗
+      createdAt: { gte: order.paidAt ?? order.createdAt },
+    },
   });
 }
 
@@ -392,7 +468,41 @@ export async function createRefund(i: CreateRefundInput, provider: PayProvider =
 
   // 确定性单号（bug #2 修复）：并发/重试算出同一 out_refund_no，靠 DB 唯一索引兜底「一单一退款」。
   const outRefundNo = outRefundNoForOrder(order.id);
+
+  // 【上一次失败的那行要复用，不能再 create】2026-08-30 修：
+  // 上面的 existing 检查**刻意**只拦 REFUND_RECONCILABLE ∪ {success}——
+  // 也就是说 failed / closed 是允许重试的，注释里也写着「发起失败置 failed，不留孤儿」。
+  // 可单号是确定性派生的、outRefundNo 又是唯一索引，于是重试必然撞 P2002，
+  // 被那句「该订单已存在退款单，请勿并发/重复发起」挡回来——而用户根本没有并发。
+  // 结果：一次网络抖动导致的 failed，就让这一单的自助退款**永久发不出去**，
+  // 只能转人工。同一个函数里两套机制打架。
+  //
+  // 复用同一行（而不是换个新号）正是这份设计自己写的：
+  //「重试复用同号，天然满足微信按 out_refund_no 的退款幂等」（lib/pay/sign.ts）。
+  const stale = await prisma.wxPayRefund.findUnique({
+    where: { outRefundNo },
+    select: { id: true, status: true },
+  });
   let refund;
+  if (stale) {
+    // 走到这里说明 existing 没拦住 → 它一定是 failed/closed。仍然带状态条件更新：
+    // 万一在这两行之间它被别的路径推成了活跃态，这次就该落空而不是把它踩回 created。
+    const revived = await prisma.wxPayRefund.updateMany({
+      where: { id: stale.id, status: { in: ['failed', 'closed'] } },
+      data: {
+        status: 'created',
+        amountRefundFen,
+        amountTotalFen: order.amountFen,
+        reason: i.reason,
+        operator: i.operator,
+        failReason: null,
+      },
+    });
+    if (revived.count === 0) {
+      return { ok: false, reason: `该订单已存在退款单（${outRefundNo}，状态 ${stale.status}），不重复发起` };
+    }
+    refund = await prisma.wxPayRefund.findUniqueOrThrow({ where: { id: stale.id } });
+  } else {
   try {
     refund = await prisma.wxPayRefund.create({
       data: {
@@ -413,6 +523,7 @@ export async function createRefund(i: CreateRefundInput, provider: PayProvider =
       return { ok: false, reason: `该订单已存在退款单（${outRefundNo}），请勿并发/重复发起` };
     }
     throw e;
+  }
   }
 
   let res;
@@ -556,7 +667,42 @@ export async function applyRefundResult(i: ApplyRefundInput): Promise<ApplyRefun
   }
 }
 
-/** 退款查单兜底（退款回调丢了也要能兑现）。前端/内部轮询触发。 */
+/**
+ * 把所有还在可复核态的退款单向微信查一遍。
+ *
+ * 【为什么必须有这个，而不是只留一个「等人调」的函数】
+ * `syncRefundFromWechat` 的注释写着「退款回调丢了也要能兑现 · 前端/内部轮询触发」——
+ * 但 2026-08-29 全库扫描查出：**它一个调用点都没有**。
+ * 支付那侧是对称的：`syncOrderFromWechat` 由 `actPollOrder` 在用户盯着二维码时轮询，
+ * 而退款没有对应的东西——用户点完退款就走了，没人会守着页面。
+ * 于是那句「靠即时返回 + 查单兜底」在退款这条路上是**假的**：
+ * 回调一丢（反代过滤 Wechatpay-* 头、公网抖动——支付那侧的注释就写着这两种），
+ * 退款单永远停在 processing，钱退了而我们这边的套餐没收回。
+ *
+ * 【为什么是定时而不是轮询】退款是异步的，微信可能几分钟也可能几天才终态。
+ * 用户不会守着页面，所以只能由服务端定期对账——这与移除申请「流转时删一次 +
+ * 每日重扫第二道」是同一个形状。
+ */
+export async function reconcilePendingRefunds(
+  provider: PayProvider = getPayProvider(),
+): Promise<{ scanned: number; settled: number }> {
+  const pending = await prisma.wxPayRefund.findMany({
+    where: { status: { in: [...REFUND_RECONCILABLE] } },
+    select: { outRefundNo: true },
+    // 上限：一轮对账不该无限拉长。剩下的下一轮继续——它们不会消失
+    take: 200,
+    orderBy: { createdAt: 'asc' },
+  });
+  let settled = 0;
+  for (const r of pending) {
+    // 单条失败不该让其余的这一轮也不对账（与 daily_recommend 的 per-tenant 隔离同款）
+    const applied = await syncRefundFromWechat(r.outRefundNo, provider).catch(() => null);
+    if (applied?.ok) settled += 1;
+  }
+  return { scanned: pending.length, settled };
+}
+
+/** 退款查单兜底（退款回调丢了也要能兑现）。由 reconcilePendingRefunds 定时调用。 */
 export async function syncRefundFromWechat(outRefundNo: string, provider: PayProvider = getPayProvider()): Promise<ApplyRefundResult | null> {
   const refund = await prisma.wxPayRefund.findUnique({ where: { outRefundNo }, select: { status: true } });
   if (!refund) return { ok: false, reason: '退款单不存在' };

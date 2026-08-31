@@ -647,6 +647,24 @@
       </label>
     </div>
 
+    <!-- 【这个开关 2026-08-30 才补上】隐私政策里写着「一个每 10 分钟的轮询（可在插件设置页关闭）」，
+         sw.js 的 armTaskPollAlarm 也确实读 taskPoll 并在它变化时重设闹钟——
+         而**全项目没有任何地方写这个键**，设置页上从来就没有这个开关。
+         承诺了一项「你可以关掉」的能力，用户却找不到地方关。 -->
+    <div class="setting-row">
+      <div class="setting-info">
+        <div class="setting-title">定时询问有没有我的任务 (Task Polling)</div>
+        <div class="setting-sub">
+          每 10 分钟向你的工作区问一次「有没有派给这个浏览器的活」。该询问<b>不携带任何页面内容</b>。
+          关掉之后仍然会在<b>浏览器启动时、打开侧栏时</b>各领一次——只是不再定时问。
+        </div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="taskPoll">
+        <span class="slider"></span>
+      </label>
+    </div>
+
     <div class="setting-row">
       <div class="setting-info">
         <div class="setting-title">执行可视化（看着它干活）</div>

@@ -111,13 +111,49 @@ describe('RLS 覆盖度（加表漏补策略即报警）', () => {
     ).toEqual([]);
   });
 
+  // ── 2026-08-30：这条守卫此前只检查了 13 条策略里的 9 条 ──────────────────
+  //
+  // 原来的判据是把 `CREATE POLICY[\s\S]*?USING \(([\s\S]*?)\);` 全局匹配一遍。
+  // 而策略在这份 SQL 里有**两种写法**：
+  //   · 多数是 `EXECUTE format('CREATE POLICY … USING (…);', t)` —— 以 `);` 收尾，能匹配；
+  //   · 最后四条（AgentStep / AgentRunNote / AgentArtifact / PublishTask）是
+  //     `EXECUTE 'CREATE POLICY … USING (…)'` —— **收尾是单引号不是分号**，`\);` 匹配不到。
+  // 于是非贪婪的 `[\s\S]*?` 一路吃到**下一条**策略的 `);`：这四条从来没被单独检查过。
+  // 逐条变异验证（摘掉某条的 NULL 放行再跑）证实：前 9 条都会红，后 4 条**全绿**。
+  //
+  // 那四条恰好是二级归属的表（AI 执行的流水/追问/产物、发布任务）。
+  // 缺 NULL 放行的后果不是「泄漏」而是**worker/cron 读不到自己刚写的行**——
+  // 不报错，只是定时任务安静地什么都不做。
+  //
+  // 现在按 `CREATE POLICY` 切段、逐段检查，与写法无关。
   it('NULL 放行语义在每条策略里都在（漏了会让 worker/cron 读不到数据）', () => {
-    const policies = [...RLS_SQL.matchAll(/CREATE POLICY[\s\S]*?USING \(([\s\S]*?)\);/g)].map((m) => m[1]);
-    expect(policies.length).toBeGreaterThan(5);
-    const noNullPass = policies.filter((p) => !p.includes('app_current_tenant() IS NULL'));
+    const idx = [...RLS_SQL.matchAll(/CREATE POLICY/g)].map((m) => m.index!);
+    expect(idx.length, '一条策略都没扫到，切段逻辑坏了').toBeGreaterThan(10);
+
+    const bad: string[] = [];
+    for (let i = 0; i < idx.length; i += 1) {
+      const seg = RLS_SQL.slice(idx[i], i + 1 < idx.length ? idx[i + 1] : RLS_SQL.length);
+      if (seg.includes('app_current_tenant() IS NULL')) continue;
+      // 报出表名，而不是只说「有一条缺了」——13 条里找那一条太费劲
+      const on = /ON\s+(?:%I|"([^"]+)")/.exec(seg);
+      bad.push(on?.[1] ?? `第 ${i + 1} 条（${seg.slice(0, 60).replace(/\s+/g, ' ')}…）`);
+    }
     expect(
-      noNullPass,
-      '这些策略缺 NULL 放行：无登录态的 worker / cron / 支付回调会读不到任何数据',
+      bad,
+      '这些策略缺 NULL 放行：无登录态的 worker / cron / 支付回调会读不到任何数据——'
+      + '不报错，只是定时任务安静地什么都不做',
     ).toEqual([]);
+  });
+
+  it('🔒 每条策略都真的被单独检查到了（旧判据漏掉 4 条时也是绿的）', () => {
+    // 【为什么要这条】上面那条断的是「违规清单为空」。切段逻辑一旦坏掉、
+    // 或者有人换回按 `);` 配对的正则，清单会**恒为空**——那正是它自己要抓的假绿。
+    // 这里拿真实的策略条数当门槛：数对不上就说明扫漏了。
+    const declared = (RLS_SQL.match(/CREATE POLICY/g) ?? []).length;
+    const withNull = [...RLS_SQL.matchAll(/app_current_tenant\(\) IS NULL/g)].length;
+    expect(
+      withNull,
+      `${declared} 条策略，但只有 ${withNull} 处 NULL 放行——有策略没写，或者扫漏了`,
+    ).toBeGreaterThanOrEqual(declared);
   });
 });

@@ -105,7 +105,47 @@ export class RssHubAdapter implements CompetitorAdapter {
   }
 
   async health() {
-    return { ok: true, detail: `rsshub @ ${this.baseUrl}` };
+    return rssHubStatus();
+  }
+}
+
+/**
+ * 自建 RSSHub 实例现在到底活着没有。
+ *
+ * 【为什么要真的探一次】原来这个 health() 是个桩：无条件 `ok: true`，只把 URL 回显一遍。
+ * 容器死了、镜像拉挂了、端口没通——它一律说「好」。而 sourceHealthBoard() 又只对
+ * **热榜**适配器调 health，竞对那半只列名字，所以这个桩连被调用的机会都没有。
+ * 结果是「这个容器到底有没有在干活」这件事在产品里**根本答不了**——
+ * 而那正是「该配上还是该停掉」这个问题会一直悬着的原因。
+ *
+ * 【判据是「够不够得着」，不是「返回什么」】任何 HTTP 响应都说明实例活着；
+ * 只有连不上/超时才算挂。RSSHub 对未知路径回 404 是正常的，不该被读成故障。
+ */
+export async function rssHubStatus(): Promise<{
+  configured: boolean; baseUrl?: string; ok: boolean; detail: string;
+}> {
+  const base = process.env.BEACON_RSSHUB_BASE_URL?.trim();
+  if (!base) {
+    return {
+      configured: false,
+      ok: false,
+      detail: '没有配 BEACON_RSSHUB_BASE_URL —— 这条备用通道不在链上（不是故障）',
+    };
+  }
+  try {
+    // 3 秒够了：它是同一个 compose 网络里的邻居。探测挂在设置页渲染上，不能让一个
+    // 死掉的容器把整页拖住。
+    const res = await fetch(`${base.replace(/\/$/, '')}/healthz`, {
+      signal: AbortSignal.timeout(3000),
+    });
+    return { configured: true, baseUrl: base, ok: true, detail: `HTTP ${res.status}` };
+  } catch (e) {
+    return {
+      configured: true,
+      baseUrl: base,
+      ok: false,
+      detail: `连不上：${(e as Error).message.slice(0, 80)}`,
+    };
   }
 }
 

@@ -101,7 +101,12 @@ export async function collectAccountFacts(accountId: string, now = Date.now()): 
   const deltas = dailyStats.map((d) => d.followerDelta).filter((d): d is number => d != null);
   const followerDelta7d = deltas.length ? deltas.reduce((s, d) => s + d, 0) : null;
 
-  const health = checkDataHealth(healthRows, now).filter((i) => i.severity === 'warn');
+  // 【没有发布时间的不进体检】checkDataHealth 判的是「发了这么久还没数据」这类陈旧问题，
+  // 而「这么久」需要发布时间。缺了它按回填当天算，会把一条三个月前的老作品判成刚发的。
+  const health = checkDataHealth(
+    healthRows.filter((r): r is typeof r & { publishedAt: Date } => r.publishedAt !== null),
+    now,
+  ).filter((i) => i.severity === 'warn');
 
   return {
     accountName: account.name,

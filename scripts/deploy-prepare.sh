@@ -19,7 +19,11 @@ say() { printf '\033[36m▸\033[0m %s\n' "$*"; }
 
 MF="public/downloads/appliance.manifest.json"
 OLD_SHA=""
-[ -f "$MF" ] && OLD_SHA=$(node -p "try{require('./$MF').sha256}catch(e){''}" 2>/dev/null || echo "")
+OLD_VER=""
+if [ -f "$MF" ]; then
+  OLD_SHA=$(node -p "try{require('./$MF').sha256}catch(e){''}" 2>/dev/null || echo "")
+  OLD_VER=$(node -p "try{require('./$MF').version}catch(e){''}" 2>/dev/null || echo "")
+fi
 
 # ① 整机版增量更新包：**无条件重打**。判断「代码有没有变」比直接打一遍还贵，
 #    而打一遍只要几秒（tar + sha256），没有省的必要。
@@ -32,6 +36,23 @@ if [ "$OLD_SHA" = "$NEW_SHA" ]; then
   say "更新包内容未变（sha ${NEW_SHA:0:12}…），v$NEW_VER"
 else
   say "更新包已刷新：${OLD_SHA:0:12}… → ${NEW_SHA:0:12}…，v$NEW_VER"
+  # ── 内容变了、版本号却没变 = 这次更新**送不出去** ───────────────────────
+  #
+  # 客户端的判据是 `compareVersion(清单版本, 本机版本) > 0`（lib/appliance/update.ts）。
+  # 版本相同 → hasUpdate=false → 客户查到「已经是最新版」，而他手上跑的是旧代码。
+  #
+  # 本文件开头那段注释早就写着这个后果，但**只是注释**——2026-08-31 真踩了一次：
+  # 一整轮修复（含两份结构变更）打进了包，sha 变了、版本没动，
+  # 整机版客户一个更新提示都收不到。写进注释治不了这个，所以变成硬闸。
+  #
+  # 真要给同一个版本号重打（比如上一份包损坏了），先删掉 $MF 再跑。
+  if [ -n "$OLD_SHA" ] && [ "$OLD_VER" = "$NEW_VER" ]; then
+    printf '\n⛔ 拦下：更新包内容变了，但版本号还是 v%s。\n' "$NEW_VER"
+    printf '   客户端按版本号判断有没有新版（lib/appliance/update.ts 的 compareVersion），\n'
+    printf '   版本不变 = 所有整机版客户都会查到「已经是最新版」，这次的修复送不到他们手上。\n'
+    printf '   请先升 package.json 的 version（以及 lib/market/version.ts 的 APP_VERSION），再跑本脚本。\n'
+    exit 1
+  fi
 fi
 
 # ② 桌面客户端清单：**只在本机真有构建产物时收集**。

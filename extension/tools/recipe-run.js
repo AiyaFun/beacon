@@ -35,20 +35,35 @@
       if (k) kids.push(k);
       if (budget.n > MAX_NODES) break;
     }
+    // role 与 data-testid 的**值**：类名被混淆成随机哈希时，它们是仅剩的稳定锚点。
+    // 服务端 vetRole / vetTestId 会再卡一道（role 只认标准词表、testid 只认标识符形状）
+    const tid = el.getAttribute('data-testid') || el.getAttribute('data-test')
+      || el.getAttribute('data-qa') || el.getAttribute('data-cy') || '';
     return {
       tag: el.tagName.toLowerCase(),
       cls: (el.className && typeof el.className === 'string') ? el.className.split(/\s+/).slice(0, 4) : [],
       attrs: [...el.attributes].map((a) => a.name).filter((n) => n !== 'style').slice(0, 8),
-      text: own.slice(0, 3),
+      role: el.getAttribute('role') || '',
+      tid: tid,
+      // 【字段名必须是 shape，且必须是字符串】服务端 sanitizeSkeleton 只认
+      // shape:string / text:string / text:string[]。这里原来是 `text: [...]`，
+      // 在服务端补上数组兼容之前，**整层文本被静默丢掉**：模型看不到任何文字，
+      // 永远提不出文本锚点，学出来的规则只剩改版最先碎的类名。
+      shape: own.slice(0, 3).join(' '),
       children: kids,
     };
   }
 
-  /** 按一条规则取值。选择器优先，取不到再用文本锚点找相邻文本。 */
-  function pick(rule) {
+  /**
+   * 按一条规则在 root 下取值。选择器优先，取不到再用文本锚点找相邻文本。
+   *
+   * 【root 就是行边界】给了 rowSelector 时，每一行只在自己那棵子树里找——
+   * 不这样的话，第二行取不到就会退到全局，把第一行的值当成自己的（跨条目串数）。
+   */
+  function pick(rule, root) {
     for (const sel of rule.selectors || []) {
       try {
-        const el = document.querySelector(sel);
+        const el = root.querySelector(sel);
         const v = el && el.textContent && el.textContent.trim();
         if (v) return v.slice(0, 200);
       } catch { /* 选择器写坏了就试下一个，不让整次抓取挂掉 */ }
@@ -57,7 +72,7 @@
     // 【为什么限定紧邻而不是全局搜】抖音「关注 178 / 粉丝 328.3万」三个数字挨着，
     // 全局搜「粉丝」再取第一个数字，会取到关注数——这个事故真发生过。
     for (const anchor of rule.anchors || []) {
-      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
       let n;
       while ((n = walker.nextNode())) {
         if (!n.textContent || !n.textContent.includes(anchor)) continue;
@@ -81,13 +96,29 @@
     return { ok: true, mode: 'learn', skeleton: skeleton(document.body) };
   }
 
+  const opts = recipe.options || {};
   const values = {};
   let got = 0;
   for (const rule of recipe.rules) {
-    const v = pick(rule);
+    const v = pick(rule, document.body);
     if (v) { values[rule.key] = v; got += 1; }
   }
-  // 一个都没取到 = 站点改版了。连骨架一起传回去，服务端据此重学（这就是「进化」）
-  if (got === 0) return { ok: false, mode: 'stale', skeleton: skeleton(document.body) };
-  return { ok: true, mode: 'scrape', values, got, want: recipe.rules.length };
+
+  // 列表行。上限 50——与服务端硬上限同一个数（超一条整批被打回那个）
+  const rows = [];
+  if (opts.rowSelector) {
+    let nodes = [];
+    try { nodes = [...document.querySelectorAll(opts.rowSelector)]; } catch { nodes = []; }
+    for (const node of nodes.slice(0, 50)) {
+      const row = {};
+      for (const rule of recipe.rules) { const v = pick(rule, node); if (v) row[rule.key] = v; }
+      // 空行不收：一行一个字段都没取到，说明 rowSelector 指到了容器而不是行
+      if (Object.keys(row).length > 0) rows.push(row);
+    }
+  }
+
+  // 【有行就算抓到了】纯列表页往往没有任何页面级标量（没有「总数」这种东西），
+  // 只看 got 会把一次满载的采集判成「站点改版了」，然后拿去重学——越学越差
+  if (got === 0 && rows.length === 0) return { ok: false, mode: 'stale', skeleton: skeleton(document.body) };
+  return { ok: true, mode: 'scrape', values, rows, got, want: recipe.rules.length };
 })();

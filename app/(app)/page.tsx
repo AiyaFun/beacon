@@ -1,14 +1,14 @@
 import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
-import { parseJson, type Metrics } from '@/lib/json';
+import { parseJson } from '@/lib/json';
 import { readPersona, isPersonaBlank } from '@/lib/persona';
 import { fmtDateLong } from '@/lib/format';
-import { HOT_SOURCES } from '@/lib/constants';
-import { Card, Fold } from '@/components/ui';
+
+import { Fold } from '@/components/ui';
 import { ActionButton } from '@/components/ActionButton';
 import { TaskList } from '@/components/TaskList';
-import { AdviceCard } from '@/components/AdviceCard';
+
 import { TrialProgressCard } from '@/components/TrialProgressCard';
 import { Icon } from '@/components/icons';
 import { loadReadiness } from '@/lib/topic/readiness';
@@ -47,57 +47,70 @@ export default async function Dashboard() {
   // 试用运营节奏：仅在「试用中且未过期」时得到 isTrial=true（纯函数，见 lib/pay/trial.ts）
   const trial = trialProgress(tenant?.plan, tenant?.planExpiresAt);
 
-  // 任务台首屏那条「正在办的事」。**只在任务台下查**——工作台不渲染它，
-  // 白查一次五张表只是给每个用户的首页平白加一笔开销
-  const activeRuns = (await listRuns(s.workspaceId, { takePerKind: 8 }))
-        .filter((r) => r.status === 'waiting' || r.status === 'running')
-        .slice(0, 8)
-        .map((r) => ({
-          id: r.id, kind: r.kind, kindLabel: KIND_LABEL[r.kind],
-          title: r.title, status: r.status as 'waiting' | 'running', detail: r.detail, href: r.href,
-          // 与 /api/runs/active 同一口径：「等你处理」只对自己发起的那条说。
-          // 首屏这份是服务端快照，轮询那份是接口——两处都要判，否则第一眼是对的、
-          // 15 秒后变了（或者反过来）
-          mine: r.memberId ? r.memberId === s.memberId : true,
-          waitingOn: r.memberId && r.memberId !== s.memberId ? r.memberName : undefined,
-        }));
+  // ── 首屏这四样互相不依赖，一次并发拿齐 ──
+  //
+  // 【为什么改】原来它们是**四段串行 await**：跑动记录 → 工具开关 → 一键任务卡 → 作战报告。
+  // 四次数据库往返首尾相接，而后一次并不需要前一次的结果——纯粹的等待叠加。
+  // 上面那个 Promise.all 已经把前 11 项并发了，这一段是漏网的尾巴。
+  // （2026-08-29 量出来的：首页一共 13 处 prisma 调用 + 5 段串行 await。）
+  //
+  // 只有 presetCards 内部那次 workflowTemplate 查询是真依赖 taskPreset 的结果，
+  // 所以它留在自己的 IIFE 里串着——**依赖是真的就不能并，不是能并的都要并**。
+  const [runsRaw, wsToolCfg, presetCards, battleReport] = await Promise.all([
+    // 任务台首屏那条「正在办的事」。listRuns 已按 (workspaceId, take) 做请求内记忆化，
+    // 而 TenantShell 用同样的参数先调过一次 —— 这里实际上不再打库
+    listRuns(s.workspaceId, { takePerKind: 8 }),
 
-  // 派发卡要用的动作清单。与助手页同一个来源（availableTools），按角色与工作区开关过滤过。
-  // **只在任务台下算**：工作台首页不渲染派活框，白查一次工具配置没有意义。
-  const authTools = availableTools(s.role, disabledTools((await prisma.workspace.findUnique({
-        where: { id: s.workspaceId }, select: { agentToolConfig: true },
-      }))?.agentToolConfig))
-        .filter((t) => t.write || t.costly)
-        .map((t) => ({ name: t.name, label: t.label, costly: t.costly, contract: t.contract }));
+    // 派发卡要用的动作清单。与助手页同一个来源（availableTools），按角色与工作区开关过滤过
+    prisma.workspace.findUnique({
+      where: { id: s.workspaceId }, select: { agentToolConfig: true },
+    }),
 
-  // 一键任务卡。**只在任务台下查**——工作台首页不渲染派活区，白查一次没意义
-  const presetCards = await (async () => {
-        const rows = await prisma.taskPreset.findMany({
-          where: { workspaceId: s.workspaceId, enabled: true },
-          orderBy: [{ sort: 'asc' }, { createdAt: 'asc' }],
-          take: 8,
-        });
-        const tplIds = [...new Set(rows.map((r) => r.agentTemplateId).filter((v): v is string => !!v))];
-        const tpls = tplIds.length
-          ? await prisma.workflowTemplate.findMany({ where: { id: { in: tplIds } }, select: { id: true, name: true, emoji: true } })
-          : [];
-        const nameOf = new Map(tpls.map((t) => [t.id, `${t.emoji} ${t.name}`]));
-        return rows.map((r) => ({
-          id: r.id,
-          title: r.title,
-          goal: r.goal,
-          agentName: r.agentTemplateId ? (nameOf.get(r.agentTemplateId) ?? '（智能体已删除）') : null,
-          authorizedCount: parseJson<string[]>(r.preauthorizedTools, []).length,
-        }));
-      })();
+    // 一键任务卡
+    (async () => {
+      const rows = await prisma.taskPreset.findMany({
+        where: { workspaceId: s.workspaceId, enabled: true },
+        orderBy: [{ sort: 'asc' }, { createdAt: 'asc' }],
+        take: 8,
+      });
+      const tplIds = [...new Set(rows.map((r) => r.agentTemplateId).filter((v): v is string => !!v))];
+      const tpls = tplIds.length
+        ? await prisma.workflowTemplate.findMany({ where: { id: { in: tplIds } }, select: { id: true, name: true, emoji: true } })
+        : [];
+      const nameOf = new Map(tpls.map((t) => [t.id, `${t.emoji} ${t.name}`]));
+      return rows.map((r) => ({
+        id: r.id,
+        title: r.title,
+        goal: r.goal,
+        agentName: r.agentTemplateId ? (nameOf.get(r.agentTemplateId) ?? '（智能体已删除）') : null,
+        authorizedCount: parseJson<string[]>(r.preauthorizedTools, []).length,
+      }));
+    })(),
+
+    // 任务台首页第一屏就是本周作战报告（渲染主体与 /battle 页共用 components/BattleReport）
+    buildBattleReport(s.workspaceId, s.accountId),
+  ]);
+
+  const activeRuns = runsRaw
+    .filter((r) => r.status === 'waiting' || r.status === 'running')
+    .slice(0, 8)
+    .map((r) => ({
+      id: r.id, kind: r.kind, kindLabel: KIND_LABEL[r.kind],
+      title: r.title, status: r.status as 'waiting' | 'running', detail: r.detail, href: r.href,
+      // 与 /api/runs/active 同一口径：「等你处理」只对自己发起的那条说。
+      // 首屏这份是服务端快照，轮询那份是接口——两处都要判，否则第一眼是对的、
+      // 15 秒后变了（或者反过来）
+      mine: r.memberId ? r.memberId === s.memberId : true,
+      waitingOn: r.memberId && r.memberId !== s.memberId ? r.memberName : undefined,
+    }));
+
+  const authTools = availableTools(s.role, disabledTools(wsToolCfg?.agentToolConfig))
+    .filter((t) => t.write || t.costly)
+    .map((t) => ({ name: t.name, label: t.label, costly: t.costly, contract: t.contract }));
 
   const persona = readPersona(account?.personaCard ?? '{}');
   // 人设完全空白时不再用小字提醒，改为页顶醒目引导卡（见下方 JSX）
   const personaBlank = isPersonaBlank(persona);
-
-  // 任务台首页第一屏就是本周作战报告。**只在任务台下查**——工作台首页不渲染它，
-  // 白查表现/竞对四处没意义（渲染主体与 /battle 页共用 components/BattleReport）。
-  const battleReport = await buildBattleReport(s.workspaceId, s.accountId);
 
   return (
     <>

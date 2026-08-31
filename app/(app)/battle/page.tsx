@@ -1,7 +1,7 @@
 import { getSession } from '@/lib/session';
 import { prisma } from '@/lib/db';
 import { readPersona, isPersonaBlank } from '@/lib/persona';
-import { PageHead } from '@/components/ui';
+
 import { buildBattleReport } from '@/lib/battle/report';
 import { BattleReport } from '@/components/BattleReport';
 import { HubHeader } from '@/components/HubHeader';

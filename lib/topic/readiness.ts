@@ -266,7 +266,8 @@ export async function loadReadiness(workspaceId: string, accountId: string): Pro
   for (const p of posts) competitorPostsByPlatform[p.platform] = (competitorPostsByPlatform[p.platform] ?? 0) + 1;
 
   const ownWorks = [
-    ...records.map((r) => ({
+    // 就绪度里 ownWorks 只用来算「多久没发了 / 有多少积累」，缺发布时间的算不进去
+    ...records.filter((r): r is typeof r & { publishedAt: Date } => r.publishedAt !== null).map((r) => ({
       platform: r.platform,
       publishedAt: r.publishedAt,
       views: parseJson<Metrics>(r.metrics, {}).views ?? 0,

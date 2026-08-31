@@ -15,3 +15,9 @@ scripts/*.sh
 .next-verify
 # 桌面壳（Tauri）：纯客户端子项目，服务器构建用不到；src-tauri/target 近 1GB
 desktop
+
+# 签名凭据：**绝不进构建上下文**。Dockerfile 是 `COPY . .`，不排的话
+# deploy/private/signing/ 里的 Developer ID .p12 会被烤进镜像层，
+# 而镜像层删不掉——同一台机上另一个项目的容器里就躺着一份两个月前烤进去的 Apple AuthKey。
+# rsync 那边也要 --exclude 'deploy/private'（部署闸门 2/4 会拦，2026-08-31 真拦下过一次）。
+deploy/private
