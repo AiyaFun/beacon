@@ -68,6 +68,7 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
   const [failed, setFailed] = useState(false);
 
   // 表单态
+  const [modalTab, setModalTab] = useState<'basic' | 'commands' | 'push' | 'guide'>('basic');
   const [botMode, setBotMode] = useState<'app' | 'webhook'>('app');
   const [agentTpl, setAgentTpl] = useState(''); // 渠道默认智能体（''=通用助手）
   const [provider, setProvider] = useState('feishu');
@@ -112,6 +113,7 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
   }
 
   function resetForm() {
+    setModalTab('basic');
     setBotMode('app'); setProvider('feishu'); setLabel(''); setWebhookUrl(''); setSignSecret('');
     setEvents(DEFAULT_EVENTS); setCommands(ALL_COMMANDS); setPushSchedule('09:00'); setShowInbound(false);
     setAppId(''); setAppSecret(''); setVerificationToken(''); setEncryptKey(''); setAgentId('');
@@ -132,6 +134,7 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
     setShowForm(true);
   }
   function openEdit(r: BotRow) {
+    setModalTab('basic');
     setEditing(r); setBotMode(r.inboundKey ? 'app' : 'webhook');
     setAgentTpl(r.agentTemplateId ?? '');
     setProvider(r.provider); setLabel(r.label);
@@ -570,647 +573,920 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
         );
       })()}
 
-      {/* 新增/编辑弹窗（2026-09-01 按用户指定的 Accio 连接弹窗改）：渠道卡点「接入/设置」当场弹出，
-          不再把整页往下顶。必须走 Overlay 组件——.card:hover 的 transform 会把就地渲染的
-          fixed 遮罩关进卡片（components/Overlay.tsx 文件头那个 602×110 的实测教训）。 */}
+      {/* 新增/编辑弹窗：现代大气选项卡设计 */}
       {showForm ? (
         <Overlay label={editing ? '设置机器人' : '连接渠道'} onClose={() => { setShowForm(false); resetForm(); }}>
-        <div className="dialog-card" style={{ width: 'min(720px, 94vw)', maxHeight: '86vh', overflowY: 'auto', padding: 18 }}>
-          <div className="row" style={{ gap: 10, alignItems: 'center', marginBottom: 12 }}>
-            <ChannelLogo provider={provider} size={38} fallback={botProviderName(provider)} />
-            <b style={{ fontSize: 16, flex: 1 }}>
-              {editing ? `设置机器人 · ${editing.label || botProviderName(provider)}` : `连接 ${botProviderName(provider)}`}
-            </b>
-            <button className="btn btn-sm btn-ghost" aria-label="关闭" onClick={() => { setShowForm(false); resetForm(); }} disabled={pending}>✕</button>
-          </div>
-          {/* 微信（iLink）新接入：没有任何要填的，直接扫码；绑定成功后刷新，名称/智能体/指令在「设置」里改 */}
-          {provider === 'wechat' && !editing ? (
-            <WechatIlinkConnect
-              existing={null}
-              autoStart
-              onDone={() => { router.refresh(); }}
-            />
-          ) : (
-          <div className="stack" style={{ gap: 12 }}>
-            {editing && (editing.hasInboundSecrets || editing.hasSignSecret) && (
-              <div className="stack" style={{ gap: 8, padding: '12px 14px', background: 'var(--surface-2)', borderRadius: 8, border: '1px solid var(--border)' }}>
-                <div className="row-between wrap" style={{ gap: 8, alignItems: 'center' }}>
-                  <span className="small" style={{ fontWeight: 700 }}>🔒 已保存的密钥</span>
-                  <button type="button" className="btn btn-sm btn-ghost" onClick={toggleReveal} disabled={pending}>
-                    {revealed ? '🙈 隐藏' : '👁 显示明文'}
-                  </button>
-                </div>
-
-                <div className="stack" style={{ gap: 4 }}>
-                  {([
-                    ['App Secret / AppSecret / Secret', editing.hasAppSecret, editing.maskedAppSecret, 'appSecret'],
-                    ['Verification Token / Token', editing.hasVerificationToken, editing.maskedVerificationToken, 'verificationToken'],
-                    ['Encrypt Key / EncodingAESKey', editing.hasEncryptKey, editing.maskedEncryptKey, 'encryptKey'],
-                    ['出站加签密钥', editing.hasSignSecret, editing.maskedSignSecret, 'signSecret'],
-                  ] as const)
-                    .filter(([, has]) => has)
-                    .map(([name, , masked, field]) => (
-                      <div key={field} className="row-between wrap" style={{ gap: 8, alignItems: 'center' }}>
-                        <span className="small muted" style={{ minWidth: 180 }}>{name}</span>
-                        <code
-                          className="small mono"
-                          style={{
-                            flex: 1, minWidth: 160, wordBreak: 'break-all', padding: '4px 8px', borderRadius: 6,
-                            background: 'var(--surface)', border: '1px solid var(--border)',
-                            color: revealed ? 'var(--brand)' : 'var(--muted)',
-                          }}
-                        >
-                          {revealed ? (revealed[field] || '(空)') : masked}
-                        </code>
-                      </div>
-                    ))}
-                </div>
-
-                <div className="small muted" style={{ lineHeight: 1.7, borderTop: '1px dashed var(--border)', paddingTop: 6 }}>
-                  下面的输入框留空是正常的——<b>留空保存即沿用上面这些值</b>，只有要换密钥时才重新填写。
-                  {revealed && <span style={{ color: 'var(--amber)' }}>　⚠ 明文已显示，注意别被旁人看到或截图。</span>}
+        <div className="dialog-card" style={{ width: 'min(780px, 95vw)', maxHeight: '88vh', display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden', borderRadius: 16, boxShadow: 'var(--shadow-lg)' }}>
+          {/* 弹窗头部 */}
+          <div style={{ padding: '18px 24px 14px', borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}>
+            <div className="row-between" style={{ alignItems: 'center' }}>
+              <div className="row" style={{ gap: 12, alignItems: 'center' }}>
+                <ChannelLogo provider={provider} size={42} fallback={botProviderName(provider)} />
+                <div>
+                  <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+                    <b style={{ fontSize: 17, fontWeight: 700 }}>
+                      {editing ? `设置机器人 · ${editing.label || botProviderName(provider)}` : `连接 ${botProviderName(provider)}`}
+                    </b>
+                    {(provider === 'feishu' || provider === 'dingtalk' || provider === 'wecom') && (
+                      <span className={`badge ${botMode === 'app' ? 'badge-brand' : 'badge-gray'}`} style={{ fontSize: 11, fontWeight: 600 }}>
+                        {botMode === 'app' ? '自建应用 · 双向' : 'Webhook · 仅出站'}
+                      </span>
+                    )}
+                    {isReplyOnlyProvider(provider) && (
+                      <span className="badge badge-blue" style={{ fontSize: 11 }}>官方通道 · 只答不推</span>
+                    )}
+                  </div>
+                  <div className="small muted" style={{ marginTop: 2 }}>
+                    {editing ? '管理该机器人的平台凭据、指令准入范围与定时推送策略' : '完成平台凭据与回调配置，即可在群内使用 AI 助手与接收推送'}
+                  </div>
                 </div>
               </div>
-            )}
-            <div className="row wrap" style={{ gap: 10 }}>
-              <label className="stack" style={{ gap: 4, flex: 1, minWidth: 160 }}>
-                <span className="small muted">平台</span>
-                <select className="input" value={provider} onChange={(e) => setProvider(e.target.value)}>
-                  {BOT_PROVIDERS.map((p) => (
-                    <option key={p.key} value={p.key} disabled={!p.supported}>{p.name}{p.supported ? '' : '（即将支持）'}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="stack" style={{ gap: 4, flex: 1, minWidth: 160 }}>
-                <span className="small muted">名称（自定义，便于区分多个群）</span>
-                <input className="input" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="如：选题作战群" />
-              </label>
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
+                style={{ width: 32, height: 32, padding: 0, borderRadius: '50%', fontSize: 16, display: 'grid', placeItems: 'center' }}
+                aria-label="关闭"
+                onClick={() => { setShowForm(false); resetForm(); }}
+                disabled={pending}
+              >
+                ✕
+              </button>
             </div>
 
-            {/* 飞书/钉钉/企微：自建应用(方式A)与群Webhook(方式B)切换 */}
-            {(provider === 'feishu' || provider === 'dingtalk' || provider === 'wecom') && (
-              <div className="stack" style={{ gap: 6 }}>
-                <span className="small muted">选择接入模式</span>
-                {/* 分段控件的形（Accio 弹窗顶部那对页签）：两条真实接法当页签，不造假的「扫码」页 */}
-                <div className="row" style={{ gap: 4, background: 'var(--surface-2)', borderRadius: 12, padding: 4 }}>
+            {/* 顶部选项卡导航（微信扫码新接入除外） */}
+            {!(provider === 'wechat' && !editing) && (
+              <div style={{ display: 'flex', gap: 6, marginTop: 14, background: 'var(--surface-2)', padding: 4, borderRadius: 10 }}>
+                <button
+                  type="button"
+                  className={`btn btn-sm ${modalTab === 'basic' ? 'btn-primary' : 'btn-ghost'}`}
+                  style={{ flex: 1, padding: '7px 12px', fontSize: 13, fontWeight: modalTab === 'basic' ? 600 : 500 }}
+                  onClick={() => setModalTab('basic')}
+                >
+                  🔌 基础与连接
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-sm ${modalTab === 'commands' ? 'btn-primary' : 'btn-ghost'}`}
+                  style={{ flex: 1, padding: '7px 12px', fontSize: 13, fontWeight: modalTab === 'commands' ? 600 : 500 }}
+                  onClick={() => setModalTab('commands')}
+                >
+                  🛡️ 指令权限 <span style={{ opacity: 0.8, fontSize: 11, marginLeft: 4 }}>({commands.length})</span>
+                </button>
+                {!isReplyOnlyProvider(provider) && (
                   <button
                     type="button"
-                    className={`btn btn-sm ${botMode === 'app' ? 'btn-primary' : 'btn-ghost'}`}
-                    style={{ flex: 1, minWidth: 220, padding: '10px 14px', justifyContent: 'flex-start', textAlign: 'left' }}
-                    onClick={() => { setBotMode('app'); setWebhookUrl(''); }}
+                    className={`btn btn-sm ${modalTab === 'push' ? 'btn-primary' : 'btn-ghost'}`}
+                    style={{ flex: 1, padding: '7px 12px', fontSize: 13, fontWeight: modalTab === 'push' ? 600 : 500 }}
+                    onClick={() => setModalTab('push')}
                   >
-                    <div>
-                      <div style={{ fontWeight: 700 }}>
-                        {provider === 'feishu' && '✦ 方式 A：飞书自建应用（双向全能 · 推荐）'}
-                        {provider === 'dingtalk' && '✦ 方式 A：钉钉企业内部应用（双向 · 推荐）'}
-                        {provider === 'wecom' && '✦ 方式 A：企业微信自建应用（双向 · 推荐）'}
-                      </div>
-                      <div className="small" style={{ opacity: 0.85, fontWeight: 400, marginTop: 2 }}>
-                        {provider === 'feishu' && <>自带出站主动推送 + 群内命令交互，<b>无需</b>单独填 Webhook</>}
-                        {provider === 'dingtalk' && <>通过工作通知推送 + 群内命令交互，<b>无需</b>单独填 Webhook</>}
-                        {provider === 'wecom' && <>通过应用消息推送 + 群内命令交互，<b>无需</b>单独填 Webhook</>}
-                      </div>
-                    </div>
+                    🔔 定时推送 <span style={{ opacity: 0.8, fontSize: 11, marginLeft: 4 }}>({events.length})</span>
                   </button>
-
+                )}
+                {(provider === 'feishu' || provider === 'dingtalk' || provider === 'wecom' || provider === 'wechat_kf') && (
                   <button
                     type="button"
-                    className={`btn btn-sm ${botMode === 'webhook' ? 'btn-primary' : 'btn-ghost'}`}
-                    style={{ flex: 1, minWidth: 220, padding: '10px 14px', justifyContent: 'flex-start', textAlign: 'left' }}
-                    onClick={() => { setBotMode('webhook'); setAppId(''); setAppSecret(''); setAgentId(''); }}
+                    className={`btn btn-sm ${modalTab === 'guide' ? 'btn-primary' : 'btn-ghost'}`}
+                    style={{ flex: 1, padding: '7px 12px', fontSize: 13, fontWeight: modalTab === 'guide' ? 600 : 500 }}
+                    onClick={() => setModalTab('guide')}
                   >
-                    <div>
-                      <div style={{ fontWeight: 700 }}>✦ 方式 B：群自定义机器人 Webhook（仅出站）</div>
-                      <div className="small" style={{ opacity: 0.85, fontWeight: 400, marginTop: 2 }}>
-                        粘贴 Webhook 地址即可接收通知，仅出站不收命令
-                      </div>
-                    </div>
+                    📖 接入指引 {provider === 'feishu' && <span style={{ color: 'var(--brand)', fontWeight: 700, marginLeft: 2 }}>⚡ 1秒导入</span>}
                   </button>
-                </div>
-              </div>
-            )}
-
-            {/* 推送事件（共用）。微信客服整段隐藏：客服消息有 48 小时窗口规则，
-                这条通道只能「回复」不能「广播」——摆一排永远不会生效的推送开关是空承诺 */}
-            {!isReplyOnlyProvider(provider) && (<>
-            <div className="stack" style={{ gap: 6 }}>
-              <span className="small muted">推送哪些事件</span>
-              <div className="wrap" style={{ gap: 8 }}>
-                {PUSH_EVENTS.map((ev) => (
-                  <label key={ev.key} className="row" style={{ gap: 6, alignItems: 'center', cursor: 'pointer' }} title={ev.desc}>
-                    <input type="checkbox" checked={events.includes(ev.key)} onChange={() => toggleEvent(ev.key)} />
-                    <span className="small">{ev.name}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-            </>)}
-
-            {/* 入站命令白名单：群里谁都能发消息给机器人，放开哪些由管理员决定。
-                ⚠️ 不在上面那个 wechat_kf 隐藏段里：1.3.14 把它和推送开关一起藏了，
-                微信客服的管理员从此没有任何地方能改「允许哪些操作」——而它恰恰是对外渠道最该改的一项 */}
-            <div className="stack" style={{ gap: 6 }}>
-              <span className="small muted">
-                {isExternalProvider(provider) ? '允许哪些操作' : '群里允许哪些操作'}
-                <span style={{ marginLeft: 6, opacity: 0.75 }}>
-                  {isExternalProvider(provider)
-                    ? '（拿到二维码 / 加了这个号的任何微信用户都能触发，取消勾选即关闭）'
-                    : '（群成员都能触发，取消勾选即在群里关闭）'}
-                </span>
-              </span>
-              <div className="stack" style={{ gap: 4 }}>
-                {TOGGLEABLE_COMMANDS.map((c) => (
-                  <label
-                    key={c.key}
-                    className="row"
-                    style={{ gap: 8, alignItems: 'flex-start', cursor: 'pointer', lineHeight: 1.5 }}
-                  >
-                    <input
-                      type="checkbox"
-                      style={{ marginTop: 3, flexShrink: 0 }}
-                      checked={commands.includes(c.key)}
-                      onChange={() => toggleCommand(c.key)}
-                    />
-                    <span className="small">
-                      <b>{c.name}</b>
-                      <code className="mono" style={{ margin: '0 6px', opacity: 0.8 }}>{c.trigger}</code>
-                      <span className="muted">{c.desc}</span>
-                      {c.warn && (
-                        <span style={{ color: 'var(--amber, #b45309)', marginLeft: 6, fontWeight: 600 }}>⚠ {c.warn}</span>
-                      )}
-                    </span>
-                  </label>
-                ))}
-              </div>
-              <span className="small muted">
-                全部取消 = 群里只剩 <code className="mono">/帮助</code>（留着它，机器人才不至于变成一个不响的黑箱）。
-              </span>
-            </div>
-
-            {/* 定时推送时间（只答不推的渠道同样隐藏） */}
-            {!isReplyOnlyProvider(provider) && (<>
-            <div className="stack" style={{ gap: 6 }}>
-              <span className="small muted">每日定时推送时间</span>
-              <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
-                {['08:30', '09:00', '12:00', '18:00', '21:00'].map((t) => (
-                  <button
-                    key={t}
-                    type="button"
-                    className={`btn btn-sm ${pushSchedule === t ? 'btn-primary' : 'btn-ghost'}`}
-                    onClick={() => setPushSchedule(t)}
-                  >
-                    {t}
-                  </button>
-                ))}
-                <input
-                  className="input"
-                  style={{ width: 110, padding: '6px 10px' }}
-                  value={pushSchedule}
-                  onChange={(e) => setPushSchedule(e.target.value)}
-                  placeholder="如 09:00"
-                />
-                <span className="small muted">（北京时间，每日此时刻自动推送今日精选热点与推荐选题；可填多个，用逗号隔开）</span>
-              </div>
-            </div>
-            </>)}
-
-            {/* 钉钉群 Webhook */}
-            {provider === 'dingtalk' && botMode === 'webhook' && (
-              <div className="stack" style={{ gap: 8, padding: '12px 14px', background: 'var(--surface-2)', borderRadius: 8 }}>
-                <div className="small"><b>钉钉群自定义机器人 Webhook</b>（仅出站推送）</div>
-                <div className="small muted">
-                  在钉钉群 ➔ 智能群助手 ➔ 添加机器人 ➔ 选择「自定义」，完成安全设置（推荐勾选「加签」），复制 Webhook 粘进来。
-                </div>
-                <input
-                  className="input"
-                  value={webhookUrl}
-                  onChange={(e) => setWebhookUrl(e.target.value)}
-                  placeholder="https://oapi.dingtalk.com/robot/send?access_token=xxxx"
-                />
-                <input
-                  className="input"
-                  value={signSecret}
-                  onChange={(e) => setSignSecret(e.target.value)}
-                  placeholder={editing?.hasSignSecret ? '加签密钥 SEC...（留空=不改）' : '加签密钥 SEC...（安全设置勾选了「加签」才填，可选）'}
-                />
-              </div>
-            )}
-
-            {/* 钉钉自建应用 */}
-            {provider === 'dingtalk' && botMode === 'app' && (
-              <div className="stack" style={{ gap: 14, padding: '14px 16px', background: 'var(--surface-2)', borderRadius: 8 }}>
-                <div className="alert-gradient-brand" style={{ padding: '10px 14px' }}>
-                  <div className="small" style={{ color: 'var(--brand)', fontWeight: 600 }}>
-                    💡 已选择钉钉企业内部应用模式：通过工作通知 API 主动推送消息到全员，<b>无需</b>单独配置群自定义机器人 Webhook！
-                  </div>
-                </div>
-
-                <div className="stack" style={{ gap: 6 }}>
-                  <div className="small">
-                    <b style={{ color: 'var(--brand)' }}>① 创建钉钉企业内部应用</b>，获取 AppKey / AppSecret / AgentId
-                  </div>
-                  <a href="https://open-dev.dingtalk.com/fe/app" target="_blank" rel="noreferrer" className="btn btn-sm btn-ghost" style={{ alignSelf: 'flex-start', color: 'var(--accent)' }}>
-                    ↗ 打开钉钉开放平台
-                  </a>
-                  <input className="input" value={appId} onChange={(e) => setAppId(e.target.value)} placeholder="AppKey（用于获取 access_token）" />
-                  <input className="input" value={appSecret} onChange={(e) => setAppSecret(e.target.value)} placeholder={secretHint(editing?.hasAppSecret, 'AppSecret', 'AppSecret')} />
-                  <input className="input" value={agentId} onChange={(e) => setAgentId(e.target.value)} placeholder="AgentId（应用详情页可查，工作通知用）" />
-                </div>
-
-                <div className="stack" style={{ gap: 6 }}>
-                  <div className="small">
-                    <b style={{ color: 'var(--accent)' }}>② 开通权限并发布</b>
-                  </div>
-                  <div className="small muted" style={{ lineHeight: 1.8, background: 'var(--surface)', padding: '12px 14px', borderRadius: 8, border: '1px solid var(--border)' }}>
-                    · 在「权限管理」中开通 <b>「企业内部机器人发送消息」</b> 和 <b>「通讯录个人信息读权限」</b><br />
-                    · 在「应用功能」➔「机器人」中启用机器人能力<br />
-                    · 在「版本管理与发布」中创建版本并发布，然后将机器人添加到群中
-                  </div>
-                </div>
-
-                <div className="stack" style={{ gap: 8 }}>
-                  <div className="small">
-                    <b style={{ color: 'var(--green)' }}>③ 配置机器人消息接收地址（群内 ChatOps 命令）</b>
-                  </div>
-                  <div className="small muted" style={{ background: 'var(--surface)', padding: '12px 14px', borderRadius: 8, border: '1px solid var(--border)', lineHeight: 1.8 }}>
-                    在「应用功能」➔「机器人」➔ <b>「消息接收地址」</b>（HTTP 模式）中粘贴下方地址。
-                    配好后在群里 @机器人 即可触发 ChatOps 命令。
-                  </div>
-                  <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
-                    <code className="small mono" style={{ background: 'var(--surface)', padding: '8px 12px', borderRadius: 8, wordBreak: 'break-all', flex: 1, minWidth: 220, border: '1px solid var(--border)' }}>
-                      {callbackUrl}
-                    </code>
-                    <button className="btn btn-sm btn-primary" onClick={copyCallback} disabled={!appId.trim()} title={appId.trim() ? '' : '先填上面的 AppKey'}>
-                      {copied ? '已复制地址' : '复制回调地址'}
-                    </button>
-                  </div>
-                </div>
-
-                <div className="small muted" style={{ lineHeight: 1.7, background: 'var(--surface)', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)' }}>
-                  <b>推送方式：</b>通过钉钉「工作通知」推送到全员的钉钉消息列表。<br />
-                  <b>群内命令：</b>在群里 @机器人 发消息即可触发收录/查询等 ChatOps 指令。
-                </div>
-              </div>
-            )}
-
-            {/* 企业微信群 Webhook */}
-            {provider === 'wecom' && botMode === 'webhook' && (
-              <div className="stack" style={{ gap: 8, padding: '12px 14px', background: 'var(--surface-2)', borderRadius: 8 }}>
-                <div className="small"><b>企业微信群自定义机器人 Webhook</b>（仅出站推送）</div>
-                <div className="small muted">
-                  在企业微信群 ➔ 右上角「...」 ➔ 添加群机器人 ➔ 新建群机器人，复制 Webhook 地址粘贴进来。
-                </div>
-                <input
-                  className="input"
-                  value={webhookUrl}
-                  onChange={(e) => setWebhookUrl(e.target.value)}
-                  placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx"
-                />
-              </div>
-            )}
-
-            {/* 企业微信自建应用 */}
-            {provider === 'wecom' && botMode === 'app' && (
-              <div className="stack" style={{ gap: 14, padding: '14px 16px', background: 'var(--surface-2)', borderRadius: 8 }}>
-                <div className="alert-gradient-brand" style={{ padding: '10px 14px' }}>
-                  <div className="small" style={{ color: 'var(--brand)', fontWeight: 600 }}>
-                    💡 已选择企业微信自建应用模式：通过应用消息 API 主动推送到全员，<b>无需</b>单独配置群机器人 Webhook！
-                  </div>
-                </div>
-
-                <div className="stack" style={{ gap: 6 }}>
-                  <div className="small">
-                    <b style={{ color: 'var(--brand)' }}>① 创建企业微信自建应用</b>，获取 CorpID / AgentID / Secret
-                  </div>
-                  <a href="https://work.weixin.qq.com/wework_admin/frame#apps/createApiApp" target="_blank" rel="noreferrer" className="btn btn-sm btn-ghost" style={{ alignSelf: 'flex-start', color: 'var(--accent)' }}>
-                    ↗ 打开企业微信管理后台
-                  </a>
-                  <div className="small muted" style={{ lineHeight: 1.6 }}>
-                    · <b>CorpID：</b>在「我的企业」➔「企业信息」底部查看<br />
-                    · <b>AgentID / Secret：</b>在「应用管理」➔ 点击你的自建应用查看
-                  </div>
-                  <input className="input" value={appId} onChange={(e) => setAppId(e.target.value)} placeholder="CorpID（企业 ID，如 wwXXXXXXXXXX）" />
-                  <input className="input" value={agentId} onChange={(e) => setAgentId(e.target.value)} placeholder="AgentID（应用 ID，如 1000002）" />
-                  <input className="input" value={appSecret} onChange={(e) => setAppSecret(e.target.value)} placeholder={secretHint(editing?.hasAppSecret, 'Secret', 'Secret（应用的 Secret）')} />
-                </div>
-
-                <div className="stack" style={{ gap: 6 }}>
-                  <div className="small">
-                    <b style={{ color: 'var(--accent)' }}>② 设置可见范围</b>
-                  </div>
-                  <div className="small muted" style={{ lineHeight: 1.8, background: 'var(--surface)', padding: '12px 14px', borderRadius: 8, border: '1px solid var(--border)' }}>
-                    · 在应用详情页设置 <b>「可见范围」</b>：选择哪些部门/人员可以收到消息<br />
-                    · 在 <b>「开发者接口」</b> 中确认「发送应用消息」等 API 权限已开通
-                  </div>
-                </div>
-
-                <div className="stack" style={{ gap: 8 }}>
-                  <div className="small">
-                    <b style={{ color: 'var(--green)' }}>③ 设置「接收消息」回调（群内 ChatOps 命令）</b>
-                  </div>
-                  <div className="small muted" style={{ background: 'var(--surface)', padding: '12px 14px', borderRadius: 8, border: '1px solid var(--border)', lineHeight: 1.8 }}>
-                    在应用详情 ➔ <b>「开发者接口」➔「接收消息」</b> 中：<br />
-                    · 设置 <b>URL</b>（粘贴下方地址）<br />
-                    · 随机生成 <b>Token</b> 和 <b>EncodingAESKey</b>，复制填入下方<br />
-                    · 点击保存，企微会自动验证 URL 连通性
-                  </div>
-                  <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
-                    <code className="small mono" style={{ background: 'var(--surface)', padding: '8px 12px', borderRadius: 8, wordBreak: 'break-all', flex: 1, minWidth: 220, border: '1px solid var(--border)' }}>
-                      {callbackUrl}
-                    </code>
-                    <button className="btn btn-sm btn-primary" onClick={copyCallback} disabled={!appId.trim() || !agentId.trim()} title={appId.trim() && agentId.trim() ? '' : '先填上面的 CorpID 和 AgentID'}>
-                      {copied ? '已复制地址' : '复制回调地址'}
-                    </button>
-                  </div>
-                  <input className="input" value={verificationToken} onChange={(e) => setVerificationToken(e.target.value)} placeholder={secretHint(editing?.hasVerificationToken, 'Token', 'Token（企微后台随机生成，必填）')} />
-                  <input className="input" value={encryptKey} onChange={(e) => setEncryptKey(e.target.value)} placeholder={secretHint(editing?.hasEncryptKey, 'EncodingAESKey', 'EncodingAESKey（企微后台随机生成，必填）')} />
-                </div>
-
-                <div className="small muted" style={{ lineHeight: 1.7, background: 'var(--surface)', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)' }}>
-                  <b>推送方式：</b>通过企业微信「应用消息」推送到全员。<br />
-                  <b>ChatOps：</b>用户在应用对话中发消息即可触发收录/查询等指令。
-                </div>
-              </div>
-            )}
-
-            {/* Telegram Bot */}
-            {provider === 'telegram' && (
-              <div className="stack" style={{ gap: 8, padding: '12px 14px', background: 'var(--surface-2)', borderRadius: 8 }}>
-                <div className="small"><b>Telegram Bot API 推送设置</b></div>
-                <div className="small muted">
-                  向 Telegram 中的 @BotFather 发送 /newbot 创建 Bot 获取 Token，再将 Bot 拉入群组获取 Chat ID，粘贴完整 API URL。
-                </div>
-                <input
-                  className="input"
-                  value={webhookUrl}
-                  onChange={(e) => setWebhookUrl(e.target.value)}
-                  placeholder="https://api.telegram.org/bot<token>/sendMessage?chat_id=<chat_id>"
-                />
-              </div>
-            )}
-
-            {/* Slack Incoming Webhooks */}
-            {provider === 'slack' && (
-              <div className="stack" style={{ gap: 8, padding: '12px 14px', background: 'var(--surface-2)', borderRadius: 8 }}>
-                <div className="small"><b>Slack Incoming Webhooks 推送设置</b></div>
-                <div className="small muted">
-                  进入 Slack API Console ➔ Incoming Webhooks ➔ 开启并生成应用 Webhook URL 粘贴进来。
-                </div>
-                <input
-                  className="input"
-                  value={webhookUrl}
-                  onChange={(e) => setWebhookUrl(e.target.value)}
-                  placeholder="https://hooks.slack.com/services/T.../B.../..."
-                />
-              </div>
-            )}
-
-            {/* 飞书 Webhook */}
-            {provider === 'feishu' && botMode === 'webhook' && (
-              <div className="stack" style={{ gap: 6, padding: '12px 14px', background: 'var(--surface-2)', borderRadius: 8 }}>
-                <span className="small"><b>飞书群自定义机器人 Webhook</b>（仅出站推送）</span>
-                <span className="small muted">在飞书群 → 设置 → 群机器人 → 添加「自定义机器人」，复制 Webhook 粘贴进来即可。</span>
-                <input className="input" value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)}
-                  placeholder="群自定义机器人 webhook：https://open.feishu.cn/open-apis/bot/v2/hook/xxxx" />
-                <input className="input" value={signSecret} onChange={(e) => setSignSecret(e.target.value)}
-                  placeholder={editing?.hasSignSecret ? '签名密钥（留空=不改）' : '签名密钥（开了「签名校验」才填，可选）'} />
-              </div>
-            )}
-
-            {/* 微信客服（官方通道）配置分段。字段复用 appId(CorpID)/appSecret(客服Secret)/
-                verificationToken/encryptKey 四个既有状态——它们语义完全一致，另起四个状态
-                只会让 save 的收口多一倍分支 */}
-            {provider === 'wechat_kf' && (
-              <div className="stack" style={{ gap: 12, padding: '14px 16px', background: 'var(--surface-2)', borderRadius: 8 }}>
-                <div className="alert-gradient-brand" style={{ padding: '10px 14px' }}>
-                  <div className="small" style={{ color: 'var(--brand)', fontWeight: 600 }}>
-                    💡 官方微信客服通道：微信用户直接和机器人一对一对话（提问、发链接收录、/命令都能用）。
-                    没有定时推送——客服消息有 48 小时窗口规则，这条通道只答不推。
-                  </div>
-                </div>
-                <div className="small muted" style={{ lineHeight: 1.7 }}>
-                  {/* 两条微信路的分工写在做决定的地方：自己用 → 「微信」卡扫码即绑；对外接客 → 这条客服通道 */}
-                  想让<b>自己的微信</b>直接和机器人聊，用旁边的「微信」卡（微信官方 iLink 接口，扫码即绑，什么都不用填）。
-                  这条「微信客服」是给<b>对外服务</b>场景的：客户扫你企业的客服码找你，走企业微信。
-                </div>
-                <div className="small" style={{ lineHeight: 1.7, padding: '8px 12px', background: 'var(--amber-soft, #fff7e6)', borderRadius: 8 }}>
-                  ⚠️ 这是<b>对外渠道</b>：拿到客服二维码的任何微信用户都能和机器人对话。所以「登录/绑定」在这条通道上不响应、派任务不可用；
-                  新建时下方「允许哪些操作」默认只开对话 / 剪藏 / 收录 / 热榜——账号体检、切换账号、竞对监控、记忆优化这些会外泄账号数据或动租户配置，看清楚再勾。
-                </div>
-                <details className="stack" style={{ gap: 6 }} open={!editing}>
-                  <summary className="small" style={{ cursor: 'pointer' }}>
-                    <b style={{ color: 'var(--brand)' }}>如何开通（企业微信管理后台，约 5 分钟）</b>
-                    <span className="muted" style={{ marginLeft: 6 }}>（点开看步骤）</span>
-                  </summary>
-                  <div className="small muted" style={{ lineHeight: 1.9, marginTop: 8, background: 'var(--surface)', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)' }}>
-                    ① 企业微信管理后台 ➔ <b>应用管理 ➔ 微信客服</b>，开通并新建一个客服账号（这就是微信用户看到的对话方）<br />
-                    ② 在「微信客服 ➔ API」里创建 <b>Secret</b>，把 <b>企业 CorpID</b>（我的企业页可查）和它填到下面<br />
-                    ③ 配置回调：URL 填下方地址，<b>Token / EncodingAESKey</b> 点「随机生成」后同步填到下面 ➔ 保存<br />
-                    ④ 把客服账号的二维码/链接发给你的微信用户——扫码进入的是<b>官方客服会话</b>，不碰任何个人号
-                  </div>
-                </details>
-                <div className="small">
-                  回调 URL（第 ③ 步粘贴）：<code className="mono" style={{ wordBreak: 'break-all' }}>{callbackUrl}</code>
-                </div>
-                <div className="row wrap" style={{ gap: 8 }}>
-                  <input className="input" value={appId} onChange={(e) => setAppId(e.target.value)}
-                    placeholder="企业 CorpID（ww 开头）" style={{ minWidth: 220, flex: 1 }} />
-                  <input className="input" value={appSecret} onChange={(e) => setAppSecret(e.target.value)}
-                    placeholder={editing?.hasAppSecret ? '微信客服 Secret（留空=不改）' : '微信客服 Secret'} style={{ minWidth: 220, flex: 1 }} />
-                </div>
-                <div className="row wrap" style={{ gap: 8 }}>
-                  <input className="input" value={verificationToken} onChange={(e) => setVerificationToken(e.target.value)}
-                    placeholder={editing?.hasVerificationToken ? '回调 Token（留空=不改）' : '回调 Token'} style={{ minWidth: 220, flex: 1 }} />
-                  <input className="input" value={encryptKey} onChange={(e) => setEncryptKey(e.target.value)}
-                    placeholder={editing?.hasEncryptKey ? 'EncodingAESKey（留空=不改）' : 'EncodingAESKey（43 位）'} style={{ minWidth: 220, flex: 1 }} />
-                </div>
-                {editing?.inboundKey && (
-                  <div className="small" style={{ color: editing.lastInboundAt ? 'var(--green)' : 'var(--muted)' }}>
-                    {editing.lastInboundAt
-                      ? `✅ 通道已通，最近收到微信消息 ${fmtDateTime(editing.lastInboundAt)}`
-                      : '⏳ 已保存，等第一条微信消息进来（用微信扫客服账号二维码发句话试试）'}
-                  </div>
                 )}
               </div>
             )}
+          </div>
 
-            {/* 微信（iLink）编辑态：绑定状态 + 重新扫码。凭据没有可填的——它们全来自扫码 */}
-            {provider === 'wechat' && editing && (
-              <div className="stack" style={{ gap: 12, padding: '14px 16px', background: 'var(--surface-2)', borderRadius: 8 }}>
+          {/* 弹窗内容区：独立滚动 */}
+          <div style={{ flex: 1, overflowY: 'auto', padding: '20px 24px', background: 'var(--bg)' }}>
+            {/* 微信（iLink）新接入：直接扫码 */}
+            {provider === 'wechat' && !editing ? (
+              <div style={{ background: 'var(--surface)', padding: 24, borderRadius: 12, border: '1px solid var(--border)' }}>
                 <WechatIlinkConnect
-                  existing={{ id: editing.id, ilinkUserId: editing.ilinkUserId, ilinkExpired: editing.ilinkExpired }}
-                  onDone={() => { flash('已重新绑定'); router.refresh(); }}
+                  existing={null}
+                  autoStart
+                  onDone={() => { router.refresh(); }}
                 />
               </div>
-            )}
+            ) : (
+              <>
+                {/* ═══════════════ TAB 1: 基础与连接 ═══════════════ */}
+                {modalTab === 'basic' && (
+                  <div className="stack" style={{ gap: 16 }}>
+                    {/* 已保存密钥提示栏（编辑态） */}
+                    {editing && (editing.hasInboundSecrets || editing.hasSignSecret) && (
+                      <div style={{ background: 'var(--surface)', padding: '12px 16px', borderRadius: 10, border: '1px solid var(--border)' }}>
+                        <div className="row-between" style={{ alignItems: 'center', marginBottom: 8 }}>
+                          <span style={{ fontSize: 13, fontWeight: 600 }}>🔒 已加密存储的凭据</span>
+                          <button type="button" className="btn btn-sm btn-ghost" onClick={toggleReveal} disabled={pending} style={{ fontSize: 12 }}>
+                            {revealed ? '🙈 隐藏明文' : '👁 显示明文'}
+                          </button>
+                        </div>
+                        <div className="stack" style={{ gap: 6 }}>
+                          {([
+                            ['App Secret / Secret', editing.hasAppSecret, editing.maskedAppSecret, 'appSecret'],
+                            ['Verification Token', editing.hasVerificationToken, editing.maskedVerificationToken, 'verificationToken'],
+                            ['Encrypt Key', editing.hasEncryptKey, editing.maskedEncryptKey, 'encryptKey'],
+                            ['出站加签密钥', editing.hasSignSecret, editing.maskedSignSecret, 'signSecret'],
+                          ] as const)
+                            .filter(([, has]) => has)
+                            .map(([name, , masked, field]) => (
+                              <div key={field} className="row-between wrap" style={{ gap: 8, alignItems: 'center', fontSize: 12 }}>
+                                <span className="muted" style={{ minWidth: 150 }}>{name}</span>
+                                <code
+                                  className="mono"
+                                  style={{
+                                    flex: 1, minWidth: 160, wordBreak: 'break-all', padding: '3px 8px', borderRadius: 6,
+                                    background: 'var(--surface-2)', border: '1px solid var(--border)',
+                                    color: revealed ? 'var(--brand)' : 'var(--text-2)',
+                                  }}
+                                >
+                                  {revealed ? (revealed[field] || '(空)') : masked}
+                                </code>
+                              </div>
+                            ))}
+                        </div>
+                        <div className="small muted" style={{ marginTop: 8, paddingTop: 6, borderTop: '1px dashed var(--border)', fontSize: 11 }}>
+                          下方输入框留空保存即保持原有密钥不变，仅需更换时重新填写。
+                          {revealed && <span style={{ color: 'var(--amber)', fontWeight: 600 }}> ⚠ 明文已展示，请注意保护隐私。</span>}
+                        </div>
+                      </div>
+                    )}
 
-            {/* 方式 A 专属：飞书自建应用入站/出站二合一分步向导 */}
-            {provider === 'feishu' && botMode === 'app' && (
-              <div className="stack" style={{ gap: 14, padding: '14px 16px', background: 'var(--surface-2)', borderRadius: 8 }}>
-                <div className="alert-gradient-brand" style={{ padding: '10px 14px' }}>
-                  <div className="small" style={{ color: 'var(--brand)', fontWeight: 600 }}>
-                    💡 已选择飞书自建应用模式：自建应用通过飞书 OpenAPI 已原生支持主动推送消息到群里，<b>无需</b>单独设置群自定义机器人 Webhook 地址！
-                  </div>
-                </div>
+                    {/* 基本信息组合卡 */}
+                    <div style={{ background: 'var(--surface)', padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: 'var(--text)' }}>1. 基础信息</div>
+                      <div className="grid grid-3" style={{ gap: 12 }}>
+                        <label className="stack" style={{ gap: 4 }}>
+                          <span className="small muted">平台类型</span>
+                          <select className="input" value={provider} onChange={(e) => setProvider(e.target.value)} style={{ padding: '7px 10px' }}>
+                            {BOT_PROVIDERS.map((p) => (
+                              <option key={p.key} value={p.key} disabled={!p.supported}>{p.name}{p.supported ? '' : '（即将支持）'}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="stack" style={{ gap: 4 }}>
+                          <span className="small muted">机器人名称（自定义）</span>
+                          <input className="input" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="如：选题作战群" style={{ padding: '7px 10px' }} />
+                        </label>
+                        <label className="stack" style={{ gap: 4 }}>
+                          <span className="small muted">渠道默认智能体</span>
+                          <select className="input" value={agentTpl} onChange={(e) => setAgentTpl(e.target.value)} style={{ padding: '7px 10px' }}>
+                            <option value="">通用运营助手（默认）</option>
+                            {agentOptions.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                          </select>
+                        </label>
+                      </div>
+                    </div>
 
-                {editing?.inboundKey && (
-                  <div className="small" style={{ color: editing.lastInboundAt ? 'var(--green)' : 'var(--amber)' }}>
-                    {editing.lastInboundAt
-                      ? `✅ 入站与出站已通，最近收到消息 ${fmtDateTime(editing.lastInboundAt)}`
-                      : '⏳ 已保存，等飞书发来第一条消息（去群里 @机器人 发「/帮助」试试）'}
+                    {/* 模式选择（飞书/钉钉/企微） */}
+                    {(provider === 'feishu' || provider === 'dingtalk' || provider === 'wecom') && (
+                      <div style={{ background: 'var(--surface)', padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>2. 接入模式</div>
+                        <div className="grid grid-2" style={{ gap: 10 }}>
+                          <div
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => { setBotMode('app'); setWebhookUrl(''); }}
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { setBotMode('app'); setWebhookUrl(''); } }}
+                            style={{
+                              padding: '12px 14px',
+                              borderRadius: 10,
+                              cursor: 'pointer',
+                              border: botMode === 'app' ? '2px solid var(--brand)' : '1px solid var(--border)',
+                              background: botMode === 'app' ? 'var(--brand-soft)' : 'var(--surface-2)',
+                              transition: 'all 0.15s ease',
+                            }}
+                          >
+                            <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+                              <input type="radio" checked={botMode === 'app'} onChange={() => {}} style={{ accentColor: 'var(--brand)' }} />
+                              <b style={{ fontSize: 13, color: botMode === 'app' ? 'var(--brand)' : 'var(--text)' }}>
+                                方式 A：自建企业应用（推荐）
+                              </b>
+                            </div>
+                            <div className="small muted" style={{ marginTop: 4, paddingLeft: 22, lineHeight: 1.5 }}>
+                              支持双向交互（群内 @ 问答、指令收录）与主动推送，无需单独配置 Webhook。
+                            </div>
+                          </div>
+
+                          <div
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => { setBotMode('webhook'); setAppId(''); setAppSecret(''); setAgentId(''); }}
+                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { setBotMode('webhook'); setAppId(''); setAppSecret(''); setAgentId(''); } }}
+                            style={{
+                              padding: '12px 14px',
+                              borderRadius: 10,
+                              cursor: 'pointer',
+                              border: botMode === 'webhook' ? '2px solid var(--brand)' : '1px solid var(--border)',
+                              background: botMode === 'webhook' ? 'var(--brand-soft)' : 'var(--surface-2)',
+                              transition: 'all 0.15s ease',
+                            }}
+                          >
+                            <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+                              <input type="radio" checked={botMode === 'webhook'} onChange={() => {}} style={{ accentColor: 'var(--brand)' }} />
+                              <b style={{ fontSize: 13, color: botMode === 'webhook' ? 'var(--brand)' : 'var(--text)' }}>
+                                方式 B：群自定义 Webhook
+                              </b>
+                            </div>
+                            <div className="small muted" style={{ marginTop: 4, paddingLeft: 22, lineHeight: 1.5 }}>
+                              粘贴 Webhook 地址即可接收定时推送与告警，仅出站、不支持群内指令交互。
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 凭据填写与回调区域 */}
+                    <div style={{ background: 'var(--surface)', padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
+                      <div className="row-between" style={{ alignItems: 'center', marginBottom: 12 }}>
+                        <div style={{ fontSize: 13, fontWeight: 700 }}>
+                          3. {botMode === 'app' ? '应用凭据与回调配置' : 'Webhook 配置'}
+                        </div>
+                        {provider === 'feishu' && botMode === 'app' && (
+                          <button
+                            type="button"
+                            className="btn btn-sm"
+                            style={{ background: 'var(--accent-soft)', color: 'var(--accent)', border: '1px solid rgba(37,99,235,0.2)', fontSize: 12 }}
+                            onClick={() => {
+                              const json = JSON.stringify({
+                                manifest_version: "1.0.0",
+                                app_config: {
+                                  scopes: [
+                                    "im:message",
+                                    "im:message.group_at_msg:readonly",
+                                    "im:message.p2p_msg:readonly",
+                                    "im:message:send_as_bot",
+                                    "im:chat:readonly"
+                                  ],
+                                  events: ["im.message.receive_v1"]
+                                }
+                              }, null, 2);
+                              navigator.clipboard.writeText(json);
+                              flash('✨ 已复制 Manifest JSON！飞书创建应用时一键导入即可');
+                            }}
+                          >
+                            ⚡ 复制 Manifest JSON (一键导入)
+                          </button>
+                        )}
+                      </div>
+
+                      {/* ── 飞书自建应用 ── */}
+                      {provider === 'feishu' && botMode === 'app' && (
+                        <div className="stack" style={{ gap: 12 }}>
+                          <div className="grid grid-2" style={{ gap: 10 }}>
+                            <label className="stack" style={{ gap: 4 }}>
+                              <span className="small muted">App ID (cli_xxx)</span>
+                              <input className="input mono" value={appId} onChange={(e) => setAppId(e.target.value)} placeholder="cli_xxxxxxxxxxxx" />
+                            </label>
+                            <label className="stack" style={{ gap: 4 }}>
+                              <span className="small muted">App Secret</span>
+                              <input className="input mono" type="password" value={appSecret} onChange={(e) => setAppSecret(e.target.value)} placeholder={secretHint(editing?.hasAppSecret, 'App Secret', '在飞书后台「凭证与基础信息」获取')} />
+                            </label>
+                          </div>
+
+                          {/* 回调地址 */}
+                          <div style={{ background: 'var(--surface-2)', padding: '12px 14px', borderRadius: 8, border: '1px solid var(--border)' }}>
+                            <div className="row-between" style={{ alignItems: 'center', marginBottom: 6 }}>
+                              <span className="small" style={{ fontWeight: 600 }}>📡 事件订阅请求地址 (模式 A · HTTP 回调)</span>
+                              <a href="https://open.feishu.cn/app" target="_blank" rel="noreferrer" className="small" style={{ color: 'var(--accent)' }}>
+                                ↗ 飞书开放平台
+                              </a>
+                            </div>
+                            <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+                              <input className="input mono small" readOnly value={callbackUrl} style={{ background: 'var(--surface)', flex: 1 }} />
+                              <button type="button" className="btn btn-sm btn-primary" onClick={copyCallback} disabled={!appId.trim()} title={appId.trim() ? '' : '请先填写 App ID'}>
+                                {copied ? '✓ 已复制' : '复制地址'}
+                              </button>
+                            </div>
+                            <div className="small muted" style={{ marginTop: 6, fontSize: 11.5 }}>
+                              飞书后台路径：<b>「开发配置」➔「事件订阅」➔「回调配置」</b>，粘贴此地址并保存。
+                            </div>
+                          </div>
+
+                          <div className="grid grid-2" style={{ gap: 10 }}>
+                            <label className="stack" style={{ gap: 4 }}>
+                              <span className="small muted">Verification Token</span>
+                              <input className="input mono" value={verificationToken} onChange={(e) => setVerificationToken(e.target.value)} placeholder={secretHint(editing?.hasVerificationToken, 'Verification Token', '飞书后台事件订阅页提供')} />
+                            </label>
+                            <label className="stack" style={{ gap: 4 }}>
+                              <span className="small muted">Encrypt Key（可选）</span>
+                              <input className="input mono" value={encryptKey} onChange={(e) => setEncryptKey(e.target.value)} placeholder={secretHint(editing?.hasEncryptKey, 'Encrypt Key', '开启「消息加密」才需填写')} />
+                            </label>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* ── 飞书 Webhook ── */}
+                      {provider === 'feishu' && botMode === 'webhook' && (
+                        <div className="stack" style={{ gap: 10 }}>
+                          <label className="stack" style={{ gap: 4 }}>
+                            <span className="small muted">群自定义机器人 Webhook URL</span>
+                            <input className="input mono" value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxxx" />
+                          </label>
+                          <label className="stack" style={{ gap: 4 }}>
+                            <span className="small muted">签名密钥（可选）</span>
+                            <input className="input mono" value={signSecret} onChange={(e) => setSignSecret(e.target.value)} placeholder={editing?.hasSignSecret ? '签名密钥（留空=不改）' : '群机器人安全设置若勾选了「签名校验」请填写'} />
+                          </label>
+                        </div>
+                      )}
+
+                      {/* ── 钉钉自建应用 ── */}
+                      {provider === 'dingtalk' && botMode === 'app' && (
+                        <div className="stack" style={{ gap: 12 }}>
+                          <div className="grid grid-3" style={{ gap: 10 }}>
+                            <label className="stack" style={{ gap: 4 }}>
+                              <span className="small muted">AppKey</span>
+                              <input className="input mono" value={appId} onChange={(e) => setAppId(e.target.value)} placeholder="AppKey" />
+                            </label>
+                            <label className="stack" style={{ gap: 4 }}>
+                              <span className="small muted">AppSecret</span>
+                              <input className="input mono" type="password" value={appSecret} onChange={(e) => setAppSecret(e.target.value)} placeholder={secretHint(editing?.hasAppSecret, 'AppSecret', 'AppSecret')} />
+                            </label>
+                            <label className="stack" style={{ gap: 4 }}>
+                              <span className="small muted">AgentId</span>
+                              <input className="input mono" value={agentId} onChange={(e) => setAgentId(e.target.value)} placeholder="工作通知用 AgentId" />
+                            </label>
+                          </div>
+                          <div style={{ background: 'var(--surface-2)', padding: '12px 14px', borderRadius: 8, border: '1px solid var(--border)' }}>
+                            <div className="row-between" style={{ alignItems: 'center', marginBottom: 6 }}>
+                              <span className="small" style={{ fontWeight: 600 }}>📡 机器人消息接收地址 (HTTP)</span>
+                              <a href="https://open-dev.dingtalk.com/fe/app" target="_blank" rel="noreferrer" className="small" style={{ color: 'var(--accent)' }}>
+                                ↗ 钉钉开放平台
+                              </a>
+                            </div>
+                            <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+                              <input className="input mono small" readOnly value={callbackUrl} style={{ background: 'var(--surface)', flex: 1 }} />
+                              <button type="button" className="btn btn-sm btn-primary" onClick={copyCallback} disabled={!appId.trim()}>
+                                {copied ? '✓ 已复制' : '复制地址'}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* ── 钉钉 Webhook ── */}
+                      {provider === 'dingtalk' && botMode === 'webhook' && (
+                        <div className="stack" style={{ gap: 10 }}>
+                          <label className="stack" style={{ gap: 4 }}>
+                            <span className="small muted">Webhook URL</span>
+                            <input className="input mono" value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} placeholder="https://oapi.dingtalk.com/robot/send?access_token=xxxx" />
+                          </label>
+                          <label className="stack" style={{ gap: 4 }}>
+                            <span className="small muted">加签密钥 SEC...（可选）</span>
+                            <input className="input mono" value={signSecret} onChange={(e) => setSignSecret(e.target.value)} placeholder={editing?.hasSignSecret ? '加签密钥（留空=不改）' : '安全设置勾选「加签」时填写'} />
+                          </label>
+                        </div>
+                      )}
+
+                      {/* ── 企业微信自建应用 ── */}
+                      {provider === 'wecom' && botMode === 'app' && (
+                        <div className="stack" style={{ gap: 12 }}>
+                          <div className="grid grid-3" style={{ gap: 10 }}>
+                            <label className="stack" style={{ gap: 4 }}>
+                              <span className="small muted">CorpID (企业 ID)</span>
+                              <input className="input mono" value={appId} onChange={(e) => setAppId(e.target.value)} placeholder="wwXXXXXXXXXX" />
+                            </label>
+                            <label className="stack" style={{ gap: 4 }}>
+                              <span className="small muted">AgentID</span>
+                              <input className="input mono" value={agentId} onChange={(e) => setAgentId(e.target.value)} placeholder="如 1000002" />
+                            </label>
+                            <label className="stack" style={{ gap: 4 }}>
+                              <span className="small muted">Secret</span>
+                              <input className="input mono" type="password" value={appSecret} onChange={(e) => setAppSecret(e.target.value)} placeholder={secretHint(editing?.hasAppSecret, 'Secret', '应用 Secret')} />
+                            </label>
+                          </div>
+                          <div style={{ background: 'var(--surface-2)', padding: '12px 14px', borderRadius: 8, border: '1px solid var(--border)' }}>
+                            <div className="row-between" style={{ alignItems: 'center', marginBottom: 6 }}>
+                              <span className="small" style={{ fontWeight: 600 }}>📡 接收消息服务器 URL</span>
+                              <a href="https://work.weixin.qq.com/wework_admin/frame#apps/createApiApp" target="_blank" rel="noreferrer" className="small" style={{ color: 'var(--accent)' }}>
+                                ↗ 企微管理后台
+                              </a>
+                            </div>
+                            <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+                              <input className="input mono small" readOnly value={callbackUrl} style={{ background: 'var(--surface)', flex: 1 }} />
+                              <button type="button" className="btn btn-sm btn-primary" onClick={copyCallback} disabled={!appId.trim() || !agentId.trim()}>
+                                {copied ? '✓ 已复制' : '复制地址'}
+                              </button>
+                            </div>
+                          </div>
+                          <div className="grid grid-2" style={{ gap: 10 }}>
+                            <label className="stack" style={{ gap: 4 }}>
+                              <span className="small muted">Token (企微后台随机生成)</span>
+                              <input className="input mono" value={verificationToken} onChange={(e) => setVerificationToken(e.target.value)} placeholder={secretHint(editing?.hasVerificationToken, 'Token', 'Token')} />
+                            </label>
+                            <label className="stack" style={{ gap: 4 }}>
+                              <span className="small muted">EncodingAESKey (企微后台随机生成)</span>
+                              <input className="input mono" value={encryptKey} onChange={(e) => setEncryptKey(e.target.value)} placeholder={secretHint(editing?.hasEncryptKey, 'EncodingAESKey', 'EncodingAESKey (43位)')} />
+                            </label>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* ── 企业微信 Webhook ── */}
+                      {provider === 'wecom' && botMode === 'webhook' && (
+                        <div className="stack" style={{ gap: 10 }}>
+                          <label className="stack" style={{ gap: 4 }}>
+                            <span className="small muted">Webhook URL</span>
+                            <input className="input mono" value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxx" />
+                          </label>
+                        </div>
+                      )}
+
+                      {/* ── 微信客服 ── */}
+                      {provider === 'wechat_kf' && (
+                        <div className="stack" style={{ gap: 12 }}>
+                          <div className="grid grid-2" style={{ gap: 10 }}>
+                            <label className="stack" style={{ gap: 4 }}>
+                              <span className="small muted">企业 CorpID</span>
+                              <input className="input mono" value={appId} onChange={(e) => setAppId(e.target.value)} placeholder="wwXXXXXXXXXX" />
+                            </label>
+                            <label className="stack" style={{ gap: 4 }}>
+                              <span className="small muted">微信客服 Secret</span>
+                              <input className="input mono" type="password" value={appSecret} onChange={(e) => setAppSecret(e.target.value)} placeholder={secretHint(editing?.hasAppSecret, 'Secret', '客服 Secret')} />
+                            </label>
+                          </div>
+                          <div style={{ background: 'var(--surface-2)', padding: '12px 14px', borderRadius: 8, border: '1px solid var(--border)' }}>
+                            <div className="row-between" style={{ alignItems: 'center', marginBottom: 6 }}>
+                              <span className="small" style={{ fontWeight: 600 }}>📡 微信客服回调 URL</span>
+                            </div>
+                            <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+                              <input className="input mono small" readOnly value={callbackUrl} style={{ background: 'var(--surface)', flex: 1 }} />
+                              <button type="button" className="btn btn-sm btn-primary" onClick={copyCallback} disabled={!appId.trim()}>
+                                {copied ? '✓ 已复制' : '复制地址'}
+                              </button>
+                            </div>
+                          </div>
+                          <div className="grid grid-2" style={{ gap: 10 }}>
+                            <label className="stack" style={{ gap: 4 }}>
+                              <span className="small muted">Token</span>
+                              <input className="input mono" value={verificationToken} onChange={(e) => setVerificationToken(e.target.value)} placeholder={secretHint(editing?.hasVerificationToken, 'Token', 'Token')} />
+                            </label>
+                            <label className="stack" style={{ gap: 4 }}>
+                              <span className="small muted">EncodingAESKey</span>
+                              <input className="input mono" value={encryptKey} onChange={(e) => setEncryptKey(e.target.value)} placeholder={secretHint(editing?.hasEncryptKey, 'EncodingAESKey', 'EncodingAESKey')} />
+                            </label>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* ── Telegram / Slack ── */}
+                      {(provider === 'telegram' || provider === 'slack') && (
+                        <div className="stack" style={{ gap: 10 }}>
+                          <label className="stack" style={{ gap: 4 }}>
+                            <span className="small muted">{provider === 'telegram' ? 'Telegram Bot API URL' : 'Slack Webhook URL'}</span>
+                            <input
+                              className="input mono"
+                              value={webhookUrl}
+                              onChange={(e) => setWebhookUrl(e.target.value)}
+                              placeholder={provider === 'telegram' ? 'https://api.telegram.org/bot<token>/sendMessage?chat_id=<id>' : 'https://hooks.slack.com/services/T.../B...'}
+                            />
+                          </label>
+                        </div>
+                      )}
+
+                      {/* 微信 iLink 编辑态 */}
+                      {provider === 'wechat' && editing && (
+                        <WechatIlinkConnect
+                          existing={{ id: editing.id, ilinkUserId: editing.ilinkUserId, ilinkExpired: editing.ilinkExpired }}
+                          onDone={() => { flash('已重新绑定'); router.refresh(); }}
+                        />
+                      )}
+                    </div>
                   </div>
                 )}
 
-                {/* 步骤 1 */}
-                <div className="stack" style={{ gap: 6 }}>
-                  <div className="small">
-                    <b style={{ color: 'var(--brand)' }}>① 建飞书自建应用</b>，获取 App ID / App Secret
-                  </div>
-                  <a href="https://open.feishu.cn/app" target="_blank" rel="noreferrer" className="btn btn-sm btn-ghost" style={{ alignSelf: 'flex-start', color: 'var(--accent)' }}>
-                    ↗ 打开飞书开放平台
-                  </a>
-                  <input className="input" value={appId} onChange={(e) => setAppId(e.target.value)} placeholder="App ID（cli_xxx，用于把事件路由到本工作区）" />
-                  <input className="input" value={appSecret} onChange={(e) => setAppSecret(e.target.value)} placeholder={secretHint(editing?.hasAppSecret, 'App Secret', 'App Secret（机器人回消息用）')} />
-                </div>
-
-                {/* 步骤 2 */}
-                <div className="stack" style={{ gap: 8 }}>
-                  <div className="small">
-                    <b style={{ color: 'var(--accent)' }}>② 设置「事件订阅」的 订阅方式 / 回调配置</b>
-                  </div>
-                  <div className="small muted" style={{ background: 'var(--surface)', padding: '12px 14px', borderRadius: 8, lineHeight: 1.8, border: '1px solid var(--border)' }}>
-                    <div style={{ marginBottom: 8 }}>
-                      📌 <b>飞书后台路径：</b>
-                      <span style={{ color: 'var(--accent)', fontWeight: 700 }}>「开发配置」➔「事件订阅」</span>
-                    </div>
-                    
-                    <div style={{ marginBottom: 10, padding: '8px 10px', background: 'var(--surface-2)', borderRadius: 6 }}>
-                      <b>订阅方式选择（页面最上方）：</b><br />
-                      <span style={{ color: '#2563eb', fontWeight: 700 }}>✦ 模式 A（推荐 HTTP 回调）：发送事件至开发者服务器</span><br />
-                      <span className="small muted" style={{ display: 'block', marginLeft: 14, marginBottom: 4 }}>
-                        要在下方<b>「回调配置」</b>标签页填写 HTTP 接收地址。
-                      </span>
-                      <span style={{ color: '#16a34a', fontWeight: 700 }}>✦ 模式 B（WebSocket 长连接）：使用长连接发送事件至开发者服务器</span><br />
-                      <span className="small muted" style={{ display: 'block', marginLeft: 14 }}>
-                        勾选此项后免公网 IP 地址，系统将直接通过 Socket 建立长通道拉取事件。
-                      </span>
-                    </div>
-
-                    <div style={{ marginTop: 6 }}>
-                      👉 <b>在「回调配置」标签页填写（模式 A 专属）：</b><br />
-                      点击标签页 <span style={{ color: '#2563eb', fontWeight: 700, background: '#e8f0fe', padding: '2px 6px', borderRadius: 4 }}>「回调配置」</span> ➔ 将下方生成的 URL 粘贴至 <b>「请求地址」</b> 栏中。
-                    </div>
-                  </div>
-
-                  <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
-                    <code className="small mono" style={{ background: 'var(--surface)', padding: '8px 12px', borderRadius: 8, wordBreak: 'break-all', flex: 1, minWidth: 220, border: '1px solid var(--border)' }}>
-                      {callbackUrl}
-                    </code>
-                    <button className="btn btn-sm btn-primary" onClick={copyCallback} disabled={!appId.trim()} title={appId.trim() ? '' : '先填上面的 App ID'}>
-                      {copied ? '已复制地址' : '复制回调地址'}
-                    </button>
-                  </div>
-                  <div className="small muted">飞书会自动打一次校验，成功后再填入下面飞书给的两项密钥：</div>
-                  <input className="input" value={verificationToken} onChange={(e) => setVerificationToken(e.target.value)} placeholder={secretHint(editing?.hasVerificationToken, 'Verification Token', 'Verification Token（校验 Token，必填）')} />
-                  <input className="input" value={encryptKey} onChange={(e) => setEncryptKey(e.target.value)} placeholder={secretHint(editing?.hasEncryptKey, 'Encrypt Key', 'Encrypt Key（开了「消息加密」才填，可选）')} />
-                </div>
-
-                {/* 步骤 3——纯操作说明折进 details（2026-09-01「不能扫码就清爽」）：
-                    首次接入的人点开照做；配好回来编辑的人不用每次隔着一屏说明找按钮 */}
-                <details className="stack" style={{ gap: 8 }} open={!editing}>
-                  <summary className="small" style={{ cursor: 'pointer' }}>
-                    <b style={{ color: 'var(--green)' }}>③ 在「事件配置」标签页添加事件 + 授权发布</b>
-                    <span className="muted" style={{ marginLeft: 6 }}>（点开看图文步骤）</span>
-                  </summary>
-                  <div className="small muted" style={{ lineHeight: 1.8, background: 'var(--surface)', padding: '12px 14px', borderRadius: 8, border: '1px solid var(--border)', marginTop: 8 }}>
-                    · 👉 <b>在「事件配置」标签页操作：</b><br />
-                    &nbsp;&nbsp;点击标签页 <span style={{ color: '#e8552d', fontWeight: 700, background: '#fdece6', padding: '2px 6px', borderRadius: 4 }}>「事件配置」</span> ➔ 点击 <b>「添加事件」</b> 按钮 ➔ 搜索并添加 <code className="mono" style={{ color: '#e8552d', fontWeight: 700 }}>im.message.receive_v1</code>（接收消息）<br />
-                    · <b>开通权限：</b>在 <b>「权限管理」</b> 开启 <b>「获取与发送单聊、群组消息」</b>
-                    和 <b>「获取群组信息」</b><code className="mono" style={{ color: '#e8552d', fontWeight: 700 }}>im:chat:readonly</code>
-                    <span style={{ color: 'var(--red)' }}>（主动推送必需，缺它会报「机器人未加入任何群聊」）</span><br />
-                    · <b>发布机器人：</b>在 <b>「应用功能」</b> 添加 <b>「机器人」</b> ➔ 在 <b>「版本管理与发布」</b> 创建版本发布 ➔ 将机器人拉入飞书群
-                  </div>
-                </details>
-
-                {/* 💡 飞书权限与事件一键配置 (Manifest JSON 与 手动勾选指南) */}
-                <div className="stack" style={{ gap: 10, padding: '14px 16px', background: 'rgba(37, 99, 235, 0.05)', borderRadius: 8, border: '1px solid rgba(37, 99, 235, 0.18)' }}>
-                  <div className="row-between wrap" style={{ gap: 8, alignItems: 'center' }}>
-                    <span className="small" style={{ color: '#2563eb', fontWeight: 700, fontSize: 13.5 }}>
-                      💡 飞书权限与事件配置（支持 App Manifest JSON 一键导入）
-                    </span>
-                    <button
-                      className="btn btn-sm"
-                      style={{ background: '#2563eb', color: '#fff', border: 'none' }}
-                      onClick={() => {
-                        const json = JSON.stringify({
-                          manifest_version: "1.0.0",
-                          app_config: {
-                            scopes: [
-                              "im:message",
-                              "im:message.group_at_msg:readonly",
-                              "im:message.p2p_msg:readonly",
-                              "im:message:send_as_bot",
-                              // 主动推送要先列出机器人所在群 → 必须有群信息读权限，缺它会报 99991672
-                              "im:chat:readonly"
-                            ],
-                            events: [
-                              "im.message.receive_v1"
-                            ]
-                          }
-                        }, null, 2);
-                        navigator.clipboard.writeText(json);
-                        flash('已复制 Manifest JSON！应用创建或配置时粘贴即可');
-                      }}
-                    >
-                      一键复制 Manifest JSON 配置文件
-                    </button>
-                  </div>
-
-                  <div className="stack" style={{ gap: 8, fontSize: 12.5, lineHeight: 1.7 }}>
-                    <div style={{ background: 'var(--surface)', padding: '10px 12px', borderRadius: 6, border: '1px solid var(--border)' }}>
-                      <b style={{ color: '#2563eb' }}>✦ 场景 A：新建应用时（推荐 1 秒配置）：</b><br />
-                      进入飞书开放平台 ➔ 点击右上角 <b>「创建应用」➔ 选择「通过 App Manifest 创建」</b> ➔ 粘贴此 JSON，自动建好应用并自动勾选机器人、权限与事件。
+                {/* ═══════════════ TAB 2: 指令权限 (ChatOps) ═══════════════ */}
+                {modalTab === 'commands' && (
+                  <div className="stack" style={{ gap: 16 }}>
+                    {/* 快捷控制栏 */}
+                    <div className="row-between wrap" style={{ gap: 10, alignItems: 'center', background: 'var(--surface)', padding: '12px 16px', borderRadius: 12, border: '1px solid var(--border)' }}>
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 700 }}>
+                          群内指令准入策略
+                        </div>
+                        <div className="small muted" style={{ marginTop: 2 }}>
+                          已开启 <b style={{ color: 'var(--brand)' }}>{commands.length}</b> / {TOGGLEABLE_COMMANDS.length} 项指令
+                          {isExternalProvider(provider) && <span style={{ color: 'var(--amber)', marginLeft: 6 }}>（对外渠道建议仅开启低风险操作）</span>}
+                        </div>
+                      </div>
+                      <div className="row" style={{ gap: 6 }}>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost"
+                          onClick={() => setCommands(ALL_COMMANDS)}
+                          style={{ fontSize: 12 }}
+                        >
+                          全部开启
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost"
+                          onClick={() => setCommands([...EXTERNAL_DEFAULT_COMMANDS])}
+                          style={{ fontSize: 12 }}
+                        >
+                          推荐安全集
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost"
+                          onClick={() => setCommands(['chat'])}
+                          style={{ fontSize: 12 }}
+                        >
+                          仅对话
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost"
+                          onClick={() => setCommands([])}
+                          style={{ fontSize: 12, color: 'var(--muted)' }}
+                        >
+                          全关
+                        </button>
+                      </div>
                     </div>
 
-                    <div style={{ background: 'var(--surface)', padding: '10px 12px', borderRadius: 6, border: '1px solid var(--border)' }}>
-                      <b style={{ color: '#2563eb' }}>✦ 场景 B：已有应用配置：</b><br />
-                      <b>方式 1（Manifest 导入）：</b>进入应用 ➔ 点击左侧 <b>「开发配置」➔「应用配置」/「App Manifest」</b> ➔ 粘贴 JSON 保存。<br />
-                      <b>方式 2（分步手选点选）：</b>若后台无 Manifest 入口，请手动勾选：
-                      <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
-                        <li><b>权限管理：</b>添加 <code className="mono" style={{ color: '#e8552d' }}>im:message</code>（消息读写）、<code className="mono" style={{ color: '#e8552d' }}>im:message:send_as_bot</code>（以机器人发送）、<code className="mono" style={{ color: '#e8552d' }}>im:chat:readonly</code>（获取群组信息）</li>
-                        <li><b>事件订阅：</b>添加 <code className="mono" style={{ color: '#e8552d' }}>im.message.receive_v1</code>（接收消息 v2.0）</li>
-                      </ul>
+                    {/* 指令分组卡片网格 */}
+                    <div className="stack" style={{ gap: 12 }}>
+                      {[
+                        {
+                          groupTitle: '💬 基础对话与问答',
+                          keys: ['chat'],
+                        },
+                        {
+                          groupTitle: '📑 内容知识沉淀与剪藏',
+                          keys: ['clip', 'topic', 'hot'],
+                        },
+                        {
+                          groupTitle: '🔍 跨平台竞对作战与任务',
+                          keys: ['crawl', 'dispatch'],
+                        },
+                        {
+                          groupTitle: '⚙️ 账号诊断与系统管理',
+                          keys: ['analyze', 'account', 'optimize'],
+                        },
+                      ].map((grp) => {
+                        const items = TOGGLEABLE_COMMANDS.filter((c) => grp.keys.includes(c.key));
+                        if (items.length === 0) return null;
+                        return (
+                          <div key={grp.groupTitle} style={{ background: 'var(--surface)', padding: '14px 16px', borderRadius: 12, border: '1px solid var(--border)' }}>
+                            <div className="small muted" style={{ fontWeight: 700, marginBottom: 10, letterSpacing: 0.2 }}>
+                              {grp.groupTitle}
+                            </div>
+                            <div className="grid grid-2" style={{ gap: 10 }}>
+                              {items.map((c) => {
+                                const checked = commands.includes(c.key);
+                                return (
+                                  <div
+                                    key={c.key}
+                                    role="button"
+                                    tabIndex={0}
+                                    onClick={() => toggleCommand(c.key)}
+                                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleCommand(c.key); }}
+                                    style={{
+                                      padding: '10px 12px',
+                                      borderRadius: 8,
+                                      cursor: 'pointer',
+                                      border: checked ? '1px solid rgba(232, 85, 45, 0.35)' : '1px solid var(--border)',
+                                      background: checked ? 'var(--surface-2)' : 'var(--surface)',
+                                      display: 'flex',
+                                      alignItems: 'flex-start',
+                                      gap: 10,
+                                      transition: 'all 0.15s ease',
+                                    }}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={() => {}}
+                                      style={{ marginTop: 2, accentColor: 'var(--brand)', flexShrink: 0 }}
+                                    />
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                      <div className="row wrap" style={{ gap: 6, alignItems: 'center' }}>
+                                        <b style={{ fontSize: 13, color: checked ? 'var(--text)' : 'var(--text-3)' }}>{c.name}</b>
+                                        <code className="mono small" style={{ background: 'var(--surface)', padding: '1px 5px', borderRadius: 4, border: '1px solid var(--border)', fontSize: 11 }}>
+                                          {c.trigger}
+                                        </code>
+                                      </div>
+                                      <div className="small muted" style={{ fontSize: 11.5, marginTop: 3, lineHeight: 1.4 }}>
+                                        {c.desc}
+                                      </div>
+                                      {c.warn && (
+                                        <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 4, fontWeight: 500 }}>
+                                          ⚠ {c.warn}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
-                </div>
+                )}
 
-                <details className="small muted" style={{ lineHeight: 1.7, background: 'var(--surface)', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)' }}>
-                  <summary style={{ cursor: 'pointer' }}><b>装好后在群里怎么用？</b><span style={{ marginLeft: 4, opacity: 0.7 }}>点开看全部玩法与命令</span></summary>
-                  <div style={{ marginTop: 6 }}>@它直接问问题=对话（记得住上下文）；发文章链接/粘正文=抓正文存档并出摘要要点；发短文本=收录成选题候选；命令
-                  <code className="mono">/分析 [账号名]</code> <code className="mono">/存 链接</code> <code className="mono">/竞对</code> <code className="mono">/拆解 链接</code> <code className="mono">/问 你的问题</code> <code className="mono">/账号 名字</code> <code className="mono">/热点</code> <code className="mono">/选题 关键词</code> <code className="mono">/采集 竞对主页URL</code> <code className="mono">/优化</code> <code className="mono">/帮助</code>。
-                  <b>只进候选池、不自动发布，生成仍全程过合规。</b>
-                </div>
-                </details>
-              </div>
+                {/* ═══════════════ TAB 3: 定时推送 ═══════════════ */}
+                {modalTab === 'push' && !isReplyOnlyProvider(provider) && (<>
+                  <div className="stack" style={{ gap: 16 }}>
+                    {/* 每日定时推送时间 */}
+                    <div style={{ background: 'var(--surface)', padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>每日定时推送节点</div>
+                      <div className="small muted" style={{ marginBottom: 12 }}>
+                        到达设定时间自动向该机器人推送今日精选热点与选题建议（北京时间 UTC+8）
+                      </div>
+                      <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
+                        {['08:30', '09:00', '12:00', '18:00', '21:00'].map((t) => (
+                          <button
+                            key={t}
+                            type="button"
+                            className={`btn btn-sm ${pushSchedule === t ? 'btn-primary' : 'btn-ghost'}`}
+                            onClick={() => setPushSchedule(t)}
+                            style={{ minWidth: 64 }}
+                          >
+                            {t}
+                          </button>
+                        ))}
+                        <input
+                          className="input mono"
+                          style={{ width: 100, padding: '6px 10px', fontSize: 13 }}
+                          value={pushSchedule}
+                          onChange={(e) => setPushSchedule(e.target.value)}
+                          placeholder="如 09:00"
+                        />
+                        <span className="small muted">支持多个时段，用逗号隔开</span>
+                      </div>
+                    </div>
+
+                    {/* 订阅推送事件网格 */}
+                    <div style={{ background: 'var(--surface)', padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
+                      <div className="row-between" style={{ alignItems: 'center', marginBottom: 12 }}>
+                        <div>
+                          <div style={{ fontSize: 13, fontWeight: 700 }}>订阅推送事件类型</div>
+                          <div className="small muted" style={{ marginTop: 2 }}>已选 {events.length} 项事件</div>
+                        </div>
+                        <div className="row" style={{ gap: 6 }}>
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-ghost"
+                            onClick={() => setEvents(PUSH_EVENTS.map((e) => e.key))}
+                            style={{ fontSize: 12 }}
+                          >
+                            全选
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-ghost"
+                            onClick={() => setEvents([...DEFAULT_EVENTS])}
+                            style={{ fontSize: 12 }}
+                          >
+                            默认推荐
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-ghost"
+                            onClick={() => setEvents([])}
+                            style={{ fontSize: 12, color: 'var(--muted)' }}
+                          >
+                            清空
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-2" style={{ gap: 10 }}>
+                        {PUSH_EVENTS.map((ev) => {
+                          const checked = events.includes(ev.key);
+                          return (
+                            <div
+                              key={ev.key}
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => toggleEvent(ev.key)}
+                              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleEvent(ev.key); }}
+                              style={{
+                                padding: '10px 12px',
+                                borderRadius: 8,
+                                cursor: 'pointer',
+                                border: checked ? '1px solid rgba(232, 85, 45, 0.35)' : '1px solid var(--border)',
+                                background: checked ? 'var(--surface-2)' : 'var(--surface)',
+                                display: 'flex',
+                                alignItems: 'flex-start',
+                                gap: 10,
+                                transition: 'all 0.15s ease',
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={() => {}}
+                                style={{ marginTop: 2, accentColor: 'var(--brand)', flexShrink: 0 }}
+                              />
+                              <div style={{ flex: 1, minWidth: 0 }}>
+                                <b style={{ fontSize: 13, color: checked ? 'var(--text)' : 'var(--text-3)' }}>{ev.name}</b>
+                                <div className="small muted" style={{ fontSize: 11.5, marginTop: 2, lineHeight: 1.4 }}>
+                                  {ev.desc}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                </>)}
+
+                {/* ═══════════════ TAB 4: 接入指引 & Manifest ═══════════════ */}
+                {modalTab === 'guide' && (
+                  <div className="stack" style={{ gap: 16 }}>
+                    {/* 飞书专属 Manifest 极速导入卡片 */}
+                    {provider === 'feishu' && (
+                      <div style={{ background: 'linear-gradient(135deg, rgba(37, 99, 235, 0.08) 0%, rgba(232, 85, 45, 0.08) 100%)', padding: '16px 18px', borderRadius: 12, border: '1px solid rgba(37, 99, 235, 0.2)' }}>
+                        <div className="row-between wrap" style={{ gap: 10, alignItems: 'center', marginBottom: 10 }}>
+                          <div>
+                            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--accent)' }}>
+                              ⚡ 飞书应用 Manifest JSON 一键导入 (推荐)
+                            </div>
+                            <div className="small muted" style={{ marginTop: 2 }}>
+                              无需逐项开通权限与订阅事件，粘贴配置文件 1 秒全自动配置完毕
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            className="btn btn-sm btn-primary"
+                            onClick={() => {
+                              const json = JSON.stringify({
+                                manifest_version: "1.0.0",
+                                app_config: {
+                                  scopes: [
+                                    "im:message",
+                                    "im:message.group_at_msg:readonly",
+                                    "im:message.p2p_msg:readonly",
+                                    "im:message:send_as_bot",
+                                    "im:chat:readonly"
+                                  ],
+                                  events: ["im.message.receive_v1"]
+                                }
+                              }, null, 2);
+                              navigator.clipboard.writeText(json);
+                              flash('✨ 已复制 Manifest JSON！');
+                            }}
+                          >
+                            复制 Manifest JSON
+                          </button>
+                        </div>
+                        <div className="grid grid-2" style={{ gap: 10, fontSize: 12, marginTop: 10 }}>
+                          <div style={{ background: 'var(--surface)', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)' }}>
+                            <b style={{ color: 'var(--accent)' }}>✦ 场景 A：新建应用（最省心）</b>
+                            <div className="muted" style={{ marginTop: 4, lineHeight: 1.6 }}>
+                              进入飞书开放平台 ➔ 点击右上角 <b>「创建应用」➔「通过 App Manifest 创建」</b> ➔ 粘贴此 JSON，自动建好并挂载所有权限。
+                            </div>
+                          </div>
+                          <div style={{ background: 'var(--surface)', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)' }}>
+                            <b style={{ color: 'var(--accent)' }}>✦ 场景 B：已有应用补充配置</b>
+                            <div className="muted" style={{ marginTop: 4, lineHeight: 1.6 }}>
+                              进入应用详情 ➔ 左侧 <b>「开发配置」➔「应用配置」/「App Manifest」</b> ➔ 粘贴 JSON 保存，即可补全消息与事件权限。
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 分步指引卡 */}
+                    <div style={{ background: 'var(--surface)', padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>分步操作指南</div>
+                      <div className="stack" style={{ gap: 12, fontSize: 12.5, lineHeight: 1.7 }}>
+                        {provider === 'feishu' && (
+                          <>
+                            <div className="row" style={{ gap: 10 }}>
+                              <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--brand-soft)', color: 'var(--brand)', fontWeight: 700, display: 'grid', placeItems: 'center', fontSize: 11, flexShrink: 0 }}>1</span>
+                              <div>
+                                <b>创建自建应用并获取凭证：</b><br />
+                                <span className="muted">在飞书开放平台创建企业自建应用，在「凭证与基础信息」中复制 App ID 与 App Secret 填入「基础与连接」页。</span>
+                              </div>
+                            </div>
+                            <div className="row" style={{ gap: 10 }}>
+                              <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--brand-soft)', color: 'var(--brand)', fontWeight: 700, display: 'grid', placeItems: 'center', fontSize: 11, flexShrink: 0 }}>2</span>
+                              <div>
+                                <b>配置事件订阅 (HTTP 回调)：</b><br />
+                                <span className="muted">在「开发配置」➔「事件订阅」中选择 HTTP 回调模式，将「基础与连接」生成的 URL 粘贴至请求地址，通过连通性校验。</span>
+                              </div>
+                            </div>
+                            <div className="row" style={{ gap: 10 }}>
+                              <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--brand-soft)', color: 'var(--brand)', fontWeight: 700, display: 'grid', placeItems: 'center', fontSize: 11, flexShrink: 0 }}>3</span>
+                              <div>
+                                <b>添加事件与发布机器人：</b><br />
+                                <span className="muted">在「事件配置」添加 <code className="mono">im.message.receive_v1</code>，并在「应用功能」启用机器人、发布新版本后拉入飞书群即可。</span>
+                              </div>
+                            </div>
+                          </>
+                        )}
+
+                        {provider === 'dingtalk' && (
+                          <>
+                            <div className="row" style={{ gap: 10 }}>
+                              <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--brand-soft)', color: 'var(--brand)', fontWeight: 700, display: 'grid', placeItems: 'center', fontSize: 11, flexShrink: 0 }}>1</span>
+                              <div>
+                                <b>创建钉钉企业内部应用：</b><br />
+                                <span className="muted">在钉钉开放平台创建内部应用，获取 AppKey、AppSecret 与应用详情里的 AgentId。</span>
+                              </div>
+                            </div>
+                            <div className="row" style={{ gap: 10 }}>
+                              <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--brand-soft)', color: 'var(--brand)', fontWeight: 700, display: 'grid', placeItems: 'center', fontSize: 11, flexShrink: 0 }}>2</span>
+                              <div>
+                                <b>启用机器人能力并设置回调：</b><br />
+                                <span className="muted">在应用功能 ➔ 机器人中启用机器人，并在「消息接收地址」粘贴本系统生成的 HTTP 回调地址。</span>
+                              </div>
+                            </div>
+                          </>
+                        )}
+
+                        {provider === 'wecom' && (
+                          <>
+                            <div className="row" style={{ gap: 10 }}>
+                              <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--brand-soft)', color: 'var(--brand)', fontWeight: 700, display: 'grid', placeItems: 'center', fontSize: 11, flexShrink: 0 }}>1</span>
+                              <div>
+                                <b>创建企微自建应用：</b><br />
+                                <span className="muted">在企业微信管理后台「应用管理」创建自建应用，获取 CorpID、AgentID 与 Secret。</span>
+                              </div>
+                            </div>
+                            <div className="row" style={{ gap: 10 }}>
+                              <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--brand-soft)', color: 'var(--brand)', fontWeight: 700, display: 'grid', placeItems: 'center', fontSize: 11, flexShrink: 0 }}>2</span>
+                              <div>
+                                <b>设置接收消息服务器：</b><br />
+                                <span className="muted">在「开发者接口 ➔ 接收消息」粘贴回调 URL，并随机生成 Token 与 EncodingAESKey 同步填回本页面。</span>
+                              </div>
+                            </div>
+                          </>
+                        )}
+
+                        {provider === 'wechat_kf' && (
+                          <>
+                            <div className="row" style={{ gap: 10 }}>
+                              <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--brand-soft)', color: 'var(--brand)', fontWeight: 700, display: 'grid', placeItems: 'center', fontSize: 11, flexShrink: 0 }}>1</span>
+                              <div>
+                                <b>开通微信客服并新建客服账号：</b><br />
+                                <span className="muted">在企微后台「应用管理 ➔ 微信客服」创建客服账号，并在「API」中创建 Secret。</span>
+                              </div>
+                            </div>
+                            <div className="row" style={{ gap: 10 }}>
+                              <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--brand-soft)', color: 'var(--brand)', fontWeight: 700, display: 'grid', placeItems: 'center', fontSize: 11, flexShrink: 0 }}>2</span>
+                              <div>
+                                <b>配置回调并将客服码发给用户：</b><br />
+                                <span className="muted">配置回调 URL、Token 与 EncodingAESKey，保存后将客服二维码发给微信用户，即可实现官方一对一客服对话。</span>
+                              </div>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* 群内玩法速查 */}
+                    <div style={{ background: 'var(--surface)', padding: '14px 16px', borderRadius: 12, border: '1px solid var(--border)', fontSize: 12 }}>
+                      <b style={{ color: 'var(--text)' }}>💡 群内指令与玩法速查</b>
+                      <div className="muted" style={{ marginTop: 6, lineHeight: 1.8 }}>
+                        • <b>自然对话：</b>直接 @机器人 发送问题，支持多轮上下文理解。<br />
+                        • <b>链接剪藏：</b>向群内直接发送文章链接，自动抓取正文、生成摘要与对本账号的价值分析。<br />
+                        • <b>快捷指令：</b>
+                        <code className="mono" style={{ margin: '0 4px' }}>/热点</code>（查热榜）
+                        <code className="mono" style={{ margin: '0 4px' }}>/选题 [关键词]</code>（收录候选）
+                        <code className="mono" style={{ margin: '0 4px' }}>/分析 [账号]</code>（账号体检）
+                        <code className="mono" style={{ margin: '0 4px' }}>/拆解 [链接]</code>（爆款分析）
+                        <code className="mono" style={{ margin: '0 4px' }}>/帮助</code>（查看说明）
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
+          </div>
 
-            {/* 渠道默认智能体（对应 Accio 弹窗的「会话默认插件」位）：
-                群里 @机器人 的对话以它出面；不选 = 通用运营助手。渠道卡上也能随时改 */}
-            <div className="stack" style={{ gap: 6 }}>
-              <span className="small muted">渠道默认智能体</span>
-              <select className="input" value={agentTpl} onChange={(e) => setAgentTpl(e.target.value)} style={{ maxWidth: 340 }}>
-                <option value="">通用运营助手（默认）</option>
-                {agentOptions.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-              </select>
+          {/* 弹窗底部固定操作栏 */}
+          <div style={{ padding: '14px 24px', borderTop: '1px solid var(--border)', background: 'var(--surface)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <div className="small" style={{ color: failed ? 'var(--red)' : 'var(--green)', fontWeight: 500 }}>
+              {msg || (editing?.lastInboundAt ? `✓ 机器人连接正常 (最近交互 ${fmtDateTime(editing.lastInboundAt)})` : '')}
             </div>
-
-            <div className="row" style={{ gap: 8 }}>
-              <button className="btn btn-sm btn-primary" onClick={save} disabled={pending}>{pending ? '保存中…' : '保存'}</button>
-              <button className="btn btn-sm btn-ghost" onClick={() => { setShowForm(false); resetForm(); }} disabled={pending}>取消</button>
-              {msg && <span className="small" style={{ color: failed ? 'var(--red)' : 'var(--muted)' }}>{msg}</span>}
+            <div className="row" style={{ gap: 10, alignItems: 'center' }}>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={() => { setShowForm(false); resetForm(); }}
+                disabled={pending}
+                style={{ padding: '8px 18px' }}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={save}
+                disabled={pending}
+                style={{ padding: '8px 24px', fontWeight: 600, boxShadow: '0 2px 8px rgba(232, 85, 45, 0.25)' }}
+              >
+                {pending ? '保存中…' : '保存配置'}
+              </button>
             </div>
           </div>
-          )}
         </div>
         </Overlay>
       ) : (

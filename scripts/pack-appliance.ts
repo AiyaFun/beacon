@@ -19,6 +19,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync, rmSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { APPLIANCE_EXCLUDE } from '../lib/appliance/package-exclude';
+import { notesForVersion } from '../lib/appliance/changelog';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -59,10 +60,25 @@ if (leaked.length > 0) {
   process.exit(1);
 }
 
+// 更新说明：先是 CHANGELOG.md 里这一版的条目（客户点「检查更新」看到的正文），
+// 再是自动列出的 SQL 迁移计数。
+//
+// 【没写说明就不许打包】版本号升了、CHANGELOG 没跟上 = 客户看到一个光秃秃的版本号，
+// 不知道要不要更。这跟「版本没升更新送不出去」是同一类静默错——deploy-prepare 用硬闸
+// 拦那一种，这里拦这一种。
+const changelogPath = join(ROOT, 'CHANGELOG.md');
+const changelog = existsSync(changelogPath) ? readFileSync(changelogPath, 'utf8') : '';
+const versionNotes = notesForVersion(changelog, version);
+if (!versionNotes || versionNotes.length === 0) {
+  rmSync(outPath, { force: true });
+  console.error(`⛔ CHANGELOG.md 里没有 v${version} 的说明（要一个 \`## ${version}\` 段落和至少一条 \`- \` 条目）。已删除产物。`);
+  process.exit(1);
+}
+const notes: string[] = [...versionNotes];
+
 // 这一版要人工留意的事：新增的 SQL 迁移脚本自动列出来（整机版是 SQLite 走 db push，
 // 这些 pg 脚本只对私有化 Postgres 有意义，但列出来让运维知道有结构变更）
 const sqlDir = join(ROOT, 'prisma', 'postgres');
-const notes: string[] = [];
 if (existsSync(sqlDir)) {
   const sqls = readdirSync(sqlDir).filter((f) => f.endsWith('.sql')).sort();
   if (sqls.length > 0) notes.push(`结构变更脚本共 ${sqls.length} 份（私有化 Postgres 用；整机版 SQLite 由 db push 自动同步）`);
