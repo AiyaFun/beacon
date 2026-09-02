@@ -6,10 +6,12 @@ import { toJson, parseJson, type Metrics } from '../json';
 import { realCompetitorAdapter } from '../adapters/competitor-real';
 import { learnFromPerformance, learnFromAbandonedDrafts } from '../insight/learn';
 import { buildDailyBrief } from '../topic/brief';
+import { briefTopicsFor } from '../topic/brief-topics';
 import { replenishEvergreen } from '../topic/sources/evergreen';
 import { notify } from '../notify';
 import { pushEvent, beaconUrl } from '../bot';
 import { isPushDue } from '../bot/push-window';
+import { isReplyOnlyProvider } from '../bot/types';
 import { optimizeWorkspaceMemory } from '../memory/optimize';
 import { scanAndGenerateReviews, scanWeeklyReviews } from '../insight/review';
 import { evaluateAndAlert } from '../insight/alert';
@@ -57,21 +59,8 @@ function dueMilestone(publishedAt: Date, snapshots: { milestone: string | null }
   return null;
 }
 
-// 晨报取数：不加 take——晨报要按队列分组，只取前 N 条会让「今日突击」这一队随机丢失，
-// 恰恰是最有时间压力的那一队。条数上限由 brief.ts 按队列各自控制。
-// 不按日期过滤是有意的：generateRecommendations 每轮会先清掉旧的 candidate/recommended 再写入，
-// 库里 state='recommended' 的就是最新一轮的结果——而且容器跑在 UTC，
-// 「北京 05:00 生成、09:00 推送」跨了 UTC 日界，按 UTC 自然日过滤反而会把当天的推荐全滤没。
-function briefTopics(accountId: string) {
-  return prisma.topicIdea.findMany({
-    where: { accountId, state: 'recommended' },
-    orderBy: { totalScore: 'desc' },
-    select: {
-      title: true, totalScore: true, queue: true, angle: true,
-      windowHint: true, sourceType: true, isExploration: true, mocked: true,
-    },
-  });
-}
+// 晨报取数：见 lib/topic/brief-topics.ts（机器人「给我今天的选题」共用同一份）
+const briefTopics = briefTopicsFor;
 
 async function withRun(name: JobName, tenantId: string | undefined, fn: () => Promise<{ detail?: string }>) {
   const startedAt = Date.now();
@@ -200,12 +189,15 @@ export const HANDLERS: Record<JobName, JobHandler> = {
       const integrations = await prisma.botIntegration.findMany({
         // 演示工作区不推（与 daily_recommend 同款排除）
         where: { enabled: true, workspaceId: { not: DEMO_WORKSPACE_ID } },
-        select: { id: true, workspaceId: true, pushSchedule: true, pushEvents: true, webhookUrl: true, inboundKey: true },
+        select: { id: true, provider: true, workspaceId: true, pushSchedule: true, pushEvents: true, webhookUrl: true, inboundKey: true },
       });
       // 到点 + 订阅了该事件 + 有可用出站通道。事件订阅 pushEvent 内部也会再判一次，
       // 这里先判是为了「一个都没到点」时直接空转返回，不去查账号和选题。
+      // 只答不推的渠道（微信客服/扫码）没有出站这条路：它们的 pushEvents 保存时已清空，
+      // 这里再按 provider 挡一道——存量数据或别的写入路漏了，也不会每天早上给它记一条「推送失败」
       const due = integrations.filter(
         (it) =>
+          !isReplyOnlyProvider(it.provider) &&
           (it.webhookUrl || it.inboundKey) &&
           parseJson<string[]>(it.pushEvents, []).includes('daily_recommend') &&
           isPushDue(it.pushSchedule, now),

@@ -39,15 +39,14 @@ async function mockLlm(text = '回答') {
 
 describe('isCommandAllowed · 空数组的语义（老数据兼容）', () => {
   it('🔒 空 = 从未配置 = 全开（绝不能理解成全关，那会让线上机器人集体哑掉）', () => {
-    // 唯一例外：DEFAULT_OFF_COMMANDS（派任务这类后来才出现的高危命令）。
-    // 它们不吃「空=全开」的祖荫——否则一次发版让所有已装机器人的群突然能烧额度派任务。
-    // 逐条双向断言，别让例外名单静默吞掉老命令。
+    // 2026-09-02 起 DEFAULT_OFF_COMMANDS 为空（dispatch 改默认开），但逻辑仍在——
+    // 以后加了新的高危命令回来，这条用例原样保护。
     for (const c of TOGGLEABLE_COMMANDS) {
       expect(isCommandAllowed(c.key, []), c.key).toBe(!DEFAULT_OFF_COMMANDS.includes(c.key));
     }
     expect(isCommandAllowed('analyze', null)).toBe(true);
     expect(isCommandAllowed('analyze', undefined)).toBe(true);
-    expect(isCommandAllowed('dispatch', null)).toBe(false);
+    expect(isCommandAllowed('dispatch', null)).toBe(true);
   });
 
   it('配过但全关 = ["help"] → 除 help 外全部拒绝', () => {

@@ -217,9 +217,20 @@ describe('quota · 超额拦截', () => {
   });
 
   it('月额度用尽 → 拦（且月度判定先于日度）', async () => {
-    const t = await mkTenant('free');
-    await logCalls(t.id, 300, { at: new Date(Date.now() - 5 * 24 * 3600_000) }); // 本月早些时候，非今日
-    await expect(assertLlmQuota(t.id, 'platform')).rejects.toThrow(/本月/);
+    // 【为什么要把时钟钉死】这条要的用量必须「在本月、但不是今天」——只有这样才能证明
+    // 月度计数看的是整月，而不是今天这一天。原来拿 `Date.now() - 5 天` 去凑，
+    // 而**每月 1~5 号那个时刻会落到上个月**：月度计数归零 → 判红，
+    // 可生产逻辑完全正确（startOfMonth 是自然月，上月用量本就不该算进本月）。
+    // 2026-09-01 真踩到，全量因此红了一条。夹具依赖真实日期 = 一年里有六十天在说谎。
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-09-15T12:00:00+08:00'));
+    try {
+      const t = await mkTenant('free');
+      await logCalls(t.id, 300, { at: new Date('2026-09-10T12:00:00+08:00') }); // 本月早些时候，非今日
+      await expect(assertLlmQuota(t.id, 'platform')).rejects.toThrow(/本月/);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('QuotaExceededError.code 供上层区分', async () => {

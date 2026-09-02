@@ -1,17 +1,54 @@
 // 机器人集成——共享类型与 provider 注册表（需求③④）。
 // feishu 先落地；其它 provider 标 supported:false，加 adapter 时打开即可，UI/数据层不用改。
 
-export type BotProvider = 'feishu' | 'dingtalk' | 'wecom' | 'telegram' | 'slack';
+export type BotProvider = 'feishu' | 'dingtalk' | 'wecom' | 'telegram' | 'slack' | 'wechat' | 'wechat_kf';
 
 export const BOT_PROVIDERS: { key: BotProvider; name: string; supported: boolean; hint: string }[] = [
   { key: 'feishu', name: '飞书 / Lark', supported: true, hint: '自建应用（双向全能） / 群 Webhook（仅出站）' },
   { key: 'dingtalk', name: '钉钉', supported: true, hint: '群自定义机器人 Webhook（支持 HMAC 加签）' },
   { key: 'wecom', name: '企业微信', supported: true, hint: '群自定义机器人 Webhook（支持图文/Markdown）' },
+  // 微信（2026-09-02，官方 iLink 机器人接口）：微信面向智能体开放的**个人号机器人**接口——用户在微信里
+  // 扫一次码，机器人就成了他微信里的一个联系人（微信 ClawBot / Accio / LightVela 的「微信」都是它）。
+  // **不经企业微信、不用自部署任何东西、不是逆向协议**。只答不推（回复必须带入站的 context_token）。
+  // 收信靠长轮询（lib/bot/wechat-ilink-poller.ts），只在 worker / 整机版 web 进程里跑。
+  // 绑定的是「扫码的那个微信号」：只有它能和机器人对话，别的号发来一律不服务。
+  { key: 'wechat', name: '微信', supported: true, hint: '官方 iLink 机器人 · 扫码把你的微信绑上，直接对话（微信 ClawBot 同一套接口）' },
+  // 微信客服：企业微信的「微信客服」通道，给**对外服务**场景（客户扫客服码找你）。凭据在企微后台生成。
+  // ⚠️ 只有对话没有定时推送：客服消息有 48 小时窗口规则，sendVia/sendViaApp 的 default
+  //    分支会如实拒绝它——别给它加出站 case，那是把「回复」伪装成「广播」。
+  { key: 'wechat_kf', name: '微信客服（企业微信）', supported: true, hint: '企业微信的微信客服通道 · 微信用户扫客服码对话（需企业微信）' },
   // Telegram/Slack 目前只有出站推送，没有入站事件路由（app/api/bot/ 下只有飞书/钉钉/企微三条）——
   // 标成「仅出站」而不是笼统的 supported，免得用户以为能在群里对话。
   { key: 'telegram', name: 'Telegram', supported: true, hint: 'Bot API 推送（仅出站，暂不支持群内对话）' },
   { key: 'slack', name: 'Slack', supported: true, hint: 'Incoming Webhooks（仅出站，暂不支持群内对话）' },
 ];
+
+/**
+ * 只答不推的渠道：没有「主动推送」这条路。
+ * · wechat（iLink）：回复必须带入站消息的 context_token，协议里没有「主动给用户发一条」；
+ * · wechat_kf：客服消息有 48 小时窗口规则，只能回复近期主动咨询的用户，晨报这种广播发不出去。
+ * 四处必须同一份名单：出站分发拒绝（lib/bot/index.ts）/ 晨报到点判断跳过（lib/jobs/handlers.ts）/
+ * 保存时清空 pushEvents（bot-actions）/ 设置页隐藏推送开关与「测试发送」。少一处就是每天早上一条假报错。
+ */
+export const REPLY_ONLY_PROVIDERS: ReadonlySet<string> = new Set(['wechat', 'wechat_kf']);
+export function isReplyOnlyProvider(provider: string | null | undefined): boolean {
+  return !!provider && REPLY_ONLY_PROVIDERS.has(provider);
+}
+
+/**
+ * 对外渠道：发消息的人**不是企业应用认证过的成员**。
+ * 飞书/钉钉/企微机器人背后是「能私聊到它的人已经过了公司的 OA 认证」（lib/auth/oa.ts 文件头的前提）；
+ * 微信客服谁扫码都能聊——这个前提在客服渠道**不成立**。
+ * （微信 iLink 不算对外：只有扫码绑定的那个微信号能对话，身份=扫码时登录着的成员，见 secrets.boundMemberId。）
+ * 后果两条，都在代码里钉死：
+ *   ① 登录/绑定指令不响应（否则任何微信用户说一声「登录」就被 autoJoin 收成成员，还拿到登录链接）；
+ *   ② 派任务的身份闸直接拒（senderId 是微信 external_userid，对不上任何 OA 身份，也不该对上）。
+ * 新建时默认只开低风险指令（EXTERNAL_DEFAULT_COMMANDS），其余管理员看清楚了再勾。
+ */
+export const EXTERNAL_PROVIDERS: ReadonlySet<string> = new Set(['wechat_kf']);
+export function isExternalProvider(provider: string | null | undefined): boolean {
+  return !!provider && EXTERNAL_PROVIDERS.has(provider);
+}
 
 export function botProviderName(key: string): string {
   return BOT_PROVIDERS.find((p) => p.key === key)?.name ?? key;
@@ -25,6 +62,24 @@ export type BotSecrets = {
   encryptKey?: string; // 入站事件订阅 Encrypt Key（飞书/企微 EncodingAESKey）
   corpId?: string; // 企微 Corp ID
   agentId?: string; // 钉钉 AgentId（工作通知用）/ 企微 AgentID
+  /** 微信客服 sync_msg 的游标：记住上次拉到哪，防重放已答过的消息 */
+  kfCursor?: string;
+  /** 微信客服账号 open_kfid：回消息必须带（一个企业可有多个客服号） */
+  openKfId?: string;
+  /** 微信 iLink：扫码后下发的 bot_token（Bearer 凭证，等于登录态） */
+  ilinkBotToken?: string;
+  /** 微信 iLink：机器人 ID（xxx@im.bot） */
+  ilinkBotId?: string;
+  /** 微信 iLink：扫码的那个微信号（xxx@im.wechat）——只服务它 */
+  ilinkUserId?: string;
+  /** 微信 iLink：状态接口可能下发的 baseurl（覆盖默认域名） */
+  ilinkBaseUrl?: string;
+  /** 微信 iLink：getupdates 游标（消费性，先落库再处理） */
+  ilinkCursor?: string;
+  /** 微信 iLink：ret=-14 后置 true，收信循环停下等重新扫码；扫码成功清掉 */
+  ilinkExpired?: boolean;
+  /** 微信 iLink：扫码时登录着的成员——微信里派任务的身份（不走 OA 身份） */
+  boundMemberId?: string;
 };
 
 // ── 入站命令白名单（BotIntegration.allowCommands，管理员在设置页勾选）──
@@ -67,12 +122,18 @@ export const TOGGLEABLE_COMMANDS = BOT_COMMANDS.filter((c) => c.key !== 'help');
 /**
  * 空白名单（=从未配置）时也**默认关**的命令。
  *
- * 「空 = 全开」是给存量数据的兼容语义（见 isCommandAllowed 注释）——但 dispatch 是
- * 那个语义定下之后才出现的：把它也归进「全开」，等于一次发版让所有已装机器人的群
- * 突然都能烧额度派任务，而管理员从没见过这个选项。新的高危命令一律进这个名单，
- * 只有管理员在设置页亲手勾过才算开。
+ * 2026-09-02：dispatch 移出此名单，默认开。理由：自然语言执行已有身份闸+站内确认两道关卡，
+ * 管理员不必额外勾一次。如果以后出现比 dispatch 更危险的命令再往里加。
  */
-export const DEFAULT_OFF_COMMANDS: readonly BotCommandKey[] = ['dispatch'];
+export const DEFAULT_OFF_COMMANDS: readonly BotCommandKey[] = [];
+
+/**
+ * 对外渠道（EXTERNAL_PROVIDERS）新建时的默认指令集。
+ * 只留「问 / 剪藏 / 收录 / 热榜」四样低风险的：不外泄账号数据（analyze/account 会把粉丝数、账号名发出去）、
+ * 不动租户的监控与记忆（crawl/optimize）。管理员在表单里随时能加回来——
+ * 默认值的职责是「没看的人不吃亏」，不是替他做决定。
+ */
+export const EXTERNAL_DEFAULT_COMMANDS: readonly BotCommandKey[] = ['chat', 'clip', 'topic', 'hot'];
 
 const COMMAND_KEYS = new Set<string>([...BOT_COMMANDS.map((c) => c.key), 'help']);
 

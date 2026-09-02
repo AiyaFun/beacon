@@ -68,7 +68,9 @@ function PersonaLine({
         {template.persona ? (
           <span>{template.persona}</span>
         ) : (
-          <span className="muted">没写 · AI 不会在对话里主动派它，只能手动点「跑一遍」</span>
+          // 琥珀而不是灰：灰字读作「无关紧要的空位」，可这一格空着，最短的那条调用路
+          // （对话直接说目标 → AI 自动派它）对这个智能体就是关死的。它是个待办，不是留白。
+          <span style={{ color: 'var(--amber-text, #96560A)' }}>⚠ 没写 · AI 不会在对话里主动派它，只能手动点「跑一遍」</span>
         )}
         {canEdit && (
           <button
@@ -365,7 +367,8 @@ export function WorkflowMarket({
             <div className="row" style={{ gap: 8 }}>
               <button
                 className="btn btn-sm btn-primary"
-                disabled={pending || !form.name.trim()}
+                disabled={pending || !form.name.trim() || !form.persona.trim()}
+                title={!form.persona.trim() ? '职责说明必填：AI 靠它决定对话里该派谁' : undefined}
                 onClick={() =>
                   simple(async () => {
                     let steps: unknown;

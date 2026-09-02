@@ -66,6 +66,131 @@ const DANGEROUS_FLAGS: RegExp[] = [
 
 export type CheckResult = { ok: true; argv: string[]; cwd: string } | { ok: false; error: string };
 
+// ── 底线：任何档都拦（2026-09-02，学自 Hermes tools/approval.py 的 HARDLINE_PATTERNS）──
+//
+// 【为什么 full 档也要有一层】full 档的定义是「哪些命令不再限制」，它的理由成立：
+// 能开终端就没有白名单。但「不限制命令」和「什么都可以」不是一回事——关机、格式化磁盘、
+// 提权、把烽火台自己的进程杀掉，这几样**不是用户开 full 档时想授权的东西**，而模型完全
+// 可能在「清理一下」「重启服务试试」这种话里顺手做出来。这一层挡的就是这几样，
+// 而且不看档位、不看清单：它们没有任何合法的自动化用途值得冒这个险，要做用户自己动手。
+//
+// 【它挡不住什么，说清楚】full 档下 `bash -c "…"` 能跑任何东西，这里只对 -c 的字符串做
+// 文本级匹配，绕过去很容易。所以它和文件头那句话一样：是「别踩到脚」，不是「关得住恶意」。
+//
+// 【为什么看 argv 而不是拼成字符串再匹配】这里根本没有 shell，命令与参数本来就是数组。
+// 按数组判没有 `git commit -m "rm -rf /"` 这种误伤——参数里出现什么字都不算，只看真正会
+// 被执行的那个命令是什么。只有 shell -c 那条路才退回文本匹配。
+
+/** 这些命令不管带什么参数都不放行。值是给用户看的理由。 */
+const HARDLINE_COMMANDS: Record<string, string> = {
+  sudo: '提权', su: '提权', doas: '提权',
+  shutdown: '关机', reboot: '重启', halt: '关机', poweroff: '关机',
+  wipefs: '抹掉磁盘签名', fdisk: '改分区表', sfdisk: '改分区表', parted: '改分区表',
+};
+/** 命令名的前缀形状：mkfs、mkfs.ext4、mkfs.vfat… */
+const HARDLINE_COMMAND_PATTERNS: [RegExp, string][] = [[/^mkfs(\.|$)/, '格式化磁盘']];
+
+/** 会把命令包一层再执行的外壳。判底线要剥掉它们看里面那条。 */
+const WRAPPERS = new Set(['env', 'nohup', 'nice', 'time', 'timeout', 'xargs', 'command', 'exec', 'stdbuf', 'caffeinate']);
+/** 需要跳过一个值的旗标（nice -n 10 / timeout -s KILL / stdbuf -o 0） */
+const WRAPPER_FLAGS_WITH_VALUE = /^-(n|s|k|o|e|i|d)$/;
+const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'fish', 'ksh']);
+
+/** 自己的进程名：杀它们 = 把烽火台杀掉。 */
+const SELF_PROCESS = /(^|[\/\s])(node|next|next-server|tsx|npm|beacon)(\s|$)/i;
+
+/**
+ * 给 `sh -c "…"` 那条路用的文本级形状。**只在这里用**：普通 argv 走上面的数组判据。
+ * 每条都收得很窄（rm 只认 / ~ $HOME . 这几个目标），宁可漏也不要把 `grep rm` 之类拦掉。
+ */
+// 【锚在命令位置】只认「行首 / ; && || | 之后 / sudo·exec·env·nohup 之后」的那个词是命令。
+// 不锚的话 `echo rm -rf / is dangerous`、`git commit -m "remove sudo"` 都会被拦——
+// Hermes 的 _CMDPOS 就是为这个存在的。
+const CMDPOS = String.raw`(^|[;&|]\s*|\b(?:sudo|exec|env|nohup)\s+)`;
+const SHELL_STRING_PATTERNS: [RegExp, string][] = [
+  [new RegExp(CMDPOS + String.raw`rm\s+(-[A-Za-z]*[rR][A-Za-z]*\s+)+(--\s+)?(\/|~|\$HOME|\.|\.\/|\/\*)(\s|$|;|&|\|)`), '递归删除根目录/家目录/整个工作目录'],
+  [new RegExp(CMDPOS + String.raw`mkfs(\.|\s)`), '格式化磁盘'],
+  [new RegExp(CMDPOS + String.raw`dd\s+[^;&|]*\bof=\/dev\/`), '直接写块设备'],
+  [/:\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/, 'fork 炸弹'],
+  [new RegExp(CMDPOS + String.raw`(shutdown|reboot|halt|poweroff)(\s|$)`), '关机/重启'],
+  [new RegExp(CMDPOS + String.raw`(sudo|su|doas)(\s|$)`), '提权'],
+  [new RegExp(CMDPOS + String.raw`(pkill|killall)\s+[^;&|]*(node|next|beacon|tsx)`), '杀掉烽火台自己的进程'],
+  [new RegExp(CMDPOS + String.raw`kill\s+(-\w+\s+)*-1(\s|$)`), '杀掉所有进程'],
+];
+
+/** 剥掉外壳（env FOO=1 nice -n 5 cmd …）取真正要执行的那条。 */
+function unwrap(list: readonly string[]): string[] {
+  let a = [...list];
+  for (let guard = 0; guard < 6 && a.length > 0 && WRAPPERS.has(a[0]); guard++) {
+    const w = a[0];
+    a = a.slice(1);
+    // env 的 KEY=VALUE、各外壳的旗标都跳过；timeout 还要跳过一个时长
+    while (a.length > 0) {
+      if (w === 'env' && /^[A-Za-z_][A-Za-z0-9_]*=/.test(a[0])) { a = a.slice(1); continue; }
+      if (a[0].startsWith('-')) {
+        const skipValue = WRAPPER_FLAGS_WITH_VALUE.test(a[0]) && a.length > 1 && !a[1].startsWith('-');
+        a = a.slice(skipValue ? 2 : 1);
+        continue;
+      }
+      break;
+    }
+    if (w === 'timeout' && a.length > 0 && /^\d+(\.\d+)?[smhd]?$/.test(a[0])) a = a.slice(1);
+  }
+  return a;
+}
+
+/** rm 的目标是不是「整个工作目录」或更外面。路径闸另外管出界，这里只认 root 自己与 . / ~。 */
+function rmTargetsWholeRoot(root: string, args: readonly string[]): boolean {
+  const recursive = args.some((a) => /^-[A-Za-z]*[rR]/.test(a) || a === '--recursive');
+  if (!recursive) return false;
+  const rootAbs = resolve(root);
+  return args.filter((a) => !a.startsWith('-')).some((t) => {
+    if (t === '~' || t === '$HOME' || t === '/' || t === '/*' || t === '.' || t === './' || t === '*') return true;
+    return resolve(root, t) === rootAbs;
+  });
+}
+
+/**
+ * 底线判定。返回 null=没碰底线；否则是给用户看的理由。
+ * 不看 policy.mode——这就是它存在的意义。
+ */
+export function hardlineReason(root: string, argv: readonly string[]): string | null {
+  const a = unwrap(argv.map((x) => String(x ?? '')));
+  const cmd = a[0] ?? '';
+  const base = cmd.split(/[\\/]/).pop() ?? cmd;
+  if (!base) return null;
+
+  const direct = HARDLINE_COMMANDS[base];
+  if (direct) return `${direct}（${base}）不由 AI 来做，要做请你自己在终端里做`;
+  for (const [re, why] of HARDLINE_COMMAND_PATTERNS) if (re.test(base)) return `${why}（${base}）不由 AI 来做`;
+
+  if (base === 'dd' && a.some((x) => /^of=\/dev\//.test(x))) return '直接往块设备写（dd of=/dev/…）不由 AI 来做';
+  if (base === 'diskutil' && a.slice(1).some((x) => /^(erase|partition|zero|secureErase|reformat|apfs)/i.test(x))) {
+    return '抹盘/改分区（diskutil）不由 AI 来做';
+  }
+  if (base === 'rm' && rmTargetsWholeRoot(root, a.slice(1))) return '递归删除整个工作目录（或更外面）不由 AI 来做，要清空请你自己来';
+
+  if (base === 'kill') {
+    const self = new Set([String(process.pid), String(process.ppid)]);
+    for (const x of a.slice(1)) {
+      if (x === '-1') return '杀掉所有进程（kill -1）不放行';
+      if (self.has(x.replace(/^-/, ''))) return '这是烽火台自己的进程，杀了它这次执行和界面都会一起没';
+    }
+  }
+  if ((base === 'pkill' || base === 'killall') && a.slice(1).some((x) => SELF_PROCESS.test(x) || SELF_PROCESS.test(' ' + x + ' '))) {
+    return '按名字杀 node/next/beacon 会把烽火台自己杀掉，不放行';
+  }
+
+  if (SHELLS.has(base)) {
+    const i = a.findIndex((x, idx) => idx > 0 && x === '-c');
+    if (i > 0 && a[i + 1]) {
+      const script = a[i + 1];
+      for (const [re, why] of SHELL_STRING_PATTERNS) if (re.test(script)) return `${why}不由 AI 来做（在 ${base} -c 的脚本里）`;
+    }
+  }
+  return null;
+}
+
 /** 命令名是否带路径（允许 git ≠ 允许 /tmp/git）。 */
 function hasPathSeparator(a: string): boolean {
   return a.includes('/') || a.includes('\\') || isAbsolute(a);
@@ -85,6 +210,14 @@ async function needsPathCheck(root: string, a: string): Promise<boolean> {
   if (isAbsolute(a)) return true;
   if (a.split(/[\\/]/).includes('..')) return true;
   try { await lstat(resolve(root, a)); return true; } catch { return false; }
+}
+
+/** 一个参数里要过路径闸的片段：整串 + `key=value` 的 value（只拆第一个等号）。 */
+function pathPieces(a: string): string[] {
+  const eq = a.indexOf('=');
+  // `=` 在开头不算键值对；`-` 开头的旗标（--output=/x）与 dd 风格（of=/x）都拆
+  if (eq <= 0 || eq === a.length - 1) return [a];
+  return [a, a.slice(eq + 1)];
 }
 
 /** 真实路径是否在 root 之内。root 与 p 都必须先解软链，且比到分隔符边界。 */
@@ -119,6 +252,9 @@ export async function checkCommand(policy: ShellPolicy, argv: readonly string[])
   const list = argv.map((a) => String(a ?? ''));
   const cmd = list[0]?.trim();
   if (!cmd) return { ok: false, error: '没给命令' };
+  // 底线先判，且不看档位：见上面那段。放在命令名判据之前——`/usr/bin/sudo` 也该被说成「提权」而不是「带路径」
+  const hard = hardlineReason(policy.root, list);
+  if (hard) return { ok: false, error: hard };
   // 命令名本身不许带路径：允许 `git` 不等于允许 `/tmp/git`
   if (hasPathSeparator(cmd)) return { ok: false, error: '命令名不能带路径，只能写命令本身（如 git）' };
   if (policy.mode !== 'full' && !policy.allow.includes(cmd)) {
@@ -130,8 +266,13 @@ export async function checkCommand(policy: ShellPolicy, argv: readonly string[])
     if (policy.mode !== 'full' && DANGEROUS_FLAGS.some((re) => re.test(a))) {
       return { ok: false, error: `参数「${a}」能让命令去执行别的东西，不放行` };
     }
-    if ((await needsPathCheck(policy.root, a)) && !(await insideRoot(policy.root, a))) {
-      return { ok: false, error: `路径「${a}」在允许的工作目录之外` };
+    // 【key=value 形状的参数，等号后面那半也要过闸】`--output=/etc/x`、`of=/dev/sda`
+    // 整串不是绝对路径、也不含 ..、也不是工作目录里的名字——原来的三条判据一条都不命中，
+    // 路径闸对它完全不设防（2026-09-02 对照 Hermes 的去混淆步骤时发现）。
+    for (const piece of pathPieces(a)) {
+      if ((await needsPathCheck(policy.root, piece)) && !(await insideRoot(policy.root, piece))) {
+        return { ok: false, error: `路径「${piece}」在允许的工作目录之外` };
+      }
     }
   }
   return { ok: true, argv: list, cwd: policy.root };

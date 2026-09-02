@@ -41,6 +41,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ key: string }>
   if (!integration || integration.provider !== 'feishu') {
     return NextResponse.json({ code: 404, msg: 'unknown app' }, { status: 404 });
   }
+  // 停用 = 出站入站一起停（此前 enabled 只管出站，「停用」后群里照答）。ack 让飞书别重试
+  if (!integration.enabled) return ack({ code: 0, msg: 'disabled' });
   const secrets = readBotSecrets(integration.secretsEnc);
 
   // 解析（可能加密）

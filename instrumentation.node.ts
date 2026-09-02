@@ -21,4 +21,8 @@ await installOpsAlerting();
 if (schedulerKind() === 'local') {
   const { startLocalScheduler } = await import('./lib/jobs/local-scheduler');
   startLocalScheduler();
+  // 微信 iLink 收信（长轮询常驻循环）同理只在整机版的 web 进程里起——SaaS/私有化在 worker.ts 起。
+  // 游标是消费性的，两处同时拉同一个 token 会互吞消息，所以这里与 worker 互斥，判据同上。
+  const { startIlinkSupervisor } = await import('./lib/bot/wechat-ilink-poller');
+  startIlinkSupervisor();
 }

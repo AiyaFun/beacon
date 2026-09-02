@@ -394,17 +394,45 @@ describe('上下文折叠：长任务不能让它忘掉自己做过什么', () =
   // 它可能把同一件事再做一遍——而且是**真的再做一遍，花第二次钱**。
   //
   // 自主智能体正是长任务的来源，所以这一层要跟它一起上。
-  it('超长时把中段折叠成一句「做过什么」，而不是直接丢掉', async () => {
+  // 2026-09-02 起折叠之前多了一步「先剪旧的大工具结果」：大头几乎总是工具结果，
+  // 剪掉它们、留下调用记录，模型照样知道自己做过什么，还不用整段丢掉再重查。
+  it('大头在工具结果里：只剪结果、不折叠，每一次调用都还在', async () => {
     const { __testing } = await import('@/lib/agent/run');
     const big = 'x'.repeat(30_000);
     const msgs: { role: string; content?: string; toolCalls?: { id: string; name: string; arguments: string }[]; toolCallId?: string }[] = [
       { role: 'system', content: '系统提示' },
       { role: 'user', content: '原始目标' },
     ];
-    // 造一段很长的中段：查了选题、建了草稿，每次工具结果都很大
     for (let i = 0; i < 10; i++) {
       msgs.push({ role: 'assistant', content: '', toolCalls: [{ id: `c${i}`, name: i % 2 ? 'create_draft' : 'list_topics', arguments: '{}' }] });
       msgs.push({ role: 'tool', toolCallId: `c${i}`, content: `{"ok":true,"data":"${big}"}` });
+    }
+    msgs.push({ role: 'assistant', content: '最后一句' });
+
+    const out = JSON.parse(__testing.capMessages(msgs as never)) as typeof msgs;
+    const text = JSON.stringify(out);
+    expect(text.length, '剪完还是超长').toBeLessThanOrEqual(200_000);
+    expect(text).not.toContain('已折叠');
+    // 十次调用一次没少：模型看得见自己建过草稿、查过选题
+    expect(out.filter((m) => m.role === 'assistant' && m.toolCalls?.length).length).toBe(10);
+    expect(text).toContain('create_draft');
+    // 剪掉的结果明确告诉它别重做
+    expect(text).toMatch(/不要重做|已经做过/);
+    expect(out[0].content).toBe('系统提示');
+    expect(text).toContain('最后一句');
+  });
+
+  it('大头在助手正文里（剪工具结果剪不下来）：才把中段折叠成一句「做过什么」', async () => {
+    const { __testing } = await import('@/lib/agent/run');
+    const big = 'x'.repeat(30_000);
+    const msgs: { role: string; content?: string; toolCalls?: { id: string; name: string; arguments: string }[]; toolCallId?: string }[] = [
+      { role: 'system', content: '系统提示' },
+      { role: 'user', content: '原始目标' },
+    ];
+    // 助手每轮都写一大段（比如把正文贴进了对话），工具结果本身很小
+    for (let i = 0; i < 10; i++) {
+      msgs.push({ role: 'assistant', content: big, toolCalls: [{ id: `c${i}`, name: i % 2 ? 'create_draft' : 'list_topics', arguments: '{}' }] });
+      msgs.push({ role: 'tool', toolCallId: `c${i}`, content: '{"ok":true}' });
     }
     msgs.push({ role: 'assistant', content: '最后一句' });
 
@@ -447,6 +475,9 @@ describe('折叠不许拆散「工具调用与它的回复」', () => {
   // 【每条工具结果要够大】用 2000 字时 24 个组合里只有 3 个真的超过 200K 上限，
   // 其余压根没折叠——于是「折叠切错了」的 mutation 照样绿（mutation 验证当场抓到）。
   // 8000 字让每一种 rounds×perRound 都真的走进折叠。
+  // 【大头放在助手正文而不是工具结果里】2026-09-02 起折叠之前会先剪旧的大工具结果，
+  // 放在工具结果里的话剪完就够了、根本走不到折叠——下面那条「每种切点形状都折叠过」
+  // 就成了空气。助手正文不剪，所以折叠必然发生。
   function buildLongConversation(rounds: number, callsPerRound: number) {
     const big = 'x'.repeat(8_000);
     const msgs: Array<Record<string, unknown>> = [
@@ -457,8 +488,8 @@ describe('折叠不许拆散「工具调用与它的回复」', () => {
       const calls = Array.from({ length: callsPerRound }, (_, c) => ({
         id: `r${r}c${c}`, name: 'list_topics', arguments: '{}',
       }));
-      msgs.push({ role: 'assistant', content: '', toolCalls: calls });
-      for (const c of calls) msgs.push({ role: 'tool', toolCallId: c.id, content: `{"ok":true,"d":"${big}"}` });
+      msgs.push({ role: 'assistant', content: big.repeat(callsPerRound), toolCalls: calls });
+      for (const c of calls) msgs.push({ role: 'tool', toolCallId: c.id, content: '{"ok":true}' });
     }
     msgs.push({ role: 'assistant', content: '最后一句' });
     return msgs;

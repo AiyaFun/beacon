@@ -1,6 +1,6 @@
 {
   "name": "beacon",
-  "version": "1.3.1",
+  "version": "1.3.17",
   "private": true,
   "description": "烽火台 · 跨平台内容作战室 — 面向创作者/内容团队的多平台选题创作 SaaS",
   "scripts": {
@@ -34,6 +34,7 @@
     "@larksuiteoapi/node-sdk": "^1.73.0",
     "@prisma/client": "5.22.0",
     "bullmq": "^5.34.0",
+    "cron-parser": "^4.9.0",
     "ioredis": "^5.4.2",
     "next": "15.1.6",
     "nodemailer": "^9.0.3",

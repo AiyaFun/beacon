@@ -1,0 +1,155 @@
+# Robots.txt for 烽火台 · 跨平台内容作战室 (Beacon Content Studio)
+# 全网搜索引擎 (Baidu/Google/Bing等) 与 AI 搜索大模型 (DeepSeek/ChatGPT/Perplexity/Kimi等) 抓取规则
+
+User-agent: *
+Allow: /
+Allow: /login
+Allow: /hotlists
+Allow: /downloads
+Allow: /legal
+Allow: /legal/
+Allow: /legal/privacy
+Allow: /legal/terms
+Allow: /legal/data-request
+Allow: /sitemap.xml
+Allow: /llms.txt
+Disallow: /api/
+Disallow: /dashboard/
+Disallow: /admin/
+
+User-agent: Baiduspider
+Allow: /
+Allow: /login
+Allow: /hotlists
+Allow: /downloads
+Allow: /legal/
+Allow: /sitemap.xml
+Allow: /llms.txt
+
+User-agent: Googlebot
+Allow: /
+Allow: /login
+Allow: /hotlists
+Allow: /downloads
+Allow: /legal/
+Allow: /sitemap.xml
+Allow: /llms.txt
+
+User-agent: Bingbot
+Allow: /
+Allow: /login
+Allow: /hotlists
+Allow: /downloads
+Allow: /legal/
+Allow: /sitemap.xml
+Allow: /llms.txt
+
+User-agent: 360Spider
+Allow: /
+Allow: /login
+Allow: /hotlists
+Allow: /downloads
+Allow: /legal/
+Allow: /sitemap.xml
+Allow: /llms.txt
+
+User-agent: Sogouspider
+Allow: /
+Allow: /login
+Allow: /hotlists
+Allow: /downloads
+Allow: /legal/
+Allow: /sitemap.xml
+Allow: /llms.txt
+
+User-agent: GPTBot
+Allow: /
+Allow: /login
+Allow: /hotlists
+Allow: /downloads
+Allow: /legal/
+Allow: /sitemap.xml
+Allow: /llms.txt
+
+User-agent: OAI-SearchBot
+Allow: /
+Allow: /login
+Allow: /hotlists
+Allow: /downloads
+Allow: /legal/
+Allow: /sitemap.xml
+Allow: /llms.txt
+
+User-agent: ChatGPT-User
+Allow: /
+Allow: /login
+Allow: /hotlists
+Allow: /downloads
+Allow: /legal/
+Allow: /sitemap.xml
+Allow: /llms.txt
+
+User-agent: Bytespider
+Allow: /
+Allow: /login
+Allow: /hotlists
+Allow: /downloads
+Allow: /legal/
+Allow: /sitemap.xml
+Allow: /llms.txt
+
+User-agent: PerplexityBot
+Allow: /
+Allow: /login
+Allow: /hotlists
+Allow: /downloads
+Allow: /legal/
+Allow: /sitemap.xml
+Allow: /llms.txt
+
+User-agent: ClaudeBot
+Allow: /
+Allow: /login
+Allow: /hotlists
+Allow: /downloads
+Allow: /legal/
+Allow: /sitemap.xml
+Allow: /llms.txt
+
+User-agent: DeepSeekBot
+Allow: /
+Allow: /login
+Allow: /hotlists
+Allow: /downloads
+Allow: /legal/
+Allow: /sitemap.xml
+Allow: /llms.txt
+
+User-agent: Applebot
+Allow: /
+Allow: /login
+Allow: /hotlists
+Allow: /downloads
+Allow: /legal/
+Allow: /sitemap.xml
+Allow: /llms.txt
+
+User-agent: Applebot-Extended
+Allow: /
+Allow: /login
+Allow: /hotlists
+Allow: /downloads
+Allow: /legal/
+Allow: /sitemap.xml
+Allow: /llms.txt
+
+User-agent: Google-Extended
+Allow: /
+Allow: /login
+Allow: /hotlists
+Allow: /downloads
+Allow: /legal/
+Allow: /sitemap.xml
+Allow: /llms.txt
+
+Sitemap: https://beacon.iyunci.cn/sitemap.xml

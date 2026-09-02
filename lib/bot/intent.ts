@@ -1,6 +1,7 @@
 import { prisma } from '../db';
 import { llmComplete } from '../llm/gateway';
 import { parseJson } from '../json';
+import { looksActionable, wantsExecution } from '../agent/intent';
 
 // 自然语言 → 指令意图（需求④增强）。
 //
@@ -21,6 +22,11 @@ export type Intent =
   | { cmd: 'optimize' }
   | { cmd: 'analyze'; arg: string } // 账号体检（arg=账号名，可空=本群当前账号）
   | { cmd: 'chat' } // 自由对话（原文即问题）
+  // ── 2026-09-02 加的四种（用户真机反馈：「给我今天的选题」被听成了「查看帮助」）──
+  | { cmd: 'brief' } // 今日选题晨报（本群账号的最新一轮推荐）
+  | { cmd: 'competitor'; arg: string } // 看监控中的竞对近期高热作品（arg=名字，可空=全部）
+  | { cmd: 'run' } // 让 AI 执行器**真去做**这句话说的事（等价 /执行 原文）
+  | { cmd: 'agent'; arg: string } // 看/切换本会话的智能体（arg=名字，可空=列出）
   | { cmd: 'ingest' }; // 默认：当作选题候选收录
 
 // ── ② 确定性短语 ──
@@ -40,7 +46,34 @@ const PHRASES: { re: RegExp; intent: Intent }[] = [
     re: /^(我的|我们的|当前)?(账号|号)(最近|近期|这周|这个月)?(数据|表现|情况)?(怎么样|如何|好不好|有什么问题)[?？。!！]*$/,
     intent: { cmd: 'analyze', arg: '' },
   },
+  // 今日选题晨报：「给我今天的选题」「今日选题」「晨报」「今天推荐什么」。
+  // 这句话此前被 LLM 归成 help（真机 2026-09-02），而它恰恰是机器人最该秒回的一句。
+  {
+    re: /^(帮我|给我|来|看看|查看|看下|看一下|发|推|说说)?(一下|下|点)?(今天|今日|本日|当天)的?(选题|推荐|晨报|选题推荐|推荐选题)(有哪些|有什么|是什么|吧|呢)?[?？。!！]*$/,
+    intent: { cmd: 'brief' },
+  },
+  { re: /^(晨报|今日晨报|选题晨报|今日选题|今天的选题|今天推荐什么|今天做什么选题|今天写什么)[?？。!！]*$/, intent: { cmd: 'brief' } },
+  // 竞对动态：「看看竞对」「对手最近怎么样」。必须含「竞对/对手/竞品」；「竞品分析怎么做」是问法论，不匹配（有「怎么」）。
+  {
+    re: /^(帮我|给我|看看|查看|看下|看一下)?(一下|下)?(监控中的|监控的)?(竞对|对手|竞品|对标)(们)?(最近|近期|这周)?(有什么|的)?(作品|动态|表现|爆款|新动作)?(如何|怎样)?[?？。!！]*$/,
+    intent: { cmd: 'competitor', arg: '' },
+  },
+  // 智能体：「有哪些智能体」「切换智能体」→ 列出；具体切到谁在 router 里按名字查（见 matchAgentSwitch）
+  { re: /^(智能体|智能体列表|有哪些智能体|你有哪些智能体|都有什么智能体|切换智能体|换个智能体|换一个智能体|当前智能体|现在是哪个智能体)[?？。!！]*$/, intent: { cmd: 'agent', arg: '' } },
 ];
+
+/**
+ * 「换成 X」「切换到 X 智能体」「用 X 来」→ 候选名字。**只给出候选**，不在这里判真伪：
+ * router 拿名字去已装智能体里查，查不到就当这句话不是在切换（照常往下走），
+ * 免得「用 3 个字概括」这种句子被劫持。
+ */
+const AGENT_SWITCH = /^(?:请)?(?:切换到|切换成|切到|换成|换到|换到|改用|改成|用|使用|让|叫)\s*[「『"“]?(.{1,30}?)[」』"”]?\s*(?:这个)?(?:智能体)?(?:来|出面|接手|回答|来回答|上)?[。!！]*$/;
+export function matchAgentSwitch(text: string): string | null {
+  const m = AGENT_SWITCH.exec(text.trim());
+  if (!m) return null;
+  const name = m[1].trim();
+  return name.length >= 2 ? name : null;
+}
 
 export function matchPhrase(text: string): Intent | null {
   const t = text.trim();
@@ -76,6 +109,11 @@ const SYSTEM = `你是内容运营助手的指令路由器。把用户在群里�
 - optimize：想触发一次记忆学习优化/复盘
 - analyze：想让助手分析/体检自己的账号数据与内容表现（arg=账号名，没提到就留空）
 - chat：在向助手提问、请教、要建议，或就某个话题跟它讨论（原话就是问题本身）
+- brief：想看今天的选题推荐/晨报（「今天做什么」「今日选题」）
+- competitor：想看监控中的竞争对手最近的作品/动态（arg=对手名字，没提到就留空）
+- run：让助手**去做**一件具体的事——写一篇、生成几条、采一遍、整理、盯着、排一下……
+  说的是「做」不是「问」（「帮我写一篇秋季穿搭笔记」「把这三个号采一遍」「整理一下本周数据」）
+- agent：想看有哪些智能体、或想切换到某个智能体（arg=名字，没提到就留空）
 - help：想知道机器人能做什么
 - ingest：以上都不是——这句话本身就是一条内容素材/选题灵感
 
@@ -87,20 +125,34 @@ const SYSTEM = `你是内容运营助手的指令路由器。把用户在群里�
    「短视频开头的三种写法」是 ingest（这是个选题）。
 3. analyze 与 chat 的分界看对象：矛头指向「我的账号/数据/最近表现」是 analyze；
    泛泛的方法论问题是 chat。
-4. 拿不准一律选 ingest。ingest 无副作用，选错代价最小。
-5. 只输出 JSON：{"cmd":"hot|topic|crawl|optimize|analyze|chat|help|ingest","arg":"","confidence":0.0}
-   arg 只有 topic/crawl/analyze 需要；confidence 是 0~1 的把握程度。`;
+4. run 与 chat 的分界看动词：「帮我写一篇」是 run；「这篇该怎么写」是 chat。
+   run 与 topic 的分界看有没有动作：「秋季穿搭」「记一下：秋季穿搭」是 topic/ingest；「写一篇秋季穿搭」是 run。
+5. 拿不准一律选 ingest。ingest 无副作用，选错代价最小。
+6. 只输出 JSON：{"cmd":"hot|topic|crawl|optimize|analyze|chat|brief|competitor|run|agent|help|ingest","arg":"","confidence":0.0}
+   arg 只有 topic/crawl/analyze/competitor/agent 需要；confidence 是 0~1 的把握程度。`;
 
-const VALID = new Set(['hot', 'topic', 'crawl', 'optimize', 'analyze', 'chat', 'help', 'ingest']);
+const VALID = new Set(['hot', 'topic', 'crawl', 'optimize', 'analyze', 'chat', 'brief', 'competitor', 'run', 'agent', 'help', 'ingest']);
 
 /**
  * 自然语言 → 意图。
  * 兜底口径：任何不确定（LLM 不可用、降级成 Mock、置信度低、格式不对）都返回 ingest，
  * 也就是保持这个功能上线前的老行为。宁可少认一次，不可乱执行一次。
  */
-export async function classifyIntent(workspaceId: string, text: string): Promise<Intent> {
+export type ClassifyOptions = {
+  /**
+   * 这个群开了「派任务」吗。开了，像「帮我写一篇…」「把这三个号采一遍」这种**让它去做**的句子
+   * 直接判成 run（等价 /执行 原文）；没开就不判 run——判了也执行不了，还不如让对话或收录接住。
+   * 判据复用站内助手那两个纯函数（lib/agent/intent.ts），两边对「什么算派活」的口径一致。
+   */
+  canRun?: boolean;
+};
+
+export async function classifyIntent(workspaceId: string, text: string, opts: ClassifyOptions = {}): Promise<Intent> {
   const phrase = matchPhrase(text);
   if (phrase) return phrase;
+  // 让它去做的句子 → 直接派给执行器。排在「对话」判定之前：「帮我写一篇…」既有「帮我」也有动作词，
+  // 用户要的是那篇稿子落在草稿箱里，不是一段 250 字的建议（2026-09-02 用户原话：希望通过自然语言直接执行任务）。
+  if (opts.canRun && (wantsExecution(text) || looksActionable(text))) return { cmd: 'run' };
   // 含人称的求助句式 → 直接对话。放在 LLM 之前，是为了让「AI 分类器降级时」这条路仍然通：
   // 群里问一句话得到的是回答，而不是被默默收录成一条选题。
   if (looksLikeChat(text)) return { cmd: 'chat' };
@@ -131,6 +183,11 @@ export async function classifyIntent(workspaceId: string, text: string): Promise
   if (cmd === 'crawl') return arg ? { cmd: 'crawl', arg } : { cmd: 'ingest' };
   if (cmd === 'analyze') return { cmd: 'analyze', arg }; // arg 可空=本群当前账号
   if (cmd === 'chat') return { cmd: 'chat' };
+  if (cmd === 'brief') return { cmd: 'brief' };
+  if (cmd === 'competitor') return { cmd: 'competitor', arg };
+  // 派任务没开的群，LLM 说 run 也不算数：退成对话让它至少答一句（router 里会附上怎么开）
+  if (cmd === 'run') return opts.canRun ? { cmd: 'run' } : { cmd: 'chat' };
+  if (cmd === 'agent') return { cmd: 'agent', arg };
   if (cmd === 'hot') return { cmd: 'hot' };
   if (cmd === 'optimize') return { cmd: 'optimize' };
   if (cmd === 'help') return { cmd: 'help' };

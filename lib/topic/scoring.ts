@@ -184,6 +184,8 @@ export function coarseRank(
 
 // 精排重试的超时预算（首次用 provider 默认 30s）。见 finePrompt 里那段说明。
 const RETRY_TIMEOUT_MS = 15_000;
+const FINE_CONCURRENCY = 4; // 精排同时在途的上限（runScoring 里分批）
+const RETRY_BACKOFF_MS = 2_000; // 降级重试前的退避基数（实际 2~4s 带抖动），见 finePrompt 里的注释
 
 // 模型回包的形状。angleShape 刻意放宽成 unknown 而不是 AngleShape：
 // 回包是模型写的，漏字段、写中文、自己发明一个分类都完全可能，
@@ -290,6 +292,12 @@ export async function finePrompt(
   // 那里重试纯属把每次生成的耗时翻倍且必然拿到同样的 Mock 结果。
   // 精排是 Promise.all 并发的，所以重试只加一个来回的墙钟，不是 N 个。
   if (res.degraded) {
+    // 【为什么重试前要等一下】2026-09-01 查生产：daily_recommend 每天 05:00 批量精排时
+    // 稳定有 ~20 次首调失败，而其中不少**重试也失败**（近 14 天累计 11 条选题带着占位分过夜）。
+    // 立即重试正好落在同一个限流/抖动窗口里——供应商还没缓过来，第二枪必然打在同一堵墙上。
+    // 退避 2~4 秒（带抖动，避免整批重试又挤在同一毫秒）：只在失败路径上花，
+    // 正常调用一毫秒都不多等；相比第一枪已经等掉的 30s 超时，这点代价可忽略。
+    await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS + Math.floor(Math.random() * RETRY_BACKOFF_MS)));
     const retry = await llmComplete(tenantId, 'scoring', messages, { json: true, temperature: 0.5, timeoutMs: RETRY_TIMEOUT_MS })
       .catch(() => null); // 重试本身再炸就认了，用第一次的降级结果，别把整条生成拖挂
     if (retry && !retry.degraded) res = retry;
@@ -361,6 +369,13 @@ export async function runScoring(
   demand: Record<string, number> = {},
 ): Promise<ScoredTopic[]> {
   const ranked = coarseRank(candidates, persona, saturation, semantic, demand).slice(0, topN);
-  const scored = await Promise.all(ranked.map((c) => finePrompt(tenantId, c, persona, memory, extraContext)));
+  // 【为什么不再 Promise.all 全发】topN 条精排一口气全打到供应商，正是 05:00 夜批失败率的放大器
+  //（那个点每个账号 6 连发、几十个账号排着队发）。4 路小池把突发摊平，
+  // 单账号墙钟只多一个来回（6 条从 1 轮变 2 轮），失败率的收益远大于这点延迟。
+  const scored: ScoredTopic[] = [];
+  for (let i = 0; i < ranked.length; i += FINE_CONCURRENCY) {
+    const batch = ranked.slice(i, i + FINE_CONCURRENCY);
+    scored.push(...await Promise.all(batch.map((c) => finePrompt(tenantId, c, persona, memory, extraContext))));
+  }
   return scored.sort((a, b) => b.totalScore - a.totalScore);
 }

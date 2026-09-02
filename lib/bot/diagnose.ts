@@ -1,6 +1,8 @@
 import { feishuTenantAccessToken, feishuListBotChats, feishuSendToChat } from './feishu';
 import { getDingtalkAccessToken, sendDingtalkApp } from './dingtalk';
 import { getWecomAccessToken, sendWecomApp } from './wecom';
+import { kfListAccounts } from './wechat-kf';
+import { backgroundSchedulerRuns } from '../jobs/queue';
 import type { BotSecrets, PushMessage } from './types';
 
 // 机器人体检：把「测试失败」拆成逐步结果，每步带上平台原始 code/msg。
@@ -31,6 +33,7 @@ export async function diagnoseBot(
   webhookUrl: string | null,
   inboundKey: string | null,
   secrets: BotSecrets,
+  meta: { lastInboundAt?: Date | null } = {},
 ): Promise<DiagResult> {
   // 选路必须与 lib/bot/index.ts 的 routeSend 一致，否则体检测的不是真实推送走的那条路。
   const appReady =
@@ -59,6 +62,8 @@ export async function diagnoseBot(
     provider === 'feishu' ? await diagnoseFeishu(inboundKey, secrets)
     : provider === 'dingtalk' ? await diagnoseDingtalk(inboundKey, secrets)
     : provider === 'wecom' ? await diagnoseWecom(secrets)
+    : provider === 'wechat_kf' ? await diagnoseWechatKf(secrets)
+    : provider === 'wechat' ? diagnoseWechatIlink(secrets, meta)
     : done([{ name: '体检', ok: false, detail: `${provider} 暂不支持自建应用体检` }]);
 
   // 两种模式都留着配置时明确说清楚走的是哪条——历史上正是这里的静默优先级坑了人
@@ -175,6 +180,71 @@ async function diagnoseWecom(secrets: BotSecrets): Promise<DiagResult> {
     ok: r.ok,
     detail: r.ok ? '发送成功，看企业微信工作台' : r.error ?? '发送失败',
     fix: r.ok ? undefined : '确认 AgentID 正确、应用「可见范围」已包含你自己',
+  });
+  return done(steps);
+}
+
+// ── 微信客服：换 token → 列客服账号 → 回调配置齐不齐。──
+// 「测试发送」在这条通道上不存在（只答不推），体检是用户唯一能主动验证凭据的地方。
+// 第②步的价值：自建应用的 Secret 也换得到 token，但调不了 kf/*——只验 token 会给出假绿。
+async function diagnoseWechatKf(secrets: BotSecrets): Promise<DiagResult> {
+  const steps: DiagStep[] = [];
+  if (!secrets.corpId || !secrets.appSecret) {
+    steps.push({
+      name: '① 换取 access_token', ok: false,
+      detail: !secrets.corpId ? '没有保存企业 CorpID' : '没有保存微信客服 Secret',
+      fix: '在「设置」里填企业 CorpID（企微「我的企业」页）与「微信客服 → API」里生成的 Secret',
+    });
+    return done(steps);
+  }
+  const { token, error } = await getWecomAccessToken(secrets.corpId, secrets.appSecret);
+  steps.push({
+    name: '① 换取 access_token', ok: !!token, detail: token ? '成功' : error ?? '失败',
+    fix: token ? undefined : 'CorpID 或 Secret 不对：CorpID 在企微「我的企业」页，Secret 要用「微信客服 → API」里生成的那个',
+  });
+  if (!token) return done(steps);
+
+  const acc = await kfListAccounts(secrets.corpId, secrets.appSecret);
+  const listed = acc.ok && acc.accounts.length > 0;
+  steps.push({
+    name: '② 列出微信客服账号', ok: listed,
+    detail: acc.ok
+      ? (acc.accounts.length ? acc.accounts.map((a) => `${a.name || '（未命名）'}（${a.openKfId}）`).join('、') : '这个企业还没有任何微信客服账号')
+      : acc.error ?? '失败',
+    fix: listed ? undefined : acc.ok
+      ? '到企微「应用管理 → 微信客服」新建一个客服账号，再把它的二维码发给要用的人'
+      : '这个 Secret 换得到 token 但调不了微信客服接口——多半填的是自建应用的 Secret，换成「微信客服 → API」里的',
+  });
+
+  const cb = !!secrets.verificationToken && !!secrets.encryptKey;
+  steps.push({
+    name: '③ 回调配置', ok: cb,
+    detail: cb ? 'Token 与 EncodingAESKey 已保存。收到第一条微信消息后，卡片上「最近接收指令」会有时间' : '缺回调 Token 或 EncodingAESKey',
+    fix: cb ? undefined : '在企微「微信客服 → API → 回调配置」生成 Token / EncodingAESKey 填回来；回调 URL 用卡片上给的那条',
+  });
+  return done(steps);
+}
+
+// ── 微信 iLink：绑定态 → 收信进程 → 最近收信。不主动打 getupdates——游标是消费性的，体检拉一次
+// 就会和收信循环互吞消息；能验的只有这三层静态事实，但它们正好覆盖了三种「看着绑了却不回话」。──
+function diagnoseWechatIlink(secrets: BotSecrets, meta: { lastInboundAt?: Date | null }): DiagResult {
+  const steps: DiagStep[] = [];
+  const bound = !!secrets.ilinkBotToken;
+  steps.push({
+    name: '① 微信绑定', ok: bound && !secrets.ilinkExpired,
+    detail: !bound ? '还没扫码绑定' : secrets.ilinkExpired ? '登录态已过期（微信侧 ret=-14）' : `已绑定${secrets.ilinkUserId ? `：${secrets.ilinkUserId}` : ''}`,
+    fix: bound && !secrets.ilinkExpired ? undefined : '到「设置」里重新扫码',
+  });
+  if (!bound) return done(steps);
+  const runs = backgroundSchedulerRuns();
+  steps.push({
+    name: '② 收信进程', ok: runs,
+    detail: runs ? '后台长轮询在跑（SaaS 在 worker，整机版在本进程）' : '这台实例没有后台进程收微信消息（本机开发模式，BEACON_QUEUE 未设）',
+    fix: runs ? undefined : '生产环境不会有这个问题；本机要验就设 BEACON_QUEUE=local 起服务',
+  });
+  steps.push({
+    name: '③ 最近收信', ok: true,
+    detail: meta.lastInboundAt ? `最近收到微信消息：${meta.lastInboundAt.toISOString()}` : '还没收到过消息——在微信里给它发句话试试（绑定后它就在你的联系人里）',
   });
   return done(steps);
 }

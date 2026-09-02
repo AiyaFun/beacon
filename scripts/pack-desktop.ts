@@ -20,7 +20,7 @@
 // 未签名包首次打开要走「右键→打开」，下载页必须如实写明——不写的话用户会以为包坏了。
 
 import { createHash } from 'node:crypto';
-import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, statSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync, statSync, readdirSync, rmSync } from 'node:fs';
 import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -77,6 +77,13 @@ try {
   prev = Array.isArray(m.builds) ? m.builds : [];
 } catch { /* 首次打包 */ }
 
+// ── 同发闸（2026-09-01）────────────────────────────────────────────────
+// 「两个一起发，版本号都要保持一致」是用户拍板的发布规则。而 deploy-prepare 每次都会跑本脚本：
+// 只要 bundle 目录里躺着新版本的**某一个**平台（比如 mac 刚构建完、Windows 还没跑 CI），
+// 清单就会被写成「新版本、缺平台」——下载页立刻少一个平台，老平台用户还会被提示去装一个
+// 不存在的新版。2026-09-01 真发生：1.3.4 预备把清单写成了 1.2.5 只有 mac。
+// 判据：**换版本**且收集到的平台集合是上一份清单平台集合的真子集 → 什么都不动，如实说明。
+// 同版本的接力收集（跨机器分两次打进同一份清单）不受影响——那正是 keep 逻辑服务的场景。
 const found: Build[] = [];
 
 function take(srcDir: string, name: string, os: Os) {
@@ -123,6 +130,24 @@ for (const b of found) {
 }
 found.length = 0; found.push(...dedup);
 
+if (version !== prevVersion && prev.length > 0) {
+  const prevOses = new Set(prev.map((b) => b.os));
+  const newOses = new Set(found.map((b) => b.os));
+  const missing = [...prevOses].filter((o) => !newOses.has(o));
+  if (missing.length > 0) {
+    console.error(`⏸ 同发闸：v${version} 只收到 ${[...newOses].join('、') || '（无）'}，比线上 v${prevVersion} 少了 ${missing.join('、')}。`);
+    console.error('  清单保持原样不动。等缺的平台构建好、产物放回 bundle 目录后，再跑一次本脚本即可两平台同发。');
+    console.error('  确要单平台发布（明知故犯），设 BEACON_DESKTOP_ALLOW_PLATFORM_DROP=1 再跑。');
+    if (process.env.BEACON_DESKTOP_ALLOW_PLATFORM_DROP !== '1') {
+      // 已拷进 OUT_DIR 的新版文件顺手清掉——留着会被 rsync 传上去当孤儿
+      for (const b of found) {
+        try { rmSync(join(OUT_DIR, b.file.replace('/downloads/', ''))); } catch { /* 尽力 */ }
+      }
+      process.exit(0);
+    }
+  }
+}
+
 const keep = version === prevVersion
   ? prev.filter((p) => !found.some((f) => f.os === p.os && f.arch === p.arch && f.ext === p.ext))
   : [];
@@ -135,6 +160,79 @@ if (builds.length === 0) {
     `Mac 的 dmg 一步若失败，按 desktop/README.md 用 hdiutil 手动补一个再跑本脚本。`,
   );
   process.exit(1);
+}
+
+// ── 一键更新工件（2026-09-01）────────────────────────────────────────────
+//
+// 更新通道与下载页是两套载荷：下载页给人手装（mac=dmg / win=exe），
+// 更新器吃的是 mac=.app.tar.gz、win=同一个 nsis exe，都要配一个 minisign 签名（.sig）。
+//
+// 【签名一律在这台打包机上重做，不信任何随包而来的 .sig】CI 里配的是仓库里的
+// 一次性钥匙（desktop/ci-throwaway-updater.key，只为让打包器走完流程），它签出的 .sig
+// 对客户端里钉死的真公钥毫无意义。收集时统一用真钥匙（deploy/private/signing/，
+// 永不进 CI、永不进 rsync）重签——这样「假签名混进生产」在结构上就不可能，
+// 而不是靠人记得别拷错文件。
+import { execFileSync } from 'node:child_process';
+import { homedir } from 'node:os';
+// 真钥匙住 ~/.beacon-signing/（明文 minisign，不许进任何仓库树——树里签名目录只收加密凭据）
+const UPDATER_KEY = join(homedir(), '.beacon-signing', 'tauri-updater.key');
+const SITE = 'https://beacon.iyunci.cn';
+const UPDATE_JSON = join(OUT_DIR, 'desktop-update.json');
+
+type UpdatePlatform = { url: string; signature: string };
+type UpdateManifest = { version: string; pub_date: string; platforms: Record<string, UpdatePlatform> };
+
+function signWithRealKey(file: string): string {
+  if (!existsSync(UPDATER_KEY)) {
+    console.error(`⛔ 更新签名钥匙不在（${UPDATER_KEY}）。没有它就出不了可信的更新包——`);
+    console.error('   这台机器若不是打包机，把产物拷回打包机再跑；钥匙本身绝不复制到别处。');
+    process.exit(1);
+  }
+  // -f 是「钥匙文件路径」；-k 是「钥匙内容」——传错参数名会把路径当内容去解析，报错不知所云
+  execFileSync('npx', ['tauri', 'signer', 'sign', '-f', UPDATER_KEY, '--password', '', file], {
+    cwd: join(ROOT, 'desktop'), stdio: 'pipe',
+  });
+  return readFileSync(`${file}.sig`, 'utf8').trim();
+}
+
+const updatePlatforms: Record<string, UpdatePlatform> = {};
+
+// mac：createUpdaterArtifacts 产出的 .app.tar.gz（与 dmg 同目录树的 macos/ 下）
+for (const [d, f] of findAll('macos', (f) => f.endsWith('.app.tar.gz'))) {
+  const arch = archOf(f) === 'x64' ? 'x86_64' : 'aarch64';
+  const outName = `beacon-desktop-${version}-mac-${arch}.update.tar.gz`;
+  copyFileSync(join(d, f), join(OUT_DIR, outName));
+  updatePlatforms[`darwin-${arch}`] = {
+    url: `${SITE}/downloads/${outName}`,
+    signature: signWithRealKey(join(OUT_DIR, outName)),
+  };
+  console.log(`更新工件 mac/${arch}: ${f} → ${outName}（已用真钥匙重签）`);
+}
+// win：更新载荷就是 nsis exe 本身——签已收集进 OUT_DIR 的那一份（sig 跟着字节走，改名无碍）
+for (const b of found.filter((x) => x.os === 'win' && x.ext === 'exe')) {
+  const arch = b.arch === 'x64' ? 'x86_64' : b.arch;
+  const local = join(OUT_DIR, b.file.replace('/downloads/', ''));
+  updatePlatforms[`windows-${arch}`] = {
+    url: `${SITE}${b.file}`,
+    signature: signWithRealKey(local),
+  };
+  console.log(`更新工件 win/${arch}: 复用安装包（已用真钥匙重签）`);
+}
+
+// 与下载清单同样的接力语义：这次没构建的平台，同版本时从旧 update.json 原样保留
+let prevUpdate: UpdateManifest | null = null;
+try { prevUpdate = JSON.parse(readFileSync(UPDATE_JSON, 'utf8')) as UpdateManifest; } catch { /* 首次 */ }
+if (prevUpdate && prevUpdate.version === version) {
+  for (const [k, v] of Object.entries(prevUpdate.platforms)) {
+    if (!updatePlatforms[k]) updatePlatforms[k] = v;
+  }
+}
+if (Object.keys(updatePlatforms).length > 0) {
+  const um: UpdateManifest = { version, pub_date: new Date().toISOString(), platforms: updatePlatforms };
+  writeFileSync(UPDATE_JSON, JSON.stringify(um, null, 2) + '\n');
+  console.log(`写入 ${UPDATE_JSON}（${Object.keys(updatePlatforms).join('、')}）`);
+} else {
+  console.log('⚠️ 这次没收到任何更新工件（.app.tar.gz / nsis exe）——一键更新清单未刷新。');
 }
 
 writeFileSync(MANIFEST, JSON.stringify({ name: '烽火台桌面客户端', version, builds }, null, 2) + '\n');

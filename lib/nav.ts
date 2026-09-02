@@ -229,7 +229,7 @@ export type HelpRoute = { what: string; href: string };
 export const HELP_ROUTES: HelpRoute[] = [
   { what: '装插件采公开数据', href: '/extension' },
   { what: '生成采集令牌', href: '/settings/keys' },
-  { what: '配飞书机器人', href: '/notifications' },
+  { what: '配机器人（飞书 / 钉钉 / 企微 / 微信）', href: '/notifications' },
   { what: '看有什么在跑 / 什么在等我处理', href: '/runs' },
   // 2026-08-19 这批新东西：不进这张表，用户在帮助页搜不到，等于功能不存在
   { what: '让一串步骤自己跑完（智能体 / 工作流模板）', href: '/skills' },

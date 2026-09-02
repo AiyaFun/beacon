@@ -304,6 +304,9 @@ function systemPrompt(personaBlock: string, memoryBlock: string, toolNames: stri
     '',
     dispatchOrderBlock(authMode),
     '',
+    // 长期记忆只装账号的事实，不装「上次做这件事发生了什么」——那在过去的执行记录里
+    '- 像是做过的活、或想知道上次某个账号/平台采集是什么情况，先用 search_past_runs 翻过去的执行记录，别把同一个坑再踩一遍。',
+    '',
     '认人的次序：先 list_agents（一整套）→ 再 list_skills（一次成品）。',
     '- 它们各自带着「什么时候该派我上」的说明，照着挑，别只看名字猜。',
     authMode === 'confirm_each'
@@ -830,12 +833,35 @@ function capMessages(messages: ChatMessage[]): string {
   let json = toJson(messages);
   if (json.length <= MAX_MESSAGES_CHARS) return json;
 
+  // 第零步（2026-09-02，学自 Hermes 压缩的第一阶段）：先只剪**旧的大工具结果**。
+  // 撑爆上下文的几乎总是它们（一次采集回来几十条作品、一篇正文全文），而不是对话本身。
+  // 剪掉结果、留下「调过什么工具、传了什么参数、结果一句话是什么」，模型仍然知道自己
+  // 做过什么，也不用像整段折叠那样把中间的一切都丢掉再重查一遍（重查=再花一次配额）。
+  // 多数情况下这一步做完就够了，根本走不到折叠。
+  if (pruneOldToolResults(messages)) {
+    json = toJson(messages);
+    if (json.length <= MAX_MESSAGES_CHARS) return json;
+  }
+
   // 第一步：把中段折叠成一条摘要。系统提示（第一条）与最近几轮原样留着。
   if (messages.length > KEEP_RECENT + 2) {
     const cut = safeCut(messages, messages.length - KEEP_RECENT);
     if (cut > 1) {
       const middle = messages.slice(1, cut);
-      messages.splice(1, middle.length, { role: 'user', content: foldSummary(middle) });
+      const summary = foldSummary(middle);
+      const next = messages[cut];
+      messages.splice(1, middle.length);
+      // 【折叠摘要不能造出两条连着的 user】折叠段之后紧跟的若是一条真实的用户消息
+      //（追问过的运行就是这样），再塞一条 user 进去就是 user→user——不少端点直接 400，
+      // 而且这份对话是落库的，之后每一轮都会再送一遍，等于这次运行永久失败。
+      // 紧跟的是 user 就把摘要并进它的开头；是 assistant 才单独插一条 user。
+      if (next && next.role === 'user') {
+        next.content = typeof next.content === 'string'
+          ? `${summary}\n\n${next.content}`
+          : [{ type: 'text', text: summary }, ...next.content];
+      } else {
+        messages.splice(1, 0, { role: 'user', content: summary });
+      }
       json = toJson(messages);
     }
   }
@@ -875,6 +901,42 @@ function safeCut(messages: readonly ChatMessage[], want: number): number {
 
 /** 折叠时保留最近几条原文。太少会让模型接不上最后一步，太多则折叠不出空间。 */
 const KEEP_RECENT = 6;
+
+/** 工具结果超过这个长度才剪。小结果留着比剪掉划算：占位符自己也有百来字。 */
+const PRUNE_TOOL_RESULT_OVER = 400;
+
+/**
+ * 把「最近几条」之前的大工具结果各剪成一行。返回有没有真的剪到东西。
+ *
+ * 剪出来的占位符刻意保留两样：原结果的 ok 标志（写成同样的 `"ok":false` 形状，
+ * 折叠摘要数失败次数用的正是这个正则）和 summary 的前 120 字（那是工具自己写的一句人话，
+ * 模型看它就知道那一步的结果是什么，不必回头猜）。
+ * 已经剪过的不再剪（占位符带 pruned 标记）。
+ */
+function pruneOldToolResults(messages: ChatMessage[]): boolean {
+  let changed = false;
+  const keepFrom = Math.max(1, messages.length - KEEP_RECENT);
+  for (let i = 1; i < keepFrom; i++) {
+    const m = messages[i];
+    if (m.role !== 'tool' || m.content.length <= PRUNE_TOOL_RESULT_OVER) continue;
+    if (/"pruned"\s*:\s*true/.test(m.content)) continue;
+    const failed = /"ok"\s*:\s*false/.test(m.content);
+    let brief = '';
+    try {
+      const parsed = JSON.parse(m.content) as { summary?: unknown; error?: unknown };
+      const line = typeof parsed.summary === 'string' ? parsed.summary : typeof parsed.error === 'string' ? parsed.error : '';
+      brief = line.replace(/\s+/g, ' ').slice(0, 120);
+    } catch { /* 不是 JSON 就不带摘要 */ }
+    m.content = toJson({
+      ok: !failed,
+      pruned: true,
+      brief,
+      note: `这条工具结果原文 ${m.content.length} 字，为了不超出上下文已经剪掉。这一步已经做过了，不要重做；需要它的具体数据就重新查一次。`,
+    });
+    changed = true;
+  }
+  return changed;
+}
 
 /**
  * 把一段对话压成一句人话摘要。**本地拼，不调模型。**
@@ -1493,7 +1555,7 @@ export function availableTools(role: string, disabled: readonly string[] = []) {
 export { AGENT_TOOLS };
 
 /** 只给测试用：这几个是内部函数，但它们的口径值得被单独钉住。 */
-export const __testing = { capMessages, foldSummary };
+export const __testing = { capMessages, foldSummary, pruneOldToolResults, KEEP_RECENT, MAX_MESSAGES_CHARS };
 
 /**
  * 给 lib/agent/wake.ts 用的对话收口。

@@ -1,0 +1,6 @@
+# 分支详情页的自定义按钮（cnb 手动触发流水线的入口，语法见 docs.cnb.cool/zh/build/web-trigger.html）
+branch:
+  - reg: ^(main|opensource-clean)$
+    buttons:
+      - name: 构建 Windows 桌面包
+        event: web_trigger_desktop_win

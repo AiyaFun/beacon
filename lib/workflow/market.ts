@@ -143,6 +143,8 @@ export type CreateTemplateInput = {
   /** 职责说明：什么时候该派它上。写了 AI 才会在对话里主动派它 */
   persona?: string;
   steps: unknown;
+  /** 内部标记：importTemplate 走进来的豁免职责必填（分享的 JSON 缺职责不拒收） */
+  fromImport?: boolean;
 };
 
 export async function createTemplate(
@@ -152,6 +154,15 @@ export async function createTemplate(
 ): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
   const name = input.name.trim().slice(0, 40);
   if (!name) return { ok: false, error: '模板得有个名字' };
+
+  // 【为什么职责说明必填】AI 助手在对话里靠它决定「用户这句话该派谁」（lib/agent/tools.ts）。
+  // 没写职责的智能体等于把最短的那条调用路（对话直接说目标）永久关掉——用户装了它、
+  // 却永远等不到 AI 派它，最后的结论是「这功能不好用」。与其事后在卡片上亮警示，
+  // 不如创建时就把话说清。**导入不受此限**（fromImport）：别人分享的 JSON 缺职责不该拒收，
+  // 收进来之后卡片上的警示会引导补写。
+  if (!input.fromImport && !(input.persona ?? '').trim()) {
+    return { ok: false, error: '写一句职责说明（什么时候该派它上）——没写的话 AI 不会在对话里主动派它' };
+  }
 
   const parsed = stepsSchema.safeParse(input.steps);
   if (!parsed.success) {
@@ -230,6 +241,9 @@ export async function exportTemplate(tenantId: string, templateId: string): Prom
       beaconWorkflow: 1,
       name: t.name,
       description: t.description,
+      // 职责说明是「AI 什么时候派它」的判据，分享出去不带它 = 对方装到的是个
+      // 永远不会被对话派单的哑巴（2026-09-01 查出导出/导入两头都在丢这个字段）
+      persona: t.persona,
       emoji: t.emoji,
       category: t.category,
       steps: parseSteps(t.steps),
@@ -244,7 +258,7 @@ export async function importTemplate(
   memberId: string,
   json: string,
 ): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
-  let data: { beaconWorkflow?: number; name?: string; description?: string; emoji?: string; category?: string; steps?: unknown };
+  let data: { beaconWorkflow?: number; name?: string; description?: string; persona?: string; emoji?: string; category?: string; steps?: unknown };
   try {
     data = JSON.parse(json) as typeof data;
   } catch {
@@ -256,9 +270,11 @@ export async function importTemplate(
   return createTemplate(tenantId, memberId, {
     name: data.name,
     description: data.description,
+    persona: data.persona,
     emoji: data.emoji,
     category: data.category,
     steps: data.steps,
+    fromImport: true,
   });
 }
 

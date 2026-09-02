@@ -106,10 +106,15 @@ if [ -f "$COUNTS_FILE" ]; then
   # 那种失败长这样：本来有数据的表还原后是 0，或者少掉一大截。这两种照样判死。
   TOL_PCT="${BEACON_DRILL_TOLERANCE_PCT:-1}"   # 允许的相对漂移
   TOL_MIN="${BEACON_DRILL_TOLERANCE_MIN:-5}"   # 小表按绝对条数放行，不然 3→4 就是 33%
+  # dump 之前的行数（backup.sh 写的 `#pre 表=行数`）。有它就不用猜百分比：
+  # dump 的快照取在 pre 那一刻、基准记在 want 那一刻，真值必然在两者之间。
+  # 老备份没有这几行 → 下面退回原来的百分比容差。
+  PRE_COUNTS="$(sed -n 's/^#pre //p' "$COUNTS_FILE")"
   MISMATCH=0
   DRIFT=0
   while IFS= read -r line; do
     [ -n "$line" ] || continue
+    case "$line" in \#*) continue ;; esac   # #pre 行在上面单独读了
     t="${line%%=*}"; want="${line#*=}"
     got="$(printf '%s\n' "$RESTORED_COUNTS" | sed -n "s/^${t}=//p")"
 
@@ -123,6 +128,23 @@ if [ -f "$COUNTS_FILE" ]; then
     if [ "$want" -gt 0 ] && [ "$got" = 0 ]; then
       printf '  ❌ %s：备份时 %s 行 → 还原后 0 行（空壳）\n' "$t" "$want"
       MISMATCH=$((MISMATCH + 1)); continue
+    fi
+
+    # 有 pre 就按**这次备份实际观测到的漂移区间**判，不猜百分比。
+    # 安静的表区间收得很窄（比旧的 1% 更严）；真在写的表区间自动放宽到它该有的宽度。
+    pre="$(printf '%s\n' "$PRE_COUNTS" | sed -n "s/^${t}=//p")"
+    if [ -n "$pre" ]; then
+      lo=$(( pre < want ? pre : want )); hi=$(( pre > want ? pre : want ))
+      lo=$(( lo - TOL_MIN )); [ "$lo" -lt 0 ] && lo=0
+      hi=$(( hi + TOL_MIN ))
+      if [ "$got" -ge "$lo" ] && [ "$got" -le "$hi" ]; then
+        printf '  ·  %s：%s → %s（dump 前 %s，落在观测区间 %s~%s 内）\n' "$t" "$want" "$got" "$pre" "$lo" "$hi"
+        DRIFT=$((DRIFT + 1))
+      else
+        printf '  ❌ %s：备份时 %s 行 → 还原后 %s（dump 前 %s，超出观测区间 %s~%s）\n' "$t" "$want" "$got" "$pre" "$lo" "$hi"
+        MISMATCH=$((MISMATCH + 1))
+      fi
+      continue
     fi
 
     diff=$(( got > want ? got - want : want - got ))

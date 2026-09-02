@@ -167,9 +167,67 @@ fn write_browser_shortcut() -> Result<String, String> {
     Ok(file.display().to_string())
 }
 
+/// 查一次更新；有新版就问用户，点了就装。装完再问要不要立刻重启。
+///
+/// 【为什么全程不在失败时打扰】没网、站点维护、清单还没发——这些都不是用户能修的事，
+/// 弹窗只会让人习惯性点掉，等真有更新时那一下也被顺手点掉了。
+/// 【签名从哪来】tauri.conf.json 里钉死的 pubkey + /downloads/desktop-update.json 的 .sig；
+/// 校验不过 updater 自己会拒装，这里不用再做判断。私钥只在打包机上（deploy/private/signing）。
+async fn check_and_prompt_update(app: &tauri::AppHandle) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    use tauri_plugin_updater::UpdaterExt;
+
+    let updater = match app.updater() {
+        Ok(u) => u,
+        Err(_) => return,
+    };
+    let update = match updater.check().await {
+        Ok(Some(u)) => u,
+        _ => return, // 没更新或没查到，都安静
+    };
+    let ver = update.version.clone();
+    let asked = app
+        .dialog()
+        .message(format!(
+            "烽火台桌面客户端有新版 v{ver}。\n\n现在更新吗？下载和安装都在后台进行，一般不到一分钟。"
+        ))
+        .title("发现新版本")
+        .kind(MessageDialogKind::Info)
+        .buttons(MessageDialogButtons::OkCancelCustom("现在更新".into(), "下次再说".into()))
+        .blocking_show();
+    if !asked {
+        return;
+    }
+    match update.download_and_install(|_, _| {}, || {}).await {
+        Ok(()) => {
+            let restart = app
+                .dialog()
+                .message("新版本已装好。重启后生效——现在重启吗？")
+                .title("更新完成")
+                .kind(MessageDialogKind::Info)
+                .buttons(MessageDialogButtons::OkCancelCustom("立刻重启".into(), "稍后自己重启".into()))
+                .blocking_show();
+            if restart {
+                app.restart();
+            }
+        }
+        Err(e) => {
+            // 用户已经点了「现在更新」，这一步的失败必须让他知道，不然就是点了没反应
+            app.dialog()
+                .message(format!("更新没装上：{e}\n\n可以稍后再试，或到官网下载页手动覆盖安装。"))
+                .title("更新失败")
+                .kind(MessageDialogKind::Warning)
+                .blocking_show();
+        }
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_autostart::init(
             MacosLauncher::LaunchAgent,
             None,
@@ -239,6 +297,16 @@ fn main() {
                     _ => {}
                 })
                 .build(app)?;
+            // 一键更新（2026-09-01）：启动后台默默查一次，有新版才打扰。
+            // 查失败一律静默——弹「检查更新失败」只会教会用户忽略弹窗；
+            // 而这台机器可能整月不重启壳，所以每 6 小时再看一眼。
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    check_and_prompt_update(&handle).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(6 * 60 * 60)).await;
+                }
+            });
             Ok(())
         })
         // 关窗=收进托盘（服务在后台，窗口只是视图；真正退出走托盘菜单）

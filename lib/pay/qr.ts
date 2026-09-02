@@ -473,7 +473,7 @@ export function encodeQrMatrix(text: string): boolean[][] {
  * 渲染成 SVG 字符串。服务端生成，前端直接 dangerouslySetInnerHTML / <img src=data:>。
  * 用矩形路径合并同行连续深色模块 —— 比每个模块一个 <rect> 小一个数量级。
  */
-export function renderQrSvg(text: string, opts: { size?: number; margin?: number } = {}): string {
+export function renderQrSvg(text: string, opts: { size?: number; margin?: number; /** 读屏标签；默认是付款码的叫法，别的用途（微信绑定码）传自己的 */ label?: string } = {}): string {
   const matrix = encodeQrMatrix(text);
   const n = matrix.length;
   const margin = opts.margin ?? 4; // 规范要求的静区（quiet zone）≥4 模块，少了扫不出来
@@ -497,7 +497,7 @@ export function renderQrSvg(text: string, opts: { size?: number; margin?: number
 
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="${px}" viewBox="0 0 ${total} ${total}" ` +
-    `shape-rendering="crispEdges" role="img" aria-label="微信支付二维码">` +
+    `shape-rendering="crispEdges" role="img" aria-label="${opts.label ?? '微信支付二维码'}">` +
     `<rect width="${total}" height="${total}" fill="#fff"/>` +
     `<path d="${path}" fill="#000"/>` +
     `</svg>`

@@ -1,10 +1,12 @@
 import { headers } from 'next/headers';
+import { backgroundSchedulerRuns } from '@/lib/jobs/queue';
 import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { parseJson } from '@/lib/json';
 import { decryptKey, maskKey } from '@/lib/crypto';
 import { readBotSecrets } from '@/lib/bot';
+import { loadBotChats } from '@/lib/bot/overview';
 import { can } from '@/lib/rbac';
 import { LLM_FUNCTIONS, type LlmFunction, looksNonChatModel } from '@/lib/constants';
 import { listIngestTokens } from '@/lib/ingest/token';
@@ -96,6 +98,17 @@ export default async function KeysPage() {
   const wxCred = credOf('wechat');
   const wbCred = credOf('weibo');
 
+  // 渠道卡上的智能体下拉：本租户可见的全部模板（内置+自建）。
+  // 只取 id/name/emoji——persona 在对话时由 router 现查，别把长文本塞进每次页面渲染。
+  const agentOptions = (await prisma.workflowTemplate.findMany({
+    where: { OR: [{ isBuiltin: true }, { tenantId: s.tenantId }] },
+    orderBy: [{ isBuiltin: 'desc' }, { createdAt: 'asc' }],
+    select: { id: true, name: true, emoji: true },
+  })).map((t) => ({ id: t.id, name: `${t.emoji} ${t.name}` }));
+
+  // 会话画像：每个机器人在哪些群、和哪些人聊过（渠道卡「用户 / 群聊」真数 + 「群聊与用户」列表）
+  const chatsByBot = await loadBotChats(s.workspaceId);
+
   const botRows: BotRow[] = botIntegrations.map((b) => {
     const secrets = readBotSecrets(b.secretsEnc);
     return {
@@ -121,6 +134,11 @@ export default async function KeysPage() {
       lastOutboundAt: b.lastOutboundAt ? b.lastOutboundAt.toISOString() : null,
       lastInboundAt: b.lastInboundAt ? b.lastInboundAt.toISOString() : null,
       lastError: b.lastError,
+      agentTemplateId: b.agentTemplateId,
+      chats: chatsByBot.get(b.id) ?? [],
+      // 微信 iLink：绑定的微信 ID 与登录态是否过期都不是密钥，回显给卡片（看到接的是哪个号、过期了提示重扫）
+      ilinkUserId: secrets.ilinkUserId ?? null,
+      ilinkExpired: !!secrets.ilinkExpired,
     };
   });
 
@@ -270,7 +288,7 @@ export default async function KeysPage() {
           在每条机器人的展开项里配，整体说明见
           <Link href="/help" style={{ color: 'var(--brand)', fontWeight: 600, marginLeft: 4 }}>使用帮助 →</Link>
         </p>
-        <BotIntegrationCard rows={botRows} callbackBase={callbackBase} />
+        <BotIntegrationCard rows={botRows} callbackBase={callbackBase} agentOptions={agentOptions} pollerRuns={backgroundSchedulerRuns()} />
       </Card>
 
       <Card title="合规边界" sub="用自己的 Key，不等于平台不管合规">

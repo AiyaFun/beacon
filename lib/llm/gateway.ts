@@ -428,8 +428,10 @@ async function recordUsage(tenantId: string | null, fn: LlmFunction, r: LlmResul
         completionTokens: ct,
         costUsd: estimateCostUsd(r.model, pt, ct, r.mocked),
         // 记「这笔钱谁出的」：平台预算闸只数 platform 那部分（lib/ops/platform-config.ts）。
-        // 降级到 Mock 的那次，钱确实没花，如实记 mock。
+        // 降级到 Mock 的那次，钱确实没花，如实记 mock；成因靠 degraded 列区分（见 schema 注释）。
         source: r.mocked ? 'mock' : source,
+        degraded: (r as LlmCompleteResult).degraded ?? false,
+
       },
     });
   } catch (e) {

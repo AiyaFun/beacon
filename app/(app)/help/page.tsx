@@ -99,8 +99,8 @@ export default function HelpPage() {
 
       {/* 2. 飞书机器人 */}
       <Card
-        title="② 配飞书机器人"
-        sub="内容推到群，群里也能发指令"
+        title="② 配机器人（飞书 / 钉钉 / 企微 / 微信）"
+        sub="内容推到群，群里也能发指令；微信用户可直接对话"
         style={{ marginBottom: 16 }}
         action={<Link href="/notifications" className="btn btn-sm btn-primary"><Icon.chat size={13} /> 去设置</Link>}
       >
@@ -118,6 +118,14 @@ export default function HelpPage() {
             <Step n={1}>展开「入站 ChatOps」，点「打开飞书开放平台」建自建应用，填 App ID / App Secret。</Step>
             <Step n={2}>前往飞书「事件订阅」：在「回调配置」贴回调地址（或在「订阅方式」选长连接模式），将 Verification Token（和 Encrypt Key）填回系统。</Step>
             <Step n={3}>在「事件配置」点「添加事件」加入 im.message.receive_v1，开通消息权限、加机器人功能并发布。</Step>
+          </div>
+
+          <div className="stack" style={{ gap: 8 }}>
+            <div className="small"><b>微信（自己用）</b> —— 微信官方 iLink 机器人接口（微信 ClawBot 同一套），扫码即绑，机器人出现在你微信的联系人里</div>
+            <Step n={1}>「消息渠道」点「微信」卡「接入」，用微信扫码并在手机上确认，什么都不用填。</Step>
+            <Step n={2}>在微信里给刚出现的机器人发一句话：问题、文章链接、一句选题都行。只有扫码的这个号能聊，它只回复不主动发；登录态过期回来重扫。</Step>
+            <div className="small" style={{ marginTop: 4 }}><b>微信客服（对外接客）</b> —— 企业微信的微信客服通道：客户扫你企业的客服码找你；谁扫码都能聊，登录/派任务不可用，默认只开对话、剪藏、收录、热榜</div>
+            <Step n={3}>企业微信后台 → 应用管理 → 微信客服，新建客服账号并生成 API Secret；点「微信客服」卡「接入」填 CorpID / Secret / 回调 Token / EncodingAESKey，把回调 URL 粘回企微后台，点「体检」验证。</Step>
           </div>
 
           <div className="stack" style={{ gap: 0, marginTop: 2 }}>

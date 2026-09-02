@@ -18,6 +18,7 @@
 // 要加的新工具如果不需要 editionCan('local*')，它不属于这个文件。
 
 import { checkCommand, runCommand, insideRoot, readTextFile, writeTextFile, listDir, SHELL_DEFAULTS } from './shell';
+import { redactSecrets } from './redact';
 import { resolve as resolvePath } from 'node:path';
 import { can as editionCan } from '../edition';
 import {
@@ -92,13 +93,16 @@ const runShell: AgentTool = {
     }
 
     const r = await runCommand(policy, chk.argv, cwd);
-    const body = [r.stdout, r.stderr].filter(Boolean).join('\n').trim();
+    // 输出进上下文之前先脱敏：这一步做在这里而不是 runCommand 里，是让「真跑」那层保持
+    // 原样可测；进模型的东西在这一层统一处理（read_file 同）。见 lib/agent/redact.ts。
+    const red = redactSecrets([r.stdout, r.stderr].filter(Boolean).join('\n').trim());
+    const body = red.text;
     return {
       ok: r.code === 0 && !r.timedOut,
-      data: { code: r.code, output: body, truncated: r.truncated, timedOut: r.timedOut },
+      data: { code: r.code, output: body, truncated: r.truncated, timedOut: r.timedOut, redacted: red.count },
       summary: r.timedOut
         ? `超时被中止（上限 ${Math.round(SHELL_DEFAULTS.timeoutMs / 1000)} 秒）`
-        : `退出码 ${r.code}${r.truncated ? '（输出过长已截断）' : ''}${body ? `\n${body}` : ''}`,
+        : `退出码 ${r.code}${r.truncated ? '（输出过长已截断）' : ''}${red.count ? `（${red.count} 处密钥已脱敏）` : ''}${body ? `\n${body}` : ''}`,
     };
   },
 };
@@ -136,7 +140,14 @@ const readFileTool: AgentTool = {
     if (!g.ok) return { ok: false, summary: g.why };
     const r = await readTextFile(g.root, String(args.path ?? ''));
     if (!r.ok) return { ok: false, summary: r.error };
-    return { ok: true, data: { text: r.text, truncated: r.truncated }, summary: r.truncated ? `${r.text}\n…（文件过长，只读了前 128KB）` : r.text };
+    // .env 这类文件正是用户最常让 AI「看一眼」的，也正是密钥所在。脱敏后再进上下文。
+    const red = redactSecrets(r.text);
+    const note = red.count ? `\n…（${red.count} 处密钥已脱敏，模型看不到原值）` : '';
+    return {
+      ok: true,
+      data: { text: red.text, truncated: r.truncated, redacted: red.count },
+      summary: (r.truncated ? `${red.text}\n…（文件过长，只读了前 128KB）` : red.text) + note,
+    };
   },
 };
 

@@ -18,6 +18,9 @@ export const dynamic = 'force-dynamic';
 async function findIntegration(key: string) {
   const integration = await prisma.botIntegration.findUnique({ where: { inboundKey: key } });
   if (!integration || integration.provider !== 'wecom') return null;
+  // 停用 = 出站入站一起停。此前 enabled 只被出站看（pushEvent/sendToIntegration），
+  // 「停用」后群里照答——按钮上写的是停用，不是「只停推送」
+  if (!integration.enabled) return null;
   return integration;
 }
 

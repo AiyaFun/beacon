@@ -1,14 +1,16 @@
 import { prisma } from '../db';
 import { HOT_SOURCES } from '../constants';
 import { parseJson } from '../json';
-import { BOT_COMMANDS, TOGGLEABLE_COMMANDS, isCommandAllowed, type BotCommandKey } from './types';
+import { BOT_COMMANDS, TOGGLEABLE_COMMANDS, isCommandAllowed, isExternalProvider, type BotCommandKey } from './types';
 import { beaconUrl } from './index';
 import { ingestTopic, ingestCompetitor, extractUrl } from './ingest';
-import { classifyIntent, type Intent } from './intent';
+import { classifyIntent, matchAgentSwitch, type Intent } from './intent';
 import {
-  loadConversation, appendTurns, bindConversationAccount, resetConversation,
+  loadConversation, appendTurns, bindConversationAccount, bindConversationAgent, resetConversation, touchConversation,
   type ChatKey, type ConversationState,
 } from './conversation';
+import { buildDailyBrief } from '../topic/brief';
+import { briefTopicsFor } from '../topic/brief-topics';
 import { resolveAccount, listActiveAccounts, accountLine } from './accounts';
 import { botChat } from './chat';
 import { analyzeAccount } from './analyze';
@@ -41,6 +43,7 @@ const HELP_LINES: { cmd: BotCommandKey; line: string }[] = [
   { cmd: 'clip', line: '· /存 链接或正文 → 明确要剪藏（不想被当成选题时用）' },
   { cmd: 'account', line: '· /账号 [名字] → 看/切换本群当前账号' },
   { cmd: 'hot', line: '· /热点 → 看当前热榜 Top' },
+  { cmd: 'topic', line: '· /晨报 → 看本群账号今天的选题推荐（也可以直接说「给我今天的选题」）' },
   { cmd: 'topic', line: '· /选题 关键词 → 把关键词收录成选题候选' },
   { cmd: 'crawl', line: '· /采集 竞对主页URL → 加入竞对监控并试采一次' },
   { cmd: 'crawl', line: '· /竞对 [名字] → 看监控中的竞对近期高热作品（带链接）' },
@@ -49,6 +52,7 @@ const HELP_LINES: { cmd: BotCommandKey; line: string }[] = [
   { cmd: 'dispatch', line: '· /派 [卡名] → 派一张一键任务卡真去干（授权按卡上存的）' },
   { cmd: 'dispatch', line: '· /执行 你要做的事 → 一句话派给 AI 执行器（要点头的操作会等你去网页确认）' },
   { cmd: 'dispatch', line: '· /任务 → 看本群派出的任务进度；/终止 → 停掉还在跑的那条' },
+  { cmd: 'chat', line: '· /智能体 [名字|默认] → 看有哪些智能体 / 让某个智能体在本群出面（也可以说「换成 XX」）' },
   { cmd: 'chat', line: '· /重置 → 清掉当前对话上下文，重开一轮' },
 ];
 
@@ -61,7 +65,7 @@ function helpText(allow: string[]): string {
     '· /帮助 → 看这份说明',
     '',
     isCommandAllowed('chat', allow) || isCommandAllowed('topic', allow)
-      ? '也可以直接说人话，比如「今天有什么热点」「我的账号最近怎么样」「帮我盯一下这个账号 <链接>」。'
+      ? `也可以直接说人话，比如「给我今天的选题」「今天有什么热点」「我的账号最近怎么样」${isCommandAllowed('dispatch', allow) ? '「帮我写一篇秋季穿搭的笔记」（会真去做）' : ''}。`
       : '',
     off.length ? `（管理员在本群关闭了：${off.map((c) => c.name).join('、')}）` : '',
   ].filter(Boolean).join('\n');
@@ -101,8 +105,10 @@ export type InboundCtx = {
   senderId?: string;
   /** 这条消息是不是在群里说的。登录/绑定类指令只在**私聊**里响应，见下面 handleInbound。 */
   isGroup?: boolean;
-  /** 发消息人的显示名，只在「加入」时用来给新成员起名。取不到就用兜底名。 */
+  /** 发消息人的显示名：「加入」时给新成员起名、会话画像里显示是谁在说话。取不到就用兜底名。 */
   senderName?: string;
+  /** 群名/对话名（钉钉回调自带 conversationTitle；飞书事件里没有，靠同步补）。会话画像用。 */
+  chatName?: string;
 };
 
 // ── 各指令的实现（斜杠与自然语言共用）──
@@ -292,17 +298,103 @@ async function cmdAccount(workspaceId: string, name: string, key: ChatKey, bound
   return `✅ 本群当前账号已切到 ${accountLine(r.account)}。之后的对话、体检、收录都记到它名下。`;
 }
 
+// /晨报：本群账号今天的选题推荐。与定时推的那份是同一个渲染（lib/topic/brief.ts），只是这次是他要的。
+async function cmdBrief(workspaceId: string, boundId: string | null): Promise<string> {
+  const r = await resolveAccount(workspaceId, { boundId });
+  if (!r.ok) return r.message;
+  const brief = buildDailyBrief(r.account.name, await briefTopicsFor(r.account.id));
+  if (!brief) {
+    return `「${r.account.name}」今天还没有推荐选题（每天 05:00 生成，也可能是账号还没有可推的候选）。去引擎里看看 → ${beaconUrl('/topics')}`;
+  }
+  // 群消息不渲染 Markdown：把 **加粗** 与 `分数` 的记号去掉，星号原样露出来很难看
+  const plain = (line: string) => line.replace(/\*\*(.+?)\*\*/g, '$1').replace(/`(.+?)`/g, '$1');
+  return [plain(brief.title), ...brief.lines.map(plain), '', `全部与推荐依据 → ${beaconUrl('/topics')}`].join('\n');
+}
+
+// ── 智能体：本会话由谁出面（2026-09-02，一个机器人可以切不同的智能体）──
+//
+// 优先级：本会话选的（/智能体 X、「换成 X」）→ 渠道默认（设置页绑的）→ 通用运营助手。
+// 查不到（模板被删/被卸载）按未选处理——机器人不该因此哑火。
+type BotAgent = { id: string; name: string; persona: string };
+
+async function agentById(id: string | null | undefined): Promise<BotAgent | null> {
+  if (!id) return null;
+  const tpl = await prisma.workflowTemplate.findUnique({ where: { id }, select: { id: true, name: true, persona: true } }).catch(() => null);
+  return tpl ? { id: tpl.id, name: tpl.name, persona: tpl.persona || '（未填写职责说明）' } : null;
+}
+
+async function currentAgent(integrationId: string | undefined, state: ConversationState): Promise<BotAgent | null> {
+  const chosen = await agentById(state.agentTemplateId);
+  if (chosen) return chosen;
+  if (!integrationId) return null;
+  const it = await prisma.botIntegration.findUnique({ where: { id: integrationId }, select: { agentTemplateId: true } }).catch(() => null);
+  return agentById(it?.agentTemplateId);
+}
+
+/** 这个工作区能派上用场的智能体：已装的内置 + 自建的。 */
+async function usableAgents(workspaceId: string): Promise<BotAgent[]> {
+  const ws = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { tenantId: true } });
+  if (!ws) return [];
+  const { listTemplates } = await import('../workflow/market');
+  const all = await listTemplates(ws.tenantId);
+  return all.filter((t) => t.installed).map((t) => ({ id: t.id, name: t.name, persona: t.persona || '（未填写职责说明）' }));
+}
+
+/** 按名字找智能体：全等优先，其次包含；多于一个不猜。 */
+function pickAgent(agents: BotAgent[], name: string): { hit: BotAgent } | { hits: BotAgent[] } {
+  const exact = agents.filter((a) => a.name === name);
+  const hits = exact.length ? exact : agents.filter((a) => a.name.includes(name) || name.includes(a.name));
+  return hits.length === 1 ? { hit: hits[0] } : { hits };
+}
+
+/** /智能体 [名字|默认]：无参数=列出并标出当前；有名字=切换本会话由它出面；「默认」=回到渠道默认。 */
+async function cmdAgent(workspaceId: string, name: string, key: ChatKey, state: ConversationState, integrationId?: string): Promise<string> {
+  const agents = await usableAgents(workspaceId);
+  const now = await currentAgent(integrationId, state);
+  if (!name) {
+    if (agents.length === 0) {
+      return `这个工作区还没有装任何智能体。去「技能 · 连接器 → 智能体」装一个或自己拼一个 → ${beaconUrl('/workflows')}`;
+    }
+    return [
+      `本群现在由「${now?.name ?? '通用运营助手'}」出面${state.agentTemplateId ? '（本群自己选的）' : now ? '（渠道默认）' : ''}。`,
+      '可以切换的智能体：',
+      ...agents.map((a, i) => `${i + 1}. ${a.name}${now?.id === a.id ? '（当前）' : ''} — ${a.persona.slice(0, 40)}`),
+      '',
+      '切换：/智能体 名字（或直接说「换成 名字」）；回到渠道默认：/智能体 默认',
+    ].join('\n');
+  }
+  if (/^(默认|重置|通用|取消)$/.test(name)) {
+    const ok = await bindConversationAgent(key, null);
+    if (!ok) return '这个渠道记不住选择（缺会话信息）。';
+    const back = await currentAgent(integrationId, { ...state, agentTemplateId: null });
+    return `✅ 本群回到渠道默认：由「${back?.name ?? '通用运营助手'}」出面。`;
+  }
+  const picked = pickAgent(agents, name);
+  if (!('hit' in picked)) {
+    return picked.hits.length === 0
+      ? `没有叫「${name}」的智能体。现在有：${agents.map((a) => a.name).join('、') || '（一个都没装）'}`
+      : `「${name}」匹配到多个：${picked.hits.map((a) => a.name).join('、')}。请写全名。`;
+  }
+  const ok = await bindConversationAgent(key, picked.hit.id);
+  if (!ok) return `这个渠道记不住选择（缺会话信息）。本次可用「/派」或「/执行」直接派。`;
+  return `✅ 本群之后由「${picked.hit.name}」出面：${picked.hit.persona.slice(0, 80)}\n之后的对话按它的职责回答，派活也交给它。换回来：/智能体 默认`;
+}
+
 // 自由对话。历史轮次来自本会话，回答完把这一轮追加回去。
 async function cmdChat(
   workspaceId: string,
   question: string,
   key: ChatKey,
   state: ConversationState,
+  integrationId?: string,
 ): Promise<string> {
   if (!question) return '想问什么？直接 @我 说就行，比如「我这条视频为什么没起量」。';
   // 账号解析不出来（多账号未绑定）不该挡住对话：没有账号上下文也能聊，只是少了个性化那部分
   const r = await resolveAccount(workspaceId, { boundId: state.accountId });
   const account = r.ok ? r.account : null;
+
+  // 本会话选的智能体 → 渠道默认 → 通用助手。查不到（模板被删/被卸载）按未绑定处理——机器人不该因此哑火
+  const agent = await currentAgent(integrationId, state);
 
   const res = await botChat({
     workspaceId,
@@ -310,6 +402,7 @@ async function cmdChat(
     accountName: account?.name ?? null,
     question,
     turns: state.turns,
+    agent,
   });
   await appendTurns(key, [{ role: 'user', content: question }, { role: 'assistant', content: res.text }], state.turns);
   return res.text;
@@ -320,6 +413,13 @@ export async function handleInbound(workspaceId: string, rawText: string, ctx: I
   const text = (rawText || '').trim();
   const provider = ctx.provider ?? 'feishu';
   const key: ChatKey = { workspaceId, integrationId: ctx.integrationId, chatId: ctx.chatId };
+  // 会话画像：所有渠道都从这里过，在这一处 touch（类型/群名/发言人/计数），别在各 route 里各记各的
+  await touchConversation(key, {
+    chatType: ctx.isGroup === undefined ? 'unknown' : ctx.isGroup ? 'group' : 'p2p',
+    chatName: ctx.chatName,
+    senderId: ctx.senderId,
+    senderName: ctx.senderName,
+  });
   // 会话状态与白名单各查一次，贯穿全程：本群绑的哪个账号、之前聊到哪儿、管理员开了哪些操作
   const [state, allow] = await Promise.all([loadConversation(key), loadAllowCommands(ctx.integrationId)]);
   const boundId = state.accountId;
@@ -336,6 +436,16 @@ export async function handleInbound(workspaceId: string, rawText: string, ctx: I
   //    群里说这些词时明确回一句「私聊我」，而不是静默——静默会让人以为机器人坏了。
   const authCmd = text.match(/^\/?(登录|登陆|绑定)(?=\s|$)/);
   if (authCmd) {
+    // 🔒 对外渠道（微信客服/扫码）一律不响应。lib/auth/oa.ts「敢自动加入」的前提是「能私聊到机器人的人
+    //    已经过了公司的 OA 认证」——微信这边谁扫码都能聊，这个前提不成立；不拦的话任何微信用户说一声
+    //    「登录」就被 autoJoin 收成成员并拿到一次性登录链接（senderId 还会被冒充成 feishu 身份存进 Member）。
+    // 微信 iLink：扫码绑定时人就是登录着的（byok.manage 才能绑），这里没有「登录」要做，也不发链接
+    if (provider === 'wechat') {
+      return '这条通道不用登录：你扫码绑定它的时候已经是登录状态，网页直接打开就行。这里不发登录链接。';
+    }
+    if (isExternalProvider(provider)) {
+      return '这个渠道不支持登录/绑定：微信这边的发送者不是企业应用认证过的成员，烽火台不会凭一条微信消息把人收成成员。要登录请在飞书/钉钉/企微机器人里私聊说「登录」，或直接打开网页登录。';
+    }
     if (ctx.isGroup) return '这条要私聊我说——登录链接和绑定码只对你一个人有效，发在群里等于给了所有人。';
     if (!ctx.senderId) return '取不到你的企业应用账号，无法完成身份操作。';
     const oaProvider = (provider === 'dingtalk' || provider === 'wecom' ? provider : 'feishu') as OaProvider;
@@ -360,6 +470,10 @@ export async function handleInbound(workspaceId: string, rawText: string, ctx: I
   // ── 斜杠指令 ──（注意：\b 是 ASCII 词边界，跟在中文后不成立，故用 (?=\s|$) 收尾）
   if (/^\/(帮助|help)(?=\s|$)/i.test(text)) return helpText(allow);
   if (/^\/热点(?=\s|$)/.test(text)) return can('hot') ? cmdHot() : denied('hot', allow);
+  if (/^\/(晨报|今日选题)(?=\s|$)/.test(text)) return can('topic') ? cmdBrief(workspaceId, boundId) : denied('topic', allow);
+  if (/^\/智能体(?=\s|$)/.test(text)) {
+    return can('chat') ? cmdAgent(workspaceId, firstArg(text, '/智能体'), key, state, ctx.integrationId) : denied('chat', allow);
+  }
   if (/^\/选题(?=\s|$)/.test(text)) {
     return can('topic')
       ? cmdTopic(workspaceId, firstArg(text, '/选题'), `bot:${provider}:/选题`, boundId)
@@ -378,7 +492,7 @@ export async function handleInbound(workspaceId: string, rawText: string, ctx: I
   }
   const chatCmd = text.match(/^\/(问|聊)(?=\s|$)/);
   if (chatCmd) {
-    return can('chat') ? cmdChat(workspaceId, firstArg(text, chatCmd[0]), key, state) : denied('chat', allow);
+    return can('chat') ? cmdChat(workspaceId, firstArg(text, chatCmd[0]), key, state, ctx.integrationId) : denied('chat', allow);
   }
   if (/^\/竞对(?=\s|$)/.test(text)) {
     return can('crawl') ? cmdCompetitor(workspaceId, firstArg(text, '/竞对')) : denied('crawl', allow);
@@ -410,7 +524,7 @@ export async function handleInbound(workspaceId: string, rawText: string, ctx: I
   if (/^\/执行(?=\s|$)/.test(text)) {
     if (!can('dispatch')) return denied('dispatch', allow);
     const { cmdDispatchGoal } = await import('./dispatch');
-    return cmdDispatchGoal(workspaceId, ctx, firstArg(text, '/执行'), boundId);
+    return cmdDispatchGoal(workspaceId, ctx, firstArg(text, '/执行'), boundId, await currentAgent(ctx.integrationId, state));
   }
   if (/^\/任务(?=\s|$)/.test(text)) {
     if (!can('dispatch')) return denied('dispatch', allow);
@@ -459,11 +573,36 @@ export async function handleInbound(workspaceId: string, rawText: string, ctx: I
     return cmdClip(workspaceId, text, boundId);
   }
 
+  // ── 「换成 X」「切换到 X 智能体」：名字在已装智能体里查得到才算切换，查不到照常往下走 ──
+  const switchName = can('chat') ? matchAgentSwitch(text) : null;
+  if (switchName) {
+    const agents = await usableAgents(workspaceId);
+    if ('hit' in pickAgent(agents, switchName)) return cmdAgent(workspaceId, switchName, key, state, ctx.integrationId);
+  }
+
   // ── 纯文本：先试着听懂意图，听不懂就按老规矩收录成选题 ──
-  const intent = await classifyIntent(workspaceId, text).catch((): Intent => ({ cmd: 'ingest' }));
+  // 开了派任务的群，「帮我写一篇…」这种让它去做的句子直接派给执行器（与 /执行 同权、同一道身份闸）
+  const intent = await classifyIntent(workspaceId, text, { canRun: can('dispatch') }).catch((): Intent => ({ cmd: 'ingest' }));
   if (intent.cmd === 'chat') {
     // 对话不加「听懂为」前缀，那会让每句回答都像机器人
-    return can('chat') ? cmdChat(workspaceId, text, key, state) : denied('chat', allow);
+    if (!can('chat')) return denied('chat', allow);
+    const answer = await cmdChat(workspaceId, text, key, state, ctx.integrationId);
+    // 这句话像是让它去做、但本群没开派任务：答归答，得告诉他为什么只是「说」没有「做」
+    const { looksActionable, wantsExecution } = await import('../agent/intent');
+    if (!can('dispatch') && (wantsExecution(text) || looksActionable(text))) {
+      return `${answer}\n\n（要我真去做的话，管理员需在 烽火台 → 工具 → 机器人与通知 → 编辑这个机器人 里开启「派任务」）`;
+    }
+    return answer;
+  }
+  if (intent.cmd === 'run') {
+    if (!can('dispatch')) return denied('dispatch', allow);
+    const { cmdDispatchGoal } = await import('./dispatch');
+    const body = await cmdDispatchGoal(workspaceId, ctx, text, boundId, await currentAgent(ctx.integrationId, state));
+    return `（听懂为：派给 AI 执行器去做，不对的话用「/问」改成提问）\n${body}`;
+  }
+  if (intent.cmd === 'agent') {
+    if (!can('chat')) return denied('chat', allow);
+    return cmdAgent(workspaceId, intent.arg, key, state, ctx.integrationId);
   }
   if (intent.cmd !== 'ingest') {
     const body = await runIntent(workspaceId, intent, provider, boundId, allow);
@@ -479,13 +618,15 @@ export async function handleInbound(workspaceId: string, rawText: string, ctx: I
     : `✅ 已收录成选题候选（账号：${r.accountName}）→ ${beaconUrl('/topics')}\n（想问我问题的话，用「/问 …」或直接说「我…吗」，我就不当选题收了）`;
 }
 
-const INTENT_LABEL: Record<Exclude<Intent['cmd'], 'ingest' | 'chat'>, string> = {
+const INTENT_LABEL: Record<Exclude<Intent['cmd'], 'ingest' | 'chat' | 'run' | 'agent'>, string> = {
   help: '查看帮助',
   hot: '查看热榜',
   topic: '收录选题',
   crawl: '添加竞对监控',
   optimize: '触发记忆优化',
   analyze: '账号体检',
+  brief: '今日选题晨报',
+  competitor: '看竞对动态',
 };
 
 // chat 在调用方已单独处理（它要带会话上下文），这里不会收到。
@@ -506,6 +647,8 @@ async function runIntent(
     case 'crawl': return gate('crawl', () => cmdCrawl(workspaceId, intent.arg));
     case 'optimize': return gate('optimize', () => cmdOptimize(workspaceId));
     case 'analyze': return gate('analyze', () => cmdAnalyze(workspaceId, intent.arg, boundId));
+    case 'brief': return gate('topic', () => cmdBrief(workspaceId, boundId));
+    case 'competitor': return gate('crawl', () => cmdCompetitor(workspaceId, intent.arg));
     default: return helpText(allow);
   }
 }

@@ -5,6 +5,9 @@ import Link from 'next/link';
 import { detectDesktopClient, type DesktopClientInfo } from '@/lib/desktop-client';
 import { compareVersion } from '@/lib/version';
 
+/** 桌面壳从这一版起内置 Tauri updater（能自己弹更新框、原地升级）。更早的版本只能手动覆盖安装。 */
+const SELF_UPDATE_SINCE = '1.2.5';
+
 // 侧栏底部的「下载桌面客户端」入口。
 //
 // 【为什么做得很轻】它常驻在每一页的视野里，是个**顺手提一句**的入口，不是号召行动的按钮。
@@ -26,8 +29,16 @@ import { compareVersion } from '@/lib/version';
 // ③ 只在**确知**客户端版本时才出现（靠壳跳转时带的标记）。用 Tauri 全局对象兜底认出来的
 // 老客户端拿不到版本号，那种情况只做 ②——版本未知就提醒更新等于猜，猜错天天弹假红点。
 //
-// 【桌面壳没有自动更新】Tauri updater 插件没装。所以「去更新」= 回下载页重新下、覆盖安装，
-// 文案不能写成「点一下就更新好了」。整机版服务那套一键增量更新是另一回事（那是服务端）。
+// 【自动更新是从 1.2.5 才有的，所以③要分两档说】(2026-09-01)
+// 1.2.5 起壳内置了 Tauri updater：它自己会在启动后台查、有新版当场弹窗、点一下原地升级。
+// 但**存量的 1.2.4 及更老客户端里没有这个东西**——对他们来说这张卡就是唯一的告知渠道，
+// 而且他们确实只能手动装一次（装的就是带更新器的那一版，此后才自动）。
+// 于是：
+//   · 客户端 < 1.2.5 → 「去下载覆盖安装」，并补一句「装完这次以后就自动更新了」——
+//     不补这句的话，用户合理地以为这产品永远要手动升级（用户 2026-09-01 正是这么反馈的）。
+//   · 客户端 ≥ 1.2.5 → 壳自己会弹更新框，这张卡再喊一遍就是重复打扰，措辞改成
+//     「客户端会自己提示更新」，且不给「去下载」的引导（那条路更差：手动覆盖装）。
+// 整机版服务那套一键增量更新是另一回事（那是服务端，见 lib/appliance/update.ts）。
 
 /** 这台机器是什么系统。识别不出来返回 null——不猜，宁可不显示那一小行。 */
 function detectOs(): 'mac' | 'win' | null {
@@ -72,12 +83,24 @@ export function DesktopDownloadCard({ version, platforms }: { version: string; p
     // 这条推断很重要：现存的 1.2.0 客户端全部走这一路，否则他们永远不知道有更新。
     const stale = client.version === null || compareVersion(client.version, version) < 0;
     if (!stale) return null; // ② 已是最新
-    // ③ 有新版。这一条不给 ×：它是有时效的通知，不是常驻入口，更新完自己就消失了
+    // ③ 有新版。这一条不给 ×：它是有时效的通知，不是常驻入口，更新完自己就消失了。
+    // 能不能自己更新，取决于**他手上那一版**有没有更新器（1.2.5 起才有），不是最新版有没有。
+    const selfUpdating = client.version !== null && compareVersion(client.version, SELF_UPDATE_SINCE) >= 0;
+    if (selfUpdating) {
+      return (
+        <div className="desktop-card">
+          <div className="desktop-card-main" title={`当前 v${client.version}，最新 v${version}`}>
+            <span className="desktop-card-title">客户端有新版 v{version}</span>
+            <span className="desktop-card-sub">客户端会自己提示更新，点一下即可</span>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="desktop-card">
         <Link href="/desktop" className="desktop-card-main" title={client.version ? `当前 v${client.version}，最新 v${version}` : `最新 v${version}`}>
           <span className="desktop-card-title">客户端有新版 v{version}</span>
-          <span className="desktop-card-sub">去下载覆盖安装</span>
+          <span className="desktop-card-sub">这次要手动装一下，之后就能自动更新了</span>
         </Link>
       </div>
     );

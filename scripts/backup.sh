@@ -151,6 +151,16 @@ TMP="$(mktemp "${BACKUP_DIR}/.${BASENAME}.XXXXXX")"
 # 任何一步失败都不留半截文件
 trap 'rm -f "$TMP"' EXIT
 
+# ── dump 之前的行数（对账的正确参照点）─────────────────────────
+# pg_dump -Fc 的快照取在**它开始的那一刻**，而下面那份基准是 dump 跑完之后才数的。
+# 热榜这类被 cron 一直写的表，这几十秒足够差出几十行——恢复演练于是拿「dump 之后的数」
+# 去对「dump 之刻的内容」，每周判红：2026-08 五次演练四次红（08-02/09/23/30），
+# 容差从「全等」放宽到 1% 也没收敛，08-30 还是差 19 行超了 18 的容差。
+# **参照点错了，调容差只是把误报推迟一周**。有了这份 pre，演练能按实际观测到的
+# 漂移区间对账，而不是猜一个百分比。
+# 数不出来不算备份失败（演练那边退回旧口径）——它是让判据更准的辅助，不是备份的前提。
+PRE_COUNTS="$(dump_row_counts 2>/dev/null || true)"
+
 # ── 导出 ──
 log "开始 pg_dump（-Fc --no-owner，连到火山 Supabase；pg 工具来源：$PG_MODE）…"
 pg_dump_to "$TMP" \
@@ -192,7 +202,12 @@ fi
 trap - EXIT
 chmod 600 "$DEST"
 # 行数基准与 dump 同名存放：恢复演练用它对账（scripts/restore-drill.sh 直接读）
-printf '%s\n' "$COUNTS" > "${DEST}.counts"
+# 【格式】`#pre 表=行数` = dump 之前，`表=行数` = dump 之后。演练两个都读；
+# 老备份没有 #pre 行，演练会退回百分比容差，不会因此判红。
+{
+  [ -n "$PRE_COUNTS" ] && printf '%s\n' "$PRE_COUNTS" | sed 's/^/#pre /'
+  printf '%s\n' "$COUNTS"
+} > "${DEST}.counts"
 chmod 600 "${DEST}.counts"
 log "完成：$DEST（原始 $SIZE）· 行数基准 ${DEST}.counts"
 

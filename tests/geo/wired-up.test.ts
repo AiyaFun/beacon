@@ -39,6 +39,13 @@ const WATCHED = [
   // 而那正是「读者删自己评论」这个法律承诺兑现不了的直接原因。
   // 合规相关的实现尤其要盯：它们的「没人调」不表现为功能缺失，而表现为**承诺是假的**。
   'lib/legal/removal.ts',
+  // 【2026-09-02 扩进来的】微信两条通道：客户端函数多、调用点各只有一处（route/diagnose/actions），
+  // 正是「写了没接」最容易长出来的地方——比如 kfSendWelcome 写了却没在 route 里对 enter_session 调，
+  // 或 gatewayProbe 写了体检没接。盯上它们。
+  'lib/bot/wechat-kf.ts',
+  'lib/bot/wechat-ilink.ts',
+  'lib/bot/wechat-ilink-poller.ts',
+  'lib/bot/wechat-text.ts',
 ];
 
 /**

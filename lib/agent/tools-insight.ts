@@ -319,10 +319,102 @@ const algorithmHint: AgentTool = {
   },
 };
 
+// ── 翻过去的执行记录（2026-09-02，学自 Hermes 的 session_search）──
+//
+// 【为什么需要】每次 AI 执行都是一段独立的对话：上周采竞对时发现「某号改版了、只能采到标题」，
+// 这周再派同一件事，模型一无所知，会把同一个坑再踩一遍。长期记忆刻意只装账号的事实，
+// 不装「过程」——过程就在 AgentStep 里躺着，只是没有入口。
+//
+// 【刻意不经模型】返回的是库里的原文片段，不做摘要：摘要要花一次额度，而且模型看原文
+// 比看另一个模型转述的更可信。片段截在命中词前后各一百来字，八条封顶。
+// 【只查本工作区】AgentRun/AgentStep 按 workspaceId 过滤；别的工作区的执行看不到。
+// 【不建索引】一个工作区的执行是几十到几百条，LIKE 扫得动。真到扫不动那天再加 pg_trgm。
+
+const PAST_RUN_HITS = 8;
+const SNIPPET_RADIUS = 120;
+
+function snippetAround(text: string, q: string): string {
+  const i = text.toLowerCase().indexOf(q.toLowerCase());
+  if (i < 0) return text.slice(0, SNIPPET_RADIUS * 2);
+  const from = Math.max(0, i - SNIPPET_RADIUS);
+  const to = Math.min(text.length, i + q.length + SNIPPET_RADIUS);
+  return `${from > 0 ? '…' : ''}${text.slice(from, to)}${to < text.length ? '…' : ''}`;
+}
+
+const searchPastRuns: AgentTool = {
+  name: 'search_past_runs',
+  label: '翻过去的执行记录',
+  action: 'content.view',
+  write: false,
+  def: {
+    name: 'search_past_runs',
+    description:
+      '在这个工作区**过去的 AI 执行记录**里按关键词找：以前做过没有、当时的结果是什么、踩过什么坑。'
+      + '返回的是当时的原文片段（目标、答复、每一步的工具结果），不是摘要。'
+      + '什么时候用：接到一件像是做过的活、或想知道上次某个账号/平台采集是什么情况时，先查一下再动手。'
+      + '长期记忆里没有的「过程」都在这里。',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '关键词，2~40 字。账号名、平台、工具名、报错里的词都行' },
+        limit: { type: 'number', description: `最多几条，默认 ${PAST_RUN_HITS}` },
+      },
+      required: ['query'],
+    },
+  },
+  async run(ctx, args) {
+    const q = str(args.query).trim();
+    if (q.length < 2) return { ok: false, error: '关键词至少两个字', summary: '关键词太短' };
+    if (q.length > 40) return { ok: false, error: '关键词别超过 40 字，太长基本搜不到', summary: '关键词太长' };
+    const limit = clamp(num(args.limit, PAST_RUN_HITS), 1, 20);
+    // 【别把这次自己查出来】正在跑的这次运行的步骤也在库里，查到自己只会让模型绕圈
+    const notSelf = ctx.runId ? { id: { not: ctx.runId } } : {};
+
+    const [runs, steps] = await Promise.all([
+      prisma.agentRun.findMany({
+        where: { workspaceId: ctx.workspaceId, ...notSelf, OR: [{ goal: { contains: q } }, { answer: { contains: q } }] },
+        select: { id: true, goal: true, answer: true, status: true, createdAt: true },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+      }),
+      prisma.agentStep.findMany({
+        where: {
+          run: { workspaceId: ctx.workspaceId, ...notSelf },
+          OR: [{ result: { contains: q } }, { args: { contains: q } }],
+        },
+        select: { runId: true, seq: true, kind: true, tool: true, result: true, args: true, ok: true, createdAt: true, run: { select: { goal: true, createdAt: true } } },
+        orderBy: { createdAt: 'desc' },
+        take: limit * 3,
+      }),
+    ]);
+
+    type Hit = { runId: string; when: string; goal: string; where: string; ok: boolean; snippet: string; at: number };
+    const hits: Hit[] = [];
+    for (const r of runs) {
+      const src = (r.answer ?? '').includes(q) ? r.answer ?? '' : r.goal;
+      hits.push({ runId: r.id, when: fmtDate(r.createdAt), goal: r.goal.slice(0, 80), where: r.answer && src === r.answer ? '最终答复' : '目标', ok: r.status === 'done', snippet: snippetAround(src, q), at: r.createdAt.getTime() });
+    }
+    for (const st of steps) {
+      const src = st.result.includes(q) ? st.result : st.args;
+      hits.push({ runId: st.runId, when: fmtDate(st.run.createdAt), goal: st.run.goal.slice(0, 80), where: `${st.tool || st.kind}（第 ${st.seq} 步）`, ok: st.ok, snippet: snippetAround(src, q), at: st.createdAt.getTime() });
+    }
+    // 同一次运行只留最新的一条命中，免得一次采集的十条结果把别的运行全挤出去
+    const seen = new Set<string>();
+    const picked = hits.sort((a, b) => b.at - a.at).filter((h) => (seen.has(h.runId) ? false : (seen.add(h.runId), true))).slice(0, limit);
+    if (picked.length === 0) return { ok: true, data: { hits: [] }, summary: `过去的执行记录里没有「${q}」` };
+    return {
+      ok: true,
+      data: { hits: picked.map(({ at: _at, ...h }) => h) },
+      summary: `找到 ${picked.length} 次相关的执行（最近的在前）：` + picked.map((h) => `\n· ${h.when} ${h.goal}｜${h.where}${h.ok ? '' : '（那步没成）'}：${h.snippet.slice(0, 160)}`).join(''),
+    };
+  },
+};
+
 export const INSIGHT_TOOLS: AgentTool[] = [
   accountPerformance,
   workMetrics,
   listComments,
   genesSummary,
   algorithmHint,
+  searchPastRuns,
 ];

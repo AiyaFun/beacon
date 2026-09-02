@@ -139,7 +139,7 @@ export async function feishuTenantAccessToken(appId: string, appSecret: string):
 // 列出机器人加入的所有群聊（自建应用模式发消息前需要知道发到哪些群）。
 // 需要 im:chat / im:chat:readonly 等群信息权限——缺权限时飞书报 99991672，
 // 必须把它和「真的没进群」区分开，否则会误导用户一直去拉机器人进群。
-export async function feishuListBotChats(token: string): Promise<{ chatIds: string[]; error?: string }> {
+export async function feishuListBotChats(token: string): Promise<{ chatIds: string[]; chats: { id: string; name: string }[]; error?: string }> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -150,11 +150,15 @@ export async function feishuListBotChats(token: string): Promise<{ chatIds: stri
     const json: any = await res.json().catch(() => null);
     if (!res.ok || json?.code !== 0) {
       const detail = json?.msg ? `${json.msg}（code ${json.code}）` : `HTTP ${res.status}`;
-      return { chatIds: [], error: detail };
+      return { chatIds: [], chats: [], error: detail };
     }
-    return { chatIds: (json?.data?.items ?? []).map((c: any) => c.chat_id).filter(Boolean) };
+    // 名字一起带出来：渠道卡「机器人在哪些群」就靠这一份（消息事件里没有群名）
+    const chats = (json?.data?.items ?? [])
+      .filter((c: any) => c?.chat_id)
+      .map((c: any) => ({ id: String(c.chat_id), name: String(c.name ?? '') }));
+    return { chatIds: chats.map((c: { id: string }) => c.id), chats };
   } catch (e) {
-    return { chatIds: [], error: e instanceof Error ? e.message : '网络异常' };
+    return { chatIds: [], chats: [], error: e instanceof Error ? e.message : '网络异常' };
   } finally {
     clearTimeout(t);
   }

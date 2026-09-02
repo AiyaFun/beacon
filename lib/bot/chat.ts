@@ -45,6 +45,8 @@ export async function botChat(params: {
   accountName: string | null;
   question: string;
   turns: BotTurn[];
+  /** 渠道绑定的智能体（BotIntegration.agentTemplateId 解析而来）。空 = 通用运营助手。 */
+  agent?: { name: string; persona: string } | null;
 }): Promise<BotChatResult> {
   const { workspaceId, accountId, accountName, question } = params;
   const ws = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { tenantId: true } });
@@ -63,7 +65,11 @@ export async function botChat(params: {
   }
 
   const system = [
-    '你是「烽火台」内容作战室的 AI 运营助手，正在一个内容团队的工作群里被 @ 到。',
+    // 渠道绑了智能体就以它出面：身份行放最前——身份不是补充信息，是整个回答的口吻与边界。
+    // persona 是「什么时候该派它上/它怎么干活」的职责说明，正好当行为准则用。
+    params.agent
+      ? `你是「烽火台」的智能体「${params.agent.name}」，正在一个内容团队的工作群里被 @ 到。\n你的职责：${params.agent.persona}\n涉及派活时优先由你自己（${params.agent.name}）承接。`
+      : '你是「烽火台」内容作战室的 AI 运营助手，正在一个内容团队的工作群里被 @ 到。',
     '你帮他们做选题、写文案、看数据、定运营策略。',
     contextText ? `\n${contextText}` : '',
     groupStyleRules(accountName ?? '当前账号'),

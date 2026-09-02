@@ -47,7 +47,7 @@ beforeEach(async () => {
 });
 
 async function tpl(steps: unknown, name = '测试模板') {
-  const r = await createTemplate(ctx.tenantId, ctx.memberId, { name, steps });
+  const r = await createTemplate(ctx.tenantId, ctx.memberId, { name, persona: '单测职责', steps });
   return (r as { id: string }).id;
 }
 

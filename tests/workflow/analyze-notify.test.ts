@@ -56,7 +56,7 @@ beforeEach(async () => {
 });
 
 async function runSteps(steps: unknown[]) {
-  const t = await createTemplate(ctx.tenantId, ctx.memberId, { name: `T-${Math.random()}`, steps });
+  const t = await createTemplate(ctx.tenantId, ctx.memberId, { name: `T-${Math.random()}`, persona: '单测职责', steps });
   if (!t.ok) throw new Error(t.error);
   return runWorkflow({ ...ctx, trigger: 'manual' }, t.id);
 }

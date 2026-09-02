@@ -111,7 +111,7 @@ describe('内置模板', () => {
 
 describe('自建 / 导入导出', () => {
   it('自建模板天然可用，不必再装一次', async () => {
-    const r = await createTemplate(tenantId, MEMBER, { name: '我的流水线', steps: [{ kind: 'cover' }] });
+    const r = await createTemplate(tenantId, MEMBER, { name: '我的流水线', persona: '要跑封面流水线时派我', steps: [{ kind: 'cover' }] });
     expect(r.ok).toBe(true);
     const list = await listTemplates(tenantId);
     const mine = list.find((t) => t.name === '我的流水线')!;
@@ -120,24 +120,51 @@ describe('自建 / 导入导出', () => {
   });
 
   it('别的租户看不到我建的模板', async () => {
-    await createTemplate(tenantId, MEMBER, { name: '私有流水线', steps: [{ kind: 'cover' }] });
+    await createTemplate(tenantId, MEMBER, { name: '私有流水线', persona: '本租户私用', steps: [{ kind: 'cover' }] });
     const other = await prisma.tenant.create({ data: { name: 'O', plan: 'free' } });
     const list = await listTemplates(other.id);
     expect(list.find((t) => t.name === '私有流水线')).toBeUndefined();
   });
 
+  it('🔒 职责说明必填：没写的智能体 AI 永远不会在对话里派它', async () => {
+    // AI 助手靠 persona 决定「这句话该派谁」（lib/agent/tools.ts）。允许空职责 =
+    // 卖一个「装了但最短调用路永久关闭」的智能体，用户只会得出「不好用」。
+    const r = await createTemplate(tenantId, MEMBER, { name: '哑巴智能体', steps: [{ kind: 'cover' }] });
+    expect(r.ok).toBe(false);
+    expect((r as { error: string }).error).toContain('职责');
+  });
+
+  it('导入不受职责必填限制：别人分享的 JSON 缺职责照收，靠卡片警示引导补写', async () => {
+    const shared = JSON.stringify({ beaconWorkflow: 1, name: '别人分享的', steps: [{ kind: 'cover' }] });
+    const r = await importTemplate(tenantId, MEMBER, shared);
+    expect(r.ok, '导入被职责必填拦下 —— 分享链路断了').toBe(true);
+  });
+
   it('步骤不合法时给出人话错误，而不是一段 zod issue', async () => {
-    const r = await createTemplate(tenantId, MEMBER, { name: 'X', steps: [{ kind: 'skill' }] });
+    const r = await createTemplate(tenantId, MEMBER, { name: 'X', persona: '测坏步骤', steps: [{ kind: 'skill' }] });
     expect(r.ok).toBe(false);
     expect((r as { error: string }).error).toContain('步骤配置不对');
   });
 
   it('导出不带租户信息（分享出去的东西不该带上你是谁）', async () => {
-    const created = await createTemplate(tenantId, MEMBER, { name: '可分享', steps: [{ kind: 'cover' }] });
+    const created = await createTemplate(tenantId, MEMBER, { name: '可分享', persona: '分享样例', steps: [{ kind: 'cover' }] });
     const json = await exportTemplate(tenantId, (created as { id: string }).id);
     expect(json).toBeTruthy();
     expect(json!).not.toContain(tenantId);
     expect(json!).not.toContain(MEMBER);
+  });
+
+  it('🔒 分享一圈职责不丢：导出带 persona，导入原样收下', async () => {
+    // 2026-09-01 查出导出/导入两头都在丢 persona：分享出去的智能体到对方手里
+    // 全是「永远不会被对话派单的哑巴」，而两边界面都不报任何错。
+    const created = await createTemplate(tenantId, MEMBER, { name: '带职责的', persona: '写周报时派我', steps: [{ kind: 'cover' }] });
+    const json = await exportTemplate(tenantId, (created as { id: string }).id);
+    expect(json!).toContain('写周报时派我');
+    const other = await prisma.tenant.create({ data: { name: 'P', plan: 'free' } });
+    const r = await importTemplate(other.id, MEMBER, json!);
+    expect(r.ok).toBe(true);
+    const got = await prisma.workflowTemplate.findUnique({ where: { id: (r as { id: string }).id } });
+    expect(got!.persona).toBe('写周报时派我');
   });
 
   it('导入的 JSON 同样过 schema：塞不进白名单外的步骤', async () => {

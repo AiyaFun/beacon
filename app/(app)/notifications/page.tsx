@@ -1,10 +1,12 @@
 import { headers } from 'next/headers';
+import { backgroundSchedulerRuns } from '@/lib/jobs/queue';
 import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { parseJson } from '@/lib/json';
 import { maskKey } from '@/lib/crypto';
 import { readBotSecrets } from '@/lib/bot';
+import { loadBotChats } from '@/lib/bot/overview';
 import { Card, Stat } from '@/components/ui';
 import { Icon } from '@/components/icons';
 import { BotIntegrationCard, type BotRow } from '../settings/BotIntegrationCard';
@@ -24,6 +26,15 @@ export default async function NotificationsPage() {
   const proto = h.get('x-forwarded-proto') ?? 'https';
   const host = h.get('host');
   const callbackBase = (host ? `${proto}://${host}` : process.env.BEACON_PUBLIC_URL || 'https://beacon.iyunci.cn').replace(/\/$/, '');
+
+  const agentOptions = (await prisma.workflowTemplate.findMany({
+    where: { OR: [{ isBuiltin: true }, { tenantId: s.tenantId }] },
+    orderBy: [{ isBuiltin: 'desc' }, { createdAt: 'asc' }],
+    select: { id: true, name: true, emoji: true },
+  })).map((t) => ({ id: t.id, name: `${t.emoji} ${t.name}` }));
+
+  // 会话画像：每个机器人在哪些群、和哪些人聊过（渠道卡「用户 / 群聊」真数 + 「群聊与用户」列表）
+  const chatsByBot = await loadBotChats(s.workspaceId);
 
   const botRows: BotRow[] = botIntegrations.map((b) => {
     const secrets = readBotSecrets(b.secretsEnc);
@@ -53,6 +64,11 @@ export default async function NotificationsPage() {
       lastOutboundAt: b.lastOutboundAt ? b.lastOutboundAt.toISOString() : null,
       lastInboundAt: b.lastInboundAt ? b.lastInboundAt.toISOString() : null,
       lastError: b.lastError,
+      agentTemplateId: b.agentTemplateId,
+      chats: chatsByBot.get(b.id) ?? [],
+      // 微信 iLink：绑定的微信 ID 与登录态是否过期都不是密钥，回显给卡片（看到接的是哪个号、过期了提示重扫）
+      ilinkUserId: secrets.ilinkUserId ?? null,
+      ilinkExpired: !!secrets.ilinkExpired,
     };
   });
 
@@ -61,7 +77,7 @@ export default async function NotificationsPage() {
   return (
     <>
       <HubHeader
-        title="机器人与消息通知"
+        title="消息渠道"
         hint="推送什么、什么时候推、群里能用哪些命令 · 机器人的密钥填在「接入与密钥」"
         action={
           <span className="row" style={{ gap: 8 }}>
@@ -87,9 +103,10 @@ export default async function NotificationsPage() {
         {botRows.length === 0 && (
           <div className="alert-gradient-amber" style={{ padding: '10px 14px', marginBottom: 12 }}>
             <span className="small">
-              还没有机器人。<b>先去「接入与密钥」把机器人凭据填上</b>（Webhook 地址或自建应用的 App Secret），
-              填完这一页就能配推送内容与时间。
-              <Link href="/settings/keys" style={{ color: 'var(--brand)', fontWeight: 600, marginLeft: 4 }}>去填 →</Link>
+              {/* 渠道卡上就有「接入」按钮（2026-09-01 Accio 式改版）——别再把人支去别的页，
+                  指过去只会发现同一个表单 */}
+              还没有机器人。<b>在下面的渠道卡上点「接入」</b>，贴上群 Webhook 或自建应用凭据即可；
+              填完回这一页配推送内容与时间。
             </span>
           </div>
         )}
@@ -101,7 +118,7 @@ export default async function NotificationsPage() {
           <b>群里 @ 它对话</b>：直接 @机器人 提问就能连着聊（记得住上下文，带你的人设与真实数据回答）；发 <code className="mono">/分析</code> 给账号做一次数据体检并拿到反馈，<code className="mono">/账号 名字</code> 指定这个群管的是哪个号。
           <a href="/help" style={{ color: 'var(--brand)', fontWeight: 600, marginLeft: 4 }}>📖 详细设置步骤 →</a>
         </p>
-        <BotIntegrationCard rows={botRows} callbackBase={callbackBase} />
+        <BotIntegrationCard rows={botRows} callbackBase={callbackBase} agentOptions={agentOptions} pollerRuns={backgroundSchedulerRuns()} />
       </Card>
     </>
   );

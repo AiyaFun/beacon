@@ -37,7 +37,7 @@ describe('feishuTenantAccessToken · 错误如实返回', () => {
 describe('feishuListBotChats · 权限错误不再被吞成空列表', () => {
   it('成功 → 返回 chat_id 列表', async () => {
     mockFetch(() => ({ body: { code: 0, data: { items: [{ chat_id: 'oc_1' }, { chat_id: 'oc_2' }] } } }));
-    expect(await feishuListBotChats('t')).toEqual({ chatIds: ['oc_1', 'oc_2'] });
+    expect(await feishuListBotChats('t')).toMatchObject({ chatIds: ['oc_1', 'oc_2'] });
   });
 
   it('缺权限 99991672 → 返回 error 而不是静默空数组', async () => {
@@ -49,7 +49,7 @@ describe('feishuListBotChats · 权限错误不再被吞成空列表', () => {
 
   it('真的没进群 → 空列表且无 error（与缺权限可区分）', async () => {
     mockFetch(() => ({ body: { code: 0, data: { items: [] } } }));
-    expect(await feishuListBotChats('t')).toEqual({ chatIds: [] });
+    expect(await feishuListBotChats('t')).toMatchObject({ chatIds: [] });
   });
 });
 

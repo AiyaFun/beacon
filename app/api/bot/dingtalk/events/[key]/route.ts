@@ -22,6 +22,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ key: string }>
   if (!integration || integration.provider !== 'dingtalk') {
     return NextResponse.json({ code: 404, msg: 'unknown app' }, { status: 404 });
   }
+  // 停用 = 出站入站一起停（此前 enabled 只管出站，「停用」后群里照答）。回 200 让平台别重试
+  if (!integration.enabled) return NextResponse.json({ code: 0, msg: 'disabled' });
   const secrets = readBotSecrets(integration.secretsEnc);
 
   // 验签：header timestamp + sign，用 appSecret 校验
@@ -61,7 +63,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ key: string }>
   const senderId = String(payload?.senderStaffId ?? payload?.senderId ?? '') || undefined;
   const senderName = String(payload?.senderNick ?? '') || undefined;
   const isGroup = String(payload?.conversationType ?? '') !== '1';
-  void processAndReply(integration.id, integration.workspaceId, text, sessionWebhook, chatId, senderId, senderName, isGroup).catch((e) =>
+  // 群名回调里就带着（conversationTitle）——渠道卡「在哪些群」靠它，别的渠道还得去同步
+  const chatName = String(payload?.conversationTitle ?? '') || undefined;
+  void processAndReply(integration.id, integration.workspaceId, text, sessionWebhook, chatId, senderId, senderName, isGroup, chatName).catch((e) =>
     log.error('钉钉入站处理失败', { key, err: e }),
   );
   return NextResponse.json({});
@@ -76,6 +80,7 @@ async function processAndReply(
   senderId: string | undefined,
   senderName: string | undefined,
   isGroup: boolean,
+  chatName?: string,
 ) {
   const reply = await handleInbound(workspaceId, text, {
     provider: 'dingtalk',
@@ -84,6 +89,7 @@ async function processAndReply(
     senderId,
     senderName,
     isGroup,
+    chatName,
   });
   await prisma.botIntegration
     .updateMany({ where: { id: integrationId }, data: { lastInboundAt: new Date(), lastError: null } })

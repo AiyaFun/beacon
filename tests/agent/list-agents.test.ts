@@ -71,6 +71,7 @@ describe('AI 看到的智能体名单', () => {
     const otherMember = await prisma.member.create({ data: { tenantId: other.id, name: '李四', role: 'owner' } });
     await createTemplate(other.id, otherMember.id, {
       name: '别家的流程',
+      persona: '别家职责',
       steps: [{ kind: 'draft', platform: 'xiaohongshu' }],
     });
 

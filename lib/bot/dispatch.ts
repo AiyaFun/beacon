@@ -1,4 +1,5 @@
 import { prisma } from '../db';
+import { isExternalProvider } from './types';
 import { can } from '../rbac';
 import { oaIdentity, memberByOaIdentity, type OaProvider } from '../auth/oa';
 import { resolveAccount } from './accounts';
@@ -55,19 +56,34 @@ type Dispatcher = { ok: true; ctx: ToolContext } | { ok: false; message: string 
  */
 export async function resolveDispatcher(
   workspaceId: string,
-  inbound: Pick<InboundCtx, 'provider' | 'senderId'>,
+  inbound: Pick<InboundCtx, 'provider' | 'senderId' | 'integrationId'>,
   boundAccountId: string | null,
 ): Promise<Dispatcher> {
   if (!inbound.senderId) {
     return { ok: false, message: '取不到你的企业应用账号，没法确认是谁在派任务（这个通道可能不支持带发送者身份）。' };
   }
-  const provider = (inbound.provider === 'dingtalk' || inbound.provider === 'wecom' ? inbound.provider : 'feishu') as OaProvider;
-  const member = await memberByOaIdentity(oaIdentity(provider, inbound.senderId));
-  if (!member) {
-    return {
-      ok: false,
-      message: '派任务要先绑定身份：**私聊我**说「登录」（成员一键绑定），或说「绑定 <6 位码>」（码在网页「设置 → 账号与安全」里拿）。绑定过一次以后就不用再绑了。',
-    };
+  // 🔒 对外渠道：senderId 是微信 external_userid，对不上任何 OA 身份，也**不该**被映射成 feishu 身份去查——
+  //    下面那行兜底把未知 provider 当 feishu，对微信来说等于拿一个陌生 ID 去撞成员表。
+  if (isExternalProvider(inbound.provider)) {
+    return { ok: false, message: '微信客服渠道无法确认你是哪位成员（这里的身份是微信用户 ID，不是企业应用身份）。派任务请到飞书/钉钉/企微机器人里，或在网页任务台发起。' };
+  }
+  let member: { id: string; tenantId: string; role: string } | null;
+  if (inbound.provider === 'wechat') {
+    // 微信 iLink：身份不是 OA，而是「扫码绑定时登录着的那个成员」（secrets.boundMemberId），且只认绑定的微信号。
+    // 扫码要 byok.manage 权限——所以这条链上的人至少是管理员级别，比 OA 自动加入的成员身份更硬
+    member = await ilinkOwnerMember(inbound.integrationId, inbound.senderId);
+    if (!member) {
+      return { ok: false, message: '这个微信号不是绑定这条机器人的那个号，或绑定它的成员已被停用——到网页「消息渠道」重新扫码绑定后再派。' };
+    }
+  } else {
+    const provider = (inbound.provider === 'dingtalk' || inbound.provider === 'wecom' ? inbound.provider : 'feishu') as OaProvider;
+    member = await memberByOaIdentity(oaIdentity(provider, inbound.senderId));
+    if (!member) {
+      return {
+        ok: false,
+        message: '派任务要先绑定身份：**私聊我**说「登录」（成员一键绑定），或说「绑定 <6 位码>」（码在网页「设置 → 账号与安全」里拿）。绑定过一次以后就不用再绑了。',
+      };
+    }
   }
   const ws = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { tenantId: true, id: true } });
   if (!ws || ws.tenantId !== member.tenantId) {
@@ -89,6 +105,20 @@ export async function resolveDispatcher(
       role: member.role,
     },
   };
+}
+
+/** 微信 iLink 的派任务身份：senderId 必须是绑定的那个微信号，成员必须仍在职。 */
+async function ilinkOwnerMember(integrationId: string | undefined, senderId: string) {
+  if (!integrationId) return null;
+  const it = await prisma.botIntegration.findUnique({ where: { id: integrationId }, select: { provider: true, secretsEnc: true } });
+  if (!it || it.provider !== 'wechat') return null;
+  const { readBotSecrets } = await import('./index');
+  const secrets = readBotSecrets(it.secretsEnc);
+  if (!secrets.boundMemberId || !secrets.ilinkUserId || secrets.ilinkUserId !== senderId) return null;
+  return prisma.member.findFirst({
+    where: { id: secrets.boundMemberId, status: 'active' },
+    select: { id: true, tenantId: true, role: true },
+  });
 }
 
 function shortGoal(goal: string, max = 40): string {
@@ -144,8 +174,20 @@ export async function cmdDispatchPreset(workspaceId: string, ctx: InboundCtx, ar
   ].join('\n');
 }
 
-/** /执行 <目标>：一句话派给 AI 执行器。走 origin:'api'，每个写/花钱动作都要到站内确认。 */
-export async function cmdDispatchGoal(workspaceId: string, ctx: InboundCtx, goal: string, boundAccountId: string | null): Promise<string> {
+/** 派活时出面的智能体（本会话选的，或渠道默认的）。见 router.ts 的 currentAgent。 */
+export type DispatchAgent = { id: string; name: string; persona: string };
+
+/**
+ * /执行 <目标>：一句话派给 AI 执行器。走 origin:'api'，每个写/花钱动作都要到站内确认。
+ * 自然语言里「帮我写一篇…」这类句子也走这里（lib/bot/intent 判成 run），与敲 /执行 完全同权。
+ */
+export async function cmdDispatchGoal(
+  workspaceId: string,
+  ctx: InboundCtx,
+  goal: string,
+  boundAccountId: string | null,
+  agent: DispatchAgent | null = null,
+): Promise<string> {
   const g = goal.trim();
   if (!g) return '用法：/执行 你要它做的事。例：/执行 看看我最近三天的作品数据，挑出表现最差的一条分析原因';
 
@@ -157,9 +199,17 @@ export async function cmdDispatchGoal(workspaceId: string, ctx: InboundCtx, goal
   try {
     // origin:'api'：resolveAuth 会把授权档强制成 confirm_each（那道闸有专门守卫）。
     // 群通道与对外 API 同一个待遇——它们都「人不在站内」，没有资格更宽。
-    const turn = await startAgentRun(who.ctx, g, { origin: 'api', botChatRef: chatRef });
+    // 选了智能体就让它出面：身份与职责拼进系统提示，运行记录上也记着是谁跑的
+    const turn = await startAgentRun(who.ctx, g, {
+      origin: 'api',
+      botChatRef: chatRef,
+      ...(agent ? {
+        agentTemplateId: agent.id,
+        agentSystemPrompt: `你现在以智能体「${agent.name}」的身份承接这件事。它的职责：${agent.persona || '（未填写职责说明）'}`,
+      } : {}),
+    });
     return [
-      `✅ 任务已开始（${STATUS_LABEL[turn.status] ?? turn.status}）。`,
+      `✅ ${agent ? `已交给「${agent.name}」，` : ''}任务已开始（${STATUS_LABEL[turn.status] ?? turn.status}）。`,
       '每一步会改数据或花额度的操作都会停下来等你去网页点头——想少点头就把这件事存成一键任务卡再 /派。',
       `跑完/要确认时我会在群里说一声。看进度 → ${runLink(turn.runId)}`,
     ].join('\n');

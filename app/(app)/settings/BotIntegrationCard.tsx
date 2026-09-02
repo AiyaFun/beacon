@@ -2,8 +2,13 @@
 
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { actSaveBot, actTestBot, actToggleBot, actDeleteBot, actRevealBotSecrets, actDiagnoseBot } from './bot-actions';
-import { BOT_PROVIDERS, PUSH_EVENTS, TOGGLEABLE_COMMANDS, DEFAULT_OFF_COMMANDS } from '@/lib/bot/types';
+import { actSaveBot, actTestBot, actToggleBot, actDeleteBot, actRevealBotSecrets, actDiagnoseBot, actSetBotAgent } from './bot-actions';
+import { BOT_PROVIDERS, PUSH_EVENTS, TOGGLEABLE_COMMANDS, DEFAULT_OFF_COMMANDS, EXTERNAL_DEFAULT_COMMANDS, botProviderName, isReplyOnlyProvider, isExternalProvider } from '@/lib/bot/types';
+import { Overlay } from '@/components/Overlay';
+import { ChannelLogo } from '@/components/ChannelLogos';
+import { WechatIlinkConnect } from '@/components/WechatIlinkConnect';
+import { BotChatsDialog } from './BotChatsDialog';
+import { summarizeChats, type BotChatRow } from '@/lib/bot/chat-summary';
 import { fmtDateTime } from '@/lib/format';
 
 // 一键配置飞书机器人（需求③④）。密钥永不回显；表单留空=保持原值。
@@ -35,26 +40,36 @@ export type BotRow = {
   lastOutboundAt: string | null;
   lastInboundAt: string | null;
   lastError: string | null;
+  /** 渠道绑定的智能体（WorkflowTemplate.id）。空 = 通用运营助手 */
+  agentTemplateId: string | null;
+  /** 这个机器人名下的会话画像（BotConversation：在哪些群、和谁聊过、计数）。渠道卡「用户 / 群聊」真数与抽屉列表都从这来 */
+  chats: BotChatRow[];
+  /** 微信（iLink）：绑定的微信用户 ID（展示用）与登录态是否过期；其它渠道为 null / false */
+  ilinkUserId: string | null;
+  ilinkExpired: boolean;
 };
 
 const DEFAULT_EVENTS = ['daily_recommend', 'compliance_alert', 'learning_summary'];
 // 新建时默认全开，与「库里空数组 = 默认全开」的老语义一致，不让新老两条路给出不同结果。
-// 但 DEFAULT_OFF_COMMANDS（派任务这类高危命令）例外：它们连「空=全开」都不吃，
-// 新建时预勾上等于管理员没看见就开了——必须亲手勾。
+// 2026-09-02：DEFAULT_OFF_COMMANDS 现在是空数组（dispatch 改默认开），
+// 以后新的高危命令进来再用，现在这行 filter 实际什么都不滤。
 const ALL_COMMANDS = TOGGLEABLE_COMMANDS
   .filter((c) => !DEFAULT_OFF_COMMANDS.includes(c.key))
   .map((c) => c.key as string);
 
-export function BotIntegrationCard({ rows, callbackBase }: { rows: BotRow[]; callbackBase: string }) {
+export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRuns = true }: { rows: BotRow[]; callbackBase: string; agentOptions: { id: string; name: string }[]; /** 这台实例有没有后台进程在收微信 iLink 消息（本机开发没有） */ pollerRuns?: boolean }) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [editing, setEditing] = useState<BotRow | null>(null);
+  /** 打开哪个渠道的「群聊与用户」抽屉（provider key） */
+  const [chatsFor, setChatsFor] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [msg, setMsg] = useState('');
   const [failed, setFailed] = useState(false);
 
   // 表单态
   const [botMode, setBotMode] = useState<'app' | 'webhook'>('app');
+  const [agentTpl, setAgentTpl] = useState(''); // 渠道默认智能体（''=通用助手）
   const [provider, setProvider] = useState('feishu');
   const [label, setLabel] = useState('');
   const [webhookUrl, setWebhookUrl] = useState('');
@@ -100,13 +115,25 @@ export function BotIntegrationCard({ rows, callbackBase }: { rows: BotRow[]; cal
     setBotMode('app'); setProvider('feishu'); setLabel(''); setWebhookUrl(''); setSignSecret('');
     setEvents(DEFAULT_EVENTS); setCommands(ALL_COMMANDS); setPushSchedule('09:00'); setShowInbound(false);
     setAppId(''); setAppSecret(''); setVerificationToken(''); setEncryptKey(''); setAgentId('');
+    setAgentTpl('');
     setRevealed(null);
     setEditing(null);
   }
 
   function openAdd() { resetForm(); setShowForm(true); }
+  // 渠道总览卡上的「接入」：预选好渠道再开表单，用户不用在下拉里再找一遍。
+  // telegram/slack 只有出站 webhook 一条路（app/api/bot/ 下没有它们的入站路由），直接落 webhook 模式。
+  function openAddFor(key: string) {
+    resetForm();
+    setProvider(key);
+    setBotMode(key === 'telegram' || key === 'slack' ? 'webhook' : 'app');
+    // 对外渠道（微信客服）：谁扫码都能聊，新建默认只开低风险指令，不吃「全勾」的默认
+    if (isExternalProvider(key)) setCommands([...EXTERNAL_DEFAULT_COMMANDS]);
+    setShowForm(true);
+  }
   function openEdit(r: BotRow) {
     setEditing(r); setBotMode(r.inboundKey ? 'app' : 'webhook');
+    setAgentTpl(r.agentTemplateId ?? '');
     setProvider(r.provider); setLabel(r.label);
     setWebhookUrl(r.webhookUrl ?? ''); setSignSecret('');
     setEvents(r.pushEvents.length ? r.pushEvents : DEFAULT_EVENTS);
@@ -119,6 +146,10 @@ export function BotIntegrationCard({ rows, callbackBase }: { rows: BotRow[]; cal
     if (r.provider === 'wecom' && r.inboundKey?.includes('_')) {
       const parts = r.inboundKey.split('_');
       setAppId(parts[0]); setAgentId(parts.slice(1).join('_'));
+    } else if (r.provider === 'wechat_kf') {
+      // 微信客服的 inboundKey 是 corpId_kf：剥掉后缀还原 CorpID。原样带回去再保存会拼成 corpId_kf_kf，
+      // 回调地址跟着变，企微后台配好的那条静默失效
+      setAppId((r.inboundKey ?? '').replace(/_kf$/, '')); setAgentId('');
     } else {
       setAppId(r.inboundKey ?? ''); setAgentId(r.agentId ?? '');
     }
@@ -145,7 +176,7 @@ export function BotIntegrationCard({ rows, callbackBase }: { rows: BotRow[]; cal
   function save() {
     start(async () => {
       const r = await actSaveBot({
-        id: editing?.id, provider, label, botMode, webhookUrl, signSecret, pushEvents: events,
+        id: editing?.id, provider, label, botMode, webhookUrl, signSecret, pushEvents: events, agentTemplateId: agentTpl,
         allowCommands: commands,
         pushSchedule, appId, appSecret, verificationToken, encryptKey, agentId,
       });
@@ -179,11 +210,214 @@ export function BotIntegrationCard({ rows, callbackBase }: { rows: BotRow[]; cal
   // 回调地址带 App ID（多租户下靠它在解密前定位密钥）；未填时给占位提示。
   const callbackKey = provider === 'wecom'
     ? (appId.trim() && agentId.trim() ? `${appId.trim()}_${agentId.trim()}` : '<先填下方 CorpID 和 AgentID>')
-    : (appId.trim() || '<先填下方 App ID>');
-  const callbackUrl = `${callbackBase}/api/bot/${provider}/events/${callbackKey}`;
+    : provider === 'wechat_kf'
+      ? (appId.trim() ? `${appId.trim()}_kf` : '<先填下方 CorpID>')
+      : (appId.trim() || '<先填下方 App ID>');
+  // 微信客服的路由段是 wechat-kf（URL 不用下划线），别用 provider 原值拼
+  const callbackUrl = `${callbackBase}/api/bot/${provider === 'wechat_kf' ? 'wechat-kf' : provider}/events/${callbackKey}`;
+
+  // 渠道总览：一屏之内看清「有哪些渠道、各自连没连」。
+  // 此前这两件事全藏在表单的平台下拉里——用户得逐个切换才知道自己配了几个（2026-09-01 依用户截图重排）。
+  // ⚠️ 准入策略（allowCommands）与智能体挂载**刻意不放进总览卡**：那是已经收口到一处的闸，
+  // 拆到每张渠道卡上会变成同一个策略六个入口。
+  // 「几小时前」——只到能扫读的粒度，别精确到秒（这里回答的是「它活着吗」，不是审计）
+  const ago = (iso: string | null): string | null => {
+    if (!iso) return null;
+    const ms = Date.now() - new Date(iso).getTime();
+    if (ms < 0) return null;
+    const m = Math.floor(ms / 60000);
+    if (m < 1) return '刚刚';
+    if (m < 60) return `${m} 分钟前`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h} 小时前`;
+    return `${Math.floor(h / 24)} 天前`;
+  };
+  const channelStat = BOT_PROVIDERS.map((p) => {
+    const mine = rows.filter((r) => r.provider === p.key);
+    const first = mine[0] ?? null;
+    // 最近活动取出站/入站两个时刻的较新者：只看其中一个，另一个方向的机器人会被冤枉成「没动静」
+    const lastActive = mine
+      .flatMap((r) => [r.lastOutboundAt, r.lastInboundAt])
+      .filter((x): x is string => !!x)
+      .sort()
+      .pop() ?? null;
+    // 推送订阅取各绑定的并集：两个机器人各订两类，渠道整体是四类不是二类
+    const eventUnion = new Set(mine.flatMap((r) => r.pushEvents));
+    return {
+      ...p,
+      total: mine.length,
+      on: mine.filter((r) => r.enabled).length,
+      first,
+      lastActive,
+      erring: mine.filter((r) => r.lastError).length,
+      events: eventUnion.size,
+      // 会话画像汇总：去重用户 / 群 / 私聊——全是真数，来自每条入站消息的 touch（lib/bot/conversation.ts）
+      ...summarizeChats(mine.flatMap((r) => r.chats)),
+      // 接法：有入站路由键 = 自建应用（双向）；只有 webhook = 仅出站
+      mode: first
+        ? (p.key === 'wechat_kf' ? '微信客服 · 官方对话通道'
+          : p.key === 'wechat' ? '官方 iLink 机器人 · 扫码绑定'
+          : first.inboundKey ? '自建应用 · 双向' : 'Webhook · 仅出站')
+        : null,
+    };
+  });
 
   return (
     <div className="stack" style={{ gap: 12 }}>
+      {/* 渠道总览（2026-09-01 按用户指定的 Accio /work/app/channels 卡片解剖重排：
+          头像头部 + 三格统计 + 智能体/指令权限双栏 + 通栏设置按钮。
+          「待处理」那格不搬——beacon 没有配对审核，摆一个恒 0 的格子是装样子；
+          换成真实存在的三个量：机器人数 / 群会话数（BotConversation 真表）/ 推送订阅并集。） */}
+      <div className="grid grid-2" style={{ gap: 12 }}>
+        {channelStat.map((c) => (
+          <div key={c.key} className="card" style={{ padding: 16, boxShadow: 'none', border: '1px solid var(--border)' }}>
+            {/* 头部：头像 + 名称/接法 + 状态徽标 */}
+            <div className="row" style={{ gap: 10, alignItems: 'center' }}>
+              <ChannelLogo provider={c.key} size={42} fallback={c.name} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+                  <b style={{ fontSize: 15 }}>{c.name}</b>
+                  {c.erring > 0 && <span className="badge badge-red" title="有机器人最近报错，点「设置机器人」看详情">⚠ {c.erring} 个报错</span>}
+                </div>
+                <div className="small muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {c.mode ?? c.hint}
+                  {/* Accio 每卡都有的「如何接入?」——beacon 的分步说明就在连接弹窗里按渠道分段，
+                      点开即见，不再单独维护第二份文档 */}
+                  <button
+                    type="button"
+                    className="small"
+                    style={{ marginLeft: 6, color: 'var(--brand)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                    onClick={() => openAddFor(c.key)}
+                  >
+                    如何接入?
+                  </button>
+                </div>
+              </div>
+              {c.total > 0
+                ? <span className="badge badge-green" style={{ flexShrink: 0 }}>已关联{c.on < c.total ? ` · 停用 ${c.total - c.on}` : ''}</span>
+                : <span className="badge badge-gray" style={{ flexShrink: 0 }}>未关联</span>}
+            </div>
+
+            {/* 三格统计：全是真数，没有的量不摆格子。用户 / 群聊 点开是「群聊与用户」抽屉——
+                Accio 卡上这两格就是这么用的：数字告诉你有多少，点进去告诉你是哪些。
+                只答不推的渠道（微信 iLink / 微信客服）没有群也没有推送：摆一格「暂不支持群聊」说破，不摆恒 0 */}
+            <div className="row" style={{ gap: 8, marginTop: 12 }}>
+              {(isReplyOnlyProvider(c.key)
+                ? ([['用户', c.users], ['私聊', c.p2p]] as const)
+                : ([['用户', c.users], ['群聊', c.groups], ['推送订阅', c.events]] as const)
+              ).map(([label, n]) => {
+                const drill = label !== '推送订阅' && c.total > 0;
+                return (
+                  <div
+                    key={label}
+                    role={drill ? 'button' : undefined}
+                    tabIndex={drill ? 0 : undefined}
+                    title={drill ? '点开看是哪些群、哪些人' : undefined}
+                    onClick={drill ? () => setChatsFor(c.key) : undefined}
+                    onKeyDown={drill ? (e) => { if (e.key === 'Enter' || e.key === ' ') setChatsFor(c.key); } : undefined}
+                    style={{ flex: 1, padding: '8px 6px', border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface-2)', textAlign: 'center', cursor: drill ? 'pointer' : undefined }}
+                  >
+                    <div style={{ fontSize: 17, fontWeight: 700, fontVariantNumeric: 'tabular-nums', lineHeight: 1.2 }}>{n}</div>
+                    <div className="small muted" style={{ fontSize: 11, marginTop: 1 }}>{label}</div>
+                  </div>
+                );
+              })}
+              {isReplyOnlyProvider(c.key) && (
+                <div className="small muted" style={{ flex: 1, padding: '8px 6px', border: '1px dashed var(--border)', borderRadius: 10, textAlign: 'center', alignSelf: 'stretch', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  暂不支持群聊
+                </div>
+              )}
+            </div>
+
+            {/* 智能体 / 指令权限 双栏（Accio 的「智能体 + 准入策略」位）。
+                指令权限只做**launcher**不做就地编辑：那套开关在编辑表单里有唯一入口，
+                拆到每张卡上就地改，等于同一道闸开六个口子 */}
+            <div className="row" style={{ gap: 8, marginTop: 10 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="small muted" style={{ marginBottom: 4 }}>智能体</div>
+                {c.first ? (
+                  <select
+                    className="input"
+                    style={{ width: '100%', padding: '6px 8px', fontSize: 13 }}
+                    value={c.first.agentTemplateId ?? ''}
+                    disabled={pending}
+                    onChange={(e) => {
+                      const v = e.target.value || null;
+                      start(async () => {
+                        const r = await actSetBotAgent(c.first!.id, v);
+                        if (!r.ok) flash(r.error ?? '保存失败', true);
+                        else { flash(v ? '已绑定，该渠道对话将以这个智能体出面' : '已解绑，回到通用助手'); router.refresh(); }
+                      });
+                    }}
+                  >
+                    <option value="">通用运营助手（默认）</option>
+                    {agentOptions.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                  </select>
+                ) : (
+                  <div className="small muted" style={{ padding: '6px 8px', border: '1px dashed var(--border)', borderRadius: 8 }}>
+                    接入后可选
+                  </div>
+                )}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="small muted" style={{ marginBottom: 4 }}>指令权限</div>
+                {c.first ? (
+                  <button
+                    type="button"
+                    className="input row-between"
+                    style={{ width: '100%', padding: '6px 8px', fontSize: 13, cursor: 'pointer', textAlign: 'left' }}
+                    disabled={pending}
+                    onClick={() => openEdit(c.first!)}
+                    title="到编辑表单里改（指令开关只有这一个入口）"
+                  >
+                    <span>{c.first.allowCommands.length === 0 ? '默认集' : `自定义 ${c.first.allowCommands.length} 项`}</span>
+                    <span className="muted">›</span>
+                  </button>
+                ) : (
+                  <div className="small muted" style={{ padding: '6px 8px', border: '1px dashed var(--border)', borderRadius: 8 }}>
+                    接入后可配
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* 活动行：它是「这渠道活着吗」的直接证据，Accio 没有但值得有 */}
+            {c.first && (
+              <div className="row-between small muted" style={{ marginTop: 8, gap: 8 }}>
+                <span>最近活动：{ago(c.lastActive) ?? '还没动静'}</span>
+                <button
+                  type="button"
+                  className="small"
+                  style={{ color: 'var(--brand)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                  onClick={() => setChatsFor(c.key)}
+                >
+                  群聊与用户 ›
+                </button>
+              </div>
+            )}
+
+            {/* 通栏主按钮 */}
+            <div style={{ marginTop: 10 }}>
+              {c.first ? (
+                <div className="row" style={{ gap: 8 }}>
+                  <button className="btn" style={{ flex: 1 }} onClick={() => openEdit(c.first!)} disabled={pending}>
+                    设置机器人
+                  </button>
+                  <button className="btn btn-ghost" onClick={() => openAddFor(c.key)} disabled={pending} title="同渠道再绑一个群/应用">
+                    ＋
+                  </button>
+                </div>
+              ) : (
+                <button className="btn btn-primary" style={{ width: '100%' }} onClick={() => openAddFor(c.key)} disabled={pending}>
+                  接入
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+
+      </div>
+
       {/* 已配置列表与详细配置信息 */}
       {rows.length > 0 && (
         <div className="stack" style={{ gap: 12 }}>
@@ -194,7 +428,11 @@ export function BotIntegrationCard({ rows, callbackBase }: { rows: BotRow[]; cal
                   <b style={{ fontSize: 15 }}>{r.label}</b>
                   <span className="badge badge-brand">{BOT_PROVIDERS.find((p) => p.key === r.provider)?.name ?? r.provider}</span>
                   {r.enabled ? <span className="badge badge-green">● 已启用</span> : <span className="badge badge-gray">已停用</span>}
-                  {r.inboundKey ? (
+                  {r.provider === 'wechat_kf' ? (
+                    <span className="badge badge-blue">官方客服 · 只答不推</span>
+                  ) : r.provider === 'wechat' ? (
+                    <span className="badge badge-blue" title="微信官方面向智能体的机器人接口">官方 iLink · 只答不推</span>
+                  ) : r.inboundKey ? (
                     <span className="badge badge-blue">双向全能 (自建应用)</span>
                   ) : (
                     <span className="badge badge-amber">出站 Webhook</span>
@@ -202,8 +440,9 @@ export function BotIntegrationCard({ rows, callbackBase }: { rows: BotRow[]; cal
                   {r.hasSignSecret && <span className="badge badge-gray">已启加签校验</span>}
                 </div>
                 <div className="row" style={{ gap: 6 }}>
-                  {(r.webhookUrl || r.inboundKey) && <button className="btn btn-sm btn-primary" onClick={() => test(r.id)} disabled={pending}>测试发送</button>}
-                  {(r.webhookUrl || r.inboundKey) && <button className="btn btn-sm btn-ghost" onClick={() => diagnose(r.id)} disabled={pending} title="逐步跑一遍出站链路，指出卡在哪一步">🩺 体检</button>}
+                  {/* 只答不推的渠道没有「测试发送」（发不出去，只会报一句谜语）；体检是它验证凭据的唯一入口 */}
+                  {(r.webhookUrl || r.inboundKey) && !isReplyOnlyProvider(r.provider) && <button className="btn btn-sm btn-primary" onClick={() => test(r.id)} disabled={pending}>测试发送</button>}
+                  {(r.webhookUrl || r.inboundKey) && <button className="btn btn-sm btn-ghost" onClick={() => diagnose(r.id)} disabled={pending} title={isReplyOnlyProvider(r.provider) ? '验证凭据、回调/网关是否配通' : '逐步跑一遍出站链路，指出卡在哪一步'}>🩺 体检</button>}
                   <button className="btn btn-sm btn-ghost" onClick={() => openEdit(r)} disabled={pending}>编辑配置</button>
                   <button className="btn btn-sm btn-ghost" onClick={() => toggle(r)} disabled={pending}>{r.enabled ? '停用' : '启用'}</button>
                   <button className="btn btn-sm btn-ghost" onClick={() => remove(r.id)} disabled={pending} style={{ color: 'var(--red)' }}>删除</button>
@@ -213,11 +452,34 @@ export function BotIntegrationCard({ rows, callbackBase }: { rows: BotRow[]; cal
               {/* 机器人配置信息展板 */}
               <div className="stack" style={{ gap: 8, marginTop: 12, padding: '10px 12px', background: 'var(--surface)', borderRadius: 8, border: '1px solid var(--border)' }}>
                 <div className="row wrap" style={{ gap: 16, fontSize: 13 }}>
-                  <div>
-                    <span className="muted">定时推送节点：</span>
-                    <b style={{ color: 'var(--brand)' }}>🕒 每日 {r.pushSchedule || '09:00'}</b>
-                  </div>
-                  {r.inboundKey && (
+                  {isReplyOnlyProvider(r.provider) ? (
+                    <div className="muted">无定时推送（这条通道只答不推）</div>
+                  ) : (
+                    <div>
+                      <span className="muted">定时推送节点：</span>
+                      <b style={{ color: 'var(--brand)' }}>🕒 每日 {r.pushSchedule || '09:00'}</b>
+                    </div>
+                  )}
+                  {r.inboundKey && r.provider === 'wechat_kf' && (
+                    <div>
+                      <span className="muted">CorpID：</span>
+                      <code className="mono">{r.inboundKey.replace(/_kf$/, '')}</code>
+                    </div>
+                  )}
+                  {r.provider === 'wechat' && (
+                    <>
+                      <div>
+                        <span className="muted">已绑定微信：</span>
+                        <b style={{ color: r.ilinkExpired ? 'var(--red)' : undefined }}>
+                          {r.ilinkExpired ? '登录态已过期，请重新扫码' : (r.ilinkUserId ?? '已绑定')}
+                        </b>
+                      </div>
+                      {!pollerRuns && (
+                        <div style={{ color: 'var(--amber)' }}>⚠ 本机开发模式没有后台进程收微信消息（生产不受影响）</div>
+                      )}
+                    </>
+                  )}
+                  {r.inboundKey && !isReplyOnlyProvider(r.provider) && (
                     <div>
                       <span className="muted">App ID：</span>
                       <code className="mono">{r.inboundKey}</code>
@@ -231,6 +493,16 @@ export function BotIntegrationCard({ rows, callbackBase }: { rows: BotRow[]; cal
                   )}
                 </div>
 
+                {/* 微信客服的回调地址要粘进企微后台——这是用户接线时**必须抄走**的东西，
+                    此前只在新建表单里一闪而过，保存后就没地方看了 */}
+                {r.inboundKey && r.provider === 'wechat_kf' && (
+                  <div className="small" style={{ wordBreak: 'break-all' }}>
+                    <span className="muted">企微后台回调 URL：</span>
+                    <code className="mono">{`${callbackBase}/api/bot/wechat-kf/events/${r.inboundKey}`}</code>
+                  </div>
+                )}
+
+                {!isReplyOnlyProvider(r.provider) && (
                 <div className="row wrap" style={{ gap: 6, alignItems: 'center' }}>
                   <span className="small muted" style={{ flexShrink: 0 }}>已订阅事件 ({r.pushEvents.length})：</span>
                   {r.pushEvents.length > 0 ? (
@@ -246,6 +518,7 @@ export function BotIntegrationCard({ rows, callbackBase }: { rows: BotRow[]; cal
                     <span className="small muted">暂无订阅事件</span>
                   )}
                 </div>
+                )}
 
                 {diag?.id === r.id && (
                   <div className="stack" style={{ gap: 8, margin: '10px 0', padding: '12px 14px', background: 'var(--surface)', borderRadius: 8, border: `1px solid ${diag.passed ? 'var(--green)' : 'var(--red)'}` }}>
@@ -283,9 +556,41 @@ export function BotIntegrationCard({ rows, callbackBase }: { rows: BotRow[]; cal
         </div>
       )}
 
-      {/* 新增/编辑表单 */}
+      {/* 「群聊与用户」抽屉：某个渠道下所有机器人的群 / 私聊 / 用户列表（会话画像真数） */}
+      {chatsFor && (() => {
+        const c = channelStat.find((x) => x.key === chatsFor);
+        if (!c) return null;
+        return (
+          <BotChatsDialog
+            providerKey={c.key}
+            providerName={c.name}
+            rows={rows.filter((r) => r.provider === c.key)}
+            onClose={() => setChatsFor(null)}
+          />
+        );
+      })()}
+
+      {/* 新增/编辑弹窗（2026-09-01 按用户指定的 Accio 连接弹窗改）：渠道卡点「接入/设置」当场弹出，
+          不再把整页往下顶。必须走 Overlay 组件——.card:hover 的 transform 会把就地渲染的
+          fixed 遮罩关进卡片（components/Overlay.tsx 文件头那个 602×110 的实测教训）。 */}
       {showForm ? (
-        <div className="card" style={{ padding: 16, boxShadow: 'none', border: '1px solid var(--brand)' }}>
+        <Overlay label={editing ? '设置机器人' : '连接渠道'} onClose={() => { setShowForm(false); resetForm(); }}>
+        <div className="dialog-card" style={{ width: 'min(720px, 94vw)', maxHeight: '86vh', overflowY: 'auto', padding: 18 }}>
+          <div className="row" style={{ gap: 10, alignItems: 'center', marginBottom: 12 }}>
+            <ChannelLogo provider={provider} size={38} fallback={botProviderName(provider)} />
+            <b style={{ fontSize: 16, flex: 1 }}>
+              {editing ? `设置机器人 · ${editing.label || botProviderName(provider)}` : `连接 ${botProviderName(provider)}`}
+            </b>
+            <button className="btn btn-sm btn-ghost" aria-label="关闭" onClick={() => { setShowForm(false); resetForm(); }} disabled={pending}>✕</button>
+          </div>
+          {/* 微信（iLink）新接入：没有任何要填的，直接扫码；绑定成功后刷新，名称/智能体/指令在「设置」里改 */}
+          {provider === 'wechat' && !editing ? (
+            <WechatIlinkConnect
+              existing={null}
+              autoStart
+              onDone={() => { router.refresh(); }}
+            />
+          ) : (
           <div className="stack" style={{ gap: 12 }}>
             {editing && (editing.hasInboundSecrets || editing.hasSignSecret) && (
               <div className="stack" style={{ gap: 8, padding: '12px 14px', background: 'var(--surface-2)', borderRadius: 8, border: '1px solid var(--border)' }}>
@@ -346,7 +651,8 @@ export function BotIntegrationCard({ rows, callbackBase }: { rows: BotRow[]; cal
             {(provider === 'feishu' || provider === 'dingtalk' || provider === 'wecom') && (
               <div className="stack" style={{ gap: 6 }}>
                 <span className="small muted">选择接入模式</span>
-                <div className="row wrap" style={{ gap: 10 }}>
+                {/* 分段控件的形（Accio 弹窗顶部那对页签）：两条真实接法当页签，不造假的「扫码」页 */}
+                <div className="row" style={{ gap: 4, background: 'var(--surface-2)', borderRadius: 12, padding: 4 }}>
                   <button
                     type="button"
                     className={`btn btn-sm ${botMode === 'app' ? 'btn-primary' : 'btn-ghost'}`}
@@ -384,7 +690,9 @@ export function BotIntegrationCard({ rows, callbackBase }: { rows: BotRow[]; cal
               </div>
             )}
 
-            {/* 推送事件（共用） */}
+            {/* 推送事件（共用）。微信客服整段隐藏：客服消息有 48 小时窗口规则，
+                这条通道只能「回复」不能「广播」——摆一排永远不会生效的推送开关是空承诺 */}
+            {!isReplyOnlyProvider(provider) && (<>
             <div className="stack" style={{ gap: 6 }}>
               <span className="small muted">推送哪些事件</span>
               <div className="wrap" style={{ gap: 8 }}>
@@ -396,12 +704,19 @@ export function BotIntegrationCard({ rows, callbackBase }: { rows: BotRow[]; cal
                 ))}
               </div>
             </div>
+            </>)}
 
-            {/* 入站命令白名单：群里谁都能发消息给机器人，放开哪些由管理员决定 */}
+            {/* 入站命令白名单：群里谁都能发消息给机器人，放开哪些由管理员决定。
+                ⚠️ 不在上面那个 wechat_kf 隐藏段里：1.3.14 把它和推送开关一起藏了，
+                微信客服的管理员从此没有任何地方能改「允许哪些操作」——而它恰恰是对外渠道最该改的一项 */}
             <div className="stack" style={{ gap: 6 }}>
               <span className="small muted">
-                群里允许哪些操作
-                <span style={{ marginLeft: 6, opacity: 0.75 }}>（群成员都能触发，取消勾选即在群里关闭）</span>
+                {isExternalProvider(provider) ? '允许哪些操作' : '群里允许哪些操作'}
+                <span style={{ marginLeft: 6, opacity: 0.75 }}>
+                  {isExternalProvider(provider)
+                    ? '（拿到二维码 / 加了这个号的任何微信用户都能触发，取消勾选即关闭）'
+                    : '（群成员都能触发，取消勾选即在群里关闭）'}
+                </span>
               </span>
               <div className="stack" style={{ gap: 4 }}>
                 {TOGGLEABLE_COMMANDS.map((c) => (
@@ -432,7 +747,8 @@ export function BotIntegrationCard({ rows, callbackBase }: { rows: BotRow[]; cal
               </span>
             </div>
 
-            {/* 定时推送时间 */}
+            {/* 定时推送时间（只答不推的渠道同样隐藏） */}
+            {!isReplyOnlyProvider(provider) && (<>
             <div className="stack" style={{ gap: 6 }}>
               <span className="small muted">每日定时推送时间</span>
               <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
@@ -456,6 +772,7 @@ export function BotIntegrationCard({ rows, callbackBase }: { rows: BotRow[]; cal
                 <span className="small muted">（北京时间，每日此时刻自动推送今日精选热点与推荐选题；可填多个，用逗号隔开）</span>
               </div>
             </div>
+            </>)}
 
             {/* 钉钉群 Webhook */}
             {provider === 'dingtalk' && botMode === 'webhook' && (
@@ -660,6 +977,73 @@ export function BotIntegrationCard({ rows, callbackBase }: { rows: BotRow[]; cal
               </div>
             )}
 
+            {/* 微信客服（官方通道）配置分段。字段复用 appId(CorpID)/appSecret(客服Secret)/
+                verificationToken/encryptKey 四个既有状态——它们语义完全一致，另起四个状态
+                只会让 save 的收口多一倍分支 */}
+            {provider === 'wechat_kf' && (
+              <div className="stack" style={{ gap: 12, padding: '14px 16px', background: 'var(--surface-2)', borderRadius: 8 }}>
+                <div className="alert-gradient-brand" style={{ padding: '10px 14px' }}>
+                  <div className="small" style={{ color: 'var(--brand)', fontWeight: 600 }}>
+                    💡 官方微信客服通道：微信用户直接和机器人一对一对话（提问、发链接收录、/命令都能用）。
+                    没有定时推送——客服消息有 48 小时窗口规则，这条通道只答不推。
+                  </div>
+                </div>
+                <div className="small muted" style={{ lineHeight: 1.7 }}>
+                  {/* 两条微信路的分工写在做决定的地方：自己用 → 「微信」卡扫码即绑；对外接客 → 这条客服通道 */}
+                  想让<b>自己的微信</b>直接和机器人聊，用旁边的「微信」卡（微信官方 iLink 接口，扫码即绑，什么都不用填）。
+                  这条「微信客服」是给<b>对外服务</b>场景的：客户扫你企业的客服码找你，走企业微信。
+                </div>
+                <div className="small" style={{ lineHeight: 1.7, padding: '8px 12px', background: 'var(--amber-soft, #fff7e6)', borderRadius: 8 }}>
+                  ⚠️ 这是<b>对外渠道</b>：拿到客服二维码的任何微信用户都能和机器人对话。所以「登录/绑定」在这条通道上不响应、派任务不可用；
+                  新建时下方「允许哪些操作」默认只开对话 / 剪藏 / 收录 / 热榜——账号体检、切换账号、竞对监控、记忆优化这些会外泄账号数据或动租户配置，看清楚再勾。
+                </div>
+                <details className="stack" style={{ gap: 6 }} open={!editing}>
+                  <summary className="small" style={{ cursor: 'pointer' }}>
+                    <b style={{ color: 'var(--brand)' }}>如何开通（企业微信管理后台，约 5 分钟）</b>
+                    <span className="muted" style={{ marginLeft: 6 }}>（点开看步骤）</span>
+                  </summary>
+                  <div className="small muted" style={{ lineHeight: 1.9, marginTop: 8, background: 'var(--surface)', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)' }}>
+                    ① 企业微信管理后台 ➔ <b>应用管理 ➔ 微信客服</b>，开通并新建一个客服账号（这就是微信用户看到的对话方）<br />
+                    ② 在「微信客服 ➔ API」里创建 <b>Secret</b>，把 <b>企业 CorpID</b>（我的企业页可查）和它填到下面<br />
+                    ③ 配置回调：URL 填下方地址，<b>Token / EncodingAESKey</b> 点「随机生成」后同步填到下面 ➔ 保存<br />
+                    ④ 把客服账号的二维码/链接发给你的微信用户——扫码进入的是<b>官方客服会话</b>，不碰任何个人号
+                  </div>
+                </details>
+                <div className="small">
+                  回调 URL（第 ③ 步粘贴）：<code className="mono" style={{ wordBreak: 'break-all' }}>{callbackUrl}</code>
+                </div>
+                <div className="row wrap" style={{ gap: 8 }}>
+                  <input className="input" value={appId} onChange={(e) => setAppId(e.target.value)}
+                    placeholder="企业 CorpID（ww 开头）" style={{ minWidth: 220, flex: 1 }} />
+                  <input className="input" value={appSecret} onChange={(e) => setAppSecret(e.target.value)}
+                    placeholder={editing?.hasAppSecret ? '微信客服 Secret（留空=不改）' : '微信客服 Secret'} style={{ minWidth: 220, flex: 1 }} />
+                </div>
+                <div className="row wrap" style={{ gap: 8 }}>
+                  <input className="input" value={verificationToken} onChange={(e) => setVerificationToken(e.target.value)}
+                    placeholder={editing?.hasVerificationToken ? '回调 Token（留空=不改）' : '回调 Token'} style={{ minWidth: 220, flex: 1 }} />
+                  <input className="input" value={encryptKey} onChange={(e) => setEncryptKey(e.target.value)}
+                    placeholder={editing?.hasEncryptKey ? 'EncodingAESKey（留空=不改）' : 'EncodingAESKey（43 位）'} style={{ minWidth: 220, flex: 1 }} />
+                </div>
+                {editing?.inboundKey && (
+                  <div className="small" style={{ color: editing.lastInboundAt ? 'var(--green)' : 'var(--muted)' }}>
+                    {editing.lastInboundAt
+                      ? `✅ 通道已通，最近收到微信消息 ${fmtDateTime(editing.lastInboundAt)}`
+                      : '⏳ 已保存，等第一条微信消息进来（用微信扫客服账号二维码发句话试试）'}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* 微信（iLink）编辑态：绑定状态 + 重新扫码。凭据没有可填的——它们全来自扫码 */}
+            {provider === 'wechat' && editing && (
+              <div className="stack" style={{ gap: 12, padding: '14px 16px', background: 'var(--surface-2)', borderRadius: 8 }}>
+                <WechatIlinkConnect
+                  existing={{ id: editing.id, ilinkUserId: editing.ilinkUserId, ilinkExpired: editing.ilinkExpired }}
+                  onDone={() => { flash('已重新绑定'); router.refresh(); }}
+                />
+              </div>
+            )}
+
             {/* 方式 A 专属：飞书自建应用入站/出站二合一分步向导 */}
             {provider === 'feishu' && botMode === 'app' && (
               <div className="stack" style={{ gap: 14, padding: '14px 16px', background: 'var(--surface-2)', borderRadius: 8 }}>
@@ -731,12 +1115,14 @@ export function BotIntegrationCard({ rows, callbackBase }: { rows: BotRow[]; cal
                   <input className="input" value={encryptKey} onChange={(e) => setEncryptKey(e.target.value)} placeholder={secretHint(editing?.hasEncryptKey, 'Encrypt Key', 'Encrypt Key（开了「消息加密」才填，可选）')} />
                 </div>
 
-                {/* 步骤 3 */}
-                <div className="stack" style={{ gap: 8 }}>
-                  <div className="small">
+                {/* 步骤 3——纯操作说明折进 details（2026-09-01「不能扫码就清爽」）：
+                    首次接入的人点开照做；配好回来编辑的人不用每次隔着一屏说明找按钮 */}
+                <details className="stack" style={{ gap: 8 }} open={!editing}>
+                  <summary className="small" style={{ cursor: 'pointer' }}>
                     <b style={{ color: 'var(--green)' }}>③ 在「事件配置」标签页添加事件 + 授权发布</b>
-                  </div>
-                  <div className="small muted" style={{ lineHeight: 1.8, background: 'var(--surface)', padding: '12px 14px', borderRadius: 8, border: '1px solid var(--border)' }}>
+                    <span className="muted" style={{ marginLeft: 6 }}>（点开看图文步骤）</span>
+                  </summary>
+                  <div className="small muted" style={{ lineHeight: 1.8, background: 'var(--surface)', padding: '12px 14px', borderRadius: 8, border: '1px solid var(--border)', marginTop: 8 }}>
                     · 👉 <b>在「事件配置」标签页操作：</b><br />
                     &nbsp;&nbsp;点击标签页 <span style={{ color: '#e8552d', fontWeight: 700, background: '#fdece6', padding: '2px 6px', borderRadius: 4 }}>「事件配置」</span> ➔ 点击 <b>「添加事件」</b> 按钮 ➔ 搜索并添加 <code className="mono" style={{ color: '#e8552d', fontWeight: 700 }}>im.message.receive_v1</code>（接收消息）<br />
                     · <b>开通权限：</b>在 <b>「权限管理」</b> 开启 <b>「获取与发送单聊、群组消息」</b>
@@ -744,7 +1130,7 @@ export function BotIntegrationCard({ rows, callbackBase }: { rows: BotRow[]; cal
                     <span style={{ color: 'var(--red)' }}>（主动推送必需，缺它会报「机器人未加入任何群聊」）</span><br />
                     · <b>发布机器人：</b>在 <b>「应用功能」</b> 添加 <b>「机器人」</b> ➔ 在 <b>「版本管理与发布」</b> 创建版本发布 ➔ 将机器人拉入飞书群
                   </div>
-                </div>
+                </details>
 
                 {/* 💡 飞书权限与事件一键配置 (Manifest JSON 与 手动勾选指南) */}
                 <div className="stack" style={{ gap: 10, padding: '14px 16px', background: 'rgba(37, 99, 235, 0.05)', borderRadius: 8, border: '1px solid rgba(37, 99, 235, 0.18)' }}>
@@ -798,13 +1184,25 @@ export function BotIntegrationCard({ rows, callbackBase }: { rows: BotRow[]; cal
                   </div>
                 </div>
 
-                <div className="small muted" style={{ lineHeight: 1.7, background: 'var(--surface)', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)' }}>
-                  <b>装好后在群里怎么用：</b>@它直接问问题=对话（记得住上下文）；发文章链接/粘正文=抓正文存档并出摘要要点；发短文本=收录成选题候选；命令
+                <details className="small muted" style={{ lineHeight: 1.7, background: 'var(--surface)', padding: '8px 10px', borderRadius: 8, border: '1px solid var(--border)' }}>
+                  <summary style={{ cursor: 'pointer' }}><b>装好后在群里怎么用？</b><span style={{ marginLeft: 4, opacity: 0.7 }}>点开看全部玩法与命令</span></summary>
+                  <div style={{ marginTop: 6 }}>@它直接问问题=对话（记得住上下文）；发文章链接/粘正文=抓正文存档并出摘要要点；发短文本=收录成选题候选；命令
                   <code className="mono">/分析 [账号名]</code> <code className="mono">/存 链接</code> <code className="mono">/竞对</code> <code className="mono">/拆解 链接</code> <code className="mono">/问 你的问题</code> <code className="mono">/账号 名字</code> <code className="mono">/热点</code> <code className="mono">/选题 关键词</code> <code className="mono">/采集 竞对主页URL</code> <code className="mono">/优化</code> <code className="mono">/帮助</code>。
                   <b>只进候选池、不自动发布，生成仍全程过合规。</b>
                 </div>
+                </details>
               </div>
             )}
+
+            {/* 渠道默认智能体（对应 Accio 弹窗的「会话默认插件」位）：
+                群里 @机器人 的对话以它出面；不选 = 通用运营助手。渠道卡上也能随时改 */}
+            <div className="stack" style={{ gap: 6 }}>
+              <span className="small muted">渠道默认智能体</span>
+              <select className="input" value={agentTpl} onChange={(e) => setAgentTpl(e.target.value)} style={{ maxWidth: 340 }}>
+                <option value="">通用运营助手（默认）</option>
+                {agentOptions.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </select>
+            </div>
 
             <div className="row" style={{ gap: 8 }}>
               <button className="btn btn-sm btn-primary" onClick={save} disabled={pending}>{pending ? '保存中…' : '保存'}</button>
@@ -812,7 +1210,9 @@ export function BotIntegrationCard({ rows, callbackBase }: { rows: BotRow[]; cal
               {msg && <span className="small" style={{ color: failed ? 'var(--red)' : 'var(--muted)' }}>{msg}</span>}
             </div>
           </div>
+          )}
         </div>
+        </Overlay>
       ) : (
         <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
           <button className="btn btn-sm btn-primary" onClick={openAdd} disabled={pending}>+ 配置机器人</button>

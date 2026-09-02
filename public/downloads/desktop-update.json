@@ -1,0 +1,14 @@
+{
+  "version": "1.2.5",
+  "pub_date": "2026-09-02T03:34:50.703Z",
+  "platforms": {
+    "darwin-aarch64": {
+      "url": "https://beacon.iyunci.cn/downloads/beacon-desktop-1.2.5-mac-aarch64.update.tar.gz",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUdUFpL0lzZXdzcVB5UXRaRWlUYTVGUHZ0UE5sd0pWWmZiM1FqVWtsOHpteCtTRFFueWx3aThRS3RaK2M0bWFGZjVsNmpabUVacjdBWXRXQkx0cUEzRVVObFN0TzQydkFBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MzIwMDg5CWZpbGU6YmVhY29uLWRlc2t0b3AtMS4yLjUtbWFjLWFhcmNoNjQudXBkYXRlLnRhci5negpaN0JWV3NTSE5nU0JVK0t0NnJvcWhlRDdyWWRUS0tCZkdWSjcwV3MwOFR0c01xcmNQZ0Vha1Zsc1JIRkRYenhadmhXYzBRSjBDaVpIWEo5Yk52U2lEQT09Cg=="
+    },
+    "windows-x86_64": {
+      "url": "https://beacon.iyunci.cn/downloads/beacon-desktop-1.2.5-win-x64.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUdUFpL0lzZXdzcUkyMG9ENmFGSUNKb3puK2lIWGhlVzA4ZTdSVjlDRGt3ZjV6Nk9wcWtZVm0vSmJKem9WeUtGaFdwREVXTmpRZUJobnhaQ285VFFYekFzK1lKUlM1YmdnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4MzIwMDkwCWZpbGU6YmVhY29uLWRlc2t0b3AtMS4yLjUtd2luLXg2NC5leGUKbFQ2ZngxQlBrb0FzcTk5dTdqUUdCeXF1a1I3eUtqeXBaZjlPWnB3aC94cnArRDAwbHVXZjZtamJybCs1WEJzRWgxVzhaTUMxc0xJb0VYcXdrazBmQmc9PQo="
+    }
+  }
+}

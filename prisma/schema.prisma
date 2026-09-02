@@ -216,6 +216,11 @@ model BotIntegration {
   pushSchedule String @default("09:00")
 
   // 入站命令白名单（JSON string[]）：控制此 bot 能触发哪些操作；空=默认集（只收录、不自动发布）。
+  // 这个渠道由哪个智能体出面（WorkflowTemplate.id，须是已装的）。
+  // 空 = 通用运营助手（原行为）。绑定后群里 @机器人 的对话以该智能体的职责说明作身份，
+  // 派活也优先派它——「为渠道选一个智能体」（2026-09-01 参照 Accio 的渠道配置模型）。
+  // 松引用不加外键：模板被删时机器人不该跟着炸，运行时查不到就按未绑定处理。
+  agentTemplateId String?
   allowCommands String @default("[]")
 
   // 观测：最后入/出站时间与错误，设置页显示健康。
@@ -246,8 +251,20 @@ model BotConversation {
   // null = 未绑定，按「工作区唯一活跃账号」推断；多账号且未绑定时机器人会要求先绑定，
   // 绝不替用户猜——猜错等于把数据记到别人名下（见 /data 的按 accountId 过滤）。
   accountId     String?
+  // 本会话「当前智能体」：/智能体 <名字> 或「换成 X」切换（2026-09-02，一个机器人可以切不同的智能体）。
+  // null = 用渠道默认（BotIntegration.agentTemplateId），再空 = 通用运营助手。
+  // 松引用不加外键，与 BotIntegration.agentTemplateId 同一口径：模板被删时按未选处理。
+  agentTemplateId String?
   turns         String   @default("[]") // 最近若干轮 JSON [{role,content}]
   turnsAt       DateTime @default(now()) // 最后一轮时间；与 updatedAt 分开，绑账号不算续上对话
+  // ── 会话画像（2026-09-02，渠道卡「用户 / 群聊」真数与「在哪些群」列表）──
+  // 此前这张表只在**对话轮**追加或绑账号时才写，只发斜杠命令的群根本没有行——「群会话」数一直偏低。
+  // 现在每条入站消息都 touch 一次（lib/bot/conversation.ts touchConversation，router 单一咽喉）。
+  chatType      String   @default("unknown") // group | p2p | unknown（老数据/单测直调）
+  chatName      String?  // 群名/对话名：钉钉回调自带 conversationTitle，飞书从 im/v1/chats 同步，私聊=发言人名
+  msgCount      Int      @default(0) // 收到的入站消息数（含斜杠命令；对话轮次只是其中一部分）
+  lastMessageAt DateTime? // 最近一条入站消息；turnsAt 只在对话轮追加时动，命令不动它
+  senders       String   @default("[]") // JSON [{id,name?,n,at}] 发言人集合，最多 200 人（超出淘汰最久没说话的）
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -1279,6 +1296,12 @@ model LlmCallLog {
   // 用户 23:00 买了永久买断去睡觉，早上想退 —— 已经「消耗」了，自助全额退变成转人工。
   // 他什么都没做。归因写进账本，退款判据才能把这部分剔出去。
   byJob            String?
+  // mocked=true 的两种成因必须分得开（与 TopicIdea.degraded 同一课）：
+  //   degraded=false → 选路就落在 Mock（没配 Key / 渠道全空），账本看到它该去查配置；
+  //   degraded=true  → 接了真模型但这次失败/超时被兜底，账本看到它该去查供应商与批处理压力。
+  // 2026-09-01 之前只有 source 被改写成 'mock' 一个信号，两种成因在库里完全同形——
+  // 那次排查花在「到底是没接上还是接上了但在失败」上的时间，全是这一列缺席的代价。
+  degraded         Boolean  @default(false)
   createdAt        DateTime @default(now())
 
   @@index([tenantId, createdAt])

@@ -40,8 +40,21 @@ const MAX_SETTLE_PER_TICK = 30;
 const WORKFLOW_STALE_MS = 2 * 60 * 60_000;
 const MAX_WORKFLOW_REAP_PER_TICK = 20;
 
+/**
+ * 等确认等了多久算没人要了。
+ *
+ * 【为什么要有超时】原来 awaiting_confirm 会永远挂着：它不占并发名额、到期清理只删终态，
+ * 于是一条没人点的确认卡会一直亮着红点，而它手里那份对话（三天前查到的数据、当时的草稿列表）
+ * 早就过时了——真点了「同意」，执行的是三天前的判断。学 Hermes 的口径：审批超时=拒绝，
+ * 如实关掉并通知，用户要做就重新派一次，模型会按现在的数据重新想。
+ * 与排队超时用同一个数（QUEUED_STALE_DAYS），一条「多久没人管就算了」的规矩比两条好记。
+ */
+export const CONFIRM_STALE_DAYS = QUEUED_STALE_DAYS;
+const MAX_EXPIRE_CONFIRM_PER_TICK = 30;
+
 export type AgentTickResult = {
   resumed: number; rekicked: number; promoted: number; settled: number; reapedWorkflows: number;
+  expiredConfirms: number;
 };
 
 export async function tickAgentRuns(): Promise<AgentTickResult> {
@@ -90,10 +103,39 @@ export async function tickAgentRuns(): Promise<AgentTickResult> {
   //    而是**如实判死**，让用户自己决定要不要再跑一次。
   const reapedWorkflows = await reapStaleWorkflowRuns(now);
 
-  if (resumed > 0 || stale.length > 0 || promoted > 0 || settled > 0 || reapedWorkflows > 0) {
-    log.info('AI 执行兜底巡检', { resumed, rekicked: stale.length, promoted, settled, reapedWorkflows });
+  // ⑥ 等确认等太久的：审批超时=拒绝（见 CONFIRM_STALE_DAYS）
+  const expiredConfirms = await expireStaleConfirms(now);
+
+  if (resumed > 0 || stale.length > 0 || promoted > 0 || settled > 0 || reapedWorkflows > 0 || expiredConfirms > 0) {
+    log.info('AI 执行兜底巡检', { resumed, rekicked: stale.length, promoted, settled, reapedWorkflows, expiredConfirms });
   }
-  return { resumed, rekicked: stale.length, promoted, settled, reapedWorkflows };
+  return { resumed, rekicked: stale.length, promoted, settled, reapedWorkflows, expiredConfirms };
+}
+
+/** 等确认超过 CONFIRM_STALE_DAYS 天的，如实取消并通知。 */
+export async function expireStaleConfirms(now: Date = new Date()): Promise<number> {
+  const cutoff = new Date(now.getTime() - CONFIRM_STALE_DAYS * 86_400_000);
+  const stale = await prisma.agentRun.findMany({
+    where: { status: 'awaiting_confirm', updatedAt: { lt: cutoff } },
+    select: { id: true },
+    orderBy: { updatedAt: 'asc' },
+    take: MAX_EXPIRE_CONFIRM_PER_TICK,
+  });
+  if (stale.length === 0) return 0;
+  const { transition } = await import('./run');
+  let n = 0;
+  for (const r of stale) {
+    const reason = `等你确认等了 ${CONFIRM_STALE_DAYS} 天没有回应，已自动取消——那时查到的数据早就过时了，要做请重新派一次。`;
+    // 乐观锁：这一刻用户可能正好点了确认或终止
+    if (!(await transition(r.id, 'awaiting_confirm', 'cancelled', {
+      error: reason, pending: null, waitingOn: null, leaseUntil: null, quotaResumeAt: null,
+    }))) continue;
+    n++;
+    // transition 对 cancelled 刻意不自动通知（多数取消是用户自己点的）；这一种是系统替他取消的，要说一声
+    await notifyStaleCancel(r.id, reason);
+  }
+  if (n > 0) log.info('清掉等确认超时的执行', { count: n });
+  return n;
 }
 
 /**

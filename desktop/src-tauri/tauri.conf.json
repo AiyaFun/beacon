@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "烽火台",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "identifier": "cn.iyunci.beacon.desktop",
   "build": {
     "frontendDist": "../ui"
@@ -31,6 +31,15 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE4MkNFQ0IxQzgyRjAyRUUKUldUdUFpL0lzZXdzcU1LVFNnRHZDaE5ibE9RTkw4bzdrdGovMGtSOGJFTml4VUlRaHp3NkVGREIK",
+      "endpoints": [
+        "https://beacon.iyunci.cn/downloads/desktop-update.json"
+      ]
+    }
   }
 }

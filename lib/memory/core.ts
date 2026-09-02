@@ -1,6 +1,10 @@
 import { prisma } from '../db';
 import { MEMORY_TYPES } from '../constants';
 import { upsertMemoryEmbedding, searchMemories } from '../vector/store';
+import { memoryThreat } from './guard';
+import { createLogger } from '../logger';
+
+const log = createLogger({ module: 'memory' });
 
 // 长期记忆核心（PRD §8）。四类记忆：persona/preference/performance/fact。
 // 置信度分级注入：单次行为推断 0.3 只存不用；同类累计 ≥2-3 次才 active 生效。
@@ -33,6 +37,12 @@ export async function writeMemory(params: {
   content: string;
   confidence?: number;
 }) {
+  // 【注入形状一律不落库】记忆会进以后每一次生成的系统提示，写进去的注入是持久的。
+  // 抛错而不是静默跳过：静默跳过 = 调用方以为记住了（模型会对用户说「记住了」）。
+  // 各条写入路径里模型那条（write_memory 工具）在调用前已用 guardModelMemory 判过并把
+  // 理由回给模型；这里是给所有路径兜底的最后一道，包括系统自己生成的那些。
+  const threat = memoryThreat(params.content);
+  if (threat) throw new Error(`拒绝写入长期记忆：${threat}`);
   // 同类同内容去重累加（提升 hitCount 与置信度）
   const existing = await prisma.memoryEntry.findFirst({
     where: {
@@ -80,6 +90,22 @@ export async function writeMemory(params: {
   return entry;
 }
 
+/**
+ * 注入进提示之前再扫一遍。
+ *
+ * 【为什么写入口拦了还要在这里拦】这道闸是 2026-09-02 才加的，之前写进去的存量记忆
+ * 没有经过它；而且记忆页允许用户手改内容，那条路不该拦人（他自己的账号），
+ * 但改出来的东西照样会进系统提示。两个入口只拦一个等于没拦。
+ * 命中的条目不删（那是用户的数据，删要他自己删），只是不注入，并留一条日志。
+ */
+function dropThreats<T extends { id: string; content: string }>(rows: T[]): T[] {
+  return rows.filter((r) => {
+    const t = memoryThreat(r.content);
+    if (t) log.warn('一条记忆长得像注入，未注入提示', { id: r.id, reason: t });
+    return !t;
+  });
+}
+
 // 读取生效记忆用于注入 prompt（限量）。
 // 排序分 = confidence × 时间衰减：纯按置信度排会让攒了几个月 hitCount 的老结论
 // 永远霸占 12 个注入位，新学到的东西挤不进去。衰减在 JS 里算（SQLite 排序算不了幂），
@@ -96,7 +122,7 @@ export async function recallForInjection(workspaceId: string, accountId?: string
     take: RECALL_SCAN_LIMIT,
   });
   const now = Date.now();
-  return entries
+  return dropThreats(entries)
     .map((e) => ({ e, score: e.confidence * recencyFactor(e.updatedAt, now) }))
     .sort((a, b) => b.score - a.score || b.e.hitCount - a.e.hitCount)
     .slice(0, MAX_INJECT)
@@ -188,7 +214,7 @@ export async function buildMemoryContext(workspaceId: string, accountId?: string
 
 // 语义召回：返回格式化的记忆行（带相关度排序）
 export async function semanticRecall(workspaceId: string, accountId: string | undefined, query: string): Promise<string[]> {
-  const hits = await searchMemories(workspaceId, accountId, query, MAX_INJECT);
+  const hits = dropThreats(await searchMemories(workspaceId, accountId, query, MAX_INJECT));
   if (hits.length === 0) return [];
   // R7：补 updatedAt/hitCount 好让注入行带上「什么时候学到的/验证过几次」。
   // 刻意用一次 id 回查，而不是给 searchMemories 的 SELECT 加列——那条 postgres 分支是

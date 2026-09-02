@@ -8,6 +8,7 @@ import { sendWecomWebhook, sendWecomApp } from './wecom';
 import { sendTelegramWebhook } from './telegram';
 import { sendSlackWebhook } from './slack';
 import type { BotSecrets, PushEventType, PushMessage, SendResult, BotProvider } from './types';
+import { isReplyOnlyProvider } from './types';
 
 // 机器人集成——出站推送编排层（需求③）。
 // 入站收录/命令在 lib/bot/router.ts + /api/bot/feishu/events（需求④）。
@@ -85,6 +86,9 @@ async function routeSend(
   secrets: BotSecrets,
   message: PushMessage,
 ): Promise<SendResult> {
+  // 只答不推的渠道（微信客服 48h 窗口 / 扫码网关无广播收件人）：在这里就拒，
+  // 不让它掉进 sendViaApp 的 default 分支报一句「暂不支持自建应用推送」——那句话对微信用户是谜语
+  if (isReplyOnlyProvider(it.provider)) return { ok: false, error: '这条通道只能回复、不能主动推送' };
   if (it.inboundKey && canUseApp(it.provider, secrets)) {
     return sendViaApp(it.provider, it.inboundKey, secrets, message);
   }
@@ -154,6 +158,9 @@ export async function sendToIntegration(workspaceId: string, integrationId: stri
 export async function testPush(integrationId: string, workspaceId: string): Promise<SendResult> {
   const it = await prisma.botIntegration.findFirst({ where: { id: integrationId, workspaceId } });
   if (!it) return { ok: false, error: '集成不存在' };
+  if (isReplyOnlyProvider(it.provider)) {
+    return { ok: false, error: '这条通道只答不推，没有「测试发送」；用「体检」验证凭据与回调是否配通' };
+  }
   if (!it.webhookUrl && !it.inboundKey) return { ok: false, error: '未配置 webhook 地址或自建应用凭据' };
   const secrets = readBotSecrets(it.secretsEnc);
   const message: PushMessage = {

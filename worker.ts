@@ -33,6 +33,11 @@ async function main() {
     await q.schedule(s.name, s.cron);
     log.info('已注册定时任务', { jobName: s.name, cron: s.cron, tz: SCHEDULE_TZ, note: s.note });
   }
+  // 上面「先清后注册」会把停机期间到点却没跑的那次一起清掉。补回来（只补宽限窗内、周期 ≥6h 的，各一次）。
+  // 放在注册之后：补跑本身也会经 withRun 记 JobRun，下一次启动就不会再补同一次。
+  const { runCatchUps } = await import('./lib/jobs/catch-up');
+  const caught = await runCatchUps(q);
+  if (caught.length) log.info('已补跑停机期间错过的定时任务', { jobs: caught });
 
   // 起消费者。**两条队列各一个**：
   // AI 执行的 loop 一跑就是几十分钟，与它共用槽位的话，热榜采集、定时智能体、
@@ -59,8 +64,14 @@ async function main() {
     queues: workers.map((x) => `${x.name}(并发 ${x.concurrency})`).join(' + '),
   });
 
+  // 微信 iLink 收信：长轮询常驻循环，只在这一个进程里跑（游标是消费性的，两处同时拉会互吞消息；
+  // 整机版没有本进程，由 instrumentation.node.ts 在 web 进程里起——两处互斥，判据都是 BEACON_QUEUE）
+  const { startIlinkSupervisor, stopIlinkSupervisor } = await import('./lib/bot/wechat-ilink-poller');
+  startIlinkSupervisor();
+
   const shutdown = async (signal: string) => {
     log.info('收到退出信号，关闭 worker…', { signal });
+    stopIlinkSupervisor();
     await Promise.all(workers.map(({ w }) => w.close()));
     await q.close();
     await flushReports();

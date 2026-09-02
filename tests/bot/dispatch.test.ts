@@ -6,8 +6,7 @@ import { prisma } from '@/lib/db';
 // 群里派任务（/派 /执行 /任务 /终止）。
 //
 // 【最不能松的四条，与 lib/bot/dispatch.ts 文件头一一对应】
-// ① 默认关：dispatch 不吃「空白名单=全开」的祖荫——空数组时它是关的，
-//    否则一次发版让所有已装机器人的群突然都能烧额度派任务；
+// ① 默认开：dispatch 与其他命令一样吃「空=全开」的祖荫——身份闸+站内确认已经两道关卡了；
 // ② 身份闸：没绑企业应用身份的群成员一条任务都派不出去（群是共享空间）；
 // ③ 授权收口：/执行 走 origin:'api'（强制 confirm_each），/派 用卡上的合同——
 //    群里没有确认通道，发布类操作必然停在 awaiting_confirm；
@@ -67,33 +66,27 @@ beforeEach(async () => {
   await prisma.creatorAccount.create({ data: { id: 'a1', workspaceId: 'w1', name: '测试号', platform: 'douyin', status: 'active' } });
 });
 
-describe('① 默认关：空白名单不算开', () => {
-  it('dispatch 在空/未配置白名单下是关的，老命令仍是开的', () => {
-    expect(isCommandAllowed('dispatch', [])).toBe(false);
-    expect(isCommandAllowed('dispatch', null)).toBe(false);
-    expect(isCommandAllowed('dispatch', undefined)).toBe(false);
-    expect(isCommandAllowed('chat', [])).toBe(true); // 存量语义一根汗毛都不能动
+describe('① 默认开：空白名单也算开（身份闸+站内确认已经两道关卡）', () => {
+  it('dispatch 在空/未配置白名单下与其他命令一样是开的', () => {
+    expect(isCommandAllowed('dispatch', [])).toBe(true);
+    expect(isCommandAllowed('dispatch', null)).toBe(true);
+    expect(isCommandAllowed('dispatch', undefined)).toBe(true);
+    expect(isCommandAllowed('chat', [])).toBe(true);
     expect(isCommandAllowed('hot', null)).toBe(true);
     expect(isCommandAllowed('dispatch', ['dispatch'])).toBe(true);
     expect(isCommandAllowed('dispatch', ['help', 'chat'])).toBe(false);
-    expect(DEFAULT_OFF_COMMANDS).toContain('dispatch');
+    expect(DEFAULT_OFF_COMMANDS).not.toContain('dispatch');
   });
 
   it('sanitizeAllowCommands 认得 dispatch（设置页存得进去）', () => {
     expect(sanitizeAllowCommands(['dispatch', 'chat', 'nope'])).toEqual(['dispatch', 'chat']);
   });
 
-  it('设置页「新建默认全勾」的集合不含 dispatch（源码守卫）', () => {
-    const src = readFileSync(join(process.cwd(), 'app/(app)/settings/BotIntegrationCard.tsx'), 'utf8');
-    expect(src).toMatch(/\.filter\(\(c\) => !DEFAULT_OFF_COMMANDS\.includes\(c\.key\)\)/);
-  });
-
-  it('群里 /派 在未配置的机器人上吃闭门羹，且一条运行都没建', async () => {
+  it('群里 /派 在未配置的机器人上也能用（身份闸仍然在）', async () => {
     await withBot([]);
     await withMember();
     const reply = await handleInbound('w1', '/派', GROUP);
-    expect(reply).toContain('在这个群没有开');
-    expect(await prisma.agentRun.count()).toBe(0);
+    expect(reply).not.toContain('在这个群没有开');
   });
 });
 
