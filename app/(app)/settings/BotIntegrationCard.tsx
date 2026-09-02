@@ -995,6 +995,16 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                       {/* ── 微信客服 ── */}
                       {provider === 'wechat_kf' && (
                         <div className="stack" style={{ gap: 12 }}>
+                          {/* 两条微信路的分工写在做决定的地方（守卫 tests/settings/bot-channel-overview.test.ts）：
+                              自己用 → 「微信」卡扫码即绑；对外接客 → 这条客服通道。09-02 选项卡重构时曾把这段整个丢掉。 */}
+                          <div className="small muted" style={{ lineHeight: 1.7 }}>
+                            想让<b>自己的微信</b>直接和机器人聊，用旁边的「微信」卡（微信官方 iLink 接口，扫码即绑，什么都不用填）。
+                            这条「微信客服」是给<b>对外服务</b>场景的：客户扫你企业的客服码找你，走企业微信；客服消息有 48 小时窗口规则，这条通道只答不推。
+                          </div>
+                          <div className="small" style={{ lineHeight: 1.7, padding: '8px 12px', background: 'var(--amber-soft, #fff7e6)', borderRadius: 8 }}>
+                            ⚠️ 这是<b>对外渠道</b>：拿到客服二维码的任何微信用户都能和机器人对话。所以「登录/绑定」在这条通道上不响应、派任务不可用；
+                            「允许哪些操作」新建时默认只开对话 / 剪藏 / 收录 / 热榜——账号体检、切换账号、竞对监控、记忆优化会外泄账号数据或动租户配置，看清楚再勾。
+                          </div>
                           <div className="grid grid-2" style={{ gap: 10 }}>
                             <label className="stack" style={{ gap: 4 }}>
                               <span className="small muted">企业 CorpID</span>
