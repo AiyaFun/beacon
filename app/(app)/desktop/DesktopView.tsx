@@ -147,7 +147,7 @@ const I18N = {
     // 安装与指引
     installGuideTitle: '安装与安全提示',
     macSecurityTitle: '🍎 macOS · 已签名并公证',
-    macSecurityDesc: '拖进「应用程序」双击即可，没有任何安全提示。签名主体：厦门云词数字科技，已通过 Apple 公证。',
+    macSecurityDesc: '拖进「应用程序」双击即可，没有任何安全提示。签名主体：厦门云磁数字科技有限公司，已通过 Apple 公证。',
     winSecurityTitle: '🪟 Windows · 会弹提示，按这三步',
     winStep1: '浏览器提示「不常下载」→ 点 保留',
     winStep2: '双击后蓝屏「Windows 已保护你的电脑」→ 点左下角 更多信息',
@@ -224,7 +224,7 @@ const I18N = {
     
     installGuideTitle: 'Installation & Security Notes',
     macSecurityTitle: '🍎 macOS · 已签名并公证',
-    macSecurityDesc: '拖进「应用程序」双击即可，没有任何安全提示。签名主体：厦门云词数字科技，已通过 Apple 公证。',
+    macSecurityDesc: '拖进「应用程序」双击即可，没有任何安全提示。签名主体：厦门云磁数字科技有限公司，已通过 Apple 公证。',
     winSecurityTitle: '🪟 Windows · 会弹提示，按这三步',
     winStep1: '浏览器提示「不常下载」→ 点 保留',
     winStep2: '双击后蓝屏「Windows 已保护你的电脑」→ 点左下角 更多信息',

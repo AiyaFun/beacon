@@ -45,7 +45,7 @@ function shortGoal(goal: string): string {
 
 export function renderProgressCard(run: {
   id: string; goal: string; status: string; answer?: string | null; error?: string | null;
-}, progress: { steps: number; lastTool?: string | null; lastOk?: boolean | null }): PushMessage {
+}, progress: { steps: number; lastTool?: string | null; lastOk?: boolean | null }): Extract<PushMessage, { kind: 'card' }> {
   const g = shortGoal(run.goal);
   const lines: string[] = [];
   if (progress.steps > 0) {
