@@ -4,14 +4,18 @@ import { prisma } from '@/lib/db';
 import { hotSourceMode } from '@/lib/adapters/registry';
 import { log } from '@/lib/logger';
 import { schedulerKind } from '@/lib/jobs/queue';
+import { isProd } from '@/lib/env';
 
 export const dynamic = 'force-dynamic';
 
 // 详情鉴权：配了 BEACON_HEALTH_TOKEN 就必须带对 token 才给组件详情，否则只回状态。
-// 未配置时 dev 直接给详情（零配置可跑），prod 一律不给——避免忘配 token 就把内部状态裸奔。
+// 未配置时仅在明确的本地开发环境（!isProd() && NODE_ENV === 'development'）直接给详情；
+// 生产态及任何环境错配/未明确状态下默认关闭（Fail-Safe 默认安全）——杜绝忘配 token 或环境错配导致内部状态泄露。
 function canSeeDetail(req: NextRequest): boolean {
   const expected = process.env.BEACON_HEALTH_TOKEN;
-  if (!expected) return process.env.BEACON_ENV !== 'prod' && process.env.NODE_ENV !== 'production';
+  if (!expected) {
+    return !isProd() && process.env.NODE_ENV === 'development';
+  }
 
   // 只认请求头，不认 query（token 落进网关/CDN 访问日志就等于泄露）
   const raw = req.headers.get('x-beacon-health-token') ?? req.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
