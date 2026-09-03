@@ -9,6 +9,8 @@ import { KINDS, type CommentKind } from '../ingest/reader-comments';
 // lib/ingest/comment-questions.ts 的 commentWorkKey()。
 
 export type ReaderCommentRow = {
+  /** comment（评论区）| danmaku（B 站弹幕） */
+  source?: string;
   id: string;
   text: string;
   kind: string;
@@ -155,7 +157,7 @@ export async function readerCommentsByWork(
     where: { workspaceId, scope: 'own', OR: [{ accountId }, { accountId: null }] },
     orderBy: { collectedAt: 'desc' },
     select: {
-      id: true, text: true, kind: true, platform: true,
+      id: true, text: true, kind: true, platform: true, source: true,
       workKey: true, workTitle: true, collectedAt: true,
     },
   });
@@ -198,7 +200,7 @@ export async function readerVoice(
     // 统计口径写在这里：只看最近 N 条。全量统计会让半年前的话题一直压着这周的
     take: opts.take ?? 500,
     select: {
-      id: true, text: true, kind: true, platform: true,
+      id: true, text: true, kind: true, platform: true, source: true,
       workKey: true, workTitle: true, collectedAt: true,
     },
   });

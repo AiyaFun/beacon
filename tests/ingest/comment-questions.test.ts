@@ -20,6 +20,7 @@ function payload(over: Partial<CommentQuestionsPayload> = {}): CommentQuestionsP
     read: 50,
     questions: [{ text: '这个工具怎么收费呢', count: 3, kind: 'question' }],
     comments: [],
+    danmaku: [],
     ...over,
   };
 }

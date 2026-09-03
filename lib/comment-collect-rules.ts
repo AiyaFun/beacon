@@ -77,3 +77,6 @@ export const MAX_COMMENT_TEXTS_PER_RUN = MAX_COMMENTS_READ;
  * 留着只是在延长第三方 UGC 的留存面。
  */
 export const MAX_READER_COMMENTS_PER_WORKSPACE = 5000;
+
+/** B 站弹幕一次最多回传几条（插件按「折叠后长度 × 出现次数」挑，不是前 N 条）。 */
+export const MAX_DANMAKU_PER_RUN = 100;

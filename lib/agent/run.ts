@@ -209,7 +209,9 @@ async function afterTransition(runId: string, from: readonly AgentRunStatus[], t
   //    只有 botChatRef 非空的运行才会真的发（站内/API/定时派的此列为 NULL，零影响）。
   //    【去重直接借①的返回值】叫醒重投会让同一个 (runId,状态) 走到这里两次，
   //    notifyRunStatus 已按 (runId,状态,episode) 去过重——它没发的，群里也不该再说一遍。
-  if (freshNotify && (to === 'done' || to === 'failed' || to === 'awaiting_confirm')) {
+  //    2026-09-03 起 waiting_browser / waiting_quota 也回：跑了几分钟卡在「等插件」「等额度」，
+  //    群里的人不知道它在等什么、要不要去开插件——那正是最需要说一声的时候。
+  if (freshNotify && ['done', 'failed', 'awaiting_confirm', 'waiting_browser', 'waiting_quota'].includes(to)) {
     const { echoRunToChat } = await import('../bot/dispatch');
     await echoRunToChat(runId, to).catch(() => {});
   }

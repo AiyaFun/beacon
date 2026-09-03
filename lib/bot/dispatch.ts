@@ -281,7 +281,11 @@ export async function echoRunToChat(runId: string, status: string): Promise<bool
         ? { title: `✅ 任务跑完了：${g}`, lines: [(run.answer ?? '').trim().slice(0, 300) || '已完成，点下面看它做了什么。'] }
         : status === 'failed'
           ? { title: `❌ 任务没跑成：${g}`, lines: [(run.error ?? '未说明原因').slice(0, 300)] }
-          : { title: `✋ 任务等你确认：${g}`, lines: ['下一步会改数据或花额度，到网页里点头它才继续（群里不能确认）。'] };
+          : status === 'waiting_browser'
+            ? { title: `🧩 任务在等浏览器插件：${g}`, lines: ['这一步要在你的浏览器里采集，打开装了烽火台插件的浏览器它就会接着跑。'] }
+            : status === 'waiting_quota'
+              ? { title: `⏳ 任务在等额度：${g}`, lines: ['今天的 AI 额度用完了，额度重置后自动继续；急的话到网页里升级套餐。'] }
+              : { title: `✋ 任务等你确认：${g}`, lines: ['下一步会改数据或花额度，到网页里点头它才继续（群里不能确认）。'] };
 
     // 定点回**派它的那个会话**（sendToChat），不是集成级广播——见 lib/bot/index.ts 那段注释
     const r = await sendToChat(run.workspaceId, ref.integrationId, ref.chatId, {

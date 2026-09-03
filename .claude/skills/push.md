@@ -48,6 +48,14 @@ If any real secret is found:
 2. **STOP** — do not push
 3. Suggest a fix (e.g., move to .env, use placeholder, split string with `.join('')`)
 
+### Step 1b: Temporary Scripts & Fail-Open Endpoint Audit (Security Guard)
+
+Execute the `/security-audit` skill checks before proceeding:
+1. **No temporary/debug scripts**: Assert no `*-tmp.*`, `*tmp*.ts`, `repro-*.ts` files exist in git tracking (`git ls-files | grep -E '(^|/)(.*-tmp|.*tmp.*|repro-.*)\.(ts|js|mjs)$'`).
+2. **No credential minting outside tests**: Assert `issueLocalLoginTicket` or `issueApiToken` are NOT called in root scripts or outside `tests/`.
+3. **No fail-open endpoint fallbacks**: Ensure endpoints like `/api/health` fail closed and strictly use `!isProd() && process.env.NODE_ENV === 'development'` if token is unset.
+4. If any violation is found, **STOP** and resolve it before pushing.
+
 ### Step 2: Verify .gitignore Coverage
 
 Confirm these files/dirs are in `.gitignore` and NOT tracked by git:

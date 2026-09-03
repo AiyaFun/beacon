@@ -197,7 +197,11 @@ export async function runCover(input: CoverRunInput): Promise<CoverRunResult> {
   // 红线闸：命中即拒（与导出 / 文本技能同语义、同口径）。检上图文字 + 用户备注。
   const publishText = onImageText(meta);
   const redline = await redlineHits([publishText, input.extra ?? ''].filter(Boolean).join('\n'));
-  if (redline.length) return { ok: false, reason: 'redline', error: redlineReason(redline) };
+  if (redline.length) {
+    const { notifyComplianceBlock } = await import('../compliance/alert');
+    void notifyComplianceBlock(input.workspaceId, '生成封面', redline, publishText);
+    return { ok: false, reason: 'redline', error: redlineReason(redline) };
+  }
   const compliance = await checkText(publishText, input.platform, input.tenantId);
 
   // ── 这一次要出哪几张 ──────────────────────────────────────────

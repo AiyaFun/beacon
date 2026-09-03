@@ -1,7 +1,7 @@
 // 隐私政策 / 服务条款的当前版本号。改政策文本必须同时升这里：Member.consentVersion 记录的是用户
 // 同意时看到的是哪一版（lib/auth.ts），版本不升 = 新增的处理活动（比如 2026.08.2 加的 AI 封面参考图）
 // 没有任何用户在任何时点同意过。
-export const LEGAL_VERSION = '2026.09.1';
+export const LEGAL_VERSION = '2026.09.2';
 
 /**
  * 三份政策**正文**的指纹（只算可见文字：剥掉标签、注释与表达式后取 sha256 前 16 位）。
@@ -21,7 +21,7 @@ export const LEGAL_VERSION = '2026.09.1';
  *
  * 改完跑 `npx vitest run tests/legal/publish-click-honesty.test.ts` 会告诉你新指纹。
  */
-export const LEGAL_TEXT_FINGERPRINT = 'bde9df7e8c2d9a28';
+export const LEGAL_TEXT_FINGERPRINT = 'a88795eebf6f04ec';
 
 // 变更史（只记**实质**变更，措辞润色不进这里）：
 //  2026.08.2  AI 封面参考图（新增一类敏感个人信息的处理活动）
@@ -50,3 +50,6 @@ export const LEGAL_TEXT_FINGERPRINT = 'bde9df7e8c2d9a28';
 //             「微信」（微信官方 iLink 个人号机器人接口，扫码绑定、只答不推）与「微信客服（企业微信）」——
 //             后者的发送者可能不是团队成员，属新增的处理活动与新的数据主体类别；③ 服务条款新增 3.4，
 //             写明微信 iLink 的可用性由微信方决定、本平台不用任何非官方微信协议。
+//  2026.09.2  B 站弹幕（2026-09-03）：在 B 站作品页点「读评论提问」时一并读取该视频的**公开弹幕文字**
+//             （公开弹幕文件，只取文字，不取发送者标识/时间/颜色，最多 100 条），按读者原声同一套规则留存。
+//             弹幕是第三方个人写下的内容，是一类新增的处理活动，故升版。

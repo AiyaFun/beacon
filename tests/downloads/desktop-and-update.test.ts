@@ -33,7 +33,7 @@ describe('下载入口不会指向空气', () => {
   });
 
   it('缺某个平台的包时只说明、不放下载按钮', () => {
-    const page = read('app/(app)/desktop/page.tsx');
+    const page = read('app/(app)/desktop/DesktopView.tsx');
     // 有包才渲染 <a download>，没包走的是纯文字分支
     expect(page).toMatch(/list\.length === 0 \? \(/);
     expect(page).toMatch(/还没有 \{DESKTOP_OS_LABEL\[os\]\} 安装包/);
@@ -44,7 +44,7 @@ describe('下载入口不会指向空气', () => {
     // 「右键打开」那套绕行办法删掉了，而守卫照样绿——因为「右键」「SmartScreen」
     // 这些词还留在**代码注释**里。这就是「被自己的注释骗」那种假绿，
     // 守的是「用户看得见什么」，就必须先把注释剥掉再断言。
-    const raw = read('app/(app)/desktop/page.tsx');
+    const raw = read('app/(app)/desktop/DesktopView.tsx');
     const page = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
     // macOS：已签名+公证 → 说「直接双击」，**绝不能**再出现右键绕行那套
@@ -352,7 +352,7 @@ describe('下载客户端的入口与说明', () => {
   });
 
   it('页面把「和网页有什么区别」讲清楚了', () => {
-    const page = stripComments(read('app/(app)/desktop/page.tsx'));
+    const page = stripComments(read('app/(app)/desktop/DesktopView.tsx'));
     // 结论先行：功能一样、不装也不影响
     // 「功能一模一样」在卡片副标题里；正文那段解释 2026-08-29 按用户要求删掉了，
     // 结论靠副标题 + 下面的对照表承载，所以这里不再断言那段正文。

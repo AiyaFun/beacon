@@ -7,8 +7,7 @@ import { isSensitiveTitle } from '../hot/sensitive';
 import {
   MAX_COMMENTS_READ, MAX_QUESTIONS_PER_RUN, MIN_LEN, MAX_LEN,
   MIN_ASKED_TO_STORE, STALE_DAYS, PURGE_DAYS,
-  MAX_COMMENT_TEXT_LEN, MAX_COMMENT_TEXTS_PER_RUN,
-} from '../comment-collect-rules';
+  MAX_COMMENT_TEXT_LEN, MAX_COMMENT_TEXTS_PER_RUN, MAX_DANMAKU_PER_RUN } from '../comment-collect-rules';
 import { pruneInspiration } from './inspiration';
 
 // ── zod schema ──
@@ -65,6 +64,11 @@ export const commentQuestionsSchema = z.object({
     // 旧版插件不传 kind，将来加新分类值也不该让整批 400——服务端 normalizeKind 兜底成 other
     kind: z.string().max(16).optional(),
   })).max(MAX_COMMENT_TEXTS_PER_RUN).default([]),
+  // B 站弹幕正文（2026-09-03 起，仅 bilibili 作品页）。与评论正文同一条链路、同一套闸、同一份留存规则，
+  // 入库时 source='danmaku' 与评论区分。只有文字：弹幕文件里的发送者 hash、时间、颜色一个都不带（插件那头就不取）。
+  danmaku: z.array(z.object({
+    text: z.string().trim().min(1).max(MAX_COMMENT_TEXT_LEN + 1),
+  })).max(MAX_DANMAKU_PER_RUN).default([]),
 });
 
 export type CommentQuestionsPayload = z.infer<typeof commentQuestionsSchema>;

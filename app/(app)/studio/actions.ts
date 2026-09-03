@@ -9,6 +9,7 @@ import { buildAccountContext } from '@/lib/account-context';
 import { llmComplete } from '@/lib/llm/gateway';
 import { QuotaExceededError } from '@/lib/quota';
 import { AIGC_LABEL, checkText, ensureAigcLabel, redlineHits, redlineReason, type WordHit } from '@/lib/compliance/engine';
+import { notifyComplianceBlock } from '@/lib/compliance/alert';
 
 import { platformName } from '@/lib/constants';
 import { skillPlatformName, SKILL_PLATFORM_OPTIONS } from '@/lib/skills/platform';
@@ -131,7 +132,10 @@ export async function actExportDeliverable(
   // （把「最好/最优」降级为 warn）正是**建立在这个硬闸存在的前提上**。此前导出路径压根不查，
   // 硬闸只是合规页的一个展示 flag——闸门在这里真正接上，让注释与行为一致。
   const redline = await redlineHits(content);
-  if (redline.length) return { ok: false, error: redlineReason(redline) };
+  if (redline.length) {
+    void notifyComplianceBlock(s.workspaceId, '导出稿件', redline, content);
+    return { ok: false, error: redlineReason(redline) };
+  }
 
   try {
     // AIGC 合规（《标识办法》第四条：下载/复制/导出须确保文件中含显式标识）。
@@ -217,7 +221,10 @@ export async function actExportCards(draftId: string): Promise<
   if (!content) return { ok: false, error: '草稿暂无内容' };
 
   const redline = await redlineHits(content);
-  if (redline.length) return { ok: false, error: redlineReason(redline) };
+  if (redline.length) {
+    void notifyComplianceBlock(s.workspaceId, '导出 PDF', redline, content);
+    return { ok: false, error: redlineReason(redline) };
+  }
 
   // 与 pptx 同一份大纲规划：稿子自带结构就按结构切，否则请模型切页（任意模型）
   const produceId = `${s.tenantId}-${draft.id}`;
@@ -1322,7 +1329,10 @@ export async function actAdoptTitle(draftId: string, title: string): Promise<{ o
   const t = title.trim();
   if (!t) return { ok: false, error: '标题为空' };
   const redline = await redlineHits(t);
-  if (redline.length) return { ok: false, error: redlineReason(redline) };
+  if (redline.length) {
+    void notifyComplianceBlock(s.workspaceId, '采纳标题', redline, t);
+    return { ok: false, error: redlineReason(redline) };
+  }
   const draft = await prisma.draft.findFirst({ where: { id: draftId, accountId: s.accountId } });
   if (!draft) return { ok: false, error: '草稿不存在' };
   await prisma.draft.update({ where: { id: draft.id }, data: { title: t.slice(0, 60) } });

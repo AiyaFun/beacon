@@ -145,11 +145,22 @@ describe('B站 · 六项指标解析（真机 BV1GJ411x7h7 校准）', () => {
     });
   });
 
-  it('⚠️ 已知限制：拿到的是展示值（真值 102,372,046 只在页面 JS 变量里，内容脚本读不到）', () => {
-    // 这条不是「测对了」，是把限制写下来：哪天有人以为播放量是精确的，先看这里。
-    // 要精确值只能走 B站 公开 API，那是另一个决定（需要 host 权限 + 合规评估）。
+  it('没有内联状态时退回展示值（2026-09-03 前这是唯一来源；现在是兜底）', () => {
     expect(m().views).toBe(100000000);
     expect(m().views).not.toBe(102372046);
+    expect(m().comments).toBeUndefined();
+  });
+
+  // 2026-09-03 真机（BV1GJ411x7h7）：页面内联 __INITIAL_STATE__.videoData.stat 有精确值，含评论数与 pubdate。
+  // 内容脚本读不到 window 变量但读得到内联脚本文本——与上面 YouTube 的 ytInitialPlayerResponse 同一手法。
+  it('有内联状态 → 七项精确值 + 发布时间；锚在 videoData 之后，不抠 related 或更早的 stat', () => {
+    const body = `<script>window.__INITIAL_STATE__={"error":{},"stat":{"view":999},"videoData":{"bvid":"BV1GJ411x7h7","aid":80433022,"cid":137649199,"pubdate":1577835803,"stat":{"aid":80433022,"view":104872038,"danmaku":148595,"reply":230480,"favorite":1525548,"coin":1262717,"share":487448,"now_rank":0,"his_rank":0,"like":2900734,"dislike":0,"evaluation":"","vt":0}},"related":[{"stat":{"view":1,"like":2}}]};</script>` + BILI_BODY;
+    const post = run(BILI_VIDEO, 'https://www.bilibili.com/video/BV1GJ411x7h7', body)?.posts?.[0] as { metrics?: Record<string, number>; publishedAt?: string } | undefined;
+    expect(post?.metrics).toEqual({
+      views: 104872038, danmaku: 148595, likes: 2900734,
+      coins: 1262717, collects: 1525548, shares: 487448, comments: 230480,
+    });
+    expect(post?.publishedAt).toBe('2019-12-31T23:43:23.000Z');
   });
 
   it('🔒 评论数选择器不许再只认已经消失的 bili-comments-header-renderer', () => {

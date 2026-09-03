@@ -24,7 +24,7 @@ describe('未登录可达的公开路径', () => {
   });
 
   it('法务页与安装包同样公开可达（商店审核抓取要用）', () => {
-    for (const p of ['/legal/privacy', '/legal/data-request', '/downloads/beacon-collector-latest.zip', '/robots.txt']) {
+    for (const p of ['/legal/privacy', '/legal/data-request', '/overview', '/overview.html', '/downloads/beacon-collector-latest.zip', '/robots.txt']) {
       const res = middleware(req(p));
       expect(res.headers.get('location'), `${p} 不该被跳转`).toBeNull();
     }

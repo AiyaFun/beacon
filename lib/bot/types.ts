@@ -168,7 +168,6 @@ export function sanitizeAllowCommands(input: unknown): string[] {
 export type PushEventType =
   | 'hot_ready'
   | 'daily_recommend'
-  | 'refresh_reminder'
   | 'compliance_alert'
   | 'learning_summary'
   | 'performance_alert'
@@ -178,8 +177,9 @@ export type PushEventType =
 
 export const PUSH_EVENTS: { key: PushEventType; name: string; desc: string }[] = [
   { key: 'daily_recommend', name: '每日选题推荐', desc: '每天推荐生成后，把今日 Top 选题推到群' },
-  { key: 'hot_ready', name: '热点刷新', desc: '热榜聚类完成后推送新上榜的高相关热点' },
-  { key: 'refresh_reminder', name: '竞对待刷新提醒', desc: '每天提醒有多少竞对档案待刷新' },
+  // hot_ready / compliance_alert 此前只登记没发射点（勾了也永远收不到）；2026-09-03 接上，
+  // 「竞对待刷新提醒」产品里根本没有这个概念，删掉。
+  { key: 'hot_ready', name: '热点刷新', desc: '热榜聚类后推送新上榜的热点（最多 5 条，两小时内不重复推）' },
   { key: 'compliance_alert', name: '合规拦截告警', desc: '内容被合规红线拦截时即时告警' },
   { key: 'learning_summary', name: '学习小结', desc: '记忆优化后推送「本轮系统学到了什么」' },
   { key: 'performance_alert', name: '爆款/异常预警', desc: '发布后数据增速显著高于或低于你的基线时提醒' },

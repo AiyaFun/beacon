@@ -1088,12 +1088,22 @@ async function collectComments(tabId) {
   }
   if (!result) return { ok: false, error: '评论区解析返回为空' };
   if (!result.ok) return { ok: false, error: result.reason || '评论区结构没认出来', probe: result.probe };
-  // 两条链路只要有一条有货就往下走。⚠️ 这里原先只看 questions——正文接上来之后
+  // B 站作品页顺手把公开弹幕文字也带上（边界见 collectBiliDanmaku）。单独一次注入：
+  // comments.js 是同步 IIFE（返回值直接就是结果），塞 await 进去整个文件都不执行。
+  result.danmaku = [];
+  if (result.platform === 'bilibili') {
+    try {
+      const [d] = await chrome.scripting.executeScript({ target: { tabId }, func: collectBiliDanmaku });
+      if (Array.isArray(d?.result)) result.danmaku = d.result;
+    } catch { /* 取不到就没有，不影响评论那条链路 */ }
+  }
+  // 三条链路只要有一条有货就往下走。⚠️ 这里原先只看 questions——正文接上来之后
   // 那个条件会把「一条疑问句都没有、但有 40 条读者原声」的整页评论直接扔掉。
   const hasQuestions = Array.isArray(result.questions) && result.questions.length > 0;
   const hasComments = Array.isArray(result.comments) && result.comments.length > 0;
-  if (!hasQuestions && !hasComments) {
-    return { ok: true, read: result.read, created: 0, updated: 0, comments: 0 };
+  const hasDanmaku = result.danmaku.length > 0;
+  if (!hasQuestions && !hasComments && !hasDanmaku) {
+    return { ok: true, read: result.read, created: 0, updated: 0, comments: 0, danmaku: 0 };
   }
 
   const tab = await chrome.tabs.get(tabId).catch(() => null);
@@ -1154,6 +1164,8 @@ async function collectComments(tabId) {
         questions: result.questions,
         // 读者原声：正文 + 粗分类，没有评论者的任何标识（见 content/comments.js 文件头清单）
         comments: result.comments,
+        // B 站弹幕文字（仅 bilibili 作品页有；其它平台是空数组）
+        danmaku: result.danmaku,
       }),
     });
     const data = await res.json().catch(() => ({}));
@@ -1161,6 +1173,48 @@ async function collectComments(tabId) {
   } catch (e) {
     return { ok: false, error: netError(e, host) };
   }
+}
+
+
+// ── B 站弹幕（2026-09-03）──
+// 弹幕是 B 站独有的互动形态，此前只数「弹幕数」从没读过弹幕说什么。
+// 通道：comment.bilibili.com/<cid>.xml —— 公开、无凭据、无签名，与作品页字幕轨（work.js）同一档；
+// 该域对 www.bilibili.com 开了 CORS，在作品页里 fetch 即可（这个函数被 executeScript 以 func 注入到页面，
+// 所以必须**自包含**：不引用本文件任何别的变量）。
+// 只取 <d> 的文字。p 属性里有发送者 hash / 时间 / 颜色——一个都不取（不是取了不传，是正则只抓文本节点）。
+// 挑选不按「出现次数」：按频次取 top-N 会把「哈哈哈」「666」「?」这类梗留下、把有信息量的长弹幕滤掉，
+// 所以先折叠重复、再过短句与纯梗、按折叠后长度排。最多 100 条（服务端 MAX_DANMAKU_PER_RUN 同数）。
+async function collectBiliDanmaku() {
+  const MAX = 100;
+  const MIN_LEN = 5;
+  const MAX_TEXT = 300;
+  const MEME = /^[\s哈嗯啊呃额哦噢喔呜哇呀哎唉嘿嘻草艹6２４\d?？!！。.,，~～…\-—_*+()（）\[\]【】]*$|^(awsl|xswl|yyds|nb|牛[逼比]|绝了|来了|前排|沙发|三连|一键三连|打卡|签到)$/i;
+  const fold = (t) => String(t || '').replace(/\s+/g, '').replace(/(.)\1{2,}/g, '$1$1');
+  const cid = (document.documentElement.innerHTML.match(/"cid":(\d{4,})/) || [])[1];
+  if (!cid) return [];
+  let xml = '';
+  try {
+    const res = await fetch(`https://comment.bilibili.com/${cid}.xml`, { credentials: 'omit' });
+    if (!res.ok) return [];
+    xml = await res.text();
+  } catch {
+    return [];
+  }
+  const counts = new Map();
+  const re = /<d\s[^>]*>([^<]*)<\/d>/g;
+  let m;
+  while ((m = re.exec(xml))) {
+    const text = m[1].replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').trim();
+    const key = fold(text);
+    if (key.length < MIN_LEN || MEME.test(key)) continue;
+    const cur = counts.get(key);
+    if (cur) cur.n++;
+    else counts.set(key, { text: text.slice(0, MAX_TEXT), n: 1, len: key.length });
+  }
+  return [...counts.values()]
+    .sort((a, b) => b.len - a.len || b.n - a.n)
+    .slice(0, MAX)
+    .map((x) => ({ text: x.text }));
 }
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {

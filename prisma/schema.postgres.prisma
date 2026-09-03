@@ -601,6 +601,8 @@ model ReaderComment {
   // 粗分类，只用于「粉丝在关心什么」的占比展示：question | demand | praise | complaint | other。
   // 是启发式判断，不是事实断言——UI 上必须说成「大致分类」。
   kind String @default("other")
+  // 正文来自哪：comment（评论区）| danmaku（B 站弹幕，2026-09-03 起）。留存/删除/不导出规则两者完全相同。
+  source String @default("comment")
   // 正文的归一化哈希，唯一索引用。放列里而不是直接对 text 建唯一索引：
   // text 可能到 300 字，长文本索引在 Postgres 上有 btree 尺寸限制。
   textHash String

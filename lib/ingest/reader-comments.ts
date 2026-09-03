@@ -46,11 +46,16 @@ export type ReaderCommentMeta = {
   workTitle: string | null;
 };
 
+/** 正文来自哪：评论区 | B 站弹幕。同一条作品下同一句话只留一行——弹幕与评论撞句时后到的覆盖 source。 */
+export type ReaderCommentSource = 'comment' | 'danmaku';
+
 export async function ingestReaderComments(
   workspaceId: string,
   meta: ReaderCommentMeta,
   comments: ReaderCommentInput,
+  opts: { source?: ReaderCommentSource } = {},
 ): Promise<{ stored: number; skipped: number }> {
+  const source: ReaderCommentSource = opts.source ?? 'comment';
   let stored = 0;
   let skipped = 0;
   const seen = new Set<string>();
@@ -89,9 +94,11 @@ export async function ingestReaderComments(
         text,
         kind: normalizeKind(c.kind),
         textHash,
+        source,
       },
       update: {
         kind: normalizeKind(c.kind),
+        source,
         collectedAt: new Date(),
         // 作品标题可能这次才采到（上次是 null）；账号归属同理，别把已知的覆盖成 null
         ...(meta.workTitle ? { workTitle: meta.workTitle } : {}),

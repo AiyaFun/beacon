@@ -81,10 +81,27 @@ export async function POST(req: Request) {
   } catch (e) {
     log.error('读者原声入库失败', { workspaceId: ws.id, platform: p.platform, err: String(e) });
   }
+  // B 站弹幕：同一条链路，source='danmaku'。同样一条失败不拖垮别的。
+  let danmaku = 0;
+  if (p.danmaku.length > 0) {
+    try {
+      const rd = await ingestReaderComments(ws.id, {
+        scope: p.scope,
+        platform: p.platform,
+        author: p.handle || null,
+        accountId: p.scope === 'own' ? (p.accountId ?? null) : null,
+        workKey: commentWorkKey(p),
+        workTitle: p.workTitle || null,
+      }, p.danmaku, { source: 'danmaku' });
+      danmaku = rd.stored;
+    } catch (e) {
+      log.error('弹幕入库失败', { workspaceId: ws.id, platform: p.platform, err: String(e) });
+    }
+  }
 
   log.info('评论采集入库', {
     workspaceId: ws.id, scope: p.scope, platform: p.platform, read: p.read,
-    created: r.created, updated: r.updated, comments,
+    created: r.created, updated: r.updated, comments, danmaku,
   });
-  return json({ ...r, comments });
+  return json({ ...r, comments, danmaku });
 }

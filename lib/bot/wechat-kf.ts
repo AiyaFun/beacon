@@ -150,19 +150,8 @@ export async function kfListAccounts(
   }
 }
 
-// ── 同一集成的拉取必须串行 ──
-//
-// 企微对**每条**新消息都发一次回调。用户连发两句，两次回调几乎同时到；两个 syncAndReply
-// 并行跑，都读到旧 cursor、都拉到同一批消息 → 同一个问题被答两遍。「cursor 先落库再处理」
-// 挡的是崩溃后的重放，挡不住并发——并发要靠这把锁。进程内锁足够：一台实例上的回调都进同一个
-// Node 进程；蓝绿切换那几秒的双实例窗口由下面的 msgid 去重兜住。
-const chains = new Map<string, Promise<void>>();
-export function runSerialized(key: string, fn: () => Promise<void>): Promise<void> {
-  const prev = chains.get(key) ?? Promise.resolve();
-  const next = prev.catch(() => {}).then(fn);
-  chains.set(key, next);
-  return next.finally(() => { if (chains.get(key) === next) chains.delete(key); });
-}
+// ── 同一集成的拉取必须串行：2026-09-03 搬到 lib/bot/serialize.ts（router 入口也用它），这里只转出口 ──
+export { runSerialized } from './serialize';
 
 // ── msgid 去重：2026-09-02 搬到 lib/bot/seen.ts 与飞书/企微/钉钉共用，这里只转出口 ──
 export { markSeen } from './seen';

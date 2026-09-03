@@ -7,4 +7,4 @@
 //
 // ⚠️ 发版时要与 package.json 的 version 一起改；
 // tests/market/pack.test.ts 有一条守卫逐字比对两处，漂了当场变红。
-export const APP_VERSION = '1.3.19';
+export const APP_VERSION = '1.3.20';

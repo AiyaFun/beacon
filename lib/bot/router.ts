@@ -409,7 +409,18 @@ async function cmdChat(
 }
 
 // 返回给用户的回执文本。回复的发送由 endpoint 负责。
+//
+// 同一个会话（integrationId+chatId）串行处理：并发跑会让两次 appendTurns 后写覆盖前写，
+// 丢一轮上下文（router.ts:424 读 → :407 写之间没有锁）。没有会话 key 的（无状态模式）照常并发。
 export async function handleInbound(workspaceId: string, rawText: string, ctx: InboundCtx = {}): Promise<string> {
+  if (ctx.integrationId && ctx.chatId) {
+    const { runSerialized } = await import('./serialize');
+    return runSerialized(`${ctx.integrationId}:${ctx.chatId}`, () => handleInboundNow(workspaceId, rawText, ctx));
+  }
+  return handleInboundNow(workspaceId, rawText, ctx);
+}
+
+async function handleInboundNow(workspaceId: string, rawText: string, ctx: InboundCtx = {}): Promise<string> {
   const text = (rawText || '').trim();
   const provider = ctx.provider ?? 'feishu';
   const key: ChatKey = { workspaceId, integrationId: ctx.integrationId, chatId: ctx.chatId };

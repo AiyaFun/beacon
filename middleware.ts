@@ -50,6 +50,8 @@ const PUBLIC_PATHS = [
   //    有速率限制，且**只有企业版才有**（SaaS 形态下路由直接 404）。
   '/api/v1',
   '/hotlists',
+  '/overview',
+  '/overview.html',
   '/legal',
   '/robots.txt',
   '/sitemap.xml',

@@ -136,6 +136,8 @@ export async function runIllustration(input: IllustrationInput): Promise<Illustr
   const userText = [...scenes.map((s) => s.scene), input.extra ?? ''].join('\n');
   const hits = await redlineHits(userText);
   if (hits.length > 0) {
+    const { notifyComplianceBlock } = await import('../compliance/alert');
+    void notifyComplianceBlock(input.workspaceId, '生成配图', hits, userText);
     return { ok: false, reason: 'redline', error: redlineReason(hits) };
   }
 

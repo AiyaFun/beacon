@@ -96,8 +96,12 @@ export const HANDLERS: Record<JobName, JobHandler> = {
 
   cluster_topics: async () =>
     withRun('cluster_topics', undefined, async () => {
+      const since = new Date();
       const r = await clusterHotTopics();
-      return { detail: `聚类 ${r.clusters} 个` };
+      // 「热点刷新」推送：本轮新上榜的推给订阅了的群（有节流，见 lib/hot/hot-ready.ts）。旁路，失败不影响聚类结果。
+      const { pushHotReady } = await import('../hot/hot-ready');
+      const hot = await pushHotReady(since).catch(() => ({ workspaces: 0, items: 0 }));
+      return { detail: `聚类 ${r.clusters} 个${hot.workspaces ? ` / 热点刷新推 ${hot.workspaces} 个工作区` : ''}` };
     }),
 
   // 广播型：竞对采集（按全局订阅去重，此处遍历所有工作区订阅）

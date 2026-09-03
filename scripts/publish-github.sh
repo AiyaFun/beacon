@@ -66,7 +66,16 @@ LEAK=$(cd "$WT" && grep -rlE "BEGIN (RSA |EC |ENCRYPTED )?PRIVATE KEY" . --exclu
 # 出现在其它任何地方都是泄漏。CI 用的一次性钥匙叫 ci-throwaway-updater.key，名字错开，不误伤。
 BIN=$(cd "$WT" && find . -path ./.git -prune -o \( -name '*.p12' -o -name '*.p8' -o -name '*.p8.enc' -o -name '*.cer' -o -name '*.mobileprovision' -o -name 'tauri-updater.key*' \) -print 2>/dev/null | head -3 || true)
 [ -z "$BIN" ] || die "树里有证书/密钥文件：$BIN"
-say "✅ 校验通过：剥离清单生效，无私钥材料"
+
+# 临时脚本 / 根目录调试脚本兜底（杜绝 login-tmp.ts 等遗留调试代码进入公开仓库）
+TMP_FILES=$(cd "$WT" && find . -maxdepth 2 -path ./.git -prune -o \( -name '*-tmp.*' -o -name '*tmp*.ts' -o -name 'repro-*.ts' \) -print 2>/dev/null | head -3 || true)
+[ -z "$TMP_FILES" ] || die "树里有未清理的临时/调试脚本：$TMP_FILES"
+
+# 检查根目录是否有包含临时执行逻辑的单发脚本
+ROOT_MINT=$(cd "$WT" && find . -maxdepth 1 -name '*.ts' -exec grep -lE 'issueLocalLoginTicket' {} + 2>/dev/null || true)
+[ -z "$ROOT_MINT" ] || die "根目录存在直接调用凭据签发的临时脚本：$ROOT_MINT"
+
+say "✅ 校验通过：剥离清单生效，无私钥材料，无临时凭证脚本"
 
 cd "$WT"
 git add -A

@@ -17,6 +17,8 @@ import { Empty } from './ui';
 export type VoiceComment = {
   id: string;
   text: string;
+  /** comment | danmaku（B 站弹幕） */
+  source?: string;
   kind: string;
   platform: string;
   workTitle: string | null;
@@ -151,6 +153,9 @@ export function ReaderVoice({
                 <span className={`badge ${KIND_CLASS[c.kind] ?? 'badge-gray'}`} style={{ flexShrink: 0 }}>
                   {KIND_LABEL[c.kind] ?? '其它'}
                 </span>
+                {c.source === 'danmaku' && (
+                  <span className="badge badge-blue" style={{ flexShrink: 0 }} title="来自 B 站公开弹幕文件，只取文字">弹幕</span>
+                )}
                 <span style={{ flex: 1, minWidth: 0, wordBreak: 'break-word' }}>{c.text}</span>
               </div>
               <div className="small muted" style={{ marginTop: 3, paddingLeft: 2 }}>
@@ -164,7 +169,7 @@ export function ReaderVoice({
 
       {/* 留存与边界，就摆在数据下面。写在隐私政策里而页面上不说，等于没说。 */}
       <div className="small muted" style={{ marginTop: 8 }}>
-        只有评论正文，不含昵称、头像、主页链接、用户 ID、IP 属地、评论时间与点赞数——这些插件根本没取。
+        只有评论正文（B 站另含公开弹幕文字，标「弹幕」），不含昵称、头像、主页链接、用户 ID、IP 属地、评论时间与点赞数——这些插件根本没取。
         正文保留 {retentionDays} 天后自动删除，不参与任何 AI 生成，也不会被导出。
       </div>
     </div>

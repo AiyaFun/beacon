@@ -58,6 +58,12 @@ docs/方案-*.md
 
 # 本机排查用的一次性 repro 脚本（写死了绝对路径），不进仓库
 .repro-check.mjs
+repro-*.ts
+repro-*.js
+*-tmp.*
+*tmp*.ts
+*tmp*.js
+*.scratch.*
 
 # ── 桌面壳（Tauri 2）──
 desktop/node_modules
