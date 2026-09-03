@@ -40,7 +40,7 @@ type JsonFeedItem = {
   date_published?: string;
 };
 
-// 从作品 URL 提取平台原生 ID，与其他通道（B站公开接口的 bvid、TikHub 的 aweme_id/note_id）
+// 从作品 URL 提取平台原生 ID，与其他通道（插件采到的 B 站 bvid、TikHub 的 aweme_id/note_id）
 // 的 platformItemId 对齐——对不齐就会出现同一作品两条记录，upsert 幂等失效。
 const ID_PATTERNS: Record<string, RegExp> = {
   bilibili: /video\/(BV\w+)/,

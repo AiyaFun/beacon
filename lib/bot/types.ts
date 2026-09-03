@@ -80,6 +80,12 @@ export type BotSecrets = {
   ilinkExpired?: boolean;
   /** 微信 iLink：扫码时登录着的成员——微信里派任务的身份（不走 OA 身份） */
   boundMemberId?: string;
+  /**
+   * 微信 iLink：最近一条入站消息的 context_token。iLink 只答不推——发消息必须挂在
+   * 某条入站消息的 context 上。派出去的任务几分钟后跑完要回执，靠它挂回最近那次对话；
+   * 微信端是否仍接受取决于它的有效期（未公开），发不出去就如实报错。
+   */
+  ilinkContextToken?: string;
 };
 
 // ── 入站命令白名单（BotIntegration.allowCommands，管理员在设置页勾选）──

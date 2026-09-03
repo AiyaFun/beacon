@@ -220,15 +220,17 @@ describe('闭环：终态回执发回派它的群', () => {
   });
 
   it('echoRunToChat：done 的运行按 botChatRef 发回对应集成；无 ref/状态不符则不发', async () => {
-    const send = vi.spyOn(botIndex, 'sendToIntegration').mockResolvedValue({ ok: true });
+    const send = vi.spyOn(botIndex, 'sendToChat').mockResolvedValue({ ok: true });
     await prisma.agentRun.create({
       data: { id: 'r1', workspaceId: 'w1', accountId: 'a1', memberId: 'm-feishu:ou_alice-t1', goal: '跑个数据', status: 'done', answer: '搞定了', messages: '[]', botChatRef: REF },
     });
     expect(await echoRunToChat('r1', 'done')).toBe(true);
     expect(send).toHaveBeenCalledTimes(1);
-    const [wsId, integrationId, msg] = send.mock.calls[0];
+    const [wsId, integrationId, chatId, msg] = send.mock.calls[0];
     expect(wsId).toBe('w1');
     expect(integrationId).toBe('bi1');
+    // 🔒 定点到派它的那个群（oc_1），不是集成级广播——集成级会发到机器人所在的所有群
+    expect(chatId).toBe('oc_1');
     expect(JSON.stringify(msg)).toContain('跑个数据');
 
     // 状态已被后来的变化盖过 → 不发（别把过期消息推进群）
@@ -242,7 +244,8 @@ describe('闭环：终态回执发回派它的群', () => {
   });
 
   it('端到端：群里 /执行 → 跑完 → afterTransition 自动把回执发回群（去重借站内通知）', async () => {
-    const send = vi.spyOn(botIndex, 'sendToIntegration').mockResolvedValue({ ok: true });
+    const send = vi.spyOn(botIndex, 'sendToChat').mockResolvedValue({ ok: true });
+    const broadcast = vi.spyOn(botIndex, 'sendToIntegration').mockResolvedValue({ ok: true });
     h.script = [{ text: '数据看完了。' }];
     await handleInbound('w1', '/执行 看看数据', GROUP);
     await settleAgentKicks();
@@ -250,9 +253,11 @@ describe('闭环：终态回执发回派它的群', () => {
     const run = await prisma.agentRun.findFirstOrThrow();
     expect(run.status).toBe('done');
     // 回执恰好一次，发给本群的集成
-    const echoCalls = send.mock.calls.filter((c) => c[1] === 'bi1');
+    const echoCalls = send.mock.calls.filter((c) => c[1] === 'bi1' && c[2] === 'oc_1');
     expect(echoCalls.length).toBe(1);
-    expect(JSON.stringify(echoCalls[0][2])).toContain('跑完了');
+    expect(JSON.stringify(echoCalls[0][3])).toContain('跑完了');
+    // 🔒 回执绝不走集成级广播
+    expect(broadcast).not.toHaveBeenCalled();
     // 站内通知也在（去重的锚点）
     expect(await prisma.notification.count({ where: { workspaceId: 'w1' } })).toBeGreaterThan(0);
   });

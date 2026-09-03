@@ -108,9 +108,8 @@ describe('🔒 服务端抓取不许伪装成浏览器', () => {
     expect(bad, `发现伪造 referer：\n${bad.join('\n')}`).toEqual([]);
   });
 
-  it('B 站请求带的是标识自己身份的 UA', () => {
-    expect(SRC).toContain('BeaconBot/1.0');
-  });
+  // 「B 站请求带的是标识自己身份的 UA」那条 2026-09-02 随 BilibiliAdapter 一起删了：
+  // 服务端不再向 api.bilibili.com 发任何请求（守卫在 tests/adapters/no-bilibili-server-fetch.test.ts）。
 });
 
 describe('🔒 safeFetch 默认遵守 robots', () => {

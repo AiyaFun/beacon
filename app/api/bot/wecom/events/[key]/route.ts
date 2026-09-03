@@ -1,5 +1,6 @@
 
 import { prisma } from '@/lib/db';
+import { markSeen } from '@/lib/bot/seen';
 import { log } from '@/lib/logger';
 import { readBotSecrets } from '@/lib/bot';
 import { wecomSignature, wecomDecrypt, wecomExtractXml, getWecomAccessToken, wecomReplyText } from '@/lib/bot/wecom';
@@ -109,6 +110,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ key: string }>
   const text = wecomExtractXml(innerXml, 'Content').trim();
   const fromUser = wecomExtractXml(innerXml, 'FromUserName');
   if (!text) return new Response('success');
+  // 重投去重：企微 5 秒内没收到响应会重试（最多 3 次）。对话/派任务/试采都不是幂等的。
+  const msgId = wecomExtractXml(innerXml, 'MsgId');
+  if (msgId && !markSeen(integration.id, `wecom:${msgId}`)) {
+    log.info('企微重投的消息，已忽略', { key, msgId });
+    return new Response('success');
+  }
 
   // 快速响应；处理与回复走后台
   void processAndReply(integration.id, integration.workspaceId, text, fromUser, secrets).catch((e) =>

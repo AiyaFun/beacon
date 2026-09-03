@@ -164,19 +164,5 @@ export function runSerialized(key: string, fn: () => Promise<void>): Promise<voi
   return next.finally(() => { if (chains.get(key) === next) chains.delete(key); });
 }
 
-// ── msgid 去重（进程内、有界）──
-// 第二道保险：锁挡并发，这个挡「同一条消息被两次 sync 拉到」（双实例窗口 / 企微偶发重投）。
-const SEEN_CAP = 500;
-const seen = new Map<string, Set<string>>();
-/** 第一次见到返回 true；见过返回 false。每个集成最多记最近 500 条。 */
-export function markSeen(integrationId: string, msgid: string): boolean {
-  let set = seen.get(integrationId);
-  if (!set) { set = new Set(); seen.set(integrationId, set); }
-  if (set.has(msgid)) return false;
-  set.add(msgid);
-  if (set.size > SEEN_CAP) {
-    const first = set.values().next().value;
-    if (first !== undefined) set.delete(first);
-  }
-  return true;
-}
+// ── msgid 去重：2026-09-02 搬到 lib/bot/seen.ts 与飞书/企微/钉钉共用，这里只转出口 ──
+export { markSeen } from './seen';

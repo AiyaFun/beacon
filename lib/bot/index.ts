@@ -154,6 +154,72 @@ export async function sendToIntegration(workspaceId: string, integrationId: stri
   return r;
 }
 
+// ── 定点到**某一个会话**：群里派出的任务回执用 ──
+//
+// 【为什么不能用 sendToIntegration】它是集成级：飞书自建应用会**逐群广播**、企微 @all、
+// 钉钉全员——「你派的任务等你确认」会发到这个机器人所在的所有群。2026-09-02 盘查抓到：
+// echoRunToChat 明明解析出了 chatId，却没有一条能把它送到发送层的路。
+// 而且微信 iLink/客服是「只答不推」，集成级发送在 routeSend 就被拒，派出去的任务永远回不了「跑完了」。
+// 这里按 provider 走各自的**会话级**接口——那本来就是入站回复用的同一套。
+export async function sendToChat(workspaceId: string, integrationId: string, chatId: string, message: PushMessage): Promise<SendResult> {
+  const it = await prisma.botIntegration.findFirst({ where: { id: integrationId, workspaceId, enabled: true } });
+  if (!it) return { ok: false, error: '集成不存在或已停用' };
+  if (!chatId) return { ok: false, error: '没有会话 id' };
+  const secrets = readBotSecrets(it.secretsEnc);
+  const r = await sendToChatVia(it.provider, it.inboundKey, secrets, chatId, message);
+  await prisma.botIntegration
+    .update({ where: { id: it.id }, data: r.ok ? { lastOutboundAt: new Date(), lastError: null } : { lastError: `回执发送失败：${r.error ?? ''}` } })
+    .catch(() => {});
+  return r;
+}
+
+/** 卡片在只有纯文本接口的渠道上的形态：标题 / 行 / 链接各占一行。 */
+export function renderPlain(message: PushMessage): string {
+  if (message.kind === 'text') return message.text;
+  const lines = [message.title, ...message.lines];
+  if (message.link) lines.push(`${message.link.text}：${message.link.url}`);
+  return lines.filter(Boolean).join('\n');
+}
+
+async function sendToChatVia(provider: string, inboundKey: string | null, secrets: BotSecrets, chatId: string, message: PushMessage): Promise<SendResult> {
+  switch (provider) {
+    case 'feishu': {
+      if (!inboundKey || !secrets.appSecret) return { ok: false, error: '飞书未配置自建应用凭据，回不到群里' };
+      const { feishuTenantAccessToken, feishuSendToChat } = await import('./feishu');
+      const { token, error } = await feishuTenantAccessToken(inboundKey, secrets.appSecret);
+      if (!token) return { ok: false, error: `获取 tenant_access_token 失败：${error ?? ''}` };
+      return feishuSendToChat(token, chatId, message);
+    }
+    case 'wecom': {
+      if (!secrets.corpId || !secrets.appSecret || !secrets.agentId) return { ok: false, error: '企微未配置 CorpID/Secret/AgentID' };
+      const { getWecomAccessToken, wecomReplyText } = await import('./wecom');
+      const { token, error } = await getWecomAccessToken(secrets.corpId, secrets.appSecret);
+      if (!token) return { ok: false, error: `获取 access_token 失败：${error ?? ''}` };
+      return wecomReplyText(token, secrets.agentId, chatId, renderPlain(message));
+    }
+    case 'dingtalk': {
+      if (!inboundKey || !secrets.appSecret) return { ok: false, error: '钉钉未配置 AppKey/AppSecret' };
+      const { getDingtalkAccessToken, dingtalkSendToConversation } = await import('./dingtalk');
+      const { token, error } = await getDingtalkAccessToken(inboundKey, secrets.appSecret);
+      if (!token) return { ok: false, error: `获取 access_token 失败：${error ?? ''}` };
+      return dingtalkSendToConversation(token, inboundKey, chatId, renderPlain(message));
+    }
+    case 'wechat_kf': {
+      if (!secrets.corpId || !secrets.appSecret || !secrets.openKfId) return { ok: false, error: '微信客服未配置 CorpID/Secret/客服账号' };
+      const { kfSendText } = await import('./wechat-kf');
+      return kfSendText(secrets.corpId, secrets.appSecret, secrets.openKfId, chatId, renderPlain(message));
+    }
+    case 'wechat': {
+      if (!secrets.ilinkBotToken) return { ok: false, error: '微信 iLink 未绑定' };
+      if (!secrets.ilinkContextToken) return { ok: false, error: '微信 iLink 没有可挂的会话上下文（要等对方先发过一条消息）' };
+      const { ilinkSendText } = await import('./wechat-ilink');
+      return ilinkSendText(secrets.ilinkBaseUrl, secrets.ilinkBotToken, chatId, secrets.ilinkContextToken, renderPlain(message));
+    }
+    default:
+      return { ok: false, error: `${provider} 没有会话级发送接口` };
+  }
+}
+
 // ── 测试发送：设置页「测试发送」按钮用 ──
 export async function testPush(integrationId: string, workspaceId: string): Promise<SendResult> {
   const it = await prisma.botIntegration.findFirst({ where: { id: integrationId, workspaceId } });

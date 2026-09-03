@@ -403,6 +403,37 @@ export async function actUpdateMemory(
   return { ok: true };
 }
 
+// ── 手动新增一条记忆 ──────────────────────────────────────────────
+// 此前用户只能删/改系统写的：想让 AI 记住「我的粉丝主要在三线城市」得去助手里说话、
+// 指望模型调 write_memory。自己的账号自己的记忆，该有一个直接的入口。
+//
+// 口径与「用户改写」一致（actUpdateMemory）：亲口陈述 = 高置信、立即生效；
+// 守卫只过 memoryThreat（注入形状），不过祈使句/工具否定断言——那两条是拦模型的
+// （见 lib/memory/guard.ts 文件头），用户自己写「以后都用清单体」是合法的偏好。
+// 走 writeMemory：同内容去重累加，不会因为多点一次就建两条。
+export async function actAddMemory(type: string, content: string): Promise<{ ok: boolean; error?: string }> {
+  const text = content.trim();
+  if (!text) return { ok: false, error: '记忆内容不能为空' };
+  if (text.length > 300) return { ok: false, error: '记忆内容不超过 300 字' };
+  const { MEMORY_TYPES } = await import('@/lib/constants');
+  if (!(type in MEMORY_TYPES)) return { ok: false, error: '记忆类型不对' };
+  const s = await getSession();
+  requireRole(s, 'persona.edit');
+  try {
+    await writeMemory({
+      workspaceId: s.workspaceId,
+      accountId: s.accountId || undefined,
+      type: type as keyof typeof MEMORY_TYPES,
+      content: text,
+      confidence: 0.9,
+    });
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : '保存失败' };
+  }
+  revalidatePath('/persona');
+  return { ok: true };
+}
+
 // ── 立即优化记忆：手动触发持续学习 pass（去重/生效/遗忘），返回本轮小结 ──
 // 只做可见可回退的记忆卫生，不改人设卡（人设改进只在页面给建议、由用户确认）。
 export async function actOptimizeMemory() {

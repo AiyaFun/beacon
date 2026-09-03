@@ -37,7 +37,7 @@ describe('sourceRank · 三档口径', () => {
     expect(sourceRank('plugin')).toBeGreaterThan(sourceRank('manual'));
   });
   it('各家官方适配器同档', () => {
-    for (const s of ['wechat-datacube', 'tikhub', 'youtube-official', 'twitterapi-io', 'newrank', 'bilibili-public']) {
+    for (const s of ['wechat-datacube', 'tikhub', 'youtube-official', 'twitterapi-io', 'newrank']) {
       expect(sourceRank(s)).toBe(sourceRank('tikhub'));
     }
   });

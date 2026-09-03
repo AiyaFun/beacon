@@ -87,7 +87,22 @@ export function wecomExtractXml(xml: string, tag: string): string {
 }
 
 // ── 入站：回复文本到指定用户（通过应用消息 API） ──
+//
+// 企微应用文本消息上限 2048 字节（全中文约 680 字）。超长**拆段按序发**而不是截断：
+// 此前直接整段塞，/竞对 8 条带链接、/分析 长文都会超，企微回 40058 整条丢掉，
+// 用户什么都收不到。与微信两条通道同一份 splitWechatText（600 字/段 ≤5 段）。
 export async function wecomReplyText(accessToken: string, agentId: string, userId: string, text: string): Promise<SendResult> {
+  const { splitWechatText } = await import('./wechat-text');
+  const parts = splitWechatText(text);
+  if (parts.length === 0) return { ok: true };
+  for (const content of parts) {
+    const r = await wecomSendTextOnce(accessToken, agentId, userId, content);
+    if (!r.ok) return r; // 后面的段没有前面的段没意义
+  }
+  return { ok: true };
+}
+
+async function wecomSendTextOnce(accessToken: string, agentId: string, userId: string, content: string): Promise<SendResult> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -98,7 +113,7 @@ export async function wecomReplyText(accessToken: string, agentId: string, userI
         touser: userId,
         msgtype: 'text',
         agentid: parseInt(agentId, 10),
-        text: { content: text },
+        text: { content },
       }),
       signal: ctrl.signal,
     });

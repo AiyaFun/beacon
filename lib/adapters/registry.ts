@@ -75,7 +75,7 @@ export async function fetchAllHot(): Promise<HotFetchResult[]> {
 }
 
 // 竞对适配器链：主备切换与热榜同款逐源降级。
-//   主：商业源/官方 API（TikHub 抖音/小红书 · 新榜公众号 · YouTube 官方 · twitterapi.io X · B站公开接口）
+//   主：商业源/官方 API（TikHub 抖音/小红书 · 新榜公众号 · YouTube 官方 · twitterapi.io X；B 站无服务端主源，见 competitor-real.ts）
 //   备：自建 RSSHub（方案二 · 开源自建，配 BEACON_RSSHUB_BASE_URL 才在链上；无指标，只做发新内容监控）
 //   兜底：一条真实通道都没配时才落 Mock（dev 铁律：全新 clone 零网络跑通）。
 // 注意与热榜的一个刻意差异：真实通道**配置了但全部失败**时不落 Mock 而是返回空——

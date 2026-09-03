@@ -45,6 +45,43 @@ export async function getDingtalkAccessToken(appKey: string, appSecret: string):
   }
 }
 
+// ── 定点发到**某一个**会话（群回执用）──
+//
+// 工作通知 asyncsend_v2 是「全员/按人」的广播，没有「发到某个群」这条路。
+// 群里派出的任务回执要回到**那个群**，走机器人 v1.0 接口：
+//   群聊：POST /v1.0/robot/groupMessages/send   {robotCode, openConversationId, msgKey, msgParam}
+//   单聊：POST /v1.0/robot/oToMessages/batchSend {robotCode, userIds, msgKey, msgParam}
+// robotCode 就是应用的 AppKey；openConversationId 就是回调里的 conversationId（cid… 开头）；
+// 单聊时我们记的 chatId 是 senderStaffId（见 route），按前缀区分。
+// 旧版 gettoken 换来的 access_token 在 v1.0 接口以 x-acs-dingtalk-access-token 头传。
+// ⚠️ 2026-09-02 按官方文档实现，未真机验证——机器人需开通「企业内机器人发送消息」权限。
+export async function dingtalkSendToConversation(accessToken: string, robotCode: string, chatId: string, text: string): Promise<SendResult> {
+  const isGroup = chatId.startsWith('cid');
+  const url = isGroup
+    ? 'https://api.dingtalk.com/v1.0/robot/groupMessages/send'
+    : 'https://api.dingtalk.com/v1.0/robot/oToMessages/batchSend';
+  const body = isGroup
+    ? { robotCode, openConversationId: chatId, msgKey: 'sampleText', msgParam: JSON.stringify({ content: text }) }
+    : { robotCode, userIds: [chatId], msgKey: 'sampleText', msgParam: JSON.stringify({ content: text }) };
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-acs-dingtalk-access-token': accessToken },
+      body: JSON.stringify(body),
+      signal: ctrl.signal,
+    });
+    const data = (await res.json().catch(() => ({}))) as { code?: string; message?: string; processQueryKey?: string };
+    if (!res.ok) return { ok: false, error: `钉钉机器人发送失败 HTTP ${res.status}${data.code ? ` ${data.code}` : ''}: ${data.message ?? ''}`.trim() };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : '发送失败' };
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 // ── 自建应用：通过工作通知 API 发送消息到全员 ──
 export async function sendDingtalkApp(appKey: string, appSecret: string, agentId: string, message: PushMessage): Promise<SendResult> {
   const { token, error: tokenErr } = await getDingtalkAccessToken(appKey, appSecret);

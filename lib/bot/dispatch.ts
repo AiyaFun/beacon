@@ -3,7 +3,7 @@ import { isExternalProvider } from './types';
 import { can } from '../rbac';
 import { oaIdentity, memberByOaIdentity, type OaProvider } from '../auth/oa';
 import { resolveAccount } from './accounts';
-import { beaconUrl, sendToIntegration } from './index';
+import { beaconUrl, sendToChat } from './index';
 import type { InboundCtx } from './router';
 import type { ToolContext } from '../agent/tools';
 
@@ -283,7 +283,8 @@ export async function echoRunToChat(runId: string, status: string): Promise<bool
           ? { title: `❌ 任务没跑成：${g}`, lines: [(run.error ?? '未说明原因').slice(0, 300)] }
           : { title: `✋ 任务等你确认：${g}`, lines: ['下一步会改数据或花额度，到网页里点头它才继续（群里不能确认）。'] };
 
-    const r = await sendToIntegration(run.workspaceId, ref.integrationId, {
+    // 定点回**派它的那个会话**（sendToChat），不是集成级广播——见 lib/bot/index.ts 那段注释
+    const r = await sendToChat(run.workspaceId, ref.integrationId, ref.chatId, {
       kind: 'card',
       title: body.title,
       lines: body.lines,

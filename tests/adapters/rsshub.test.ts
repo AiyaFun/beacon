@@ -37,7 +37,6 @@ const okFeed = () => ({ ok: true, status: 200, json: async () => feedPayload });
 beforeEach(() => {
   // 钉死默认态：全部真实通道关闭
   vi.stubEnv('BEACON_RSSHUB_BASE_URL', '');
-  vi.stubEnv('BEACON_BILIBILI_ENABLED', '');
   vi.stubEnv('BEACON_TIKHUB_KEY', '');
 });
 
@@ -94,7 +93,6 @@ describe('rsshub · JSON Feed 归一化', () => {
   });
 
   it('content_html 剥标签成摘要；date_published 解析为 Date', async () => {
-    vi.stubEnv('BEACON_BILIBILI_ENABLED', ''); // 只留 rsshub
     stubFetch(() => Promise.resolve(okFeed()));
     const r = await fetchCompetitorPosts('bilibili', '12345');
     expect(r.posts).toHaveLength(2);
@@ -105,20 +103,8 @@ describe('rsshub · JSON Feed 归一化', () => {
 });
 
 describe('rsshub · 主备链语义', () => {
-  it('B站公开接口失败 → 降级到 RSSHub 备源', async () => {
-    vi.stubEnv('BEACON_BILIBILI_ENABLED', '1');
-    vi.stubEnv('BEACON_RSSHUB_BASE_URL', 'http://rsshub:1200');
-    stubFetch((url) =>
-      url.includes('api.bilibili.com')
-        ? Promise.reject(new TypeError('fetch failed'))
-        : Promise.resolve(okFeed()),
-    );
-    const r = await fetchCompetitorPosts('bilibili', '12345');
-    expect(r.via).toBe('rsshub');
-    expect(r.degraded).toBe(false);
-    expect(r.posts).toHaveLength(2);
-  });
-
+  // 「B 站公开接口失败 → 降级 RSSHub」那条 2026-09-02 随 BilibiliAdapter 一起删了：
+  // B 站没有服务端主源（api.bilibili.com robots 全站 Disallow），RSSHub 就是它唯一的服务端通道。
   it('真实通道配置了但全部失败：返回空 + degraded，绝不落 Mock（防生产数据污染）', async () => {
     vi.stubEnv('BEACON_RSSHUB_BASE_URL', 'http://rsshub:1200');
     stubFetch(() => Promise.reject(new TypeError('network unreachable')));

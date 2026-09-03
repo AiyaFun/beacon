@@ -129,7 +129,11 @@ async function handleOne(integrationId: string, workspaceId: string, secrets: Bo
   const contextToken = m.context_token;
   if (!from || !contextToken) return;
 
-  await prisma.botIntegration.updateMany({ where: { id: integrationId }, data: { lastInboundAt: new Date() } }).catch(() => {});
+  // 记下最近一条的 context_token：派出去的任务跑完要回执，得有条 context 可挂（sendToChat 用）
+  secrets.ilinkContextToken = contextToken;
+  await prisma.botIntegration
+    .updateMany({ where: { id: integrationId }, data: { lastInboundAt: new Date(), secretsEnc: writeBotSecrets(secrets) } })
+    .catch(() => {});
 
   let reply: string;
   if (secrets.ilinkUserId && from !== secrets.ilinkUserId) {

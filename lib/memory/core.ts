@@ -14,7 +14,7 @@ export type MemoryType = keyof typeof MEMORY_TYPES;
 
 const ACTIVATION_HITS = 2; // 累计命中阈值
 const ACTIVATION_CONFIDENCE = 0.5;
-const MAX_INJECT = 12; // 单次注入条数硬上限
+export const MAX_INJECT = 12; // 单次注入条数硬上限（记忆页显示「注入位」用它）
 // DB 侧有界读上限：先按 confidence 降序取宽松前缀，再在 JS 里按「confidence × 时间衰减」重排。
 // 因 recencyFactor 上限为 1（衰减只降权不升权），置信度低于当前第 MAX_INJECT 名衰减分的条目
 // 不可能翻身进注入位，故取远大于 MAX_INJECT 的前缀即对正确性充分，同时给规模封顶（防全表载入）。
@@ -99,19 +99,31 @@ export async function writeMemory(params: {
  * 命中的条目不删（那是用户的数据，删要他自己删），只是不注入，并留一条日志。
  */
 function dropThreats<T extends { id: string; content: string }>(rows: T[]): T[] {
-  return rows.filter((r) => {
+  return partitionThreats(rows).kept;
+}
+function partitionThreats<T extends { id: string; content: string }>(rows: T[]): { kept: T[]; skipped: { id: string; reason: string }[] } {
+  const kept: T[] = [];
+  const skipped: { id: string; reason: string }[] = [];
+  for (const r of rows) {
     const t = memoryThreat(r.content);
-    if (t) log.warn('一条记忆长得像注入，未注入提示', { id: r.id, reason: t });
-    return !t;
-  });
+    if (t) {
+      log.warn('一条记忆长得像注入，未注入提示', { id: r.id, reason: t });
+      skipped.push({ id: r.id, reason: t });
+    } else kept.push(r);
+  }
+  return { kept, skipped };
 }
 
-// 读取生效记忆用于注入 prompt（限量）。
-// 排序分 = confidence × 时间衰减：纯按置信度排会让攒了几个月 hitCount 的老结论
-// 永远霸占 12 个注入位，新学到的东西挤不进去。衰减在 JS 里算（SQLite 排序算不了幂），
-// 但 DB 侧仍按 confidence 降序有界读（RECALL_SCAN_LIMIT）——衰减只降权不升权，宽松前缀对 top-N 充分，
-// 不必把整库 active 记忆全量载进 JS。同分再按 updatedAt 新→旧，让前缀更贴近衰减后的真实排序。
-export async function recallForInjection(workspaceId: string, accountId?: string): Promise<string[]> {
+/**
+ * 注入明细：哪些条目**真的**会带进提示、哪些被守卫跳过。记忆页用它把「已生效」和「在用」分开——
+ * active 超过 MAX_INJECT 条时，第 13 条起根本没进提示，页面上一律标「已生效·正注入」就是假话。
+ * 排序与 recallForInjection 完全同一份（后者就是它的包装）。
+ */
+export async function recallForInjectionDetailed(workspaceId: string, accountId?: string): Promise<{
+  injected: { id: string; type: string; content: string; updatedAt: Date; hitCount: number }[];
+  skipped: { id: string; reason: string }[];
+  limit: number;
+}> {
   const entries = await prisma.memoryEntry.findMany({
     where: {
       workspaceId,
@@ -122,11 +134,23 @@ export async function recallForInjection(workspaceId: string, accountId?: string
     take: RECALL_SCAN_LIMIT,
   });
   const now = Date.now();
-  return dropThreats(entries)
+  const { kept, skipped } = partitionThreats(entries);
+  const injected = kept
     .map((e) => ({ e, score: e.confidence * recencyFactor(e.updatedAt, now) }))
     .sort((a, b) => b.score - a.score || b.e.hitCount - a.e.hitCount)
     .slice(0, MAX_INJECT)
-    .map(({ e }) => memoryLine(e.type, e.content, e.updatedAt, e.hitCount));
+    .map(({ e }) => ({ id: e.id, type: e.type, content: e.content, updatedAt: e.updatedAt, hitCount: e.hitCount }));
+  return { injected, skipped, limit: MAX_INJECT };
+}
+
+// 读取生效记忆用于注入 prompt（限量）。
+// 排序分 = confidence × 时间衰减：纯按置信度排会让攒了几个月 hitCount 的老结论
+// 永远霸占 12 个注入位，新学到的东西挤不进去。衰减在 JS 里算（SQLite 排序算不了幂），
+// 但 DB 侧仍按 confidence 降序有界读（RECALL_SCAN_LIMIT）——衰减只降权不升权，宽松前缀对 top-N 充分，
+// 不必把整库 active 记忆全量载进 JS。同分再按 updatedAt 新→旧，让前缀更贴近衰减后的真实排序。
+export async function recallForInjection(workspaceId: string, accountId?: string): Promise<string[]> {
+  const { injected } = await recallForInjectionDetailed(workspaceId, accountId);
+  return injected.map((e) => memoryLine(e.type, e.content, e.updatedAt, e.hitCount));
 }
 
 // R7 记忆可见化：注入行带上「什么时候学到的 / 被验证过几次」。

@@ -64,8 +64,9 @@ describe('服务端够不着的竞对要转派给插件', () => {
   });
 
   it('🔒 服务端采得到的平台不许转派（否则插件白跑一遍已有的数据）', async () => {
-    // RSSHub 在链上时 bilibili 走得通；这里直接用一个有真实通道的平台
-    vi.stubEnv('BEACON_BILIBILI_ENABLED', '1');
+    // RSSHub 在链上时 bilibili 走得通（B 站没有别的服务端通道了，见 competitor-real.ts）
+    vi.stubEnv('BEACON_RSSHUB_BASE_URL', 'http://rsshub.test:1200');
+    vi.stubGlobal('fetch', async () => { throw new TypeError('network unreachable'); });
     await watch('bilibili');
     await installCollector();
 

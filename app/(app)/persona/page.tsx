@@ -9,6 +9,8 @@ import { Icon } from '@/components/icons';
 import { personaLearningProposals } from '@/lib/memory/optimize';
 import { PersonaEditor } from './PersonaEditor';
 import { MemoryEditor } from './MemoryEditor';
+import { MemoryAddForm } from './MemoryAddForm';
+import { recallForInjectionDetailed } from '@/lib/memory/core';
 import { VersionHistory, type VersionRow } from './VersionHistory';
 import { AccountManager } from './AccountManager';
 import { StyleAnalyzeButton } from './StyleAnalyzeButton';
@@ -54,6 +56,12 @@ export default async function PersonaPage({
 
   const persona = readPersona(account?.personaCard ?? '{}');
   const completeness = personaCompleteness(persona);
+
+  // 注入明细：哪些条目**真的**在每次生成里被带上。「已生效」≠「在用」——active 超过注入位时
+  // 第 13 条起根本没进提示；被守卫（像注入的句子）跳过的也不进。页面必须把这三态分开说。
+  const injection = await recallForInjectionDetailed(s.workspaceId, s.accountId || undefined);
+  const injectedIds = new Set(injection.injected.map((e) => e.id));
+  const skippedReason = new Map(injection.skipped.map((x) => [x.id, x.reason]));
 
   // 人设版本历史：PersonaVersion 此前只写不读，快照白存了一堆、回滚功能不存在。
   const versionRows: VersionRow[] = s.accountId
@@ -201,11 +209,13 @@ export default async function PersonaPage({
               <>
       <Card
         title="长期记忆"
-        sub={`共 ${memories.length} 条 · ${activeCount} 条已生效`}
+        sub={`共 ${memories.length} 条 · ${activeCount} 条已生效 · 注入位 ${injection.limit}，本次带上 ${injection.injected.length} 条`}
       >
-        <p className="small muted" style={{ marginTop: -6, marginBottom: 14 }}>
-          全程可见、可编辑、可删除。按置信度分级注入；推断类记忆需同类行为累计多次才会「生效」，单次观察只记录、不影响推荐。
+        <p className="small muted" style={{ marginTop: -6, marginBottom: 10 }}>
+          全程可见、可编辑、可删除。推断类记忆需同类行为累计多次才会「生效」；生效的按「置信度 × 时间衰减」排队，
+          每次生成只带前 {injection.limit} 条（标「在用」），其余标「排队中」。长得像指令的条目会被跳过，也会说破。
         </p>
+        <div style={{ marginBottom: 14 }}><MemoryAddForm /></div>
 
         {memories.length === 0 ? (
           <Empty icon="🧠" text="还没有记忆——采纳/拒绝选题、改稿、登记数据都会沉淀成记忆" />
@@ -245,6 +255,13 @@ export default async function PersonaPage({
                                 ) : (
                                   <span className="badge badge-gray">观察中，未生效</span>
                                 )}
+                                {skippedReason.has(m.id) ? (
+                                  <span className="badge badge-red" title={`守卫判定：${skippedReason.get(m.id)}。改成陈述句就会恢复注入`}>被跳过·像指令</span>
+                                ) : injectedIds.has(m.id) ? (
+                                  <span className="badge badge-blue" title="这条会带进每次生成的系统提示">在用</span>
+                                ) : m.active ? (
+                                  <span className="badge badge-gray" title={`注入位只有 ${injection.limit} 个，按置信度×时间衰减排队，这条暂时没排进去`}>排队中</span>
+                                ) : null}
                                 <span className="small muted">命中 {m.hitCount} 次</span>
                                 <span className="small muted">· {relTime(m.updatedAt)}</span>
                               </div>
@@ -275,7 +292,7 @@ export default async function PersonaPage({
       >
         <div className="grid grid-4" style={{ gap: 12, marginBottom: 12 }}>
           <Stat label="人设完善度" value={`${completeness}%`} foot={completeness >= 75 ? '已达标' : '继续完善'} />
-          <Stat label="已生效偏好" value={activePrefs.length} foot="正注入每次生成" />
+          <Stat label="在用记忆" value={injection.injected.length} foot={`注入位 ${injection.limit} · 已生效 ${activeCount}`} />
           <Stat label="长期记忆" value={memories.length} foot={`本周 +${memThisWeek}`} />
           <Stat label="素材库" value={materialCount} foot="差异化原料" href="/material" />
         </div>
@@ -287,7 +304,7 @@ export default async function PersonaPage({
         </div>
         {activePrefs.length > 0 ? (
           <>
-            <div className="small muted" style={{ marginBottom: 8 }}>已生效的偏好与结论（正在注入每次生成）</div>
+            <div className="small muted" style={{ marginBottom: 8 }}>已生效的偏好与结论（按置信度排队进注入位，标「在用」的才真带进生成）</div>
             <div className="stack" style={{ gap: 6 }}>
               {activePrefs.slice(0, 5).map((p) => (
                 <div key={p.id} className="row" style={{ gap: 8, alignItems: 'center' }}>

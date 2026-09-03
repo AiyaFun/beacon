@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import { markSeen } from '@/lib/bot/seen';
 import { log } from '@/lib/logger';
 import { readBotSecrets } from '@/lib/bot';
 import { dingtalkVerifySign, dingtalkReplyViaSession, stripDingtalkAtPrefix } from '@/lib/bot/dingtalk';
@@ -54,6 +55,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ key: string }>
   // 会话 id：群聊给 conversationId，单聊退回发送者，都没有就不记上下文（照常回话）
   const chatId = String(payload?.conversationId ?? payload?.senderStaffId ?? '');
   if (!text) return NextResponse.json({});
+  // 重投去重：钉钉回调超时会重试。对话/派任务/试采都不是幂等的。
+  const msgId = String(payload?.msgId ?? '');
+  if (msgId && !markSeen(integration.id, `dingtalk:${msgId}`)) {
+    log.info('钉钉重投的消息，已忽略', { key, msgId });
+    return NextResponse.json({});
+  }
 
   // 快速响应；处理与回复走后台
   // 身份：senderStaffId 是这个人在企业里的稳定 userid（senderId 是会话级的，换个群就变）。

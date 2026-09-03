@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
+import { markSeen } from '@/lib/bot/seen';
 import { log } from '@/lib/logger';
 import { readBotSecrets } from '@/lib/bot';
 import { parseJson } from '@/lib/json';
@@ -126,8 +127,15 @@ export async function POST(req: Request, ctx: { params: Promise<{ key: string }>
   const text = cleanText(message.content ?? '');
   if (!text) return ack();
 
+  // 重推去重：飞书 3 秒没等到 ack 会原样再推一次。对话烧额度、派任务起运行、采集试采，
+  // 都**不是**幂等的（此前这里的注释说「操作皆幂等」，不成立）。同一条 message_id 只处理一次。
+  const msgId = message.message_id as string | undefined;
+  if (msgId && !markSeen(integration.id, `feishu:${msgId}`)) {
+    log.info('飞书重推的消息，已忽略', { key, msgId });
+    return ack();
+  }
+
   // 快速 ack（飞书要求 <3s，超时会重推）；实际处理与回复走后台（常驻 Node 进程，安全）。
-  // 操作皆幂等（收录去重 / 订阅 upsert / 查询无副作用），偶发重推不会重复入库。
   void processAndReply({
     integrationId: integration.id,
     workspaceId: integration.workspaceId,

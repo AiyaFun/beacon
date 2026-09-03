@@ -174,100 +174,16 @@ export class NewRankAdapter implements CompetitorAdapter {
   }
 }
 
-// ── B站：公开接口（低风险，法务书面评估后启用；频率 ≤ 每日 1-2 次）──
+// ── B 站：**没有服务端适配器，这是刻意的** ──
 //
-// ⚠️ 2026-08-24 合规审查后改动：**不再伪装成浏览器**。
-// 原来发的是 `user-agent: Mozilla/5.0` + `referer: https://www.bilibili.com`——
-// 这两个头是「伪装成用户浏览器以绕过服务端识别」的教科书特征，在反不正当竞争诉讼里
-// 会被直接当作「规避技术措施」的证据（淘宝诉美景、微博诉脉脉两案都点过这一条）。
-// 我们抓的是公开数据、量也极小，没有任何理由去背这个证据点。
-//
-// 现在发的是标识自己身份的 UA，B 站因此**可能拒绝**这个请求。这是可以接受的结果：
-// 对方明示不欢迎自动化访问时就不该硬抓——registry 会回退到 Mock，用户侧表现为
-// 「B 站真实数据源不可用」，而不是拿到一份靠伪装换来的数据。
-//
-// ── 2026-08-24 真机实测：这条通道**现在取不到数据，三种 UA 都取不到** ──
-//   BeaconBot        → HTTP 200, code=-352「风控校验失败」
-//   Mozilla/5.0+ref  → HTTP 200, code=-403「访问权限不足」（也就是改动前同样拿不到）
-//   不带 UA          → HTTP 200, code=-403
-// 真因是路径里那个 `wbi`：这是 B 站的**接口签名机制**，URL 必须带 `w_rid`/`wts`
-// 两个由前端算法生成的签名参数，我们从来没算过。所以这个适配器不是被本次改动弄坏的，
-// 它此前就已经是死代码——只是失败得**很安静**（见下面 assertBiliOk 的注释）。
-//
-// 【为什么不去实现 wbi 签名】wbi 签名**就是** B 站的技术措施本身。
-// 本轮刚把伪装 UA 去掉，理由是「不规避目标站点的技术措施」；转头去破解它的签名算法，
-// 是同一件事更重的版本。要恢复 B 站数据源，正路是走商业数据服务商或官方开放平台，
-// 不是把签名算出来。**谁都别把这段注释删掉去实现它。**
-export const BILIBILI_UA = 'BeaconBot/1.0 (+https://beacon.iyunci.cn)';
-
-/**
- * B 站接口的失败是 **HTTP 200 + body 里 code≠0**，getJson 的 `!res.ok` 一个都拦不住。
- *
- * 不判这一下的后果不是「报错」，是**静默返回 0 条**：`data?.data?.list?.vlist ?? []`
- * 把一次失败的请求变成一个空数组，registry 那边看到的是「真实通道确认这个号没作品」
- * （emptyVia 分支），于是既不熔断、也不回退备源、也不打降级标记——
- * 用户看到的是「B 站竞对一条作品都没有」，而不是「这个数据源坏了」。
- * 同一形状在项目里出现过多次（见 lib/ingest 那几处「缺席不许当成 0」）。
- */
-function assertBiliOk(data: any): void {
-  const code = Number(data?.code);
-  if (code === 0) return;
-  const msg = String(data?.message || '未知错误');
-  // -403 / -352 是缺 wbi 签名与风控拦截，也就是本文件上方说的那件事。
-  // 原样带出去：让健康看板与台账上留下的是真实原因，不是我们编的一句话。
-  throw new Error(`B 站接口拒绝（code=${code}：${msg}）`);
-}
-
-export class BilibiliAdapter implements CompetitorAdapter {
-  readonly name = 'bilibili-public';
-  readonly kind = 'opensource' as const;
-  readonly platform = 'bilibili';
-  async fetchPosts(handle: string): Promise<CompetitorPostEntry[]> {
-    // handle = UP 主 mid
-    const url = `https://api.bilibili.com/x/space/wbi/arc/search?mid=${encodeURIComponent(handle)}&ps=15&pn=1`;
-    const data = await getJson(url, { 'user-agent': BILIBILI_UA });
-    assertBiliOk(data);
-    const list: any[] = data?.data?.list?.vlist ?? [];
-    return list.flatMap((v) => {
-      // 只认 bvid：parse-url.ts 与插件两侧的 B 站身份都是 BV 号，
-      // 用 aid 兜底会造出一条永远匹配不上 BV 记录的重复行（同一视频两条）。
-      const bvid = idOrNull(v.bvid);
-      if (!bvid) return [];
-      return [{
-        platform: 'bilibili',
-        platformItemId: bvid,
-        title: v.title ?? '',
-        summary: v.description,
-        url: `https://www.bilibili.com/video/${bvid}`,
-        publishedAt: v.created ? new Date(v.created * 1000) : undefined,
-        metrics: { views: num(v.play), comments: num(v.comment) },
-      }];
-    });
-  }
-  /**
-   * 真探一次，**不报平安**。
-   *
-   * 原来这里硬编码 `{ ok: true, detail: 'bilibili public' }`——而实测证明这条通道
-   * 一条数据都取不到。健康看板（lib/adapters/registry.ts 的 sourceHealthBoard，
-   * 显示在设置页）于是长期对用户说「正常」，这比没有健康看板更坏。
-   *
-   * 与其它适配器不同，这一个探真实接口：它没有 key、不计费、不占任何人的配额，
-   * 探一次的代价只有一个 HTTP 请求。TikHub / 新榜那几家按次计费，所以那边只验配置——
-   * 但它们的 detail 会明说「只验了配置」，不冒充连通性。
-   */
-  async health() {
-    try {
-      const data = await getJson(
-        'https://api.bilibili.com/x/space/wbi/arc/search?mid=946974&ps=1&pn=1',
-        { 'user-agent': BILIBILI_UA },
-      );
-      assertBiliOk(data);
-      return { ok: true, detail: 'B 站公开接口可用' };
-    } catch (e) {
-      return { ok: false, detail: `B 站公开接口不可用：${(e as Error).message}` };
-    }
-  }
-}
+// 2026-08-24 实测这里曾经的 BilibiliAdapter 一条数据都取不到（路径里的 wbi 是 B 站的接口签名，
+// 我们从来没算过），2026-09-02 整个删掉，理由有两层：
+//   ① `api.bilibili.com/robots.txt` 是 `Disallow: /`——就算签名问题不存在，服务端直连它
+//      也违反本项目自己的 robots 规矩（lib/web/robots.ts），没有给 B 站开例外的理由；
+//   ② wbi 签名**就是** B 站的技术措施本身。去伪装 UA 的理由是「不规避目标站点的技术措施」，
+//      转头去算签名是同一件事更重的版本。**谁都别把这段注释删掉去实现它。**
+// B 站的数据回流走两条正路：插件（extension/content/bilibili.js，用户自己浏览器里读公开主页）
+// 与自建 RSSHub 备源（lib/adapters/rsshub.ts）。tests/adapters/no-bilibili-server-fetch.test.ts 钉住。
 
 // 按平台选择真实适配器（有对应 key 才返回，否则 null → registry 回退 Mock）
 //
@@ -283,6 +199,5 @@ export function realCompetitorAdapter(platform: string): CompetitorAdapter | nul
   if (platform === 'youtube' && process.env.BEACON_YOUTUBE_API_KEY) return new YouTubeAdapter(process.env.BEACON_YOUTUBE_API_KEY);
   if (platform === 'x' && process.env.BEACON_TWITTERAPI_KEY) return new TwitterApiAdapter(process.env.BEACON_TWITTERAPI_KEY);
   if (platform === 'wechat' && process.env.BEACON_NEWRANK_KEY) return new NewRankAdapter(process.env.BEACON_NEWRANK_KEY);
-  if (platform === 'bilibili' && process.env.BEACON_BILIBILI_ENABLED === '1') return new BilibiliAdapter();
   return null;
 }
