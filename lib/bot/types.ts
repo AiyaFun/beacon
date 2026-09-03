@@ -206,4 +206,5 @@ export type InboundMessage = {
   raw?: unknown;
 };
 
-export type SendResult = { ok: boolean; error?: string };
+/** messageId：渠道回的消息 id（目前只有飞书会给）——进度卡就地编辑靠它。 */
+export type SendResult = { ok: boolean; error?: string; messageId?: string };

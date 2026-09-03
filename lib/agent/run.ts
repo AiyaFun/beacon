@@ -215,6 +215,9 @@ async function afterTransition(runId: string, from: readonly AgentRunStatus[], t
     const { echoRunToChat } = await import('../bot/dispatch');
     await echoRunToChat(runId, to).catch(() => {});
   }
+  //    进度卡（飞书）：任何状态变化都把那张卡改成当前状态（强制，不受节流）——
+  //    否则任务跑完了卡上还写着「正在跑」。
+  void import('../bot/progress').then((m) => m.updateProgressCard(runId, { force: true })).catch(() => {});
 
   // ② 我要是别人派出来的子运行，跑完了得叫醒那个正挂着等我的父运行。
   //    **挂在这里而不是各个终态写点**：终态有七八处，每处都记得叫一次是不可能的，
@@ -381,6 +384,8 @@ async function appendStep(
         ok: step.ok ?? true,
       },
     });
+    // 群里派出的运行：把那张进度卡改成「已走 N 步 · 最近：xxx」（有节流；站内派的没有卡，查一下就返回）
+    void import('../bot/progress').then((m) => m.updateProgressCard(runId)).catch(() => {});
   } catch (err) {
     const gone = await prisma.agentRun.count({ where: { id: runId } });
     if (gone > 0) throw err;

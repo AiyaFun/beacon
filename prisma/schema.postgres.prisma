@@ -1606,6 +1606,8 @@ model AgentRun {
   // 从群机器人派出来的话，记下「回哪儿」：`<provider>:<integrationId>:<chatId>`。
   // 终态/等确认时把回执发回那个群（lib/bot/dispatch.ts），/任务 /终止 也按它圈定本群的运行。
   botChatRef  String?
+  // 群里那张进度卡的消息 id（目前只有飞书给）：每一步就地更新它，而不是往群里丢新消息。
+  botMessageId String?
   answer      String? // 最终回答
   error       String?
   // 【steps 与 rounds 是两个数，别再混用】

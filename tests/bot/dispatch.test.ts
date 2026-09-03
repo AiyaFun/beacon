@@ -253,9 +253,10 @@ describe('闭环：终态回执发回派它的群', () => {
     const run = await prisma.agentRun.findFirstOrThrow();
     expect(run.status).toBe('done');
     // 回执恰好一次，发给本群的集成
-    const echoCalls = send.mock.calls.filter((c) => c[1] === 'bi1' && c[2] === 'oc_1');
+    // 派出时的进度卡（startProgressCard，「已排队」）也走 sendToChat，且是 void 的异步——
+    // 与断言的先后不定，所以只数「跑完了」那条回执，不数总调用次数
+    const echoCalls = send.mock.calls.filter((c) => c[1] === 'bi1' && c[2] === 'oc_1' && JSON.stringify(c[3]).includes('跑完了'));
     expect(echoCalls.length).toBe(1);
-    expect(JSON.stringify(echoCalls[0][3])).toContain('跑完了');
     // 🔒 回执绝不走集成级广播
     expect(broadcast).not.toHaveBeenCalled();
     // 站内通知也在（去重的锚点）

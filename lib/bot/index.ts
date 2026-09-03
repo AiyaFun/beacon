@@ -173,6 +173,23 @@ export async function sendToChat(workspaceId: string, integrationId: string, cha
   return r;
 }
 
+/**
+ * 就地编辑一条已发出的消息（进度卡）。**目前只有飞书**给消息 id 且开放编辑接口；
+ * 企微应用消息/钉钉机器人文本/微信两条通道都没有「改已发消息」这回事——
+ * 它们的运行进度只能靠终态/等待态时再发一条（echoRunToChat 已做）。
+ */
+export async function updateChatMessage(workspaceId: string, integrationId: string, messageId: string, message: PushMessage): Promise<SendResult> {
+  const it = await prisma.botIntegration.findFirst({ where: { id: integrationId, workspaceId, enabled: true } });
+  if (!it) return { ok: false, error: '集成不存在或已停用' };
+  if (it.provider !== 'feishu') return { ok: false, error: `${it.provider} 不支持编辑已发消息` };
+  const secrets = readBotSecrets(it.secretsEnc);
+  if (!it.inboundKey || !secrets.appSecret) return { ok: false, error: '飞书未配置自建应用凭据' };
+  const { feishuTenantAccessToken, feishuUpdateCard } = await import('./feishu');
+  const { token, error } = await feishuTenantAccessToken(it.inboundKey, secrets.appSecret);
+  if (!token) return { ok: false, error: `获取 tenant_access_token 失败：${error ?? ''}` };
+  return feishuUpdateCard(token, messageId, message);
+}
+
 /** 卡片在只有纯文本接口的渠道上的形态：标题 / 行 / 链接各占一行。 */
 export function renderPlain(message: PushMessage): string {
   if (message.kind === 'text') return message.text;

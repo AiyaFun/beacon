@@ -226,38 +226,39 @@ export async function feishuMentionsBot(
 }
 
 // 通过 OpenAPI 发送 PushMessage 到指定群（自建应用模式主动推送用；支持 text + interactive 卡片）。
+/** 卡片/文本 → 飞书消息体（msg_type + content）。发送与编辑共用同一份，免得两处各画一版卡。 */
+export function feishuMessageBody(message: PushMessage): { msgType: string; content: string } {
+  if (message.kind === 'text') return { msgType: 'text', content: JSON.stringify({ text: message.text }) };
+  const elements: unknown[] = message.lines.map((l) => ({
+    tag: 'div',
+    text: { tag: 'lark_md', content: l },
+  }));
+  if (message.link) {
+    elements.push({
+      tag: 'action',
+      actions: [{
+        tag: 'button',
+        text: { tag: 'plain_text', content: message.link.text },
+        url: message.link.url,
+        type: 'primary',
+      }],
+    });
+  }
+  return {
+    msgType: 'interactive',
+    content: JSON.stringify({
+      config: { wide_screen_mode: true },
+      header: { title: { tag: 'plain_text', content: message.title }, template: 'blue' },
+      elements,
+    }),
+  };
+}
+
 export async function feishuSendToChat(token: string, chatId: string, message: PushMessage): Promise<SendResult> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
   try {
-    let msgType: string;
-    let content: string;
-    if (message.kind === 'text') {
-      msgType = 'text';
-      content = JSON.stringify({ text: message.text });
-    } else {
-      const elements: unknown[] = message.lines.map((l) => ({
-        tag: 'div',
-        text: { tag: 'lark_md', content: l },
-      }));
-      if (message.link) {
-        elements.push({
-          tag: 'action',
-          actions: [{
-            tag: 'button',
-            text: { tag: 'plain_text', content: message.link.text },
-            url: message.link.url,
-            type: 'primary',
-          }],
-        });
-      }
-      msgType = 'interactive';
-      content = JSON.stringify({
-        config: { wide_screen_mode: true },
-        header: { title: { tag: 'plain_text', content: message.title }, template: 'blue' },
-        elements,
-      });
-    }
+    const { msgType, content } = feishuMessageBody(message);
     const res = await fetch('https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=chat_id', {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
@@ -265,7 +266,8 @@ export async function feishuSendToChat(token: string, chatId: string, message: P
       signal: ctrl.signal,
     });
     const json: any = await res.json().catch(() => null);
-    if (res.ok && json?.code === 0) return { ok: true };
+    // message_id 带回去：群里的任务进度卡靠它就地编辑（feishuUpdateCard）
+    if (res.ok && json?.code === 0) return { ok: true, messageId: json?.data?.message_id || undefined };
     return { ok: false, error: json?.msg || `HTTP ${res.status}` };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : '发送失败' };
@@ -354,6 +356,33 @@ export async function feishuReplyText(token: string, chatId: string, text: strin
     return { ok: false, error: json?.msg || `HTTP ${res.status}` };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : '回复失败' };
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+/**
+ * 就地更新一张已发出的卡片（PATCH /im/v1/messages/:message_id，只对 interactive 卡有效）。
+ * 群里派任务的进度卡用它：一条卡从「排队中」改到「正在跑 · 已走 N 步」再改到「跑完了」，
+ * 而不是每一步都往群里丢一条新消息。
+ */
+export async function feishuUpdateCard(token: string, messageId: string, message: PushMessage): Promise<SendResult> {
+  if (message.kind !== 'card') return { ok: false, error: '只有卡片能就地更新' };
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const { content } = feishuMessageBody(message);
+    const res = await fetch(`https://open.feishu.cn/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+      body: JSON.stringify({ content }),
+      signal: ctrl.signal,
+    });
+    const json: any = await res.json().catch(() => null);
+    if (res.ok && json?.code === 0) return { ok: true, messageId };
+    return { ok: false, error: json?.msg || `HTTP ${res.status}` };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : '更新失败' };
   } finally {
     clearTimeout(t);
   }

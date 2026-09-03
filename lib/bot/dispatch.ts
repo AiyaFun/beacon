@@ -167,6 +167,8 @@ export async function cmdDispatchPreset(workspaceId: string, ctx: InboundCtx, ar
   const { dispatchPreset } = await import('../agent/preset');
   const r = await dispatchPreset(who.ctx, { presetId: hits[0].id, origin: 'preset', botChatRef: chatRef });
   if (!r.ok) return `没派出去：${r.error}`;
+  // 进度卡：飞书上之后每一步就地更新这张卡（旁路，不等它）
+  void import('./progress').then((m) => m.startProgressCard(r.turn.runId)).catch(() => {});
   return [
     `✅ 已派出「${hits[0].title}」，${STATUS_LABEL[r.turn.status] ?? r.turn.status}。`,
     '授权按这张卡存的范围来；要你点头的操作会停下来，去网页确认（群里不能确认）。',
@@ -208,6 +210,7 @@ export async function cmdDispatchGoal(
         agentSystemPrompt: `你现在以智能体「${agent.name}」的身份承接这件事。它的职责：${agent.persona || '（未填写职责说明）'}`,
       } : {}),
     });
+    void import('./progress').then((m) => m.startProgressCard(turn.runId)).catch(() => {});
     return [
       `✅ ${agent ? `已交给「${agent.name}」，` : ''}任务已开始（${STATUS_LABEL[turn.status] ?? turn.status}）。`,
       '每一步会改数据或花额度的操作都会停下来等你去网页点头——想少点头就把这件事存成一键任务卡再 /派。',
