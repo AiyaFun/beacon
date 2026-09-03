@@ -72,6 +72,9 @@ export async function startProgressCard(runId: string): Promise<boolean> {
   try {
     const run = await prisma.agentRun.findUnique({ where: { id: runId }, select: { id: true, workspaceId: true, botChatRef: true, goal: true, status: true } });
     if (!run?.botChatRef) return false;
+    // 起卡是异步旁路：一个瞬间跑完的任务可能在这里执行时已经是终态——那时 echoRunToChat 已经/正要
+    // 发终态回执，再发一张「跑完了」的进度卡就是同一句话说两遍（dispatch 端到端用例抓到的）。
+    if (['done', 'failed', 'cancelled'].includes(run.status)) return false;
     const ref = parseRef(run.botChatRef);
     if (!ref) return false;
     const r = await sendToChat(run.workspaceId, ref.integrationId, ref.chatId, renderProgressCard(run, { steps: 0 }));
