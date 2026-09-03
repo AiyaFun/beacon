@@ -129,8 +129,8 @@ const I18N = {
       ['选题、起稿、改稿、配图、发布', '✓', '✓', '—'],
       ['看数据、竞对监控、作战报告', '✓', '✓', '—'],
       ['派 AI 任务、定时任务', '✓', '✓', '—'],
-      ['抓你自己后台的经营数据', '—', '—', '✓ 只能靠它'],
-      ['抓公众号 / 视频号竞对', '—', '—', '✓ 只能靠它'],
+      ['抓你自己后台的经营数据（视频号/抖音/小红书/B站）', '—', '—', '✓ 只能靠它'],
+      ['抓公众号 / 视频号竞对', '—', '—', '— 都做不到'],
       ['抓其他平台竞对', '✓ 服务端自动', '✓ 同左', '✓ 可补采'],
       ['独立窗口 / 托盘 / 开机自启', '—', '✓', '—'],
       ['连这台机器上的整机版', '手动输地址', '✓ 自动探测并记住', '—'],
@@ -207,8 +207,8 @@ const I18N = {
       ['Topic generation, drafting, rewriting, cover image, publishing', '✓', '✓', '—'],
       ['Analytics dashboard, competitor tracking, battle reports', '✓', '✓', '—'],
       ['Dispatch AI agents, scheduled automation tasks', '✓', '✓', '—'],
-      ['Sync private creator back-office data', '—', '—', '✓ Required'],
-      ['Scrape WeChat Official Accounts & Channels', '—', '—', '✓ Required'],
+      ['Sync private creator back-office data (Channels/Douyin/Xiaohongshu/Bilibili)', '—', '—', '✓ Required'],
+      ['Scrape WeChat Official Accounts & Channels', '—', '—', '— Not available'],
       ['Scrape other public competitor platforms', '✓ Server Auto', '✓ Same as Web', '✓ Supplemental'],
       ['Dedicated window / Tray resident / Auto-start', '—', '✓', '—'],
       ['Connect to local Appliance server on this machine', 'Manual URL', '✓ Auto-detect & remember', '—'],
@@ -254,6 +254,8 @@ interface DesktopViewProps {
   serverVersion: string;
 }
 
+import { useI18n } from '@/lib/i18n';
+
 export function DesktopView({
   manifest,
   recommended,
@@ -262,26 +264,11 @@ export function DesktopView({
   canUpdate,
   serverVersion,
 }: DesktopViewProps) {
-  const [lang, setLang] = useState<Lang>('zh');
-
-  useEffect(() => {
-    // Read preference from URL or localStorage
-    const params = new URLSearchParams(window.location.search);
-    const urlLang = params.get('lang');
-    if (urlLang === 'en' || urlLang === 'zh') {
-      setLang(urlLang);
-      return;
-    }
-    const saved = localStorage.getItem('beacon.lang');
-    if (saved === 'en' || saved === 'zh') {
-      setLang(saved);
-    }
-  }, []);
+  const { lang, setLang } = useI18n();
 
   const switchLang = (newLang: Lang) => {
     setLang(newLang);
     try {
-      localStorage.setItem('beacon.lang', newLang);
       const url = new URL(window.location.href);
       url.searchParams.set('lang', newLang);
       window.history.replaceState({}, '', url.toString());

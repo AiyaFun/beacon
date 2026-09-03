@@ -133,7 +133,7 @@ describe('三个消费点', () => {
       const live = await prisma.agentRun.findFirst({ where: { workspaceId: ctx.workspaceId, status: 'running' } });
       if (live) await appendNote(live.id, '标题要情绪化一点');
     };
-    const turn = await startAgentRun(ctx, '建个草稿');
+    const turn = await startAgentRun(ctx, '建个草稿', { authMode: 'confirm_each' });
     const runId = turn.runId;
     await settleAgentKicks();
 

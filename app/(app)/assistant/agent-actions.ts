@@ -46,12 +46,13 @@ export async function actStartAgent(goal: string, auth?: DispatchAuthValue): Pro
   try {
     const ctx = await ctxOf();
     // 【授权只认这一下点击】origin 写死 'manual'：这个 action 是**页面上的派发**，
-    // 客户端传不了别的来源。无人值守档在 startAgentRun 里会被打回 confirm_each
-    // （它只能由定时/预设配出来），所以这里即使被人塞一个 unattended 也没有用。
+    // 客户端传不了别的来源。缺省「直接跑完」（DEFAULT_AUTH），用户在派发卡上改成
+    // 「每一步先问我」或勾一批预授权时才收紧——三档之外的值一律按缺省。
+    const mode = auth?.authMode === 'preauthorized' || auth?.authMode === 'confirm_each' ? auth.authMode : 'unattended';
     const turn = await startAgentRun(ctx, goal, {
       origin: 'manual',
-      authMode: auth?.authMode === 'preauthorized' ? 'preauthorized' : 'confirm_each',
-      preauthorizedTools: auth?.preauthorizedTools ?? [],
+      authMode: mode,
+      preauthorizedTools: mode === 'preauthorized' ? (auth?.preauthorizedTools ?? []) : [],
     });
     revalidatePath('/assistant');
     return { ok: true, turn };

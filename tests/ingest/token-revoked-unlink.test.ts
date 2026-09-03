@@ -47,13 +47,12 @@ function loadSw(status: number | number[]) {
     token: 'bcn_deadbeef',
     selfAccountId: 'acc_1',
     scheduledCollect: true,
-    selfAutoCollect: true,
   };
   const local: Store = {
     competitors: [{ platform: 'x', handle: 'someone' }],
     competitorsAt: 1,
     workspace: '我的工作区',
-    selfAccounts: [{ id: 'acc_1', name: '我的公众号' }],
+    selfAccounts: [{ id: 'acc_1', name: '我的抖音号' }],
     selfAccountsAt: 1,
     lastScheduledCollectLog: { summary: '每日定时采集完成' },
     wechatThrottle: { at: 1 },
@@ -167,7 +166,7 @@ const CACHE_KEYS = keysFrom('LOCAL_KEYS_ON_UNLINK', 5);
 const SYNC_KEYS = keysFrom('SYNC_KEYS_ON_UNLINK', 2);
 
 describe('🔒 sw.js · 令牌作废后插件必须自己停手并清干净', () => {
-  it('连续 3 次 401 → 清令牌、清全部工作区缓存、停三只闹钟、弹一条说明', async () => {
+  it('连续 3 次 401 → 清令牌、清全部工作区缓存、停两只闹钟、弹一条说明', async () => {
     const t = loadSw(401);
 
     await t.ctx.refreshCompetitors();
@@ -184,7 +183,7 @@ describe('🔒 sw.js · 令牌作废后插件必须自己停手并清干净', ()
       expect(t.local[k], `${k} 没被清掉——它会在用户注销之后继续留在设备上`).toBeUndefined();
     }
     expect(t.alarmsCleared).toEqual(
-      expect.arrayContaining(['beacon-self-auto', 'beacon-scheduled-collect', 'beacon-daily']),
+      expect.arrayContaining(['beacon-scheduled-collect', 'beacon-daily']),
     );
     // 必须说话：插件突然不采了而用户不知道为什么，比继续报 401 更让人抓瞎
     expect(t.notified).toHaveLength(1);
@@ -195,7 +194,6 @@ describe('🔒 sw.js · 令牌作废后插件必须自己停手并清干净', ()
     const t = loadSw(401);
     for (let i = 0; i < 3; i++) await t.ctx.refreshCompetitors();
     expect(t.sync.scheduledCollect).toBe(false);
-    expect(t.sync.selfAutoCollect).toBe(false);
   });
 
   it('中间通过一次就把计数清零——不许靠跨周攒够 3 次偶发 401 来误清', async () => {

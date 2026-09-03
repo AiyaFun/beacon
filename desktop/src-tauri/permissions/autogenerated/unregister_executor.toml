@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-unregister-executor"
+description = "Enables the unregister_executor command without any pre-configured scope."
+commands.allow = ["unregister_executor"]
+
+[[permission]]
+identifier = "deny-unregister-executor"
+description = "Denies the unregister_executor command without any pre-configured scope."
+commands.deny = ["unregister_executor"]

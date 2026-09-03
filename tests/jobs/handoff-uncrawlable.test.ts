@@ -9,7 +9,11 @@ import { prisma } from '@/lib/db';
 // 有人订阅了竞对、一条数据都没拿到过，而系统一声不吭。
 //
 // 根因不是 bug 是**没有路**：公众号要商业源（生产没配 key），视频号没有官方接口。
-// 但插件走得通（collect_competitor 早就实现好了），定时任务从来没把活交给它。
+// 有些平台插件走得通（collect_competitor 早就实现好了），定时任务从来没把活交给它。
+//
+// ⚠️ 2026-09-03 移除公众号采集之后，**公众号与视频号插件也走不通了**（PLUGIN_COLLECTABLE
+// 里没有它们）。派一个插件做不了的活，它会交回「更新 0/0」这种看起来成功的结果——
+// 比不派更糟。所以转派的条件是「服务端够不着 **且** 插件够得着」，两者都要。
 
 const { HANDLERS } = await import('@/lib/jobs/handlers');
 const runCrawl = () => HANDLERS.crawl_competitors(undefined as never);
@@ -51,16 +55,25 @@ async function installCollector() {
 const tasks = () => prisma.browserTask.findMany({ select: { kind: true, payload: true, origin: true, status: true } });
 
 describe('服务端够不着的竞对要转派给插件', () => {
-  it('公众号/视频号采不到 → 派活给插件', async () => {
-    await watch('wechat');
+  it('服务端采不到但插件采得到（TikTok）→ 派活给插件', async () => {
+    await watch('tiktok');
     await installCollector();
 
     await runCrawl();
 
     const t = await tasks();
-    expect(t.length, '公众号竞对没被转派 —— 用户订了却永远拿不到数据').toBe(1);
+    expect(t.length, '够不着的竞对没被转派 —— 用户订了却永远拿不到数据').toBe(1);
     expect(t[0].kind).toBe('collect_competitor');
     expect(t[0].origin, '来源要标成 schedule，跑动记录里才分得清是谁派的').toBe('schedule');
+  });
+
+  it('🔒 公众号/视频号谁都够不着 → 一条都不派（派了只会交回「更新 0/0」的假成功）', async () => {
+    await watch('wechat');
+    await watch('shipinhao');
+    await installCollector();
+
+    await runCrawl();
+    expect(await tasks(), '派了一个插件做不了的活').toHaveLength(0);
   });
 
   it('🔒 服务端采得到的平台不许转派（否则插件白跑一遍已有的数据）', async () => {
@@ -75,14 +88,14 @@ describe('服务端够不着的竞对要转派给插件', () => {
   });
 
   it('🔒 没装插件就不派（任务只会堆到过期，白占队列还吓人）', async () => {
-    await watch('wechat');
+    await watch('tiktok');
     // 不装插件
     await runCrawl();
     expect(await tasks(), '没有采集端却排了活').toHaveLength(0);
   });
 
   it('🔒 每个工作区每轮封顶（采集是用户的浏览器在出力）', async () => {
-    for (let i = 0; i < 6; i++) await watch('wechat', `号${i}`);
+    for (let i = 0; i < 6; i++) await watch('tiktok', `号${i}`);
     await installCollector();
 
     await runCrawl();
@@ -92,7 +105,7 @@ describe('服务端够不着的竞对要转派给插件', () => {
   });
 
   it('🔒 跑两轮不会越堆越多（同一个活复用 pending 那条）', async () => {
-    await watch('wechat');
+    await watch('tiktok');
     await installCollector();
 
     await runCrawl();
@@ -101,10 +114,10 @@ describe('服务端够不着的竞对要转派给插件', () => {
   });
 
   it('🔒 补上服务端的 key 之后自动停手（判据不是写死的平台名单）', async () => {
-    await watch('wechat');
+    await watch('xiaohongshu');
     await installCollector();
-    // 配上公众号的商业源 key —— 服务端从此够得着，不该再麻烦用户的浏览器
-    vi.stubEnv('BEACON_NEWRANK_KEY', 'test-key');
+    // 配上小红书的商业源 key —— 服务端从此够得着，不该再麻烦用户的浏览器
+    vi.stubEnv('BEACON_TIKHUB_KEY', 'test-key');
 
     await runCrawl();
     expect(await tasks(), '配了 key 还在派活，用户会看到插件一直采一个已经采好的号').toHaveLength(0);

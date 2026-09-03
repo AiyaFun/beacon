@@ -83,11 +83,12 @@ function mount(
   return { sent, toTab, click, settle, el };
 }
 
-const WECHAT_BACKEND = 'https://mp.weixin.qq.com/cgi-bin/appmsgpublish?sub=list&token=987654';
+// 视频号后台：插件仍支持的创作者后台之一（公众号那条 2026-09-03 已整条移除）
+const SELF_BACKEND = 'https://channels.weixin.qq.com/platform/post/list';
 
 describe('🔒 SidePanel · 自有作品回填按钮（此前根本不存在）', () => {
-  it('公众号后台上按钮露出来', async () => {
-    const p = mount(WECHAT_BACKEND);
+  it('创作者后台上按钮露出来', async () => {
+    const p = mount(SELF_BACKEND);
     await p.settle();
     expect(p.el('spCollectSelf').style.display).not.toBe('none');
   });
@@ -105,7 +106,7 @@ describe('🔒 SidePanel · 自有作品回填按钮（此前根本不存在）'
   });
 
   it('点它走 beacon-ingest-self，绝不走竞对通道', async () => {
-    const p = mount(WECHAT_BACKEND);
+    const p = mount(SELF_BACKEND);
     await p.settle();
     await p.click('spCollectSelf');
     expect(p.sent.some((m) => m.type === 'beacon-ingest-self')).toBe(true);
@@ -115,7 +116,7 @@ describe('🔒 SidePanel · 自有作品回填按钮（此前根本不存在）'
 
 describe('🔒 SidePanel · 竞对按钮不得把自有后台数据写进竞对库', () => {
   it('在创作者后台点「加为竞对」→ 直接挡下，并指路到回填按钮', async () => {
-    const p = mount(WECHAT_BACKEND);
+    const p = mount(SELF_BACKEND);
     await p.settle();
     // 面板为了显示页面标题本来就会解析一次（只在本地读，不上传）——
     // 这里量的是**点击之后**有没有再去采一次，而不是有没有采过。
@@ -151,7 +152,7 @@ describe('🔒 SidePanel · 竞对按钮不得把自有后台数据写进竞对�
 // 用户看到勾，去数据看板一看什么都没有。
 describe('🔒 SidePanel · 一条都没入库时不许报成功', () => {
   it('skipped>0 而 updated+created=0 → 报警告并带上自检', async () => {
-    const p = mount(WECHAT_BACKEND, {
+    const p = mount(SELF_BACKEND, {
       ingestSelf: {
         ok: true, updated: 0, created: 0, skipped: 9,
         summary: '认出了 9 条作品，但一个指标都没读到，因此一条都没入库。',

@@ -576,76 +576,7 @@ function beaconIsNavNode(node) {
   return !!node.closest('nav, aside, header, .weui-desktop-layout__extra, .weui-desktop-menu, [class*="menu"], [class*="nav"], [class*="sidebar"]');
 }
 
-function beaconGetWechatBiz() {
-  try {
-    const u = new URL(location.href);
-    const b = u.searchParams.get('__biz') || u.searchParams.get('biz');
-    if (b) return b;
-  } catch {}
-  try {
-    if (globalThis.cgiData && globalThis.cgiData.biz) return globalThis.cgiData.biz;
-    if (globalThis.cgiData && globalThis.cgiData.__biz) return globalThis.cgiData.__biz;
-    if (globalThis.wx && globalThis.wx.commonData && globalThis.wx.commonData.biz) return globalThis.wx.commonData.biz;
-    if (globalThis.biz) return globalThis.biz;
-  } catch {}
-  const el = document.querySelector('[data-biz], [data-__biz], a[href*="__biz="]');
-  if (el) {
-    const b = el.getAttribute('data-biz') || el.getAttribute('data-__biz');
-    if (b) return b;
-    if (el.getAttribute('href')) {
-      const u = beaconUrlOf(el.getAttribute('href'));
-      if (u) {
-        const b2 = u.searchParams.get('__biz') || u.searchParams.get('biz');
-        if (b2) return b2;
-      }
-    }
-  }
-  return null;
-}
 
-// 返回 { id, via, anchor } —— 与 beaconRowIdInfo 的其它分支同形。
-// ⚠️ anchor 是这里最容易被忽略、代价却最大的一个返回值：公众号分支此前只返回 ID，
-// 于是 __beaconParse 拿不到「产出这条 ID 的那个链接」，标题只能退回按类名猜
-// （[class*="title"] / [class*="desc"] / td:first-child）——真机上就是这么把
-// 「已通知3人失败0人」抓成标题的。文章链接的文字才是标题，这是页面自己给的答案。
-function beaconWechatRowId(row, cfg) {
-  const nodes = [row, ...row.querySelectorAll('*')];
-  // 1. 先检查节点上的完整/相对 URL 属性（href, data-href, data-url, data-link, data-src）
-  for (const el of nodes) {
-    for (const attr of ['href', 'data-href', 'data-url', 'data-link', 'data-src']) {
-      const val = el.getAttribute(attr);
-      if (val) {
-        const id = cfg.idOf(val);
-        // 只有 <a href> 才算「链接的文字就是标题」；data-* 挂在容器上，它的 textContent
-        // 是整块内容，拿来当标题就成了另一种噪音。
-        if (id) return { id, via: 'wechat', anchor: attr === 'href' && el.tagName === 'A' ? el : undefined };
-      }
-    }
-  }
-
-  // 2. 收集整行中散落的离散 data 属性（如 data-appmsgid, data-sn, data-biz, data-token）
-  let mid, sn, biz, token, idx;
-  for (const el of nodes) {
-    if (!mid) mid = el.getAttribute('data-appmsgid') || el.getAttribute('data-appmsg-id') || el.getAttribute('data-mid') || el.getAttribute('data-id');
-    if (!sn) sn = el.getAttribute('data-sn');
-    if (!biz) biz = el.getAttribute('data-biz') || el.getAttribute('data-__biz');
-    if (!token) token = el.getAttribute('data-token');
-    if (!idx) idx = el.getAttribute('data-idx') || el.getAttribute('data-itemidx');
-  }
-
-  if (token && WX_TOKEN_RE.test(token)) {
-    return { id: `https://mp.weixin.qq.com/s/${token}`, via: 'wechat' };
-  }
-
-  if (!biz) biz = beaconGetWechatBiz();
-  if (!idx) idx = '1';
-
-  if (biz && mid && sn) {
-    return { id: `https://mp.weixin.qq.com/s?__biz=${biz}&mid=${mid}&idx=${idx}&sn=${sn}`, via: 'wechat' };
-  }
-
-  return { id: null, via: null };
-}
 
 // 一次采集内缓存：抠 ID 要遍历行内几百个节点的全部属性，而同一行现在会被问到三次
 // （容器过滤一次、自检一次、正式解析一次）。178 行 × 3 遍全属性扫描是能把主线程钉住的。
@@ -665,9 +596,6 @@ function beaconRowIdInfo(row, cfg) {
 // anchor（产出这条 ID 的那个 <a>）也一并带出来：它的文字必然是这篇作品的标题，
 // 比任何按类名猜标题的做法都准。
 function beaconRowIdInfoUncached(row, cfg) {
-  if (cfg.platform === 'wechat') {
-    return beaconWechatRowId(row, cfg);
-  }
   for (const a of row.querySelectorAll(cfg.linkSelector)) {
     const id = cfg.idOf(a.getAttribute('href'));
     if (id) return { id, via: 'link', anchor: a };
@@ -691,7 +619,6 @@ function beaconRowId(row, cfg) {
 
 const SPH_ID_KEYS = ['eid', 'exportId', 'export_id', 'objectId', 'object_id'];
 const SPH_ID_RE = /^[A-Za-z0-9_=-]{8,128}$/;
-const WX_TOKEN_RE = /^[A-Za-z0-9_-]{10,64}$/;
 
 function beaconUrlOf(href) {
   if (!href) return null;
@@ -805,56 +732,6 @@ function beaconScanAttrs(row, cfg) {
 // 才看得见框架状态），它会把 [DOM]（插件可用）与 [框架]（插件读不到）分开标注。
 
 // ── 公众号后台的 token：三类可达来源，按可靠性递降 ──────────────────────
-//
-// ⚠️ 真机 2026-07-29（竞对通道那次）：**插件自己开的 `/cgi-bin/home`，地址里不一定带 token**
-// ——只有用户手动点进来的页面才一定带。当时只修了 content/wechat-competitor.js 的 readToken，
-// 这一侧漏掉了：于是「每日自动回填」在同一个明明采得到数的页面上，把「地址栏没有 token」
-// 当成了「登录态已过期」→ 执行端 abort → sw.js 的 finishSelfAuto 立刻关掉标签页
-// （用户看到的就是「打开公众号后秒退、什么都没采到」），通知还反过来说是用户没登录。
-// 两条通道从此共用同一套判据，别再各修各的。
-//
-// 合规：token 只用于同域内的一次跳转，不存储、不上传、不进日志（自检里一律抹成 ***）。
-const WX_BACKEND_TOKEN_RE = /[?&;]token=(\d{6,12})\b/;
-
-function beaconWechatBackendToken(href) {
-  // 1) 地址栏（用户手动导航来的页面一定有）
-  try {
-    const t = new URL(href || location.href, location.origin).searchParams.get('token') || '';
-    if (/^\d{6,12}$/.test(t)) return t;
-  } catch {
-    /* 地址不合法就往下找 */
-  }
-  // 2) 页面里任意一条带 token= 的地址：左侧菜单/顶栏的 <a>，以及首页「已发表」那个
-  //    /cgi-bin/appmsgpublish iframe。读的是 DOM 属性，不碰 iframe 里的内容。
-  for (const el of beaconQueryAll('a[href*="token="], iframe[src*="token="], frame[src*="token="]')) {
-    const m = WX_BACKEND_TOKEN_RE.exec(el.getAttribute('href') || el.getAttribute('src') || '');
-    if (m) return m[1];
-  }
-  // 3) 内联 <script> 里的 token（后台把它写在 cgiData 里）。隔离世界读不到页面的 JS 变量，
-  //    但读得到 <script> 的**文本**——同一份数据的可达形态。
-  for (const s of beaconQueryAll('script:not([src])')) {
-    const m = /\btoken\s*[:=]\s*["']?(\d{6,12})\b/.exec(s.textContent || '');
-    if (m) return m[1];
-  }
-  return '';
-}
-
-// 取不到 token 时，「没登录」和「登录了但这一页取不到」是两件事：前者要用户去扫码，
-// 后者要用户换一个后台页面再来。指错方向就是让人白折腾——何况这条通道只有一条通知
-// 能说话，说错了就没有第二次机会。与 content/wechat-competitor.js 的 noTokenReason() 同口径。
-function beaconWechatNoRoutesInfo() {
-  // 判据只看页面自己的事实（路由 + 登录组件），不拿「没取到 token」倒推：
-  // needLogin 决定 sw.js 会不会把这一页切到前台等用户扫码，判错就是白弹一个页面给他。
-  const needLogin = /\/cgi-bin\/(loginpage|bizlogin)/.test(location.pathname)
-    || !!document.querySelector('.login__type__container, .login_container, #headimg_qrcode');
-  return {
-    needLogin,
-    reason: needLogin
-      ? '公众号后台未登录——已把登录页切到前台，请扫码登录，登录完成后会自动继续回填'
-      : '公众号后台这一页取不到 token，本轮自动回填已停止——请先手动打开公众号后台（左侧菜单可见的任意页面），再点一次「采集我的数据」',
-  };
-}
-
 const BACKENDS = {
   // ── 微信视频号 ──
   'channels.weixin.qq.com': {
@@ -879,75 +756,6 @@ const BACKENDS = {
     urlOf: (id) => `https://channels.weixin.qq.com/web/pages/feed?eid=${id}`,
   },
 
-  // ── 微信公众号 ──
-  // 口径特殊：公众号文章没有平台级数字 ID，**URL 本身就是身份**（见 parse-url.ts parseWechat）。
-  // 所以这里必须做与 parseWechat 完全一致的规范化，否则与手动登记的记录对不上。
-  'mp.weixin.qq.com': {
-    platform: 'wechat',
-    pathPrefix: '/cgi-bin', // 后台在 /cgi-bin 下；文章正文页 /s 不在此列（那是读者视角，无后台数据）
-    // /cgi-bin 前缀只说明「在后台域下」，**不说明这一页有作品数据**。首页 /cgi-bin/home、
-    // 素材 /cgi-bin/appmsg、设置页都在这个前缀下，它们根本没有作品数据表。
-    // 真机实测（2026-07-25）：停在 /cgi-bin/home 时认出 178 行，全是首页挂件
-    // （LI.weui-desktop-list__item / SECTION.item），表头是「使用位置 ×10 / 相关文章」——
-    // 自检却一路报到「抠不出作品 ID」，把人引去补选择器，方向完全错。
-    // 这里列出真正有数据表的页面，认不出就直接说「换页面」，别浪费一轮校准。
-    dataPaths: [/analysis/i, /appmsgpublish/i, /masssend/i, /datacenter/i, /statistic/i],
-    // 真机 2026-07-25 /cgi-bin/appmsgpublish：通用行选择器一条真数据行都没认出来——
-    // weui 的条目类名是 weui-desktop-mass-appmsg 这一族，里面既没有 row 也没有 item。
-    // （唯一被捞进来的页面元素是 weui-desktop-mass__status_text_arrow，还是靠「arrow 含 row」。）
-    // 这几个 hint 是从那份现场证据里读出来的，不是猜的；万一还不够，
-    // beaconStructuralRows 会按结构再兜一次，不依赖任何类名。
-    // ⚠️ 不要写 [class*="mass"]：weui 里 weui-desktop-mass__status_text（「已通知3人失败0人」
-    // 那块通知状态）也会命中，它同样含链接和数字，于是被当成一条作品行——
-    // 真机 2026-07-25 入库的 9 条记录标题全是那句状态文案，就是这么来的。
-    // 只认条目本体的类名。
-    rowHints: '[class*="appmsg"], [class*="publish"]',
-    // 每日自动回填要依次走的页面。公众号后台每个地址都要 token，**从当前页面上原样取**——
-    // 不只看地址栏：插件自己开的 /cgi-bin/home 地址里常常没有 token，但页面里有
-    //（见上面 beaconWechatBackendToken 那段真机记录）。
-    // token 只用于这一次同域跳转，不存储、不上传、不发给任何第三方（自检里也一律抹成 ***）。
-    // 顺序有讲究：先发表记录（已验证能采到阅读/在看），再内容分析（完读率与送达人数在那儿）。
-    autoRoutes(u) {
-      const token = beaconWechatBackendToken(u && u.href);
-      // 页面上三类来源都没有 token = 真的走不下去了。是「没登录」还是「这页没有」，
-      // 交给 noRoutesReason 去分辨——调用方只负责如实转述，不猜。
-      if (!token) return null;
-      const q = `&token=${encodeURIComponent(token)}&lang=zh_CN`;
-      return [
-        `https://mp.weixin.qq.com/cgi-bin/appmsgpublish?sub=list&begin=0&count=10${q}`,
-        `https://mp.weixin.qq.com/cgi-bin/appmsganalysis?action=all${q}`,
-      ];
-    },
-    noRoutesInfo: beaconWechatNoRoutesInfo,
-    // 真机 2026-07-25：用户连着三轮停在首页的「已发表」面板（t=home/index#tab=sent-panel）。
-    // 那个面板确实列着文章，看起来就像「作品数据」，但它没有完读率/送达人数——
-    // 光说「切到内容分析」不够，得给一条不依赖菜单长相的路：直接改地址栏。
-    // token 必须原样保留（后台每个地址都要它），所以只说「换前半段」，不给完整链接。
-    dataPageHint:
-      '左侧菜单「数据」→「内容分析」（作品数据），或「数据」→「用户分析」（粉丝/受众）；\n' +
-      '找不到菜单就直接改地址栏：把 home?t=home/index 换成 appmsganalysis?action=all，' +
-      '后面的 &token=... &lang=... 原样别动',
-    linkSelector:
-      'a[href*="mp.weixin.qq.com/s"], a[href*="/s/"], a[href*="/s?"], a[href*="__biz"], a[href*="sn="], a[href*="appmsgid"], a[href*="appmsg_id"], [data-href], [data-url], [data-link], [data-src], [data-appmsgid], [data-appmsg-id], [data-mid], [data-sn], [data-id]',
-    idOf(href) {
-      const u = beaconUrlOf(href);
-      if (!u || u.hostname !== 'mp.weixin.qq.com') return null;
-      const segs = u.pathname.split('/').filter(Boolean);
-      if (segs[0] === 's' && segs[1] && WX_TOKEN_RE.test(segs[1])) {
-        return `https://mp.weixin.qq.com/s/${segs[1]}`;
-      }
-      const biz = u.searchParams.get('__biz') || u.searchParams.get('biz');
-      const mid = u.searchParams.get('mid') || u.searchParams.get('appmsgid') || u.searchParams.get('appmsg_id');
-      const idx = u.searchParams.get('idx') || u.searchParams.get('itemidx') || '1';
-      const sn = u.searchParams.get('sn');
-      // 四件套齐了才是一篇确定的文章，缺任何一个都定位不到，不猜
-      if (biz && mid && idx && sn) {
-        return `https://mp.weixin.qq.com/s?__biz=${biz}&mid=${mid}&idx=${idx}&sn=${sn}`;
-      }
-      return null;
-    },
-    urlOf: (id) => id, // wechat 的 ID 就是规范化后的 URL
-  },
 
   // ── 抖音创作者后台 ──
   'creator.douyin.com': {
@@ -1518,100 +1326,3 @@ globalThis.__beaconParse = function (opts) {
 // 供 popup 判断当前页是否是受支持的自有后台（与 SELF_SUPPORTED 正则互为双保险）
 globalThis.__beaconSelfBackend = BACKENDS[location.hostname]?.platform ?? null;
 
-// ── 每日自动回填 · 执行端 ─────────────────────────────────────────────
-// ⚠️ 「这是不是自动回填的标签页」由 service worker 按 tabId 认定，内容脚本每次加载问一句。
-// **不能靠 URL 上的标记传递**：公众号入口页会用会话 Cookie 302 到带 token 的地址，
-// 重定向会把自己加的查询参数丢掉，第一跳就断了。
-// 用户平时自己浏览创作者后台时，SW 会答「不是」，这段**一行都不执行**——
-// 「默认不打扰」是这条通道的底线，不能因为加了自动化就顺手改掉手动模式的语义。
-const BEACON_AUTO_POLL_MS = 1200;
-const BEACON_AUTO_POLL_MAX = 12; // ~14 秒：后台列表是异步出数的，一上来解析必然是空的
-
-function beaconAutoSend(type, body) {
-  return new Promise((resolve) => {
-    try {
-      chrome.runtime.sendMessage({ type, ...(body || {}) }, (r) => {
-        resolve(chrome.runtime.lastError ? null : r);
-      });
-    } catch {
-      resolve(null); // 非扩展环境（如单元测试）直接当「不是自动标签页」
-    }
-  });
-}
-
-// 等页面把数据渲染出来。解析成功就立刻返回，不硬等满 14 秒。
-function beaconAutoWaitForData() {
-  return new Promise((resolve) => {
-    let tries = 0;
-    const tick = () => {
-      tries++;
-      let payload = null;
-      try { payload = globalThis.__beaconParse(); } catch { payload = null; }
-      const got = payload && ((payload.posts && payload.posts.length > 0) || payload.dailyStats || payload.audience);
-      if (got) { resolve(payload); return; }
-      if (tries >= BEACON_AUTO_POLL_MAX) { resolve(null); return; }
-      setTimeout(tick, BEACON_AUTO_POLL_MS);
-    };
-    setTimeout(tick, BEACON_AUTO_POLL_MS);
-  });
-}
-
-async function beaconAutoRun() {
-  const hello = await beaconAutoSend('beacon-self-auto-hello');
-  if (!hello || !hello.auto) return; // 普通浏览：什么都不做
-
-  const cfg = BACKENDS[location.hostname];
-  if (!cfg || !cfg.autoRoutes) {
-    await beaconAutoSend('beacon-self-auto-abort', { reason: '这个创作者后台还不支持自动回填' });
-    return;
-  }
-
-  let u;
-  try { u = new URL(location.href); } catch { return; }
-  const routes = cfg.autoRoutes(u);
-  if (!routes || routes.length === 0) {
-    // 走不下去就停手：**绝不尝试登录**（不填表单、不点按钮、不碰二维码）。
-    // ⚠️ 理由必须分得清「没登录」和「登录了但这一页取不到 token」——这条通道全程静默，
-    // 用户唯一能看到的就是这一句话，说成「登录态已过期」会把登着的人指去重新扫码。
-    // needLogin=true 时 sw.js 会把这一页切到前台交给用户，等他登录完页面自己会跳回来，
-    // 内容脚本随之重新加载、再问一次 hello，本轮从当前这一站继续（见 sw.js 的 abort 分支）。
-    const info = (typeof cfg.noRoutesInfo === 'function' && cfg.noRoutesInfo()) || {};
-    await beaconAutoSend('beacon-self-auto-abort', {
-      reason: info.reason || '创作者后台登录态已过期，请重新登录后再试（本轮自动回填已停止）',
-      needLogin: !!info.needLogin,
-    });
-    return;
-  }
-
-  const step = Number.isInteger(hello.step) ? hello.step : 0;
-  if (step >= routes.length) { await beaconAutoSend('beacon-self-auto-done'); return; }
-
-  // 入口页（/cgi-bin/home）只负责让服务端把 token 补进地址，拿到就跳当前这一站
-  const onDataPage = cfg.dataPaths ? cfg.dataPaths.some((re) => re.test(beaconRoute())) : true;
-  if (!onDataPage) { location.href = routes[step]; return; }
-
-  const payload = await beaconAutoWaitForData();
-  if (payload) await beaconAutoSend('beacon-self-auto-payload', { payload });
-
-  const adv = await beaconAutoSend('beacon-self-auto-advance');
-  const next = adv && Number.isInteger(adv.step) ? adv.step : routes.length;
-  if (next < routes.length) location.href = routes[next];
-  else await beaconAutoSend('beacon-self-auto-done');
-}
-
-// 供测试与现场排查：算出这一轮要走哪几个页面，纯函数、无副作用、不发消息。
-// token 的处理是这条通道里最敏感的一环，必须能被单独验证。
-globalThis.__beaconAutoRoutes = function (href) {
-  const cfg = BACKENDS[location.hostname];
-  if (!cfg || !cfg.autoRoutes) return null;
-  try { return cfg.autoRoutes(new URL(href || location.href)); } catch { return null; }
-};
-
-// 同上：走不下去时那句话本身也要能被单独验证——它是这条静默通道唯一的对外输出，
-// 说错方向（把「登着但这页没 token」说成「登录态过期」）比不说更糟。
-globalThis.__beaconAutoNoRoutesInfo = function () {
-  const cfg = BACKENDS[location.hostname];
-  return (cfg && typeof cfg.noRoutesInfo === 'function' && cfg.noRoutesInfo()) || null;
-};
-
-try { beaconAutoRun(); } catch { /* 自动回填出错绝不能影响手动采集 */ }

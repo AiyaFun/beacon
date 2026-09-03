@@ -14,22 +14,38 @@ import { isReadAllowed } from './read-allowlist';
 //   ② 它需要用户的登录态吗？—— 需要的话必须在隐私政策里已披露的范围内。
 //   ③ 失败了要不要重试？—— 采集类可以重试；任何会**产生对外动作**的一律不重试。
 
-export const BROWSER_TASK_KINDS = ['collect_competitor', 'collect_self', 'open_and_read'] as const;
+export const BROWSER_TASK_KINDS = ['collect_competitor', 'collect_self_profile', 'open_and_read'] as const;
 export type BrowserTaskKind = (typeof BROWSER_TASK_KINDS)[number];
 
 /**
- * 「回填自己的后台数据」目前**只支持公众号**。
+ * 【已删除的 kind：collect_self】2026-09-03 移除公众号采集时一并删掉。
  *
- * 这不是保守，是照着插件的实际能力写：extension/sw.js 的 `SELF_AUTO_ENTRY` 里只有
- * wechat 一个入口，它自己的注释写着「其它平台的入口等真机验证过再往这里加：
- * 加错了只是白开一个标签页等超时，却会让用户以为『在采』，那比不加更糟」。
- *
- * 放行别的平台 = 服务端排一个插件根本不会做的活，它会白跑到超时、重试三次、
- * 最后判失败——而用户全程以为在采。这正是本文件顶部第 ① 条要防的事。
- *
- * **加平台的顺序是：先给 SELF_AUTO_ENTRY 加入口并真机验证，再回来放宽这里。**
+ * 它唯一支持的平台是公众号：插件开用户**自己**已登录的公众号后台、换 token、站内跳两次再读数。
+ * 那条通道整条撤掉之后，这个 kind 没有任何平台可派——留着就是让服务端能排一个插件不会做的活，
+ * 正是本文件顶部第 ① 条要防的事。创作者后台的自有数据现在只能由用户自己打开后台页、
+ * 点插件侧栏「这是我的作品 · 回填数据看板」手动回填一次。
  */
-const SELF_COLLECT_PLATFORMS = ['wechat'] as const;
+
+/**
+ * 「回填自己主页上的数据」支持的平台（2026-09-03）。
+ *
+ * 这些平台没有创作者后台，自有数据就摆在自己的公开主页上——X 的浏览量对所有人可见，
+ * TikTok 主页九宫格每条封面都带播放量。插件的 `batchCollectSelf`（extension/sw.js 的
+ * SELF_COLLECT_URL）早就能按 handle 打开这些主页回填，缺的只是服务端派活这条路：
+ * 它曾与只认公众号的 collect_self 并存（那个 kind 已随公众号采集一起删除）：分成两个 kind
+ * 而不是放宽一个 enum，是因为老版本插件拿到 collect_self + platform=x 会照着公众号那套步进机
+ * 去开 mp.weixin.qq.com（它不看 platform），白开一个标签页等 90 秒超时；新 kind 老插件不认识，
+ * 会立刻交回「请更新插件」。这正是文件顶部第 ① 条要防的事。
+ *
+ * 加平台的顺序仍然是：先给 SELF_COLLECT_URL 加入口并真机验证，再回来放宽这里。
+ */
+export const SELF_PROFILE_PLATFORMS = ['x', 'tiktok'] as const;
+
+/** 用户说「回填我的 <平台>」时该派哪个 kind。null = 这个平台没有服务端能派的自有回填路。 */
+export function selfCollectKindFor(platform: string): 'collect_self_profile' | null {
+  if ((SELF_PROFILE_PLATFORMS as readonly string[]).includes(platform)) return 'collect_self_profile';
+  return null;
+}
 
 export const browserTaskPayloadSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -40,9 +56,13 @@ export const browserTaskPayloadSchema = z.discriminatedUnion('kind', [
     limit: z.number().int().min(1).max(50).default(20),
   }),
   z.object({
-    kind: z.literal('collect_self'),
-    /** 去哪个平台的创作后台回填自己的数据 */
-    platform: z.enum(SELF_COLLECT_PLATFORMS),
+    kind: z.literal('collect_self_profile'),
+    /** 去哪个平台的**自己主页**回填（见 SELF_PROFILE_PLATFORMS） */
+    platform: z.enum(SELF_PROFILE_PLATFORMS),
+    /** 记在哪个账号名下。服务端按工作区账号解析好再派，插件不再猜归属 */
+    accountId: z.string().min(1).max(64),
+    /** 主页地址由它拼（extension/sw.js SELF_COLLECT_URL）。来自 CreatorAccount.handle */
+    handle: z.string().min(1).max(128),
   }),
   z.object({
     kind: z.literal('open_and_read'),
@@ -71,7 +91,7 @@ export type BrowserTaskPayload = z.infer<typeof browserTaskPayloadSchema>;
 /** 给人看的动作名（运行中心、插件侧栏都用它）。 */
 export const KIND_LABEL: Record<BrowserTaskKind, string> = {
   collect_competitor: '去采一个竞对',
-  collect_self: '回填自己的后台数据',
+  collect_self_profile: '去自己的主页回填数据',
   open_and_read: '去读一个网页',
 };
 
@@ -86,7 +106,7 @@ export function retriable(kind: BrowserTaskKind): boolean {
   // open_and_read 也可以重试：它是纯读，多打开一次页面最多多花几秒。
   // **将来若加了「替用户在创作后台填内容」这类会产生对外动作的任务，一律返回 false**
   // ——重试一次就是多发一条。
-  return kind === 'collect_competitor' || kind === 'collect_self' || kind === 'open_and_read';
+  return kind === 'collect_competitor' || kind === 'collect_self_profile' || kind === 'open_and_read';
 }
 
 /**

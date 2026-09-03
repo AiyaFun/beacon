@@ -120,11 +120,11 @@ const TOOLS = [
   {
     name: 'beacon_collect_self',
     description:
-      '让用户的浏览器插件回填**用户本人**创作后台的数据（用他自己的登录态，进他自己的后台）。'
-      + '目前只支持 platform=wechat（公众号）。异步排队，插件在线时执行。',
+      '让用户的浏览器打开**他本人的主页**回填自有数据（自有数据就在公开主页上的平台）。'
+      + '目前支持 platform=x / tiktok。异步排队，插件在线时执行；本机浏览器可用时当场执行。',
     inputSchema: {
       type: 'object',
-      properties: { platform: { type: 'string', description: '目前只有 wechat' } },
+      properties: { platform: { type: 'string', description: '目前支持 x / tiktok' } },
       required: ['platform'],
     },
   },
@@ -199,7 +199,7 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
   // 三个浏览器动词共用同一条创建路：白名单校验、开关、监控列表归属全在服务端那侧判
   const BROWSER_CREATE: Record<string, (a: Record<string, unknown>) => Record<string, unknown>> = {
     beacon_collect_competitor: (a) => ({ kind: 'collect_competitor', competitor: String(a.competitor ?? ''), ...(a.limit ? { limit: Number(a.limit) } : {}) }),
-    beacon_collect_self: (a) => ({ kind: 'collect_self', platform: String(a.platform ?? '') }),
+    beacon_collect_self: (a) => ({ kind: 'collect_self_profile', platform: String(a.platform ?? '') }),
     beacon_read_page: (a) => ({ kind: 'open_and_read', url: String(a.url ?? '') }),
   };
   if (BROWSER_CREATE[name]) {

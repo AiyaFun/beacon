@@ -47,6 +47,25 @@ export async function hasCollector(workspaceId: string): Promise<boolean> {
   return byDevice > 0 || legacy > 0;
 }
 
+/**
+ * 这个工作区的执行器（插件 / 桌面执行器）加起来会做哪些 kind。
+ * 没自报过能力的令牌按「老版插件」算：只会最初的三种。派活前按它判，别派一个没人会做的活。
+ */
+export const LEGACY_PLUGIN_KINDS: readonly BrowserTaskKind[] = ['collect_competitor', 'open_and_read'];
+export async function collectorKinds(workspaceId: string): Promise<Set<string>> {
+  const [rows, legacy] = await Promise.all([
+    prisma.ingestToken.findMany({ where: { workspaceId, revokedAt: null }, select: { kinds: true } }),
+    prisma.workspace.count({ where: { id: workspaceId, ingestToken: { not: null } } }),
+  ]);
+  const out = new Set<string>();
+  if (legacy > 0) for (const k of LEGACY_PLUGIN_KINDS) out.add(k);
+  for (const r of rows) {
+    const ks = r.kinds ? parseJson<string[]>(r.kinds, []) : [...LEGACY_PLUGIN_KINDS];
+    for (const k of ks) out.add(k);
+  }
+  return out;
+}
+
 /** 排一个活。payload 先过 zod——白名单之外的 kind 与形状一律拒收。 */
 export async function enqueueBrowserTask(input: {
   workspaceId: string;
@@ -97,13 +116,14 @@ export async function enqueueBrowserTask(input: {
  * 两个浏览器同时来时只有一个的 count 会是 1。先 findFirst 再 update 是不行的
  *（那中间有窗口），这也是为什么这里不用 findFirst + update 的写法。
  */
-export async function claimNextTask(workspaceId: string, claimerId: string): Promise<ClaimedTask | null> {
+export async function claimNextTask(workspaceId: string, claimerId: string, allowedKinds?: readonly string[] | null): Promise<ClaimedTask | null> {
   const now = new Date();
   // 先把租约到期的放回池子：领了不还是常态，不放回就永远卡在 claimed
   await releaseExpiredLeases(now);
 
   const candidates = await prisma.browserTask.findMany({
-    where: { workspaceId, status: 'pending', expiresAt: { gt: now } },
+    // 只给领活的这个执行器会做的 kind：旧插件不该领到新 kind 然后反复「不认识」；没自报的按老三种
+    where: { workspaceId, status: 'pending', expiresAt: { gt: now }, kind: { in: [...(allowedKinds ?? LEGACY_PLUGIN_KINDS)] } },
     orderBy: { createdAt: 'asc' }, // 先排的先做
     take: 5, // 抢失败就试下一个，不用把整池子拉出来
     select: { id: true, kind: true, payload: true, accountId: true },
@@ -179,7 +199,9 @@ export async function completeTask(
     return { ok: true, status: 'done' };
   }
 
-  const canRetry = retriable(t.kind as BrowserTaskKind) && t.attempts < MAX_ATTEMPTS;
+  // 「这个版本不认识」不是偶发失败，再试三次也是同一句话——直接判死，别让 AI 执行多挂两轮
+  const unknownKind = /不认识/.test(outcome.error ?? '');
+  const canRetry = !unknownKind && retriable(t.kind as BrowserTaskKind) && t.attempts < MAX_ATTEMPTS;
   const failed = await prisma.browserTask.update({
     where: { id: t.id },
     data: {

@@ -19,7 +19,7 @@ export default defineConfig({
     isolate: true,
     // e2e/ 是 Playwright 冒烟（.spec.ts + @playwright/test），不是 vitest 单测——排除，
     // 否则 npm test 会误抓它、import 一个没装的 @playwright/test 而崩。
-    exclude: [...configDefaults.exclude, 'e2e/**'],
+    exclude: [...configDefaults.exclude, 'e2e/**', 'public/downloads/**'],
     testTimeout: 15_000,
     hookTimeout: 30_000,
     coverage: {

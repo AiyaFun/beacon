@@ -44,16 +44,14 @@ const SELF_SUPPORTED = [
   // 页面本身分不出是谁的，靠用户点哪个按钮来分（点错的防线见下方 X_SELF）。
   X_SELF_PAGE,
   // 创作者后台（本人登录态下的自有数据，含公开页拿不到的完播率/完读率）。
-  // 公众号只认 /cgi-bin 后台，不认 /s 文章正文页（那是读者视角，与自有数据无关）。
   /^https:\/\/channels\.weixin\.qq\.com\/platform\//,
-  /^https:\/\/mp\.weixin\.qq\.com\/cgi-bin\//,
   /^https:\/\/creator\.douyin\.com\//,
   /^https:\/\/creator\.xiaohongshu\.com\//,
   /^https:\/\/member\.bilibili\.com\//,
 ];
 // 创作者后台是**非公开页面**，它的数据只能走自有通道。这一组是 SELF_SUPPORTED 里
 // 「绝不可以出现在竞对通道」的那部分——公开作品页两条都能走，后台页只能走一条。
-const SELF_ONLY_BACKEND = /^https:\/\/(?:channels\.weixin\.qq\.com\/platform|mp\.weixin\.qq\.com\/cgi-bin|creator\.douyin\.com|creator\.xiaohongshu\.com|member\.bilibili\.com)\//;
+const SELF_ONLY_BACKEND = /^https:\/\/(?:channels\.weixin\.qq\.com\/platform|creator\.douyin\.com|creator\.xiaohongshu\.com|member\.bilibili\.com)\//;
 
 const isSelfPage = (url) => SELF_SUPPORTED.some((re) => re.test(url));
 const isCompetitorPage = (url) => SUPPORTED.some((re) => re.test(url)) && !SELF_ONLY_BACKEND.test(url);
@@ -302,12 +300,10 @@ async function loadCompetitors() {
 
 // ── 我的账号清单 + 一键采集 ──
 // 与竞对清单同一个形态，只是走自有通道（/api/ingest/self）。
-// 「能不能一键采」按账号如实标：X 靠 handle 开自己主页；创作者后台要登录态换 token、
-// 站内还得跳两次，那是另一套流程（sw.js runSelfAuto），一键采会顺带触发它；
+// 「能不能一键采」按账号如实标：X 靠 handle 开自己主页；创作者后台要登录态、
 // 公开作品页与 multi 账号没有「一个地址采全部」这回事，只能手动。
 function selfCollectHint(a) {
   if (a.platform === 'x') return a.handle ? { ok: true, text: '可一键采集' } : { ok: false, text: '需在账号里补 handle' };
-  if (a.platform === 'wechat') return { ok: true, text: '一键采集时后台自动回填' };
   if (a.platform === 'multi') return { ok: false, text: '多平台账号 · 请在具体作品页回填' };
   return { ok: false, text: '需打开创作者后台/作品页手动回填' };
 }
@@ -365,8 +361,7 @@ chrome.runtime.onMessage?.addListener((m) => {
       ? '已有一批采集在跑，等它结束再点'
       : `采集中 ${m.done}/${m.total}${m.current ? ` · ${m.current}` : ''}`;
   } else if (m?.type === 'batch-self-done' && selfMsg) {
-    selfMsg.textContent = `✓ ${m.total} 个账号采集完成，回填 ${m.posts} 条作品`
-      + (m.wechat ? '；公众号后台正在后台回填，完成后有系统通知' : '');
+    selfMsg.textContent = `✓ ${m.total} 个账号采集完成，回填 ${m.posts} 条作品`;
     loadSelfList();
     loadAccounts(true);
   } else if (m?.type === 'batch-progress' && batchMsg) {
@@ -374,7 +369,7 @@ chrome.runtime.onMessage?.addListener((m) => {
       ? '已有一批采集在跑，等它结束再点'
       : `采集中 ${m.done}/${m.total}${m.current ? ` · ${m.current}` : ''}`;
   } else if (m?.type === 'batch-done' && batchMsg) {
-    // notes 是被节流/上限拦下的原因（公众号那条通道会带）。静默丢掉的话，
+    // notes 是「这一页没采到数据」这类原因。静默丢掉的话，
     // 用户看到「10 个里成功 6 个」却不知道另外 4 个为什么没采。
     batchMsg.textContent = `✓ ${m.total} 个竞对，成功采集 ${m.collected} 个`
       + (m.notes?.length ? `；${m.notes.join('；')}` : '');

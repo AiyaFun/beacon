@@ -45,7 +45,7 @@ export function AgentPanel({
 }) {
   const [pending, start] = useTransition();
   const [goal, setGoal] = useState('');
-  /** 派发时的授权范围。缺省是「每一步都先问我」，与以前完全一样 */
+  /** 派发时的授权范围。缺省是「直接跑完，不逐步问我」（2026-09-03 起） */
   const [auth, setAuth] = useState<DispatchAuthValue>(DEFAULT_AUTH);
   /** 追问 / 确认时的附言。两处共用一个框：同一时刻只会出现其中一个 */
   const [note, setNote] = useState('');
@@ -150,7 +150,7 @@ export function AgentPanel({
         <div className="row" style={{ gap: 8, marginBottom: 10 }}>
           <span className="badge badge-brand"><Icon.sparkles size={13} /> 执行模式</span>
           <span className="small muted">
-            AI 会真的操作这个系统。会改数据或花钱的动作<strong>默认</strong>逐个停下来问你；也可以在开始前一次授权这次要用的那些。
+            AI 会真的操作这个系统，<strong>默认直接跑完</strong>；建发布计划、写长期记忆、配定时这几样仍会停下来等你点头。想盯着它一步步来，在下方选「每一步都先问我」。
           </span>
         </div>
 

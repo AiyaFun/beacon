@@ -2,13 +2,14 @@ import { prisma } from '../db';
 import { parseJson, toJson } from '../json';
 import { llmComplete } from '../llm/gateway';
 import { readPersona, personaPromptBlock } from '../persona';
+import { accountsContextBlock } from './context-accounts';
 import { buildMemoryContext } from '../memory/core';
 import { can } from '../rbac';
 import { createLogger } from '../logger';
 import type { ChatMessage, ToolCall } from '../llm/types';
 import {
   AGENT_TOOLS, toolByName, needsConfirm, resultForModel, toolTimeoutMs,
-  type ToolContext, type AgentTool, type RunAuth, type AuthMode,
+  type ToolContext, type AgentTool, type RunAuth, type AuthMode, DEFAULT_AUTH_MODE,
 } from './tools';
 import { toolsFor, disabledTools } from './tool-config';
 import { dispatchOrderBlock } from './roles';
@@ -267,13 +268,13 @@ function writeConfirmLine(authMode: string): string {
       + '授权范围内的直接做，范围外的仍会停下来等他点头。';
   }
   if (authMode === 'unattended') {
-    return '- 这次是无人值守执行，写操作直接做，用户不在场。'
-      + '**但**建发布计划、写长期记忆、配定时、拼新智能体这几样仍然会停下来等他回来确认。';
+    return '- 写操作（建草稿、加对标、采数据、生成选题）**直接做，不用停下来问**——用户要的就是一口气跑完。'
+      + '**但**建发布计划、写长期记忆、配定时、拼新智能体这几样仍然会停下来等他确认。';
   }
   return '- 写操作（建草稿、加对标、采数据、生成选题）会先弹给用户确认，用户同意后才真正执行。';
 }
 
-function systemPrompt(personaBlock: string, memoryBlock: string, toolNames: string[], authMode: string): string {
+function systemPrompt(personaBlock: string, memoryBlock: string, toolNames: string[], authMode: string, accountsBlock = ''): string {
   return [
     '你是「烽火台」内容创作 SaaS 里的 AI 助手，除了回答问题，你还能**直接操作这个系统**。',
     '',
@@ -332,15 +333,20 @@ function systemPrompt(personaBlock: string, memoryBlock: string, toolNames: stri
     '- 手上的数据够回答问题时就直接回答，不要每次都派活——那只会让用户等一个他不需要的采集。',
     '',
     personaBlock,
+    // 账号清单 + 插件状态：用户说「我的 X 账号」时它得知道那是哪一条、能不能派（2026-09-03）
+    accountsBlock ? '\n' + accountsBlock : '',
     memoryBlock ? '\n' + memoryBlock : '',
   ].join('\n');
 }
 
-async function loadContext(ctx: ToolContext): Promise<{ persona: string; memory: string }> {
+async function loadContext(ctx: ToolContext): Promise<{ persona: string; memory: string; accounts: string }> {
   const account = await prisma.creatorAccount.findUnique({ where: { id: ctx.accountId } });
   const persona = readPersona(account?.personaCard ?? '{}');
-  const memory = await buildMemoryContext(ctx.workspaceId, ctx.accountId).catch(() => '');
-  return { persona: personaPromptBlock(persona), memory };
+  const [memory, accounts] = await Promise.all([
+    buildMemoryContext(ctx.workspaceId, ctx.accountId).catch(() => ''),
+    accountsContextBlock({ workspaceId: ctx.workspaceId, accountId: ctx.accountId }),
+  ]);
+  return { persona: personaPromptBlock(persona), memory, accounts };
 }
 
 type RunRow = {
@@ -493,9 +499,12 @@ async function viewOf(runId: string, viewerId?: string): Promise<AgentTurn> {
  * 这笔账是划算的：用户看到的第一帧从「转圈几十秒」变成「立刻有一条任务」。
  */
 export type StartRunOptions = {
-  /** 谁发起的。api 那种在下面被**强制**回 confirm_each，见注释。 */
-  origin?: 'manual' | 'preset' | 'schedule' | 'api';
-  /** 授权档。只有页面上的派发动作、以及预设/定时的既有配置能指定它。 */
+  /**
+   * 谁发起的。api 那种在下面被**强制**回 confirm_each，见注释。
+   * bot = 群机器人里派的（/执行、自然语言）：与页面同权，缺省直接跑完。
+   */
+  origin?: 'manual' | 'preset' | 'schedule' | 'api' | 'bot';
+  /** 授权档。不传按 DEFAULT_AUTH_MODE（直接跑完）；对外 API 例外，见 resolveAuth。 */
   authMode?: AuthMode;
   /** 预授权勾定的工具名。**只在 authMode=preauthorized 时有意义**。 */
   preauthorizedTools?: readonly string[];
@@ -530,12 +539,12 @@ export async function startAgentRun(ctx: ToolContext, goal: string, opts: StartR
   // 拼错了就是让模型替我们对用户撒谎（预授权的运行里说「这一步我会先问你」然后直接做了）。
   const auth = resolveAuth(opts);
 
-  const { persona, memory } = await loadContext(ctx);
+  const { persona, memory, accounts } = await loadContext(ctx);
   const messages: ChatMessage[] = [
     {
       role: 'system',
       content:
-        systemPrompt(persona, memory, tools.map((t) => `${t.name}(${t.label})`), auth.authMode)
+        systemPrompt(persona, memory, tools.map((t) => `${t.name}(${t.label})`), auth.authMode, accounts)
         // 智能体的人设拼在最后：它是对通用助手的**补充**，不是替换——
         // 替换掉的话那几条硬规矩（不许编数据、Mock 不许假装执行）就随人设一起丢了
         + (opts.agentSystemPrompt ? `\n\n【你这次的角色】\n${opts.agentSystemPrompt}` : ''),
@@ -584,13 +593,14 @@ export async function startAgentRun(ctx: ToolContext, goal: string, opts: StartR
 function resolveAuth(opts: StartRunOptions): { authMode: AuthMode; preauthorizedTools: string[] } {
   if (opts.origin === 'api') return { authMode: 'confirm_each', preauthorizedTools: [] };
 
-  const mode: AuthMode = opts.authMode ?? 'confirm_each';
-  // 【无人值守只能由定时派出来】一键任务卡上可以存这个档，但那是给挂了定时的它准备的——
-  // 用户在页面上点那张卡的时候人就在跟前，没有理由不问他。
-  // 早先这里把 'preset' 也放行了，等于「存一张无人值守的卡，然后手点」就绕过了确认闸。
-  if (mode === 'unattended' && opts.origin !== 'schedule') {
-    return { authMode: 'confirm_each', preauthorizedTools: [] };
-  }
+  // 【2026-09-03 缺省改为直接跑完】此前缺省是 confirm_each，且 unattended 只有定时派的才放行，
+  // 页面/桌面端/群里派的活每一步写操作都要回来点头。用户拍板：「无论在群里派发任务还是在
+  // 页面桌面端，只要是任务，就要直接去完成」。于是：
+  //   · 缺省档 = unattended，页面/群/预设/定时都一样；想逐步确认的在派发卡上自己选；
+  //   · 对外 API 仍强制 confirm_each（上面那一行，另一个模型代签的风险没变）；
+  //   · 签合约那几样（发布计划/长期记忆/定时/新智能体）仍由 needsConfirm 的机制级闸拦住——
+  //     那些做完会一直生效，不随这次改动放开。
+  const mode: AuthMode = opts.authMode ?? DEFAULT_AUTH_MODE;
   // 白名单只在预授权档有意义。别的档留着它没有用处，反而会在将来改档时变成一份
   // 「谁也不记得是什么时候勾的」的授权
   const list = mode === 'preauthorized' ? [...new Set(opts.preauthorizedTools ?? [])] : [];
@@ -1288,6 +1298,38 @@ async function loop(ctx: ToolContext, runId: string): Promise<void> {
         continue;
       }
 
+      // 【它一个工具都没调，却宣称做完了 / 编了示例数据 / 让用户选路】2026-09-03 真机：
+      // 「去抓取 x 的数据」两轮零工具调用——第一轮「请稍等，我正在为您采集…您希望如何操作？」，
+      // 第二轮「数据采集已完成。以下是示例数据（不代表真实情况）：播放量 10,000…」，运行判了 done。
+      // 上面那道闸只认「写成正文的工具调用」，这种连调用形状都没有的纯编造它看不见。
+      // 判据与处置见 looksLikeFabricatedCompletion；叫不回来就判 failed——没做就是没做，
+      // 一句「示例数据」标注挡不住用户把 10,000 当成真播放量。
+      const fab = looksLikeFabricatedCompletion(answer, tools);
+      if (fab) {
+        const factNudged = messages.filter((m) => m.role === 'user' && typeof m.content === 'string'
+          && m.content.startsWith(FACT_NUDGE)).length;
+        if (factNudged < MAX_FACT_NUDGES) {
+          await appendStep(runId, ++seq, {
+            kind: 'tool_result', tool: '', args: toJson({}), ok: false,
+            result: FAB_STEP_NOTE[fab],
+          });
+          messages.push(
+            { role: 'assistant', content: answer },
+            { role: 'user', content: FACT_NUDGE + fabNudgeText(fab, tools) },
+          );
+          await patchRun(runId, 'running', { messages: capMessages(messages), steps: seq, rounds: run.rounds + 1 });
+          continue;
+        }
+        await appendStep(runId, ++seq, { kind: 'answer', result: answer.slice(0, 4000), ok: false });
+        await transition(runId, 'running', 'failed', {
+          answer,
+          steps: seq,
+          error: FAB_FAIL_ERROR[fab],
+          messages: capMessages([...messages, { role: 'assistant', content: answer }]),
+        });
+        return;
+      }
+
       await appendStep(runId, ++seq, { kind: 'answer', result: answer.slice(0, 4000) });
       await transition(runId, 'running', 'done', {
         answer,
@@ -1442,6 +1484,11 @@ export function looksLikeUnsentToolCall(text: string, tools: readonly { name: st
     /(?:^|[^\w.])functions?\.(\w+)\s*\(/g,          // functions.create_draft({...})
     /<invoke\s+name=["'](\w+)["']/g,                  // <invoke name="create_draft">
     /["']?tool(?:_name|Name)?["']?\s*[:=]\s*["'](\w+)["']/g, // {"tool": "create_draft", ...}
+    // 2026-09-03 真机又抓到一个形状：```json {"function": "list_browser_tasks"}```——
+    // 模型把「你可以用这个命令看进度」写成一个 JSON 块给用户看。"name" 只认带引号的键，
+    // 免得正文里普通的 name = xxx 赋值被当成调用
+    /["']?function(?:_name|Name)?["']?\s*[:=]\s*["'](\w+)["']/g, // {"function": "list_browser_tasks"}
+    /["']name["']\s*:\s*["'](\w+)["']/g,                          // {"name": "list_browser_tasks", "arguments": …}
   ];
   for (const re of shapes) {
     for (const m of text.matchAll(re)) if (names.has(m[1])) return true;
@@ -1462,6 +1509,53 @@ const TOOL_SYNTAX_NUDGE = '【系统·工具调用格式】';
  * 叫三次还不会用工具的模型，再叫也只是烧钱。到顶就照常收工。
  */
 const MAX_TOOL_SYNTAX_NUDGES = 2;
+
+/**
+ * 零工具调用的最终回答里，三种「报告与事实不符」的形状（2026-09-03 真机抓到，见调用处注释）：
+ *   sample         编了「示例/模拟」数据冒充结果——最坏的一种，数字会被当真
+ *   promise        把「请稍等 / 正在为您…」当成最终回答——最终回答之后没人会替它继续
+ *   route_question 问用户「走插件还是客户端」——路由由系统定（vet 会如实说派不派得出去），不该甩给用户
+ *
+ * 只在这次运行**有工具可用**时判：没有工具的纯问答里说「示例」是正常的。
+ * promise 只认短回答：一段真交付的末尾顺口一句「稍等」不该被打回。
+ */
+export function looksLikeFabricatedCompletion(
+  text: string, tools: readonly { name: string }[],
+): 'sample' | 'promise' | 'route_question' | null {
+  if (!text || tools.length === 0) return null;
+  if (/示例数据|模拟数据|不代表真实|仅为示例|虚构的数据|假设的数据|示例结果/.test(text)) return 'sample';
+  if (/(插件|客户端|本机浏览器)[\s\S]{0,200}(您希望如何|你希望如何|请告诉我您|请告诉我你|请选择|如何操作|您的选择|你的选择)/.test(text)) return 'route_question';
+  if (text.length < 600 && /请稍等|稍等片刻|正在为您|正在为你|我这就去|马上为您|马上为你/.test(text)) return 'promise';
+  return null;
+}
+
+const FACT_NUDGE = '【系统·不许谎报】';
+const MAX_FACT_NUDGES = 2;
+
+const FAB_STEP_NOTE: Record<NonNullable<ReturnType<typeof looksLikeFabricatedCompletion>>, string> = {
+  sample: '模型没有调用任何工具，却给出了「示例数据」冒充结果，已打回让它真的去做。',
+  promise: '模型把「请稍等」当成了最终回答（之后什么都不会再发生），已打回让它真的去做。',
+  route_question: '模型让用户选走插件还是客户端——路由由系统定，已打回让它直接派活。',
+};
+
+const FAB_FAIL_ERROR: typeof FAB_STEP_NOTE = {
+  sample: '模型没有调用任何工具就宣称做完了，内容是它编的示例数据。已判失败，没有任何数据入库——上面那些数字不是真的。换一个更会用工具的模型（接入与密钥 → 执行模式渠道）再派。',
+  promise: '模型只说了「请稍等」就收工了，什么都没做。已判失败。换一个更会用工具的模型（接入与密钥 → 执行模式渠道）再派。',
+  route_question: '模型一直在问你选哪条采集路由，而没有真的去派。已判失败。直接再派一次；仍然这样就换一个更会用工具的模型。',
+};
+
+function fabNudgeText(kind: NonNullable<ReturnType<typeof looksLikeFabricatedCompletion>>, tools: readonly { name: string }[]): string {
+  const dispatch = tools.some((t) => t.name === 'dispatch_browser_task') ? '（采集就调用 dispatch_browser_task）' : '';
+  const tail = `要做就**现在**用工具调用去做${dispatch}；做不了就如实说做不了、为什么、用户该做什么。不要写「请稍等」，不要编任何数字。`;
+  switch (kind) {
+    case 'sample':
+      return `你这一轮没有调用任何工具，却给出了「示例/模拟」数据。这是谎报——用户会把那些数字当真。${tail}`;
+    case 'promise':
+      return `你把「请稍等 / 正在为您…」当成了最终回答。最终回答之后什么都不会再发生，没人会替你继续。${tail}`;
+    case 'route_question':
+      return `走哪条采集路由由系统决定，不要问用户选。直接派活${dispatch}；派不出去时工具会如实返回原因（插件版本旧、需要登记桌面客户端等），你把那个原因转告用户即可。`;
+  }
+}
 
 /** 这次运行还归我推吗。用户随时可能按终止，而一批工具要跑好几分钟。 */
 async function stillRunning(runId: string): Promise<boolean> {

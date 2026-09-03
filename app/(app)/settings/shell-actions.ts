@@ -105,3 +105,35 @@ export async function actDetectCdp(): Promise<{ ok: boolean; url?: string; error
     return { ok: false, error: (e as Error).message };
   }
 }
+
+/**
+ * 「浏览器操作」一个开关（2026-09-03）。
+ *
+ * 用户的原话：「需要类似 Claude Code 一样获得 Computer use 和 Browser use 的权限设置」——
+ * 那个模型是一个开关，点了就能用，没有「先去托盘启动、再回来手填端点」这两跳。
+ * 整机版的服务就跑在用户自己的电脑上，所以服务端能自己把 Chrome 带端口拉起来（lib/browser/launch.ts），
+ * 拉起来了才写库；拉不起来（Chrome 正开着没端口 / 没装 Chrome）就如实说，**不写一个连不上的端点**。
+ * 关：直接清空，不动浏览器（他可能正在用）。
+ */
+export async function actToggleLocalBrowser(on: boolean): Promise<{ ok: boolean; url?: string; started?: boolean; error?: string }> {
+  const s = await getSession();
+  try {
+    if (!can('localBrowser')) return { ok: false, error: '这个版本不提供本机浏览器驱动' };
+    requireRole(s, 'byok.manage');
+    if (!on) {
+      await prisma.workspace.update({ where: { id: s.workspaceId }, data: { browserCdpUrl: null } });
+      revalidatePath('/settings');
+      return { ok: true };
+    }
+    const { ensureLocalBrowser } = await import('@/lib/browser/launch');
+    const r = await ensureLocalBrowser();
+    if (!r.ok) return { ok: false, error: r.error };
+    const v = vetCdpUrl(r.url);
+    if (!v.ok) return { ok: false, error: v.error };
+    await prisma.workspace.update({ where: { id: s.workspaceId }, data: { browserCdpUrl: v.url } });
+    revalidatePath('/settings');
+    return { ok: true, url: v.url!, started: r.started };
+  } catch (e) {
+    return { ok: false, error: (e as Error).message };
+  }
+}

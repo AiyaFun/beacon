@@ -33,7 +33,7 @@ function unauthorized() {
  * POST /api/v1/browser-tasks —— 排一个浏览器任务。
  * body: { kind, competitor?, platform?, url?, limit? }
  *   - kind=collect_competitor：competitor 可以是监控列表里的 id、主页 handle 或名字（精确匹配）
- *   - kind=collect_self：platform（目前只有 wechat）
+ *   - kind=collect_self_profile：platform（目前支持 x / tiktok）
  *   - kind=open_and_read：url（必须在域白名单里，且工作区开过「让插件替我读网页」）
  */
 export async function POST(req: Request) {
@@ -77,7 +77,7 @@ export async function POST(req: Request) {
   }
 
   const body = (await req.json().catch(() => ({}))) as {
-    kind?: unknown; competitor?: unknown; platform?: unknown; url?: unknown; limit?: unknown;
+    kind?: unknown; competitor?: unknown; platform?: unknown; url?: unknown; limit?: unknown; account?: unknown;
   };
   const kind = typeof body.kind === 'string' ? body.kind : '';
   if (!(BROWSER_TASK_KINDS as readonly string[]).includes(kind)) {
@@ -104,12 +104,16 @@ export async function POST(req: Request) {
     platform: typeof body.platform === 'string' ? body.platform : '',
     url: typeof body.url === 'string' ? body.url : '',
     limit: typeof body.limit === 'number' ? body.limit : undefined,
+  }, {
+    // 对外调用面只排队、不走本机浏览器：MCP 那头是另一个模型，当场驱动用户的 Chrome 不该由它触发
+    preferAccountId: auth.ctx.accountId,
+    accountRef: typeof body.account === 'string' ? body.account : '',
   });
   if (!vetted.ok) return NextResponse.json({ ok: false, error: vetted.error }, { status: 400 });
 
   const r = await enqueueBrowserTask({
     workspaceId: auth.ctx.workspaceId,
-    accountId: auth.ctx.accountId,
+    accountId: vetted.accountId ?? auth.ctx.accountId,
     payload: vetted.payload,
     origin: 'api',
     createdBy: auth.ctx.memberId,

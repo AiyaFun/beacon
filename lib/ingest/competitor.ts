@@ -31,11 +31,13 @@ export async function workspaceByIngestToken(token: string | null | undefined) {
   return r ? r.workspace : null;
 }
 
-// 插件能采的平台。wechat 与其它五个不同：公众号没有公开主页，插件不是「打开竞对主页顺手采」，
-// 而是开**用户自己**的公众号后台、用当前登录态调接口拿公开图文列表
-//（extension/content/wechat-competitor.js）。所以它的 competitorHomeUrl 是 null 却仍然可采——
-// 消费方按 url 判断可采性会把它漏掉，一律以本集合为准。
-export const PLUGIN_COLLECTABLE = new Set(['bilibili', 'douyin', 'xiaohongshu', 'x', 'youtube', 'wechat', 'tiktok']);
+// 插件能采的平台：都是「打开竞对的公开主页顺手采」这一种形态。
+//
+// ⚠️ 公众号**不在此列**（2026-09-03 移除）。它没有公开主页，此前那条路是开用户**自己**已登录的
+// 公众号后台、用当前登录态调后台的非官方查询接口——风险落在用户自己的号上。整条通道已经删掉，
+// 公众号竞对数据只走服务端商业数据源（见 lib/adapters/competitor-real.ts 的 NewRank）与
+// 用户自己导出的文章导入（lib/ingest/wechat-export.ts）。
+export const PLUGIN_COLLECTABLE = new Set(['bilibili', 'douyin', 'xiaohongshu', 'x', 'youtube', 'tiktok']);
 
 export { competitorHomeUrl };
 
@@ -128,12 +130,14 @@ export type IngestResult =
   | { ok: false; error: string; code: 'not_found' | 'not_subscribed' };
 
 /**
- * 公众号没有公开主页，插件是在**用户自己的后台**里采的；其余平台是在公开主页上采的。
- * 通道决定台账里那句「这批是怎么来的」，也决定它受哪套频率约束——调用方没表态时按平台推断，
- * 别让台账里出现「不知道哪来的」这一类。
+ * 竞对数据都是在公开主页上采的（插件唯一的竞对通道）。通道决定台账里那句「这批是怎么来的」，
+ * 调用方没表态时按此推断，别让台账里出现「不知道哪来的」这一类。
+ *
+ * plugin_backend 仍然存在，但只属于**自有数据**那条路（用户自己的创作者后台），
+ * 不会由竞对回传落进来。
  */
-export function defaultChannelFor(platform: string): CollectionChannel {
-  return platform === 'wechat' ? 'plugin_backend' : 'plugin_home';
+export function defaultChannelFor(_platform: string): CollectionChannel {
+  return 'plugin_home';
 }
 
 export async function ingestCompetitorData(

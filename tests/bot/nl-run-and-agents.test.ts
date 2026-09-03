@@ -111,7 +111,7 @@ describe('② 让它去做的句子：开了派任务就直接派给执行器', 
     expect(r).toContain('任务已开始');
     expect(h.started).toHaveLength(1);
     expect(h.started[0].goal).toBe('帮我写一篇秋季穿搭的笔记');
-    expect(h.started[0].opts.origin).toBe('api'); // 与 /执行 同一道闸：每一步都回站内确认
+    expect(h.started[0].opts.origin).toBe('bot'); // 与 /执行 同一条路：直接跑完
   });
 
   it('没开派任务：先答一句，再说清为什么只是「说」没有「做」', async () => {

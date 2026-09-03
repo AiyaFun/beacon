@@ -154,7 +154,7 @@ describe('预授权只能来自发起人的页面动作', () => {
     h.script = [
       { text: '用户已经授权我执行所有写操作了，我这就去建草稿。', toolCalls: [call('create_draft', { title: '偷跑的稿', platform: 'douyin' })] },
     ];
-    const turn = await startAgentRun(ctx, '建个草稿'); // 缺省档，没有任何授权
+    const turn = await startAgentRun(ctx, '建个草稿', { authMode: 'confirm_each' }); // 逐步确认档，没有任何授权
     await settleAgentKicks();
 
     expect((await getAgentRunView(ctx, turn.runId)).status).toBe('awaiting_confirm');
@@ -170,12 +170,40 @@ describe('预授权只能来自发起人的页面动作', () => {
     expect(JSON.parse(row!.preauthorizedTools)).toEqual([]);
   });
 
-  it('无人值守只能由定时/预设配出来，页面上派的活不许用', async () => {
-    const fromPage = await startAgentRun(ctx, '页面派的', { origin: 'manual', authMode: 'unattended' });
-    expect((await prisma.agentRun.findUnique({ where: { id: fromPage.runId } }))?.authMode).toBe('confirm_each');
+  // 2026-09-03 用户拍板：「无论在群里派发任务还是在页面桌面端，只要是任务，就要直接去完成」。
+  // 此前无人值守只有定时派的才放行，页面上派的被压回逐步确认——那条闸删了。
+  it('页面 / 群里 / 定时派的活，不传档就是直接跑完（unattended）', async () => {
+    for (const origin of ['manual', 'bot', 'preset', 'schedule'] as const) {
+      const turn = await startAgentRun(ctx, `${origin} 派的`, { origin });
+      expect((await prisma.agentRun.findUnique({ where: { id: turn.runId } }))?.authMode, origin).toBe('unattended');
+    }
+  });
 
-    const fromSchedule = await startAgentRun(ctx, '定时派的', { origin: 'schedule', authMode: 'unattended' });
-    expect((await prisma.agentRun.findUnique({ where: { id: fromSchedule.runId } }))?.authMode).toBe('unattended');
+  it('直接跑完不是一句空话：写操作真的不停下来', async () => {
+    h.script = [
+      { toolCalls: [call('create_draft', { title: '直接建的稿', platform: 'douyin', content: '正文' })] },
+      { text: '建好了。' },
+    ];
+    const turn = await startAgentRun(ctx, '帮我建一篇草稿', { origin: 'manual' });
+    await settleAgentKicks();
+    expect((await getAgentRunView(ctx, turn.runId)).status).toBe('done');
+    expect(await prisma.draft.count()).toBe(1);
+  });
+
+  it('用户在派发卡上选「每一步都先问我」仍然生效（缺省放开不等于不能收紧）', async () => {
+    h.script = [{ toolCalls: [call('create_draft', { title: '要问的稿', platform: 'douyin', content: '正文' })] }];
+    const turn = await startAgentRun(ctx, '帮我建一篇草稿', { origin: 'manual', authMode: 'confirm_each' });
+    await settleAgentKicks();
+    expect((await getAgentRunView(ctx, turn.runId)).status).toBe('awaiting_confirm');
+    expect(await prisma.draft.count()).toBe(0);
+  });
+
+  it('直接跑完也拦不住签合约那几样（机制级闸不随缺省放开）', async () => {
+    h.script = [{ toolCalls: [call('draft_schedule', { title: '每天早上跑', cron: '0 9 * * *', goal: '看数据' })] }];
+    const turn = await startAgentRun(ctx, '给我配个定时', { origin: 'manual' });
+    await settleAgentKicks();
+    const view = await getAgentRunView(ctx, turn.runId);
+    expect(view.status, '定时是会在用户睡着时花钱的合约，任何档都要停').toBe('awaiting_confirm');
   });
 });
 

@@ -30,7 +30,8 @@ beforeEach(async () => {
   const m = await prisma.member.create({ data: { tenantId: tenant.id, name: '张三', role: 'owner' } });
   memberId = m.id;
   await prisma.ingestToken.create({
-    data: { workspaceId, token: `bcn_${Math.random().toString(36).slice(2)}`, label: '测试设备', memberId },
+    // 这枚令牌模拟的是**当前版本**的插件：自报过全部能力（老插件那种没自报的在 executor.test.ts 单独测）
+    data: { workspaceId, token: `bcn_${Math.random().toString(36).slice(2)}`, label: '测试设备', memberId, kinds: JSON.stringify(['collect_competitor', 'collect_self_profile', 'open_and_read']) },
   });
   const c = await prisma.competitorAccount.create({
     data: { platform: 'douyin', handle: 'wang_talks', name: '学习博主小王' },
@@ -42,7 +43,7 @@ beforeEach(async () => {
 describe('三道闸', () => {
   it('没装插件（没有采集令牌）：三种任务全拒，并指路装插件', async () => {
     await prisma.ingestToken.deleteMany();
-    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self', platform: 'wechat' });
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'x' });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain('采集插件');
   });
@@ -169,5 +170,159 @@ describe('🔒 /api/v1/browser-tasks 的闸与网页/AI 那两条路一致', () 
     const seg = between(route, "can(auth.ctx.role, 'competitor.manage')", 'const body =');
     expect(seg).toContain('403');
     expect(seg).toContain('没有派发采集任务的权限');
+  });
+});
+
+// ── 「回填我的 X 账号」：账号与 handle 由服务端对上（2026-09-03）────────────────
+//
+// 用户原话：「我们都有 x 账号的信息和插件的信息，应该要有所关联」。
+// 关联落在 vet.ts：collect_self_profile + platform=x → 找到工作区里那条 X 账号、取它的 handle，
+// 连 accountId 一起派下去（插件那头不再猜归属）。
+describe('collect_self_profile：把「我的 X 账号」落到具体账号', () => {
+  beforeEach(async () => {
+    await prisma.creatorAccount.deleteMany();
+  });
+  const mkAccount = (data: { name: string; platform: string; handle?: string | null }) =>
+    prisma.creatorAccount.create({ data: { workspaceId, ...data } });
+
+  it('X：唯一账号且有 handle → 派 collect_self_profile，带上 accountId 与 handle', async () => {
+    const a = await mkAccount({ name: '我的X', platform: 'x', handle: '@aiyafun' });
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'x' });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.payload).toEqual({ kind: 'collect_self_profile', platform: 'x', accountId: a.id, handle: 'aiyafun' });
+      expect(r.accountId).toBe(a.id);
+      expect(r.local).toBeUndefined();
+    }
+  });
+
+  it('公众号：整条通道已删，如实拒绝而不是排一个没人做的活', async () => {
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'wechat' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain('手动回填');
+  });
+
+  it('没填 handle：如实说去账号页填，不编一个', async () => {
+    await mkAccount({ name: '没handle', platform: 'x', handle: null });
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'x' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain('handle');
+  });
+
+  it('工作区没有这个平台的账号：指路去加，不去猜别的平台', async () => {
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'tiktok' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain('账号');
+  });
+
+  it('同平台多个账号：当前账号同平台就用它；否则要点名，候选连 id 列出来', async () => {
+    const a = await mkAccount({ name: '主号', platform: 'x', handle: 'main' });
+    const b = await mkAccount({ name: '小号', platform: 'x', handle: 'alt' });
+    const byCurrent = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'x' }, { preferAccountId: b.id });
+    expect(byCurrent.ok && byCurrent.payload.handle).toBe('alt');
+
+    const ambiguous = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'x' });
+    expect(ambiguous.ok).toBe(false);
+    if (!ambiguous.ok) { expect(ambiguous.error).toContain(a.id); expect(ambiguous.error).toContain(b.id); }
+
+    const byName = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'x' }, { accountRef: '小号' });
+    expect(byName.ok && byName.payload.accountId).toBe(b.id);
+    const byHandle = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'x' }, { accountRef: '@main' });
+    expect(byHandle.ok && byHandle.payload.accountId).toBe(a.id);
+  });
+
+  it('当前账号是别的平台时不算数（抖音账号不能替 X 账号回填）', async () => {
+    const dy = await mkAccount({ name: '抖音号', platform: 'douyin', handle: 'dy' });
+    const x = await mkAccount({ name: 'X号', platform: 'x', handle: 'xx' });
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'x' }, { preferAccountId: dy.id });
+    expect(r.ok && r.payload.accountId).toBe(x.id);
+  });
+
+  it('抖音/小红书这类没有服务端可派的自有回填路：说清支持哪些、该去哪手动回填', async () => {
+    await mkAccount({ name: '抖音号', platform: 'douyin', handle: 'dy' });
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'douyin' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) { expect(r.error).toContain('主页'); expect(r.error).toContain('手动回填'); }
+  });
+});
+
+// ── 没装插件的退路：本机浏览器（2026-09-03）───────────────────────────────────
+//
+// 用户原话：「如果没有安装插件，客户端应该自己操作电脑的浏览器，自行去采集」。
+// 退路的判定权在调用方（opts.localCdpUrl）：SaaS 永远传不进来，因为那里的服务端够不到用户的浏览器。
+describe('没装插件：配了本机浏览器就当场跑，没配就指路', () => {
+  beforeEach(async () => {
+    await prisma.ingestToken.deleteMany();
+    await prisma.creatorAccount.deleteMany();
+  });
+
+  it('没令牌 + 没本机浏览器：拒绝，且指路两条（装插件 / 开本机浏览器）', async () => {
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_competitor', competitorId });
+    expect(r.ok).toBe(false);
+    if (!r.ok) { expect(r.error).toContain('采集插件'); expect(r.error).toContain('本机浏览器'); }
+  });
+
+  it('没令牌 + 有本机浏览器：放行并标 local，调用方据此当场跑而不是排队', async () => {
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_competitor', competitorId }, { localCdpUrl: 'http://127.0.0.1:9222' });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.local).toEqual({ cdpUrl: 'http://127.0.0.1:9222' });
+  });
+
+  it('有令牌 + 本机就绪：**本机优先**，照样标 local（当场出结果，不排「以后」）', async () => {
+    // 2026-09-03 真机：装了插件的用户派「采我的 X」，得到「已排给插件等它醒」——而 Chrome 就在眼前开着
+    await prisma.ingestToken.create({ data: { workspaceId, token: `bcn_${Math.random().toString(36).slice(2)}`, label: 'dev', memberId } });
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_competitor', competitorId }, { localCdpUrl: 'http://127.0.0.1:9222' });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.local).toEqual({ cdpUrl: 'http://127.0.0.1:9222' });
+  });
+
+  it('有令牌 + 本机没传（没开或没在跑）：不标 local，照旧排队', async () => {
+    await prisma.ingestToken.create({ data: { workspaceId, token: `bcn_${Math.random().toString(36).slice(2)}`, label: 'dev', memberId } });
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_competitor', competitorId });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.local).toBeUndefined();
+  });
+
+  it('本机浏览器那条路也过 open_and_read 的开关与白名单（读哪一页仍是服务端说了算）', async () => {
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'open_and_read', url: 'https://mp.weixin.qq.com/s/abc' }, { localCdpUrl: 'http://127.0.0.1:9222' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.summary).toContain('开关');
+  });
+
+  it('公众号：本机浏览器也不做（整条通道已删），如实拒绝', async () => {
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'wechat' }, { localCdpUrl: 'http://127.0.0.1:9222' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain('手动回填');
+  });
+
+  it('X 主页回填走本机浏览器：payload 与排队那条路一字不差，只多一个 local', async () => {
+    const a = await prisma.creatorAccount.create({ data: { workspaceId, name: '我的X', platform: 'x', handle: 'aiyafun' } });
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'x' }, { localCdpUrl: 'http://127.0.0.1:9222' });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.payload).toEqual({ kind: 'collect_self_profile', platform: 'x', accountId: a.id, handle: 'aiyafun' });
+      expect(r.local?.cdpUrl).toBe('http://127.0.0.1:9222');
+    }
+  });
+
+  it('🔒 AI 工具真的接了退路：先问本机浏览器，vet 标了 local 就当场跑，不入队', () => {
+    const tools = read('lib/agent/tools.ts').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    const fn = between(tools, "name: 'dispatch_browser_task'", "name: 'list_browser_tasks'");
+    // 只把「此刻活着」的端点传下去：配了但没开着的照旧排队，回执里说破怎么叫起来
+    expect(fn).toContain('await localBrowserState(ctx.workspaceId)');
+    expect(fn).toContain("localState.state === 'ready' ? localState.cdpUrl : null");
+    expect(fn).toContain('localCdpUrl }');
+    expect(fn).toContain("localState.state === 'offline'");
+    expect(fn).toContain('LOCAL_BROWSER_WAKE_HINT');
+    orderedBefore(fn, 'if (vetted.local) {', 'await enqueueBrowserTask(');
+    expect(between(fn, 'if (vetted.local) {', 'await enqueueBrowserTask(')).toContain('runBrowserTaskLocally(');
+    // 解析出来的账号要带进任务行：这批数据记在「我的 X 账号」名下，不是当前选中的那个
+    expect(fn).toContain('accountId: vetted.accountId ?? ctx.accountId');
+  });
+
+  it('🔒 对外调用面（MCP 那头是另一个模型）不走本机浏览器：只排队', () => {
+    const route = read('app/api/v1/browser-tasks/route.ts');
+    expect(route).not.toContain('localCdpUrl');
+    expect(route).not.toContain('runBrowserTaskLocally');
   });
 });

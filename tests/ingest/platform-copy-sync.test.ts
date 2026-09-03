@@ -21,9 +21,10 @@ const read = (p: string) =>
 
 // 这几串**本来就该窄**，逐条写清理由（不写理由不许加进来）
 const EXEMPT = new Map<string, string>([
-  // 创作者后台是另一套页面，与「公开页能不能采」是两件事：视频号/公众号没有公开主页，
+  // 创作者后台是另一套页面，与「公开页能不能采」是两件事：视频号没有公开主页，
   // 而 X/YouTube/TikTok 压根没有独立的创作者后台域名。
-  ['视频号/公众号/抖音/小红书/B站', '创作者后台清单，与公开页平台集合本就不同'],
+  //（公众号后台 2026-09-03 起插件不再匹配，已从这串里去掉。）
+  ['视频号/抖音/小红书/B站', '创作者后台清单，与公开页平台集合本就不同'],
 ]);
 
 /** 平台在用户可见文案里的叫法（与 lib/constants.ts 的 PLATFORMS.name 同源，公众号例外见下） */
@@ -38,9 +39,8 @@ const LABEL: Record<string, string> = {
 };
 
 // 「B站/抖音/…」这种斜杠连写的枚举串
-// 视频号也列进来：它不在 PLUGIN_COLLECTABLE 里（没有公开主页），但只有认得它，
-// 「视频号/公众号/抖音/小红书/B站」这串才会被整体匹配到、从而命中下面的豁免；
-// 否则正则会从「公众号」切一刀，豁免键对不上。
+// 视频号/公众号也列进来：它们不在 PLUGIN_COLLECTABLE 里（没有公开主页，插件也不进它们的后台采），
+// 但只有认得它们，「视频号/抖音/小红书/B站」这类串才会被整体匹配到、从而命中下面的豁免。
 const ENUM_RE = /(?:B站|抖音|小红书|YouTube|X|TikTok|公众号|视频号)(?:\/(?:B站|抖音|小红书|YouTube|X|TikTok|公众号|视频号)){2,}/g;
 
 const FILES = [
@@ -52,9 +52,8 @@ const FILES = [
 
 describe('用户可见的平台枚举文案不许漏平台', () => {
   it('🔒 每条「A/B/C…」枚举都覆盖了插件能采的全部公开平台', () => {
-    // 公众号没有公开主页，「在某某页面上使用采集」这类句子本来就不该把它算进去，
-    // 所以判据只要求**公开页平台**列全；公众号是否提及由各处按语义决定。
-    const publicPlatforms = [...PLUGIN_COLLECTABLE].filter((p) => p !== 'wechat');
+    // PLUGIN_COLLECTABLE 现在全是公开页平台（公众号 2026-09-03 移出）。
+    const publicPlatforms = [...PLUGIN_COLLECTABLE];
     expect(publicPlatforms.length, 'PLUGIN_COLLECTABLE 里公开页平台少于 5 个？先确认是不是下线了')
       .toBeGreaterThanOrEqual(5);
 
@@ -79,7 +78,7 @@ describe('用户可见的平台枚举文案不许漏平台', () => {
   //（视频号/公众号这类没有公开主页的）。全由公开页平台组成的串只能是「漏了」，不可能是「本来就窄」。
   // 没有这条，任何人都可以把一条漏平台的文案原样塞进 EXEMPT 让守卫闭嘴。
   it('🔒 豁免不能拿来消音：每条豁免都必须确实是「另一类清单」', () => {
-    const publicLabels = new Set([...PLUGIN_COLLECTABLE].filter((p) => p !== 'wechat').map((p) => LABEL[p]));
+    const publicLabels = new Set([...PLUGIN_COLLECTABLE].map((p) => LABEL[p]));
     for (const [key, reason] of EXEMPT) {
       expect(reason.trim().length, `豁免「${key}」没写理由`).toBeGreaterThan(8);
       const hasOutsider = key.split('/').some((label) => !publicLabels.has(label));

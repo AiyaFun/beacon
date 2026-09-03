@@ -6,6 +6,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { activeHref, groupHasActive, type NavGroup } from '@/lib/nav';
 import { Icon } from './icons';
+import { useI18n } from '@/lib/i18n';
 
 // 侧栏：**分组 + 逐个板块列出**（用户 2026-08-19 明确要求沿用这个效果）。
 //
@@ -26,6 +27,7 @@ export function NavList({ nav, onNavigate }: { nav: NavGroup[]; onNavigate?: () 
   const pathname = usePathname();
   const active = activeHref(nav, pathname);
   const [manual, setManual] = useState<Record<string, boolean>>({});
+  const { lang, dict } = useI18n();
 
   useEffect(() => {
     try {
@@ -46,11 +48,20 @@ export function NavList({ nav, onNavigate }: { nav: NavGroup[]; onNavigate?: () 
     }
   }
 
+  function getGroupTitle(rawTitle: string): string {
+    if (!rawTitle) return '';
+    if (lang === 'zh') return rawTitle;
+    if (rawTitle === '内容板块') return dict.nav.groups.content;
+    if (rawTitle === '设置') return dict.nav.groups.settings;
+    return rawTitle;
+  }
+
   return (
     <nav>
       {nav.map((group) => {
         const hasActive = groupHasActive(group, pathname);
         const open = manual[group.title] ?? (!group.collapsed || hasActive);
+        const displayTitle = getGroupTitle(group.title);
         return (
           <div className="nav-group" key={group.title}>
             {group.collapsed ? (
@@ -60,26 +71,29 @@ export function NavList({ nav, onNavigate }: { nav: NavGroup[]; onNavigate?: () 
                 aria-expanded={open}
                 onClick={() => toggle(group.title, !open)}
               >
-                <span>{group.title}</span>
+                <span>{displayTitle}</span>
                 <Icon.chevron size={13} className={`nav-chevron${open ? ' open' : ''}`} />
               </button>
             ) : (
               // 空标题 = 扁平一列，不渲染分组头（任务台主入口就是这样，见 lib/shell.ts）
-              group.title ? <div className="nav-group-title">{group.title}</div> : null
+              displayTitle ? <div className="nav-group-title">{displayTitle}</div> : null
             )}
             {open &&
               group.items.map((item) => {
                 const IconCmp = Icon[item.icon];
+                const navInfo = dict.nav.items[item.href as keyof typeof dict.nav.items];
+                const displayLabel = navInfo ? navInfo.label : item.label;
+                const displayHint = navInfo && navInfo.hint ? navInfo.hint : item.hint;
                 return (
                   <Link
                     href={item.href}
                     key={item.href}
                     className={`nav-item${item.href === active ? ' active' : ''}`}
-                    title={item.hint}
+                    title={displayHint}
                     onClick={onNavigate}
                   >
                     <IconCmp className="ic" />
-                    <span>{item.label}</span>
+                    <span>{displayLabel}</span>
                     {item.badge && <span className="nav-badge">{item.badge}</span>}
                   </Link>
                 );
@@ -91,24 +105,15 @@ export function NavList({ nav, onNavigate }: { nav: NavGroup[]; onNavigate?: () 
   );
 }
 
+import { SidebarBrand } from './SidebarBrand';
+
 export function Sidebar({ nav, footer }: { nav: NavGroup[]; footer?: React.ReactNode }) {
-  // pinBottom 的组（设置与支持）钉到最底部，与账号区挨着——都是「装一次就不动」的东西，
-  // 不跟每天要点的板块抢上半屏（2026-08-26 用户要求）
   const main = nav.filter((g) => !g.pinBottom);
   return (
     <aside className="sidebar">
-      <div className="brand">
-        <Image src="/logo.png" alt="烽火台" width={36} height={36} className="brand-logo-img" />
-        <div>
-          <div className="brand-name">烽火台</div>
-          <div className="brand-sub">跨平台内容作战室</div>
-        </div>
-      </div>
-      {/* 与任务台同构：中间滚动、账号区钉底（见 globals.css 的 .sidebar-scroll） */}
+      <SidebarBrand />
       <div className="sidebar-scroll">
         <NavList nav={main} />
-        {/* 「设置」不在这儿渲染了：2026-08-26 起它收进底部账号菜单
-            （components/SidebarUser.tsx），由 TenantShell 传过去 */}
       </div>
       {footer}
     </aside>

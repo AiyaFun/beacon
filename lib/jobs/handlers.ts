@@ -661,26 +661,32 @@ export const HANDLERS: Record<JobName, JobHandler> = {
  * 也就是说有人订阅了竞对、一条数据都没拿到过，而系统一声不吭。
  *
  * 根因不是 bug 而是**没有路**：公众号要 NewRank 之类的商业源（生产没配 key），
- * 视频号根本没有官方内容接口。这两条路服务端永远走不通，但**插件走得通**——
+ * 视频号根本没有官方内容接口。有些平台服务端走不通但**插件走得通**——
  * 它在用户自己已登录的浏览器里读公开页面，`collect_competitor` 早就实现好了，
  * 只是定时任务从来没把活交给它。
  *
- * 三道闸，少一道都会变成骚扰：
+ * 四道闸，少一道都会变成骚扰或空承诺：
  *   ① 只派服务端确实够不着的（serverCanCrawl 说了算，补了 key 会自动停手）
- *   ② 这个工作区得真装了插件（没装的话任务只会堆到过期，白占队列还吓人）
- *   ③ 每个工作区每轮封顶——采集是用户浏览器在出力，一次塞十几个活等于占着他的机器
+ *   ② **插件真能采的才派**（PLUGIN_COLLECTABLE）。2026-09-03 移除公众号采集后，
+ *      公众号与视频号两条路插件也走不通了——不加这道闸就会派一个插件做不了的活，
+ *      它会交回「更新 0/0」这种**看起来成功**的结果，比不派更糟。
+ *   ③ 这个工作区得真装了插件（没装的话任务只会堆到过期，白占队列还吓人）
+ *   ④ 每个工作区每轮封顶——采集是用户浏览器在出力，一次塞十几个活等于占着他的机器
  */
 const HANDOFF_PER_WORKSPACE = 3;
 
 async function handOffUncrawlable(workspaceId: string): Promise<number> {
   const { serverCanCrawl } = await import('../adapters/registry');
+  const { PLUGIN_COLLECTABLE } = await import('../ingest/competitor');
   const { hasCollector, enqueueBrowserTask } = await import('../browser-task');
 
   const items = await prisma.watchlistItem.findMany({
     where: { workspaceId },
     select: { competitorId: true, competitor: { select: { platform: true } } },
   });
-  const stuck = items.filter((i) => i.competitor && !serverCanCrawl(i.competitor.platform));
+  const stuck = items.filter(
+    (i) => i.competitor && !serverCanCrawl(i.competitor.platform) && PLUGIN_COLLECTABLE.has(i.competitor.platform),
+  );
   if (stuck.length === 0) return 0;
 
   // 闸②放在这里而不是循环外：没有竞对卡住的工作区不必白查一次令牌表

@@ -290,11 +290,10 @@ describe('订阅清单（每日提醒/竞对清单弹窗数据源）', () => {
       collectable: true,
       url: 'https://www.douyin.com/user/MS4wLjABAAAA-x',
     });
-    // 公众号是唯一「可采但没有主页链接」的平台：它不走「打开竞对主页顺手采」，而是开用户
-    // **自己**的公众号后台调接口（extension/content/wechat-competitor.js）。所以消费方判断
-    // 可采性只能看 collectable，不能看 url——按 url 过滤会让公众号整个消失。
+    // 公众号：没有公开主页，插件也不再进它的后台采（2026-09-03 整条移除）。
+    // 订阅项仍在清单里，但如实标成采不了——藏起来用户会以为没订阅上。
     const wxItem = list.find((c) => c.platform === 'wechat');
-    expect(wxItem).toMatchObject({ collectable: true, url: null });
+    expect(wxItem).toMatchObject({ collectable: false, url: null });
   });
 
   it('competitorHomeUrl 三平台拼接正确，其余返回 null', () => {

@@ -136,6 +136,10 @@ model IngestToken {
   // 最后一次鉴权成功的时间。**节流写入**（见 lib/ingest/token.ts TOUCH_INTERVAL_MS）：
   // 每条回传都更新它，等于给每个采集请求平白加一次写库
   lastUsedAt  DateTime?
+  // 这枚令牌背后的执行器会做哪些浏览器任务（JSON 数组，如 ["collect_competitor","collect_self_profile"]）。
+  // 由插件/桌面执行器每次领活时用 x-beacon-ingest-kinds 头自报；null = 没报过 = 老版插件（只会最初三种）。
+  // 派活前按它判：别把一个执行器不认识的 kind 派下去——2026-09-03 真机：新 kind 派给旧插件，反复「不认识」到判死。
+  kinds       String?
   // 非空 = 已吊销。不删行——用户要看得到「这台设备是什么时候、因为什么被收回的」
   revokedAt   DateTime?
   revokedNote String?

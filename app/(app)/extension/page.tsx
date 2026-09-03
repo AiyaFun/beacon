@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { DesktopExecutorCard } from '@/components/DesktopExecutorCard';
 import { Card, Stat, Empty, Fold } from '@/components/ui';
 
 import { Icon } from '@/components/icons';
@@ -209,6 +210,9 @@ export default async function ExtensionPage() {
       {/* 填令牌是**所有人必经**的一步（不填插件认不出工作区），所以独占一行、排在前面。
           「开发者模式加载」只有走 zip 的人需要，折进 Fold——这一页此前 8 张卡平铺，
           新用户第一眼分不出哪几步是自己必须做的。 */}
+      {/* 桌面客户端里：不装插件也能采（只在 Tauri 壳里渲染） */}
+      <DesktopExecutorCard />
+
       <Card title="填入采集令牌" sub="装好插件后这一步才能回传数据" style={{ marginBottom: 16 }}>
           <div className="stack" style={{ gap: 10 }}>
             <p className="small muted" style={{ lineHeight: 1.7 }}>

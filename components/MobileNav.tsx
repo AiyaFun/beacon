@@ -7,11 +7,14 @@ import { Icon } from './icons';
 import { NavList } from './Sidebar';
 import type { NavGroup } from '@/lib/nav';
 
+import { useI18n } from '@/lib/i18n';
+
 // 720px 以下的抽屉式导航：汉堡按钮 + 遮罩 + 左滑入侧栏。
 // 桌面端三个元素都被 CSS 默认隐藏（.nav-burger/.drawer/.drawer-overlay），不参与布局。
 export function MobileNav({ nav }: { nav: NavGroup[] }) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
+  const { lang } = useI18n();
 
   // 点导航项跳转后自动收起，避免遮罩留在新页面上
   useEffect(() => {
@@ -48,7 +51,7 @@ export function MobileNav({ nav }: { nav: NavGroup[] }) {
       <button
         type="button"
         className="nav-burger"
-        aria-label={open ? '关闭导航菜单' : '打开导航菜单'}
+        aria-label={open ? (lang === 'en' ? 'Close menu' : '关闭导航菜单') : (lang === 'en' ? 'Open menu' : '打开导航菜单')}
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
       >
@@ -60,20 +63,19 @@ export function MobileNav({ nav }: { nav: NavGroup[] }) {
           </svg>
         )}
       </button>
-      <div className={`drawer-overlay${open ? ' open' : ''}`} onClick={() => setOpen(false)} aria-hidden="true" />
+      <div className="drawer-overlay" style={{ display: open ? 'block' : 'none' }} onClick={() => setOpen(false)} aria-hidden="true" />
       <aside
         className={`drawer${open ? ' open' : ''}`}
         aria-hidden={!open}
-        // 点中导航项就收起——点的是当前页时 pathname 不变，上面的 effect 关不掉它
         onClick={(e) => {
           if ((e.target as HTMLElement).closest('a')) setOpen(false);
         }}
       >
         <div className="brand">
-          <Image src="/logo.png" alt="烽火台" width={36} height={36} className="brand-logo-img" />
+          <Image src="/logo.png" alt={lang === 'en' ? 'Beacon' : '烽火台'} width={36} height={36} className="brand-logo-img" />
           <div>
-            <div className="brand-name">烽火台</div>
-            <div className="brand-sub">跨平台内容作战室</div>
+            <div className="brand-name">{lang === 'en' ? 'Beacon' : '烽火台'}</div>
+            <div className="brand-sub">{lang === 'en' ? 'Content Ops Deck' : '跨平台内容作战室'}</div>
           </div>
         </div>
         <NavList nav={nav} />

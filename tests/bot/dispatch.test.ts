@@ -8,7 +8,7 @@ import { prisma } from '@/lib/db';
 // 【最不能松的四条，与 lib/bot/dispatch.ts 文件头一一对应】
 // ① 默认开：dispatch 与其他命令一样吃「空=全开」的祖荫——身份闸+站内确认已经两道关卡了；
 // ② 身份闸：没绑企业应用身份的群成员一条任务都派不出去（群是共享空间）；
-// ③ 授权收口：/执行 走 origin:'api'（强制 confirm_each），/派 用卡上的合同——
+// ③ 授权收口：/执行 走 origin:'bot'（缺省直接跑完，与页面同权），/派 用卡上的合同——
 //    群里没有确认通道，发布类操作必然停在 awaiting_confirm；
 // ④ 圈地：/任务 /终止 只看 botChatRef 等于本群的运行，碰不到站内/别的群派的。
 
@@ -128,15 +128,17 @@ describe('③ 授权收口与真实派发', () => {
     await withMember('editor');
   });
 
-  it('/执行：origin=api、authMode 被强制成 confirm_each、botChatRef 记回本群', async () => {
+  it('/执行：origin=bot、直接跑完（unattended）、botChatRef 记回本群', async () => {
     h.script = [{ text: '看完了，一切正常。' }];
     const reply = await handleInbound('w1', '/执行 看看我最近的数据', GROUP);
     expect(reply).toContain('✅ 任务已开始');
-    expect(reply).toContain('确认');
+    expect(reply).toContain('直接跑完');
 
     const run = await prisma.agentRun.findFirstOrThrow();
-    expect(run.origin).toBe('api');
-    expect(run.authMode).toBe('confirm_each'); // 群通道与对外 API 同待遇，没资格更宽
+    expect(run.origin).toBe('bot');
+    // 2026-09-03 用户拍板：群里派的活也直接完成。此前走 origin:'api' 被强制成每步确认。
+    expect(run.authMode).toBe('unattended');
+    expect(run.origin, '群通道绝不能再走 api 那条强制确认的路').not.toBe('api');
     expect(run.botChatRef).toBe(REF);
     expect(run.goal).toBe('看看我最近的数据');
 

@@ -31,7 +31,7 @@ export type AgentConfig = {
   tools: string[];
   /** 这次最多烧几次模型调用。不填按套餐档。 */
   callBudget?: number;
-  /** 缺省授权档。**仍然要过 startAgentRun 的那几道闸**（无人值守只能由定时/预设配）。 */
+  /** 缺省授权档。**仍然要过 startAgentRun 的那几道闸**（对外 API 强制逐步确认；子运行不得宽于父）。 */
   defaultAuthMode?: AuthMode;
 };
 

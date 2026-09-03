@@ -374,6 +374,7 @@ describe('停采闸：四条路一条都不能漏', () => {
   const GATED = [
     ['lib/scrape/recipe.ts', '建采集配方'],
     ['lib/browser/local.ts', '本机浏览器驱动'],
+    ['lib/browser/local-collect.ts', '本机浏览器采平台主页'],
     ['app/api/ingest/recipe/route.ts', '插件回传'],
     ['lib/clip/index.ts', '服务端直抓正文'],
   ] as const;

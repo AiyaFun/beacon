@@ -99,11 +99,17 @@ export const viewport: Viewport = {
   themeColor: '#0f1626',
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
-  const jsonLdGraph = generateKnowledgeGraphJsonLd(siteUrl);
+import { I18nProvider } from '@/lib/i18n';
+import { getServerLang } from '@/lib/i18n/server';
+
+export default async function RootLayout({ children }: { children: React.ReactNode }) {
+  const [initialLang, jsonLdGraph] = await Promise.all([
+    getServerLang(),
+    Promise.resolve(generateKnowledgeGraphJsonLd(siteUrl)),
+  ]);
 
   return (
-    <html lang="zh-CN">
+    <html lang={initialLang === 'en' ? 'en' : 'zh-CN'}>
       <head>
         <script
           type="application/ld+json"
@@ -111,9 +117,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body>
-        <ChunkErrorRecovery />
-        <DesktopClientProbe />
-        {children}
+        <I18nProvider initialLang={initialLang}>
+          <ChunkErrorRecovery />
+          <DesktopClientProbe />
+          {children}
+        </I18nProvider>
       </body>
     </html>
   );

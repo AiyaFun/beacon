@@ -222,8 +222,16 @@ async fn check_and_prompt_update(app: &tauri::AppHandle) {
     }
 }
 
+mod executor;
+
 fn main() {
     tauri::Builder::default()
+        .manage(executor::ExecutorState::default())
+        .invoke_handler(tauri::generate_handler![
+            executor::register_executor,
+            executor::unregister_executor,
+            executor::executor_status
+        ])
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
@@ -300,6 +308,8 @@ fn main() {
             // 一键更新（2026-09-01）：启动后台默默查一次，有新版才打扰。
             // 查失败一律静默——弹「检查更新失败」只会教会用户忽略弹窗；
             // 而这台机器可能整月不重启壳，所以每 6 小时再看一眼。
+            // 采集执行器（2026-09-03）：登记过就每分钟领一次活；没登记不发任何请求
+            executor::start_loop(app.handle().clone());
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 loop {

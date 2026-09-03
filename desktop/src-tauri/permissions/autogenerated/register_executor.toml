@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-register-executor"
+description = "Enables the register_executor command without any pre-configured scope."
+commands.allow = ["register_executor"]
+
+[[permission]]
+identifier = "deny-register-executor"
+description = "Denies the register_executor command without any pre-configured scope."
+commands.deny = ["register_executor"]

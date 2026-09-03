@@ -50,20 +50,38 @@ describe('白名单：没注册的动作就是做不了', () => {
 describe('服务端不许排一个插件不会做的活', () => {
   const sw = fs.readFileSync(path.join(ROOT, 'extension/sw.js'), 'utf8');
 
-  it('collect_self 只放行插件真有入口的平台', async () => {
-    // extension/sw.js 的 SELF_AUTO_ENTRY 里只有 wechat。放行别的平台 = 插件白开一个标签页
-    // 等超时、重试三次判失败，而用户全程以为在采
-    expect((await enq({ kind: 'collect_self', platform: 'wechat' })).ok).toBe(true);
-    for (const p of ['douyin', 'xiaohongshu', 'bilibili', 'x']) {
+  it('collect_self 已随公众号采集一起删除——服务端不许再排这个 kind', async () => {
+    // 它唯一支持的平台是公众号（插件开用户自己的后台步进采）。整条通道 2026-09-03 撤掉后，
+    // 这个 kind 没有任何平台可派；留着就是能排一个插件不会做的活。
+    for (const p of ['wechat', 'douyin', 'xiaohongshu', 'bilibili', 'x']) {
       expect((await enq({ kind: 'collect_self', platform: p })).ok, `${p} 不该放行`).toBe(false);
     }
+    expect(sw, '插件里还留着公众号后台那条路').not.toMatch(/mp\.weixin\.qq\.com/);
   });
 
-  it('插件那张 SELF_AUTO_ENTRY 真的只有 wechat——放宽白名单前先给它加入口', () => {
-    const block = sw.slice(sw.indexOf('const SELF_AUTO_ENTRY'), sw.indexOf('const SELF_AUTO_TIMEOUT_MS'));
-    expect(block).toMatch(/wechat:/);
-    // 这条会在有人给插件加了入口时变红，提醒回来放宽 kinds.ts —— 那正是该做的事
-    expect(block.match(/^\s{2}\w+:/gm) ?? [], '插件加了新入口，回 kinds.ts 放宽 SELF_COLLECT_PLATFORMS').toHaveLength(1);
+  it('collect_self_profile：只放行插件 SELF_COLLECT_URL 里有入口的平台，且必须带账号与 handle', async () => {
+    const good = await enq({ kind: 'collect_self_profile', platform: 'x', accountId: 'acc1', handle: 'aiyafun' });
+    expect(good.ok).toBe(true);
+    expect((await enq({ kind: 'collect_self_profile', platform: 'tiktok', accountId: 'acc1', handle: 'me' })).ok).toBe(true);
+    for (const p of ['wechat', 'douyin', 'xiaohongshu', 'bilibili']) {
+      expect((await enq({ kind: 'collect_self_profile', platform: p, accountId: 'acc1', handle: 'h' })).ok, `${p} 不该放行`).toBe(false);
+    }
+    // 没有账号/handle 的不许入队：插件那头不再猜归属，也拼不出主页地址
+    expect((await enq({ kind: 'collect_self_profile', platform: 'x', handle: 'h' })).ok).toBe(false);
+    expect((await enq({ kind: 'collect_self_profile', platform: 'x', accountId: 'acc1' })).ok).toBe(false);
+  });
+
+  it('插件那张 SELF_COLLECT_URL 真的有 x 与 tiktok——SELF_PROFILE_PLATFORMS 只能是它的子集', async () => {
+    const { SELF_PROFILE_PLATFORMS } = await import('@/lib/browser-task/kinds');
+    const block = sw.slice(sw.indexOf('const SELF_COLLECT_URL'), sw.indexOf('function selfCollectUrl'));
+    for (const p of SELF_PROFILE_PLATFORMS) expect(block, `插件没有 ${p} 的主页入口`).toMatch(new RegExp(`^\\s{2}${p}:`, 'm'));
+  });
+
+  it('collect_self_profile 在插件里核对 handle，对不上一条都不回填', () => {
+    const fn = sw.slice(sw.indexOf('async function collectSelfProfileTask'), sw.indexOf('/**\n * 打开一个网页、把正文读回来'));
+    expect(fn).toMatch(/norm\(payload\.handle\) !== norm\(handle\)/);
+    expect(fn).toContain('accountId: task.accountId || task.payload.accountId');
+    expect(fn).toContain('active: false');
   });
 
   it('插件认识白名单里的每一种 kind', () => {
@@ -77,25 +95,25 @@ describe('服务端不许排一个插件不会做的活', () => {
     expect(fn).toMatch(/还不认识/);
   });
 
-  it('异步收尾那条不许在启动时就交活——否则「开了个标签页」会被记成最终结果', () => {
+  it('每条活都当场交回结果——没有「先报成功、真实结果稍后再说」的分支', () => {
+    // 曾经有一条 deferred（公众号后台回填由 finishSelfAuto 收尾）。那条通道删掉之后，
+    // 留着 deferred 就是留一条「开了个标签页」会被记成最终结果的路。
     const drain = sw.slice(sw.indexOf('async function drainBrowserTasks'));
-    expect(drain, 'deferred 的活被重复交了').toMatch(/if \(!outcome\.deferred\) await reportBrowserTask/);
-    // 真实结果由 finishSelfAuto 交
-    expect(sw.slice(sw.indexOf('async function finishSelfAuto'), sw.indexOf('async function runSelfAuto')))
-      .toMatch(/reportBrowserTask\(run\.taskId/);
+    expect(drain, '还留着 deferred 分支').not.toMatch(/deferred/);
+    expect(drain).toMatch(/await reportBrowserTask\(task\.id, outcome\.ok/);
   });
 });
 
 describe('领活：两个浏览器同时来，只能有一个领走', () => {
   it('并发领取同一条，只有一个拿到', async () => {
-    await enq({ kind: 'collect_self', platform: 'wechat' });
+    await enq({ kind: 'collect_competitor', competitorId: 'c1', limit: 5 });
     const [a, b] = await Promise.all([claimNextTask(wsId, 'browser-A'), claimNextTask(wsId, 'browser-B')]);
     const got = [a, b].filter(Boolean);
     expect(got, '同一条活被领了两次').toHaveLength(1);
   });
 
   it('两条活两个浏览器各领一条，不会都盯着同一条', async () => {
-    await enq({ kind: 'collect_self', platform: 'wechat' });
+    await enq({ kind: 'collect_competitor', competitorId: 'c1', limit: 5 });
     await enq({ kind: 'collect_competitor', competitorId: 'c9', limit: 5 });
     const [a, b] = await Promise.all([claimNextTask(wsId, 'A'), claimNextTask(wsId, 'B')]);
     expect(a).toBeTruthy();
@@ -108,7 +126,7 @@ describe('领活：两个浏览器同时来，只能有一个领走', () => {
   });
 
   it('别的工作区的活领不到', async () => {
-    await enq({ kind: 'collect_self', platform: 'wechat' });
+    await enq({ kind: 'collect_competitor', competitorId: 'c1', limit: 5 });
     const other = await prisma.workspace.create({
       data: { tenantId: (await prisma.tenant.findFirst())!.id, name: 'w2' },
     });
@@ -116,7 +134,7 @@ describe('领活：两个浏览器同时来，只能有一个领走', () => {
   });
 
   it('过期的活不许再被领走', async () => {
-    const r = await enq({ kind: 'collect_self', platform: 'wechat' });
+    const r = await enq({ kind: 'collect_competitor', competitorId: 'c1', limit: 5 });
     await prisma.browserTask.update({
       where: { id: (r as { id: string }).id },
       data: { expiresAt: new Date(Date.now() - 1000) },
@@ -127,7 +145,7 @@ describe('领活：两个浏览器同时来，只能有一个领走', () => {
 
 describe('租约：领了不还是常态，不是异常', () => {
   it('租约到期自动放回池子，下一个浏览器能领到', async () => {
-    await enq({ kind: 'collect_self', platform: 'wechat' });
+    await enq({ kind: 'collect_competitor', competitorId: 'c1', limit: 5 });
     const first = await claimNextTask(wsId, 'A');
     expect(first).toBeTruthy();
     // 领了就走人（关标签页/关机/崩溃）
@@ -140,7 +158,7 @@ describe('租约：领了不还是常态，不是异常', () => {
   });
 
   it('releaseExpiredLeases 只动过期的，没到期的一条不碰', async () => {
-    await enq({ kind: 'collect_self', platform: 'wechat' });
+    await enq({ kind: 'collect_competitor', competitorId: 'c1', limit: 5 });
     const t = await claimNextTask(wsId, 'A');
     expect(await releaseExpiredLeases()).toBe(0);
     expect((await prisma.browserTask.findUnique({ where: { id: t!.id } }))!.status).toBe('claimed');
@@ -149,7 +167,7 @@ describe('租约：领了不还是常态，不是异常', () => {
 
 describe('交活', () => {
   it('成功就结案', async () => {
-    await enq({ kind: 'collect_self', platform: 'wechat' });
+    await enq({ kind: 'collect_competitor', competitorId: 'c1', limit: 5 });
     const t = await claimNextTask(wsId, 'A');
     const r = await completeTask(wsId, t!.id, { ok: true, result: '采到 12 条' });
     expect(r.ok).toBe(true);
@@ -158,7 +176,7 @@ describe('交活', () => {
   });
 
   it('失败且还能重试就放回池子', async () => {
-    await enq({ kind: 'collect_self', platform: 'wechat' });
+    await enq({ kind: 'collect_competitor', competitorId: 'c1', limit: 5 });
     const t = await claimNextTask(wsId, 'A');
     const r = await completeTask(wsId, t!.id, { ok: false, error: '没登录' });
     expect(r.status).toBe('pending');
@@ -166,7 +184,7 @@ describe('交活', () => {
   });
 
   it('重试到上限就判死，别让一个死任务把每一轮都占掉', async () => {
-    await enq({ kind: 'collect_self', platform: 'wechat' });
+    await enq({ kind: 'collect_competitor', competitorId: 'c1', limit: 5 });
     let last = '';
     for (let i = 0; i < MAX_ATTEMPTS; i++) {
       const t = await claimNextTask(wsId, 'A');
@@ -178,7 +196,7 @@ describe('交活', () => {
   });
 
   it('别的工作区改不动我的任务状态', async () => {
-    await enq({ kind: 'collect_self', platform: 'wechat' });
+    await enq({ kind: 'collect_competitor', competitorId: 'c1', limit: 5 });
     const t = await claimNextTask(wsId, 'A');
     const other = await prisma.workspace.create({
       data: { tenantId: (await prisma.tenant.findFirst())!.id, name: 'w2' },
@@ -188,7 +206,7 @@ describe('交活', () => {
   });
 
   it('没领就交活会被拒（租约过期被放回之后再交，不能覆盖别人的结果）', async () => {
-    const e = await enq({ kind: 'collect_self', platform: 'wechat' });
+    const e = await enq({ kind: 'collect_competitor', competitorId: 'c1', limit: 5 });
     const r = await completeTask(wsId, (e as { id: string }).id, { ok: true });
     expect(r.ok).toBe(false);
   });
@@ -257,7 +275,7 @@ describe('没装插件就别排——排了也没人领', () => {
     const fn = src.slice(src.indexOf('const dispatchBrowserTask'), src.indexOf('const listBrowserTasks'));
     expect(fn, '派活工具没走统一的闸').toMatch(/vetBrowserTaskArgs\(ctx\.workspaceId/);
     const vet = fs.readFileSync(path.join(ROOT, 'lib/browser-task/vet.ts'), 'utf8');
-    expect(vet, '派活前没查有没有插件').toMatch(/hasCollector\(workspaceId\)/);
+    expect(vet, '派活前没查有没有插件').toMatch(/collectorKinds\(workspaceId\)/);
     expect(vet, '没告诉用户去哪装').toMatch(/采集助手/);
   });
 });
@@ -266,27 +284,27 @@ describe('干完要说一声——派活到干完中间可能隔了几小时', (
   const notes = () => prisma.notification.findMany({ where: { workspaceId: wsId }, orderBy: { createdAt: 'asc' } });
 
   it('成功完成会发通知，带上做了什么', async () => {
-    await enq({ kind: 'collect_self', platform: 'wechat' });
+    await enq({ kind: 'collect_competitor', competitorId: 'c1', limit: 5 });
     const t = await claimNextTask(wsId, 'A');
     await completeTask(wsId, t!.id, { ok: true, result: '更新 8 新增 2' });
 
     const rows = await notes();
     expect(rows, '干完了却没通知发起的人').toHaveLength(1);
-    expect(rows[0].title).toContain('回填自己的后台数据');
+    expect(rows[0].title).toContain('去采一个竞对');
     expect(rows[0].body).toContain('更新 8');
     // 点得回来。2026-08-26 落点从插件页改到运行中心（那里才有「这一次跑成什么样」）
     expect(rows[0].link).toBe('/runs');
   });
 
   it('还能重试时不吵——每次失败都推一条只会让人把通知关掉', async () => {
-    await enq({ kind: 'collect_self', platform: 'wechat' });
+    await enq({ kind: 'collect_competitor', competitorId: 'c1', limit: 5 });
     const t = await claimNextTask(wsId, 'A');
     await completeTask(wsId, t!.id, { ok: false, error: '没登录' });
     expect(await notes(), '第一次失败就推了').toHaveLength(0);
   });
 
   it('判死了才说，并给出常见原因', async () => {
-    await enq({ kind: 'collect_self', platform: 'wechat' });
+    await enq({ kind: 'collect_competitor', competitorId: 'c1', limit: 5 });
     for (let i = 0; i < MAX_ATTEMPTS; i++) {
       const t = await claimNextTask(wsId, 'A');
       await completeTask(wsId, t!.id, { ok: false, error: '没登录' });
@@ -332,7 +350,7 @@ describe('去重与过期', () => {
   });
 
   it('过期标 expired 不标 failed——「没做」和「做失败」对用户是两件事', async () => {
-    const e = await enq({ kind: 'collect_self', platform: 'wechat' });
+    const e = await enq({ kind: 'collect_competitor', competitorId: 'c1', limit: 5 });
     await prisma.browserTask.update({
       where: { id: (e as { id: string }).id },
       data: { expiresAt: new Date(Date.now() - 1000) },

@@ -1,6 +1,6 @@
 import { cache } from 'react';
 import { prisma } from '@/lib/db';
-import type { RunStatus } from './badge';
+import type { RunStatus, RunKind, RunStep, RunEntry } from './badge';
 import { platformName } from '@/lib/constants';
 import { TASK_STATUS_LABEL } from '@/lib/publish/capability';
 import { KIND_LABEL as BROWSER_KIND_LABEL } from '@/lib/browser-task/kinds';
@@ -30,44 +30,7 @@ import { KIND_LABEL as BROWSER_KIND_LABEL } from '@/lib/browser-task/kinds';
 // 都定义在 ./badge —— 那个文件零依赖，客户端组件也能 import 而不会把 prisma 打进浏览器包。
 // 这里 re-export，几十处调用点一个都不用改。
 export { activeBadge } from './badge';
-export type { RunStatus } from './badge';
-
-export type RunKind = 'agent' | 'workflow' | 'collect' | 'publish' | 'browser';
-
-export type RunEntry = {
-  id: string;
-  kind: RunKind;
-  /** 一句话说清这是在跑什么（用户那句话 / 模板名 / 采了谁 / 发哪篇） */
-  title: string;
-  status: RunStatus;
-  /** 排序用：这条记录最近一次有动静的时刻 */
-  at: Date;
-  /** 副标题：跑到第几步、收了多少条、为什么失败 */
-  detail?: string;
-  /** 点进去看详情的页面 */
-  href: string;
-  /** 属于哪个创作账号。跨账号可见的前提是每条都标明归属。 */
-  accountName?: string;
-  /**
-   * 谁发起的。**只有 AI 执行有**（那是唯一「只有发起人能推进」的一类）。
-   *
-   * 【为什么要带上它】这一页是工作区级的，同事的运行你也看得见——这是刻意的
-   * （见「刻意不按 accountId 过滤」那条）。但「等你确认」只有发起人点得动：
-   * 把同事的运行也印成第二人称「等你处理」，等于叫他去点一个必定报错的按钮。
-   */
-  memberId?: string;
-  /** 发起人的名字。同事的那条要说清是在等谁，而不是含糊地「等你」。 */
-  memberName?: string;
-  /**
-   * AI 执行的步骤明细。这是**唯一**能看到「AI 替我调了哪些工具」的地方——
-   * 此前 AgentStep 写了库但没有任何页面读它。展开就地看，不跳转：
-   * 跳到 /assistant 只会到一个看不见这次运行的页面（指路指到空页面）。
-   */
-  steps?: RunStep[];
-};
-
-/** 一步 AI 执行。只收「做了什么」那几类，tool_result 太长且对用户无意义。 */
-export type RunStep = { seq: number; kind: string; tool: string; ok: boolean; result: string };
+export type { RunStatus, RunKind, RunStep, RunEntry } from './badge';
 
 /** 步骤结果只用来给人扫一眼，超长就截断——整段塞进页面既拖慢渲染也没人读。 */
 export const STEP_RESULT_MAX = 160;
@@ -79,6 +42,7 @@ export const STEP_RESULT_MAX = 160;
 export const TRIGGER_LABEL: Record<string, string> = {
   schedule: '定时触发',
   agent: 'AI 派的',
+  bot: '群里派的',
 };
 
 export const KIND_LABEL: Record<RunKind, string> = {

@@ -8,7 +8,7 @@
   @media (prefers-color-scheme: dark) { :root { --fg:#efe9df; --bg:#17130e; --line:rgba(239,233,223,.18); } }
   body { margin:0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
          display:flex; align-items:center; justify-content:center; height:100vh;
-         background:var(--bg); color:var(--fg); }
+         background:var(--bg); color:var(--fg); position:relative; }
   .box { text-align:center; max-width:460px; padding:24px; }
   .logo { width:72px; height:72px; border-radius:18px; margin-bottom:18px; }
   h1 { font-size:20px; margin:0 0 8px; }
@@ -31,34 +31,41 @@
         cursor:pointer; font:inherit; font-size:13px; }
   .link { background:none; border:0; color:var(--brand); cursor:pointer; font:inherit; font-size:12px;
           text-decoration:underline; padding:0; margin-top:10px; }
+  .lang-toggle { position:absolute; top:16px; right:16px; display:inline-flex; border:1px solid var(--line);
+                 border-radius:20px; padding:2px; font-size:11px; background:var(--bg); }
+  .lang-btn { border:0; background:transparent; padding:3px 8px; border-radius:16px; cursor:pointer;
+              font-family:inherit; color:inherit; opacity:.6; }
+  .lang-btn.active { background:var(--brand); color:#fff; opacity:1; font-weight:600; }
 </style>
 </head>
 <body>
+<div class="lang-toggle">
+  <button id="lang-zh" class="lang-btn active" onclick="setLocale('zh')">中文</button>
+  <button id="lang-en" class="lang-btn" onclick="setLocale('en')">EN</button>
+</div>
+
 <div class="box">
   <img class="logo" src="logo.png" alt="" />
 
-  <!-- ① 探测中。
-       【别把 localhost 印成主信息】旧版这里大字写「服务地址 http://localhost:3070」，
-       而云端用户压根没有本机服务——他看到的是一个正在连接一台不存在的机器的界面，
-       第一印象就是「这软件坏了」。真实语义是「先看看你本机装没装整机版」，就照实写。 -->
+  <!-- ① 探测中 -->
   <div id="probing">
     <div class="spin"></div>
-    <h1 id="title">正在启动…</h1>
-    <p>正在检查这台电脑上有没有装整机版…</p>
+    <h1 id="probe-title">正在启动…</h1>
+    <p id="probe-desc">正在检查这台电脑上有没有装整机版…</p>
   </div>
 
   <!-- ② 选连哪儿（本机没跑起来时出现） -->
   <div id="pick" class="hide">
-    <h1>连到哪一个烽火台？</h1>
-    <p>没检测到本机服务。你可以连云端账号，或先把整机版装起来。</p>
+    <h1 id="pick-title">连到哪一个烽火台？</h1>
+    <p id="pick-desc">没检测到本机服务。你可以连云端账号，或先把整机版装起来。</p>
     <div class="pick">
       <button class="card" id="pick-cloud">
-        <b>☁️ 连云端账号</b>
-        <span>用 <code id="cloud-host"></code> 上的账号，和浏览器里是同一个工作区。适合直接用 SaaS 的人。</span>
+        <b id="pick-cloud-title">☁️ 连云端账号</b>
+        <span id="pick-cloud-desc">用 <code id="cloud-host"></code> 上的账号，和浏览器里是同一个工作区。适合直接用 SaaS 的人。</span>
       </button>
       <button class="card" id="pick-local">
-        <b>🖥️ 连本机整机版</b>
-        <span>数据全在这台机器上。还没装的话，在烽火台目录执行一次
+        <b id="pick-local-title">🖥️ 连本机整机版</b>
+        <span id="pick-local-desc">数据全在这台机器上。还没装的话，在烽火台目录执行一次
           <code>bash deploy/appliance/install.sh</code>，装完开机自启，这里就能连上。</span>
       </button>
     </div>
@@ -70,31 +77,101 @@
 
   <!-- ③ 记住的选择连不上时 -->
   <div id="failed" class="hide">
-    <h1>连不上</h1>
-    <p><code id="failed-addr"></code> 没有响应。检查网络，或换一个连接方式。</p>
+    <h1 id="failed-title">连不上</h1>
+    <p id="failed-desc"><code id="failed-addr"></code> 没有响应。检查网络，或换一个连接方式。</p>
     <button class="link" id="reset">换个地址</button>
   </div>
 </div>
 <script>
-  // 【双模式，2026-08-27】此前壳写死探测 localhost:3070——SaaS 用户装了这个客户端
-  // 永远停在「本机服务还没在跑」，因为他根本没有本机服务。现在：
-  //   本机通 → 直接进本机（整机版用户零改变，仍是开箱即用）
-  //   本机不通 → 让用户选云端 / 本机 / 自建，选择记住，下次直接进。
   const qs = new URLSearchParams(location.search);
   const PORT = qs.get('port') || '3070';
   const LOCAL = `http://localhost:${PORT}`;
-  // 构建期可用 ?cloud= 覆盖（私有化客户拿同一个壳指自己的域名）
   const CLOUD = qs.get('cloud') || 'https://beacon.iyunci.cn';
   const KEY = 'beacon.desktop.target';
+  const LANG_KEY = 'beacon.lang';
+
+  const I18N = {
+    zh: {
+      title: '烽火台',
+      probeTitle: '正在启动…',
+      probeDesc: '正在检查这台电脑上有没有装整机版…',
+      pickTitle: '连到哪一个烽火台？',
+      pickDesc: '没检测到本机服务。你可以连云端账号，或先把整机版装起来。',
+      pickCloudTitle: '☁️ 连云端账号',
+      pickCloudDescPrefix: '用 ',
+      pickCloudDescSuffix: ' 上的账号，和浏览器里是同一个工作区。适合直接用 SaaS 的人。',
+      pickLocalTitle: '🖥️ 连本机整机版',
+      pickLocalDesc: '数据全在这台机器上。还没装的话，在烽火台目录执行一次 <code>bash deploy/appliance/install.sh</code>，装完开机自启，这里就能连上。',
+      customPlaceholder: '或填自建地址，如 https://beacon.mycorp.com',
+      goBtn: '进入',
+      failedTitle: '连不上',
+      failedSuffix: ' 没有响应。检查网络，或换一个连接方式。',
+      resetBtn: '换个地址',
+      localNotRunning: '（本机服务没在跑）'
+    },
+    en: {
+      title: 'Beacon',
+      probeTitle: 'Starting up…',
+      probeDesc: 'Checking if local appliance instance is running…',
+      pickTitle: 'Connect to Beacon',
+      pickDesc: 'No local instance detected. Connect your cloud account or install the appliance.',
+      pickCloudTitle: '☁️ Connect Cloud Account',
+      pickCloudDescPrefix: 'Use your account on ',
+      pickCloudDescSuffix: ', shared with your browser. Best for SaaS users.',
+      pickLocalTitle: '🖥️ Connect Local Appliance',
+      pickLocalDesc: 'All data stays on this machine. Run <code>bash deploy/appliance/install.sh</code> to install, then connect here.',
+      customPlaceholder: 'Or enter custom address, e.g. https://beacon.mycorp.com',
+      goBtn: 'Connect',
+      failedTitle: 'Connection Failed',
+      failedSuffix: ' is not responding. Check your network or switch connection.',
+      resetBtn: 'Switch Address',
+      localNotRunning: ' (local service is not running)'
+    }
+  };
+
+  let curLang = 'zh';
+  try {
+    const savedLang = localStorage.getItem(LANG_KEY);
+    if (savedLang === 'en' || (!savedLang && navigator.language && navigator.language.toLowerCase().startsWith('en'))) {
+      curLang = 'en';
+    }
+  } catch {}
 
   const $ = (id) => document.getElementById(id);
-  try { $('cloud-host').textContent = new URL(CLOUD).host; } catch { $('cloud-host').textContent = CLOUD; }
+
+  function setLocale(lang) {
+    curLang = lang;
+    try { localStorage.setItem(LANG_KEY, lang); } catch {}
+    document.documentElement.lang = lang;
+    $('lang-zh').classList.toggle('active', lang === 'zh');
+    $('lang-en').classList.toggle('active', lang === 'en');
+    
+    const d = I18N[lang] || I18N.zh;
+    document.title = d.title;
+    $('probe-title').textContent = d.probeTitle;
+    $('probe-desc').textContent = d.probeDesc;
+    $('pick-title').textContent = d.pickTitle;
+    $('pick-desc').textContent = d.pickDesc;
+    $('pick-cloud-title').textContent = d.pickCloudTitle;
+    
+    let host = CLOUD;
+    try { host = new URL(CLOUD).host; } catch {}
+    $('pick-cloud-desc').innerHTML = `${d.pickCloudDescPrefix}<code>${host}</code>${d.pickCloudDescSuffix}`;
+    
+    $('pick-local-title').textContent = d.pickLocalTitle;
+    $('pick-local-desc').innerHTML = d.pickLocalDesc;
+    $('custom').placeholder = d.customPlaceholder;
+    $('custom-go').textContent = d.goBtn;
+    $('failed-title').textContent = d.failedTitle;
+    $('reset').textContent = d.resetBtn;
+  }
+
+  setLocale(curLang);
 
   function show(which) {
     for (const id of ['probing', 'pick', 'failed']) $(id).classList.toggle('hide', id !== which);
   }
 
-  // 探一个地址通不通。no-cors：健康接口跨源也能探到「通没通」（opaque 响应即算通）
   async function alive(base) {
     try {
       await fetch(`${base}/api/health`, { mode: 'no-cors', cache: 'no-store' });
@@ -106,24 +183,18 @@
     try { localStorage.setItem(KEY, base); } catch {}
   }
 
-  // 跳进站点时带一次性握手参数：站点据此① 不再劝你下载客户端 ② 有新版时提醒你。
-  // 站点读到后会把这两个参数从地址栏抹掉。CLIENT_VERSION 必须与 tauri.conf.json / package.json
-  // 的 version 一致——有守卫钉死，改版本号漏改这里会红。
-  const CLIENT_VERSION = '1.2.5';
+  const CLIENT_VERSION = '1.2.6';
   function enter(base) {
     remember(base);
     const sep = base.includes('?') ? '&' : '?';
-    location.replace(`${base}${sep}_client=desktop&_cv=${encodeURIComponent(CLIENT_VERSION)}`);
+    location.replace(`${base}${sep}_client=desktop&_cv=${encodeURIComponent(CLIENT_VERSION)}&lang=${curLang}`);
   }
 
   async function boot() {
-    // 记住过就先按记住的走——但**仍然要探活**：记着一个连不上的地址直接跳过去，
-    // 用户看到的是浏览器的错误页，连「换个地址」的入口都没有。
     let saved = null;
     try { saved = localStorage.getItem(KEY); } catch {}
     if (saved) {
       if (await alive(saved)) return enter(saved);
-      // 本机模式下服务可能只是还没起来（开机自启有延迟），多等几轮再判失败
       if (saved === LOCAL) {
         for (let i = 0; i < 6; i++) {
           await new Promise((r) => setTimeout(r, 1500));
@@ -135,7 +206,6 @@
       return;
     }
 
-    // 首次启动：先给本机几轮机会（整机版用户装完就该直接进，不该被问一遍）
     for (let i = 0; i < 3; i++) {
       if (await alive(LOCAL)) return enter(LOCAL);
       await new Promise((r) => setTimeout(r, 1200));
@@ -146,7 +216,8 @@
   $('pick-cloud').onclick = () => enter(CLOUD);
   $('pick-local').onclick = async () => {
     if (await alive(LOCAL)) return enter(LOCAL);
-    $('failed-addr').textContent = `${LOCAL}（本机服务没在跑）`;
+    const d = I18N[curLang] || I18N.zh;
+    $('failed-addr').textContent = `${LOCAL}${d.localNotRunning}`;
     show('failed');
   };
   $('custom-go').onclick = () => {

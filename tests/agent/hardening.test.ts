@@ -269,12 +269,16 @@ describe('把写成正文的工具调用认出来', () => {
     expect(looksLikeUnsentToolCall('好的。\n```typescript\nfunctions.create_draft({"platform":"wechat"})\n```', T)).toBe(true);
     expect(looksLikeUnsentToolCall('<invoke name="create_draft">…', T)).toBe(true);
     expect(looksLikeUnsentToolCall('{"tool": "create_draft", "args": {}}', T)).toBe(true);
+    // 2026-09-03 真机：「您可以通过以下命令查看进度：```json {"function": "create_draft"} ```」
+    expect(looksLikeUnsentToolCall('您可以通过以下命令查看进度：\n```json\n{\n  "function": "create_draft"\n}\n```', T)).toBe(true);
+    expect(looksLikeUnsentToolCall('{"name": "create_draft", "arguments": {}}', T)).toBe(true);
   });
 
   it('🔒 不许误伤：名字不是这次能用的工具就不算', () => {
     // 只看「长得像调用」的话，一篇讲代码的稿子会被反复打回
     expect(looksLikeUnsentToolCall('functions.doSomethingElse({})', T)).toBe(false);
     expect(looksLikeUnsentToolCall('教你写 functions.map(fn) 这种高阶函数', T)).toBe(false);
+    expect(looksLikeUnsentToolCall('把 name = create_draft 记下来', T)).toBe(false); // 不带引号的 name 赋值不算
   });
 
   it('🔒 不许误伤：正文里提一句工具名不算', () => {
@@ -323,6 +327,75 @@ describe('端到端：写成正文就把它叫回来，不许当成答完了', (
   });
 });
 
+// ── 一个工具都没调，却宣称做完了 / 编示例数据 / 让用户选路 ──────────────────────
+//
+// 2026-09-03 真机（生产 cmtledyu2000312xhgnuwk1pf）：「去抓取 x 的数据」，MiniMax 两轮零工具调用——
+//   第一轮「请稍等，我正在为您采集…建议更新插件或使用桌面客户端…您希望如何操作？」
+//   第二轮「数据采集已完成。以下是示例数据（不代表真实情况）：播放量 10,000 / 点赞 500…」
+// 运行判了 done。上面那道闸只认工具调用的字面形状，这种纯编造它看不见。
+const { looksLikeFabricatedCompletion } = await import('@/lib/agent/run');
+
+describe('把零工具调用的谎报认出来', () => {
+  it('认得出三种形状', () => {
+    expect(looksLikeFabricatedCompletion('数据采集已完成。以下是采集到的数据示例（请注意，这只是示例数据，不代表真实情况）：\n- 播放量：10,000', T)).toBe('sample');
+    expect(looksLikeFabricatedCompletion('请稍等，我正在为您采集 X 平台的数据。', T)).toBe('promise');
+    expect(looksLikeFabricatedCompletion('我注意到您的采集插件版本较旧。如果您希望继续使用当前版本的插件，我可以排给插件。您希望如何操作？', T)).toBe('route_question');
+  });
+
+  it('🔒 不许误伤', () => {
+    // 没有工具的纯问答里说「示例」是正常的
+    expect(looksLikeFabricatedCompletion('给你三条示例数据的写法…', [])).toBeNull();
+    // 真交付
+    expect(looksLikeFabricatedCompletion('查完了：你有 6 条选题，最新一条是《…》。', T)).toBeNull();
+    // 长回答末尾顺口一句「稍等」不算承诺
+    expect(looksLikeFabricatedCompletion('这是给你写好的初稿：' + '内容'.repeat(400) + '\n还要改的话稍等片刻告诉我。', T)).toBeNull();
+    // 真需要用户澄清的问题（不是选路由）不算
+    expect(looksLikeFabricatedCompletion('你有两个抖音账号，采哪一个？', T)).toBeNull();
+  });
+});
+
+describe('端到端：零工具调用的谎报要叫回来，叫不回来判 failed', () => {
+  it('叫回来之后它真的去调工具，任务才算完；编的数字不能留在答案里', async () => {
+    h.script = [
+      { text: '数据采集已完成。以下是示例数据（不代表真实情况）：播放量 10,000' },
+      { toolCalls: [{ id: 'c1', name: 'list_topics', arguments: '{"limit":3}' }] },
+      { text: '查完了，你有若干选题。' },
+    ];
+    const t = await startAgentRun(ctx, '看看我的选题');
+    await settleAgentKicks();
+    const v = await getAgentRunView(ctx, t.runId);
+    expect(v.status).toBe('done');
+    expect(v.answer, '编的示例数据成了最终答案').not.toContain('10,000');
+    expect(v.steps.some((s) => /示例数据/.test(String(s.result ?? '')) && s.ok === false), '打回这件事没留在时间线上').toBe(true);
+    expect(v.steps.some((s) => s.kind === 'tool_result' && s.tool === 'list_topics')).toBe(true);
+  });
+
+  it('叫两次还在编，就判 failed 而不是 done（没做就是没做）', async () => {
+    const bad = '数据采集已完成。以下是示例数据（不代表真实情况）：播放量 10,000';
+    h.script = [{ text: bad }, { text: bad }, { text: bad }, { text: bad }];
+    const t = await startAgentRun(ctx, '去抓取 x 的数据');
+    await settleAgentKicks();
+    const v = await getAgentRunView(ctx, t.runId);
+    expect(v.status, '编的示例数据被当成了「已完成」').toBe('failed');
+    expect(String(v.error ?? '')).toMatch(/示例数据|编/);
+    const nudges = v.steps.filter((s) => /示例数据/.test(String(s.result ?? '')) && s.kind === 'tool_result').length;
+    expect(nudges, `叫了 ${nudges} 次，上限该是 2`).toBeLessThanOrEqual(2);
+  });
+
+  it('「请稍等」不能当最终回答', async () => {
+    h.script = [
+      { text: '请稍等，我正在为您采集 X 平台的数据。' },
+      { toolCalls: [{ id: 'c1', name: 'list_topics', arguments: '{"limit":3}' }] },
+      { text: '查完了。' },
+    ];
+    const t = await startAgentRun(ctx, '看看我的选题');
+    await settleAgentKicks();
+    const v = await getAgentRunView(ctx, t.runId);
+    expect(v.status).toBe('done');
+    expect(v.answer).toBe('查完了。');
+  });
+});
+
 describe('走确认闸执行的写操作，产物也要进清单', () => {
   it('确认后建出来的草稿，出现在产物清单里', async () => {
     // 【为什么这条必须有】产物登记挂在 executeCall 的 ctx.runId 上，而
@@ -334,7 +407,7 @@ describe('走确认闸执行的写操作，产物也要进清单', () => {
       { toolCalls: [{ id: 'd1', name: 'create_draft', arguments: JSON.stringify({ platform: 'wechat', title: '测试稿' }) }] },
       { text: '建好了。' },
     ];
-    const t = await startAgentRun(ctx, '建一篇稿子');
+    const t = await startAgentRun(ctx, '建一篇稿子', { authMode: 'confirm_each' });
     await settleAgentKicks();
 
     const paused = await getAgentRunView(ctx, t.runId);

@@ -241,7 +241,7 @@ const SCROLL_HEIGHT_FN = `() => document.body.scrollHeight`;
  * 而只看 URL 又会漏掉「原地弹层」那种。三条一起看，宁可偶尔误判一次让用户重试，
  * 也不要把登录页当成内容页学进配方里。
  */
-const LOGIN_WALL_FN = `() => {
+export const LOGIN_WALL_FN = `() => {
   const url = location.href.toLowerCase();
   if (/\\/(login|signin|sign-in|auth|passport)(\\/|\\?|$)/.test(url)) return { walled: true, kind: 'login', why: '地址是登录页' };
   if (document.querySelector('input[type=password]')) return { walled: true, kind: 'login', why: '页面上有密码输入框' };

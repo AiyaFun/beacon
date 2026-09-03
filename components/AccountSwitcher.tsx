@@ -3,6 +3,7 @@
 import { useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { actSwitchAccount } from '@/app/(app)/actions';
+import { useI18n } from '@/lib/i18n';
 
 export type SwitcherAccount = { id: string; name: string; platform: string; platformLabel: string };
 
@@ -10,6 +11,7 @@ export type SwitcherAccount = { id: string; name: string; platform: string; plat
 export function AccountSwitcher({ accounts, currentId }: { accounts: SwitcherAccount[]; currentId: string }) {
   const [pending, start] = useTransition();
   const router = useRouter();
+  const { dict } = useI18n();
 
   if (accounts.length === 0) return null;
 
@@ -27,7 +29,9 @@ export function AccountSwitcher({ accounts, currentId }: { accounts: SwitcherAcc
 
   return (
     <div className="row" style={{ gap: 8, alignItems: 'center', flexShrink: 0, whiteSpace: 'nowrap' }}>
-      <span className="small muted hide-mobile" style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>当前账号</span>
+      <span className="small muted hide-mobile" style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
+        {dict.shell.currentAccount}
+      </span>
       <select
         className="select"
         style={{ width: 'auto', minWidth: 160, maxWidth: 220, opacity: pending ? 0.6 : 1, paddingRight: 24, flexShrink: 0 }}
@@ -41,7 +45,7 @@ export function AccountSwitcher({ accounts, currentId }: { accounts: SwitcherAcc
             {a.name} · {a.platformLabel}
           </option>
         ))}
-        <option value="__manage__">＋ 管理 / 新建账号…</option>
+        <option value="__manage__">{dict.shell.manageAccount}</option>
       </select>
     </div>
   );

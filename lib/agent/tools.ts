@@ -14,6 +14,8 @@ import { parseWeekdays } from '../workflow/schedule';
 import { scheduleWhen, scheduleTargetLabel } from '../workflow/schedule-format';
 import { enqueueBrowserTask, KIND_LABEL as BROWSER_KIND_LABEL } from '../browser-task';
 import { vetBrowserTaskArgs } from '../browser-task/vet';
+import { localBrowserState, runBrowserTaskLocally, LOCAL_BROWSER_WAKE_HINT } from '../browser-task/local-run';
+import type { BrowserTaskPayload } from '../browser-task/kinds';
 import { browserWaitToken } from './wake';
 import { readAllowlistLabels } from '../browser-task/read-allowlist';
 import { fmtDate } from '../format';
@@ -358,9 +360,12 @@ const dispatchBrowserTask: AgentTool = {
     name: 'dispatch_browser_task',
     description:
       '把一件**只有浏览器能做**的事排给用户的采集插件：collect_competitor（去某个竞对主页采作品）、'
-      + 'collect_self（去用户自己的创作后台回填数据，要指定 platform）。'
+      + 'collect_self_profile（回填用户自己的数据，要指定 platform：x / tiktok，去他自己的主页——'
+      + '账号与 handle 服务端按工作区账号自动对上，见系统提示里「你的账号与插件」，不要问用户要链接）。'
       + '用在服务端拿不到数据时，比如需要完播率/粉丝画像这些只有创作后台才有的指标，或竞对数据太旧要刷新。'
-      + '⚠️ 它只是**排队**：插件要等下次醒来（用户打开浏览器时）才会执行，不会立刻有数据。'
+      + '**本机浏览器就绪时（见系统提示里「你的账号与插件」）它会当场用本机 Chrome 采完并直接返回结果**，'
+      + '不排队、不用问用户选哪条路。'
+      + '⚠️ 只有排给插件时它才是**排队**：插件要等下次醒来（用户打开浏览器时）才会执行，不会立刻有数据，'
       + '排完就如实告诉用户「已排给插件」，不要说成已经采到了。'
       + 'open_and_read（让浏览器打开一个网页并把正文读回来——服务端抓不到的平台走这条）。'
       + '如果你**没有这份数据就没法回答**用户的问题，把 wait_for_result 设成 true：'
@@ -370,7 +375,7 @@ const dispatchBrowserTask: AgentTool = {
       properties: {
         kind: {
           type: 'string',
-          enum: ['collect_competitor', 'collect_self', 'open_and_read'],
+          enum: ['collect_competitor', 'collect_self_profile', 'open_and_read'],
           description: '要做哪件事',
         },
         url: {
@@ -381,7 +386,8 @@ const dispatchBrowserTask: AgentTool = {
             + '。别的网址请改用 clip_url（服务端直接抓，不动用户的浏览器）。',
         },
         competitor_id: { type: 'string', description: 'kind=collect_competitor 时必填，来自 list_competitors' },
-        platform: { type: 'string', description: 'kind=collect_self 时必填，如 douyin / xiaohongshu' },
+        platform: { type: 'string', description: 'kind=collect_self_profile 时必填：x / tiktok（其它平台的自有数据服务端派不了——创作者后台要用户自己打开页面点插件侧栏）' },
+        account: { type: 'string', description: 'kind=collect_self_profile 且同平台有多个账号时点名一个：账号 id / handle / 名字（精确）。没有就按当前账号' },
         limit: { type: 'number', description: '采几条作品，默认 20，最多 50' },
         wait_for_result: {
           type: 'boolean',
@@ -399,26 +405,48 @@ const dispatchBrowserTask: AgentTool = {
 
     // 三道闸（有没有插件 / 读网页开关+白名单 / 竞对必须在监控列表）收口在 vet.ts——
     // 对外调用面（/api/v1/browser-tasks）排同样的任务，闸各写一份迟早对不上
+    // 本机浏览器**优先**：整机版/桌面端开了开关且 Chrome 此刻带端口跑着，就当场用它跑（SaaS 恒 off）。
+    // 只把「此刻活着」的端点传下去——配了但没开着的照旧排给插件，回执里说清怎么叫起来。
+    const localState = await localBrowserState(ctx.workspaceId);
+    const localCdpUrl = localState.state === 'ready' ? localState.cdpUrl : null;
     const vetted = await vetBrowserTaskArgs(ctx.workspaceId, {
       kind,
       competitorId: str(args.competitor_id),
       platform: str(args.platform),
       url: str(args.url),
       limit: num(args.limit, 20),
-    });
+    }, { preferAccountId: ctx.accountId, accountRef: str(args.account), localCdpUrl });
     if (!vetted.ok) return { ok: false, error: vetted.error, summary: vetted.summary };
     const payload = vetted.payload;
 
+    if (vetted.local) {
+      // 用户原话：「如果没有安装插件，客户端应该自己操作电脑的浏览器，自行去采集」。
+      // 这里拿到的是**结果**不是回执——不排队、不挂起，直接回给模型
+      const done = await runBrowserTaskLocally({
+        cdpUrl: vetted.local.cdpUrl,
+        workspaceId: ctx.workspaceId,
+        payload: payload as BrowserTaskPayload,
+      });
+      if (!done.ok) return { ok: false, error: done.error, summary: done.summary };
+      return { ok: true, data: { local: true, ...(done.data ?? {}) }, summary: done.summary };
+    }
+
     const r = await enqueueBrowserTask({
       workspaceId: ctx.workspaceId,
-      accountId: ctx.accountId,
+      // collect_self 解析出来的账号优先：这批数据要记在「我的 X 账号」名下，不是当前选中的那个
+      accountId: vetted.accountId ?? ctx.accountId,
       payload,
       origin: 'agent',
       createdBy: ctx.memberId,
     });
     if (!r.ok) return { ok: false, error: r.error, summary: '任务没排上' };
 
-    const label = BROWSER_KIND_LABEL[kind as keyof typeof BROWSER_KIND_LABEL] ?? kind;
+    const finalKind = String(payload.kind ?? kind);
+    const label = BROWSER_KIND_LABEL[finalKind as keyof typeof BROWSER_KIND_LABEL] ?? finalKind;
+    // 配了本机浏览器却没开着：说破为什么这次排队了、怎么让下次当场跑——不然用户以为开关坏了
+    const offlineNote = localState.state === 'offline'
+      ? `（本机浏览器已开启但 Chrome 现在没带调试端口跑着，所以这次排给了插件；想当场采，${LOCAL_BROWSER_WAKE_HINT}）`
+      : '';
     // 模型说「没这份数据我答不了」时，就把整次执行停在这儿等结果。
     // 叫醒由 lib/browser-task 在四种结局（完成/判死/过期/取消）上触发——
     // 只要有一种结局没人叫醒，这里就成了一次永远醒不来的运行，所以别在这里加新的等待类型。
@@ -427,13 +455,13 @@ const dispatchBrowserTask: AgentTool = {
         ok: true,
         data: { taskId: r.id, kind },
         waitFor: browserWaitToken(r.id),
-        summary: `已排给插件：${label}。这次执行先停在这里等它的结果。`,
+        summary: `已排给插件：${label}。这次执行先停在这里等它的结果。${offlineNote}`,
       };
     }
     return {
       ok: true,
       data: { taskId: r.id, kind },
-      summary: `已排给插件：${label}。插件下次醒来会执行，现在还没有数据。`,
+      summary: `已排给插件：${label}。插件下次醒来会执行，现在还没有数据。${offlineNote}`,
     };
   },
 };
@@ -843,6 +871,14 @@ export type RunAuth = {
 };
 
 export type AuthMode = 'confirm_each' | 'preauthorized' | 'unattended';
+
+/**
+ * 缺省授权档：**直接跑完**（2026-09-03 用户拍板）。
+ * 页面、桌面端、群机器人派的任务不传档就按这个来；对外 API 不看它（resolveAuth 强制 confirm_each）。
+ * needsConfirm 里「run 缺省时按最保守的档」那条不受影响——那是运行记录本身缺失时的兜底，
+ * 与「调用方没指定」是两回事。
+ */
+export const DEFAULT_AUTH_MODE: AuthMode = 'unattended';
 
 /**
  * 这一步要不要停下来问人。

@@ -1,0 +1,19 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "executor-remote",
+  "description": "云端账号模式：网页里那张「把这台客户端登记为采集执行器」卡要能调壳的三个命令。只放行官方站与本机整机版地址。",
+  "remote": {
+    "urls": [
+      "https://beacon.iyunci.cn/*",
+      "http://localhost:3070/*",
+      "http://127.0.0.1:3070/*"
+    ]
+  },
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "allow-register-executor",
+    "allow-unregister-executor",
+    "allow-executor-status"
+  ]
+}

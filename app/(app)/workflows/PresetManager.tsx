@@ -39,7 +39,7 @@ export function PresetManager({
 
   const blank = (): PresetRow => ({
     id: '', title: '', goal: '', agentTemplateId: null,
-    authMode: 'confirm_each', preauthorizedTools: [], enabled: true,
+    authMode: 'unattended', preauthorizedTools: [], enabled: true,
   });
 
   function save(row: PresetRow) {
@@ -138,6 +138,7 @@ function PresetForm({
     const names = toolsForGroups(tools, [...next]);
     setDraft({ ...draft, preauthorizedTools: names, authMode: names.length ? 'preauthorized' : 'confirm_each' });
   }
+  const askEach = draft.authMode !== 'unattended';
 
   return (
     <div className="card" style={{ padding: 14, marginTop: 12 }}>
@@ -167,12 +168,22 @@ function PresetForm({
         </label>
 
         <div>
-          <div className="small" style={{ marginBottom: 6 }}>这张卡派出去时，哪些动作不用再逐个问你：</div>
-          {AUTH_GROUPS.map((g) => {
+          <div className="small" style={{ marginBottom: 6 }}>这张卡派出去时：</div>
+          <label className="row small" style={{ gap: 8, alignItems: 'flex-start', cursor: 'pointer', marginBottom: 6 }}>
+            <input type="radio" name="preset-auth-mode" checked={!askEach} disabled={pending}
+              onChange={() => setDraft({ ...draft, authMode: 'unattended', preauthorizedTools: [] })} style={{ marginTop: 3 }} />
+            <span><strong>直接跑完</strong><span className="muted" style={{ marginLeft: 6 }}>不逐个问你，做完汇报（缺省）</span></span>
+          </label>
+          <label className="row small" style={{ gap: 8, alignItems: 'flex-start', cursor: 'pointer', marginBottom: 6 }}>
+            <input type="radio" name="preset-auth-mode" checked={askEach} disabled={pending}
+              onChange={() => setDraft({ ...draft, authMode: 'confirm_each', preauthorizedTools: [] })} style={{ marginTop: 3 }} />
+            <span><strong>每一步都先问我</strong><span className="muted" style={{ marginLeft: 6 }}>下面勾上的几类不用问，没勾的照旧停下来</span></span>
+          </label>
+          {askEach && AUTH_GROUPS.map((g) => {
             const inGroup = tools.filter((t) => groupOf(t) === g.key);
             if (inGroup.length === 0) return null;
             return (
-              <label key={g.key} className="row small" style={{ gap: 8, alignItems: 'flex-start', cursor: 'pointer', marginBottom: 6 }}>
+              <label key={g.key} className="row small" style={{ gap: 8, alignItems: 'flex-start', cursor: 'pointer', marginBottom: 6, marginLeft: 24 }}>
                 <input type="checkbox" checked={checked.has(g.key)} disabled={pending} onChange={() => toggleGroup(g.key)} style={{ marginTop: 3 }} />
                 <span><strong>{g.name}</strong><span className="muted" style={{ marginLeft: 6 }}>{g.hint}</span></span>
               </label>
@@ -180,7 +191,7 @@ function PresetForm({
           })}
           {/* 与派发卡同一条说明：签合约那几样是机制级的闸，勾了也仍然会问 */}
           <div className="small muted">
-            建发布计划、写长期记忆、配定时、拼新智能体这几样<strong>无论如何都会再问你一次</strong>。
+            建发布计划、写长期记忆、配定时、拼新智能体这几样<strong>无论选哪种都会再问你一次</strong>。
           </div>
         </div>
 

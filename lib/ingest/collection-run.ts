@@ -10,11 +10,15 @@ import { log } from '../logger';
 export type CollectionScope = 'self' | 'rival';
 
 /** 采集通道。谁在采、在哪采——同一批数据的可信度与频率约束都由它决定 */
-export type CollectionChannel = 'plugin_home' | 'plugin_backend' | 'server' | 'import' | 'manual';
+export type CollectionChannel = 'plugin_home' | 'plugin_backend' | 'local_browser' | 'desktop' | 'server' | 'import' | 'manual';
 
 export const CHANNEL_LABEL: Record<CollectionChannel, string> = {
   plugin_home: '插件·主页',
   plugin_backend: '插件·后台',
+  // 没装插件时由整机版/桌面端驱动本机 Chrome 采的（lib/browser/local-collect.ts）。
+  // 单列一档：它与插件同一套解析器，但触发方式不同，台账上要分得清
+  local_browser: '本机浏览器',
+  desktop: '桌面客户端执行器',
   server: '服务端定时',
   import: '文件导入',
   manual: '页面手动',

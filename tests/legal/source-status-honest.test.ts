@@ -45,9 +45,12 @@ describe('数据源状态：说了就要显示', () => {
 
   it('判据本身：插件能采的 → plugin（不是 none）', () => {
     // 测试环境没有任何 key，所以这些落在 plugin 档而不是 server
-    for (const p of ['douyin', 'xiaohongshu', 'wechat', 'tiktok']) {
+    for (const p of ['douyin', 'xiaohongshu', 'tiktok']) {
       expect(competitorSourceStatus(p), `${p} 应该是 plugin`).toBe('plugin');
     }
+    // 公众号：插件采不到（2026-09-03 移除了走用户自己后台那条路），没配 NewRank 就是 none。
+    // 这一格必须如实报——说「插件能采」而它采不了，用户会一直等一个永远不来的结果。
+    expect(competitorSourceStatus('wechat')).toBe('none');
   });
 
   it('🔒 配上 key 之后要变成 server（判据真的读环境，不是写死的）', () => {

@@ -107,7 +107,7 @@ export const ownPostIngestSchema = z.object({
   accountId: z.string().max(64).optional(),
   // 这批数据从哪采的，只进采集台账（lib/ingest/collection-run.ts），不参与任何归属判断。
   // 老版本插件不带这个字段 → 按「作品页单篇采集」计，那是它当时唯一的能力。
-  channel: z.enum(['plugin_home', 'plugin_backend']).optional(),
+  channel: z.enum(['plugin_home', 'plugin_backend', 'local_browser', 'desktop']).optional(),
   posts: z.array(postSchema).min(1).max(50),
 });
 

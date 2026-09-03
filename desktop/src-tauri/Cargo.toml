@@ -1,6 +1,6 @@
 [package]
 name = "beacon-desktop"
-version = "1.2.5"
+version = "1.2.6"
 description = "烽火台整机版的桌面壳：窗口 + 托盘 + 开机自启，界面就是本机 localhost 的完整 Web 界面"
 edition = "2021"
 
@@ -15,7 +15,12 @@ tauri-plugin-updater = "2"   # 一键更新：查 /downloads/desktop-update.json
 tauri-plugin-dialog = "2"    # 更新确认框（v2 的 updater 不带内置对话框）
 tauri-plugin-process = "2"   # 装完重启自己
 serde_json = "1"
-tokio = { version = "1", features = ["time"] }  # 更新检查的 6 小时间隔  # 只用于把提示文案安全地转成 JS 字符串字面量
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["time", "net"] }  # 更新检查的 6 小时间隔；执行器轮询与 CDP 连接
+# 采集执行器（2026-09-03）：领活 + 取脚本 + 交回 走 HTTP；驱动本机 Chrome 走 CDP 的 WebSocket（只连 127.0.0.1，不需要 TLS）
+reqwest = { version = "0.12", features = ["json"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
 
 [profile.release]
 codegen-units = 1

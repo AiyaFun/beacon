@@ -62,7 +62,7 @@ function chromeStub() {
       },
       storage: {
         sync: {
-          get: (k, cb) => { const v = { showInPageAi: true, scheduledCollect: true, scheduledCollectHour: 9, selfAutoCollect: true, selfAutoHour: 9, autoCollect: true, dailyReminder: true, host: 'https://beacon.iyunci.cn', token: 'bcn_示例令牌_请在设置页生成' };
+          get: (k, cb) => { const v = { showInPageAi: true, scheduledCollect: true, scheduledCollectHour: 9, autoCollect: true, dailyReminder: true, host: 'https://beacon.iyunci.cn', token: 'bcn_示例令牌_请在设置页生成' };
             if (typeof cb === 'function') { cb(v); return; } return Promise.resolve(v); },
           set: () => Promise.resolve(),
         },

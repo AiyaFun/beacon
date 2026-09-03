@@ -18,7 +18,7 @@ const log = createLogger({ module: 'agent-preset' });
 
 export type DispatchPresetInput = {
   presetId: string;
-  /** 谁触发的。schedule 那种才允许无人值守（人不在跟前才有那个必要） */
+  /** 谁触发的（页面点卡=preset，定时=schedule）。授权档按卡上存的来，两种来源同权 */
   origin: 'preset' | 'schedule';
   /** 定时派的话记下是哪一条——连败自停闸靠它回写 */
   scheduledAgentId?: string;
@@ -36,7 +36,7 @@ export type DispatchResult =
  * 派一条预设任务。
  *
  * 【授权怎么定】卡上存的那份是**上界**，但仍然要过 startAgentRun 里那几道闸：
- *   · 无人值守只有定时/预设能用（页面上点的那一下人就在跟前，没有理由不问他）；
+ *   · 授权档按卡上存的来，页面点卡与定时派同权（2026-09-03 起缺省直接跑完）；
  *   · 自主智能体的工具白名单与用户自己的权限求交集。
  * 卡是「用户当时定好的」，不是「绕过检查的通行证」。
  */

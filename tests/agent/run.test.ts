@@ -37,8 +37,9 @@ const { settleAgentKicks } = await import('@/lib/agent/kick');
 //（生产的请求路径绝不该调它，那等于把异步又变回同步）。
 //
 // 这两个小包装刻意**不放宽任何断言**：等的是同一次运行，读的是同一张表。
+// 这一组测的是**确认闸本身**，所以显式走逐步确认档（2026-09-03 起缺省已是「直接跑完」）
 async function runToEnd(c: typeof ctx, goal: string) {
-  const started = await startAgentRun(c, goal);
+  const started = await startAgentRun(c, goal, { authMode: 'confirm_each' });
   await settleAgentKicks();
   return getAgentRunView(c, started.runId);
 }

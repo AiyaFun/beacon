@@ -21,7 +21,6 @@ import { growthOverWindow, windowRange, WINDOW_LABEL, type WindowKey } from '@/l
 import type { PostGrowth } from './CompetitorTopPosts';
 import { CollectionRuns } from '@/components/CollectionRuns';
 import { listCollectionRuns } from '@/lib/ingest/collection-run';
-import { wechatCollectRuleLines } from '@/lib/wechat-collect-rules';
 // 「插件能采的平台」只此一份（此前网页与 lib 各存一份 Set，改一处漏一处就会出现
 // 「按钮说能采、后端说不能采」的对不上）
 import { PLUGIN_COLLECTABLE } from '@/lib/ingest/competitor';
@@ -34,7 +33,7 @@ import { HubHeader } from '@/components/HubHeader';
 export const dynamic = 'force-dynamic';
 
 // 页面自上而下只分四段：指标 → 平台筛选 → 管理区（全部折叠）→ 高热作品榜。
-// 管理区（添加账号 / 公众号采集说明 / 对标名单）此前是左侧一条常驻侧栏，账号和说明一多
+// 管理区（添加账号 / 公众号文章导入 / 对标名单）此前是左侧一条常驻侧栏，账号和说明一多
 // 就把主内容——作品榜——挤成半屏还看不完；现在收进折叠卡，作品榜吃满整宽。
 export default async function CompetitorsPage({
   searchParams,
@@ -160,7 +159,7 @@ export default async function CompetitorsPage({
   const neverCrawled = watchlist.filter((w) => !w.competitor.lastCrawledAt).length;
   // 一键采集覆盖的竞对数（仅插件能采集的平台）
   const collectableCount = watchlist.filter((w) => PLUGIN_COLLECTABLE.has(w.competitor.platform)).length;
-  // 公众号走导入通道（无公开主页 → 插件采不到），有订阅公众号才显示导入卡
+  // 公众号只有导入通道（无公开主页，插件也不再进你自己的后台采），有订阅公众号才显示导入卡
   const wechatAccounts = allWatchlist
     .filter((w) => w.competitor.platform === 'wechat')
     .map((w) => ({ id: w.competitorId, name: w.competitor.name, handle: w.competitor.handle }));
@@ -181,14 +180,14 @@ export default async function CompetitorsPage({
   );
 
   // ⚠️ 这份平台清单要与 lib/ingest/competitor.ts 的 PLUGIN_COLLECTABLE 对齐
-  //（tests/ingest/platform-copy-sync.test.ts 会扫）。此前漏了 TikTok 与公众号——
+  //（tests/ingest/platform-copy-sync.test.ts 会扫）。此前漏了 TikTok——
   // 被明确告知「不支持」的用户根本不会去试，功能等于不存在。
-  // 公众号单独说明：它没有公开主页，贴不了链接，走的是插件在你自己后台里查。
+  // 公众号单独说明：它没有公开主页，插件采不到，只能导入自己导出的文章。
   const rosterOrEmpty =
     rosterRows.length === 0 ? (
       <Empty
         icon="🎯"
-        text="还没有对标账号——贴一个同行主页链接就能建档，B站/抖音/小红书/YouTube/X/TikTok 都支持；公众号没有公开主页，填公众号名称后由插件在你自己的后台里查"
+        text="还没有对标账号——贴一个同行主页链接就能建档，B站/抖音/小红书/YouTube/X/TikTok 都支持；公众号没有公开主页，插件采不到，只能用导出文件导入"
       />
     ) : (
       <CompetitorRoster rows={rosterRows} />
@@ -254,7 +253,7 @@ export default async function CompetitorsPage({
       {/* ── 管理区：三张卡并排一行，默认全收起，用到再展开 ──
            展开的那张会自动占满整行（.fold-row 里的纯 CSS 规则）——
            名单表格和采集台账挤在 1/3 宽里没法看，但收起态只有一行标题，
-           并排才不至于让三张卡吃掉三屏。公众号那张是有订阅才出现的第四张，
+           并排才不至于让三张卡吃掉三屏。公众号导入那张是有订阅才出现的第四张，
            它出现时会自动换到下一行，不影响前三张的并排。 */}
       {/* #growth 锚点放在网格**外面**：放进去会占掉一个格子，
           第四列就空出来了（真机上撞到过）。四张卡本来同一行，滚到行首即滚到增长卡。 */}
@@ -279,22 +278,15 @@ export default async function CompetitorsPage({
 
         {wechatAccounts.length > 0 && (
           <Fold
-            title="公众号采集"
-            sub={`${wechatAccounts.length} 个公众号 · 走你自己的后台登录态`}
-            note={<span className="small muted hide-mobile">采集节奏规则 · 文章导入</span>}
+            title="公众号文章导入"
+            sub={`${wechatAccounts.length} 个公众号 · 只能导入`}
+            note={<span className="small muted hide-mobile">本地导出后导入</span>}
           >
             <div className="stack" style={{ gap: 10 }}>
               <div className="small muted">
-                由插件在你自己的公众号后台完成，服务器不接触任何登录态。为避免账号被微信限接口，
-                <b>采集节奏是写死的</b>：
-              </div>
-              <ul className="small" style={{ margin: 0, paddingLeft: 18, lineHeight: 1.9 }}>
-                {wechatCollectRuleLines().map((line) => (
-                  <li key={line}>{line}</li>
-                ))}
-              </ul>
-              <div className="small muted" style={{ borderTop: '1px solid var(--border)', paddingTop: 10 }}>
-                <b>备用通道</b>：也可以用 wechat-article-exporter 在本地导出 JSON 再导入（插件不可用、或要补历史文章时用）。
+                插件不会去公众号后台采集（这条通道已在 2026-09-03 整条移除：它用的是你自己的后台登录态调非官方接口，
+                踩线被限的是你自己的号）。公众号竞对文章只有两条路：用 wechat-article-exporter 在本地导出 JSON 再导进来，
+                或由服务端配置的商业数据源获取。
               </div>
               <ImportWechatArticles accounts={wechatAccounts} />
             </div>

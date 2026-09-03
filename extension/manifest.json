@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "烽火台采集助手",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "description": "烽火台 AI 智能采集助手：竞对公开数据自动采集回传、全站 AI 爆款拆解与选题灵感、网页侧栏与 SidePanel 控制台。",
   "permissions": [
     "storage",
@@ -95,7 +95,6 @@
     {
       "matches": [
         "https://channels.weixin.qq.com/platform/*",
-        "https://mp.weixin.qq.com/cgi-bin/*",
         "https://creator.douyin.com/*",
         "https://creator.xiaohongshu.com/*",
         "https://member.bilibili.com/*"
@@ -104,14 +103,6 @@
         "content/common.js",
         "content/self-backend.js",
         "content/publish-fill.js"
-      ]
-    },
-    {
-      "matches": [
-        "https://mp.weixin.qq.com/cgi-bin/*"
-      ],
-      "js": [
-        "content/wechat-competitor.js"
       ]
     },
     {

@@ -141,10 +141,12 @@ describe('batchCollectSelf · 逐个后台开页 → 采 → 回填 → 关页',
     expect(sw.notes.join()).toContain('没有可一键采集的账号');
   });
 
-  it('有公众号账号 → 通知里说明后台回填也启动了', async () => {
+  it('公众号账号不再有任何一键采集的路（插件已不进它的后台）', async () => {
     const sw = loadSw([X, WECHAT]);
     await sw.batchCollectSelf();
-    expect(sw.notes.join()).toContain('公众号');
+    // 只为 X 开一页；不为公众号开任何页，也不再说「后台回填已启动」
+    expect(sw.opened).toHaveLength(1);
+    expect(sw.notes.join()).not.toContain('公众号后台');
   });
 });
 

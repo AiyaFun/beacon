@@ -8,6 +8,24 @@
 /** 五类跑动记录收敛后的统一状态。 */
 export type RunStatus = 'running' | 'waiting' | 'done' | 'failed' | 'cancelled';
 
+export type RunKind = 'agent' | 'workflow' | 'collect' | 'publish' | 'browser';
+
+export type RunStep = { seq: number; kind: string; tool: string; ok: boolean; result: string };
+
+export type RunEntry = {
+  id: string;
+  kind: RunKind;
+  title: string;
+  status: RunStatus;
+  at: Date;
+  detail?: string;
+  href: string;
+  accountName?: string;
+  memberId?: string;
+  memberName?: string;
+  steps?: RunStep[];
+};
+
 /**
  * 活动条上那枚徽章：文字与配色。
  *

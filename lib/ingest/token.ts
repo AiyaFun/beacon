@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
 import { prisma } from '../db';
+import { parseJson } from '../json';
+import { BROWSER_TASK_KINDS } from '../browser-task/kinds';
 import { log } from '../logger';
 
 // 插件采集令牌：签发 / 列举 / 吊销 / 鉴权解析。
@@ -173,7 +175,15 @@ export async function revokeAllIngestTokens(workspaceId: string, note?: string) 
  *   ② 旧的 Workspace.ingestToken —— 存量用户插件里装的就是这一串。删掉这条兜底 =
  *      部署那一刻所有已装插件集体失效。等界面上的「旧版令牌」都迁完再摘。
  */
-export async function resolveIngestToken(raw: string | null | undefined) {
+/** 执行器自报的能力头：逗号分隔的 kind 列表。只认白名单里的 kind，别的一律丢。 */
+export const INGEST_KINDS_HEADER = 'x-beacon-ingest-kinds';
+export function parseKindsHeader(raw: string | null | undefined): string[] | null {
+  if (raw == null) return null;
+  const ks = String(raw).split(',').map((s) => s.trim()).filter((k) => (BROWSER_TASK_KINDS as readonly string[]).includes(k));
+  return Array.from(new Set(ks)).sort();
+}
+
+export async function resolveIngestToken(raw: string | null | undefined, opts: { kinds?: string | null } = {}) {
   const t = raw?.trim();
   if (!t) return null;
 
@@ -192,16 +202,23 @@ export async function resolveIngestToken(raw: string | null | undefined) {
   }
   if (row) {
     if (row.revokedAt) return null;
-    await touch(row.id, row.lastUsedAt);
-    return { workspace: row.workspace, tokenId: row.id, legacy: false };
+    await touch(row, opts.kinds);
+    return { workspace: row.workspace, tokenId: row.id, legacy: false, kinds: parseJson<string[]>(row.kinds ?? 'null', null as unknown as string[]) ?? null };
   }
 
   const ws = await prisma.workspace.findUnique({ where: { ingestToken: t } });
   return ws ? { workspace: ws, tokenId: null, legacy: true } : null;
 }
 
-async function touch(id: string, lastUsedAt: Date | null) {
-  if (lastUsedAt && Date.now() - lastUsedAt.getTime() < TOUCH_INTERVAL_MS) return;
+async function touch(row: { id: string; lastUsedAt: Date | null; kinds: string | null }, kindsHeader?: string | null) {
+  // 能力变了（插件更新了、或第一次自报）必须立刻写，不受节流管：派活那道闸读的就是这一列
+  const ks = parseKindsHeader(kindsHeader);
+  const kindsJson = ks ? JSON.stringify(ks) : null;
+  const kindsChanged = kindsJson != null && kindsJson !== row.kinds;
+  if (!kindsChanged && row.lastUsedAt && Date.now() - row.lastUsedAt.getTime() < TOUCH_INTERVAL_MS) return;
   // 失败不影响鉴权本身：lastUsedAt 只是界面上的一个说明字段
-  await prisma.ingestToken.update({ where: { id }, data: { lastUsedAt: new Date() } }).catch(() => {});
+  await prisma.ingestToken.update({
+    where: { id: row.id },
+    data: { lastUsedAt: new Date(), ...(kindsChanged ? { kinds: kindsJson } : {}) },
+  }).catch(() => {});
 }

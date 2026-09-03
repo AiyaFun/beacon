@@ -7,7 +7,7 @@ import { JSDOM } from 'jsdom';
 // X 的自有数据通道。
 //
 // 【为什么 X 要单开一个文件】别的平台，「我的数据」和「竞对的数据」长在**不同的地方**：
-// 自有数据在 creator.douyin.com / mp.weixin.qq.com 这类独立域名的创作者后台上（认域名就够），
+// 自有数据在 creator.douyin.com / channels.weixin.qq.com 这类独立域名的创作者后台上（认域名就够），
 // 竞对数据在公开主页上。X 两样都不是——浏览量在 X 上对所有人公开，
 // x.com/<我> 和 x.com/<竞对> 是同一个域名、同一套 DOM、同一批 data-testid。
 // 于是：
@@ -364,10 +364,10 @@ describe('SidePanel · X 上的「这是我的作品」', () => {
     expect(p.sent.filter((m) => m.type === 'beacon-ingest-self')).toHaveLength(1);
   });
 
-  it('非 X 平台不受这道确认影响（公众号后台照旧一次点击回填）', async () => {
-    const p = mountSp('https://mp.weixin.qq.com/cgi-bin/appmsgpublish?token=1', {
+  it('非 X 平台不受这道确认影响（创作者后台照旧一次点击回填）', async () => {
+    const p = mountSp('https://creator.douyin.com/creator-micro/content/manage', {
       ok: true,
-      payload: { platform: 'wechat', handle: 'self', posts: [{ platformItemId: 'a', metrics: { views: 1 } }] },
+      payload: { platform: 'douyin', handle: 'self', posts: [{ platformItemId: 'a', metrics: { views: 1 } }] },
     });
     await p.click('spCollectSelf');
     expect(p.sent.filter((m) => m.type === 'beacon-ingest-self')).toHaveLength(1);

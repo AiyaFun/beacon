@@ -26,6 +26,7 @@
 
 <p align="center">
   <a href="#what-problem-does-it-solve">What It Solves</a> ·
+  <a href="#not-supported-yet--in-progress">Not Supported Yet</a> ·
   <a href="#who-is-it-for">Who It's For</a> ·
   <a href="#quick-start">Quick Start</a> ·
   <a href="#production-deployment">Deployment</a> ·
@@ -44,11 +45,11 @@ Beacon brings all three into one platform so you don't have to juggle a dozen ap
 | Feature | Description |
 |---|---|
 | **Trending Aggregation** | Real-time trending topics from Weibo, Douyin (TikTok CN), Bilibili, Zhihu, Baidu, YouTube, etc. with AI-powered clustering and deduplication |
-| **Competitor Monitoring** | Cross-platform competitor tracking (Douyin, WeChat Official Accounts, Xiaohongshu, Bilibili, YouTube, X) with automatic content scraping and analytics |
+| **Competitor Monitoring** | Cross-platform competitor tracking (Douyin, Xiaohongshu, Bilibili, YouTube, X, TikTok) with automatic content scraping and analytics. **For WeChat Official Accounts / Channels see "Not Supported Yet" below** |
 | **Topic Engine** | A panel of 12 AI personas reviews topics from different angles, tailored to your creator profile |
 | **Writing Workshop** | AI-assisted drafting, one-click multi-platform rewriting, humanness scoring, fact-drift detection, automatic AIGC labeling |
 | **Compliance Check** | 4-tier sensitive word library with per-platform rules — scan before you publish |
-| **Browser Extension** | One-click inspiration clipping, self-account data sync, competitor content collection |
+| **Browser Extension** | One-click inspiration clipping, self-account data sync, competitor content collection (**never touches the WeChat Official Account back office** — see below) |
 | **Bot Integration** | Feishu (Lark) group bot for trending alerts and natural language queries |
 | **Analytics Dashboard** | Unified multi-account dashboard with trend analysis and weekly reports |
 | **One-Click Publishing** | WeChat Official Accounts go through the official API (drafts only by default); for Douyin / Xiaohongshu / Bilibili / WeChat Channels the extension fills the back-office form and **stops before the publish button** — you press it |
@@ -87,6 +88,55 @@ you a finished piece and stop; pasting, publishing and collecting the results we
 - **One page for keys**: model providers, image generation, publishing credentials, collection
   tokens and bot secrets in one place, with a **side-effect-free** connectivity check (no test
   messages sent, no images actually generated; webhook-only bots are honestly marked "can't test").
+
+## Removed: WeChat Official Account scraping (2026-09-03)
+
+**What changed**: the channel that collected data through *your own logged-in WeChat Official
+Account back office* is gone. The extension no longer matches **any page under
+`mp.weixin.qq.com`**. Two features were deleted with it:
+
+1. **Competitor collection for Official Accounts** — calling the back office's own `searchbiz`
+   (search an account by name) and `appmsgpublish` (list that account's already-published public
+   articles) endpoints to fetch a competitor's article list;
+2. **Daily auto-sync of your own Official Account metrics** — opening your own back office in a
+   background tab on a schedule to read reads / "wow" / read-through rate for your own posts.
+
+**Why**: those endpoints are **not part of WeChat's official open API**. Calling them in an
+automated way **may violate the WeChat Official Accounts Platform service agreement** ("no
+unofficial interfaces", "no automated access"), and if it does, the account that gets rate-limited,
+feature-blocked or penalised is **your own** — we cannot appeal on your behalf.
+
+The feature shipped with three mitigations: off by default, a separate one-time risk
+acknowledgement, and hard-coded conservative throttling (one collection per account per 12h,
+5 accounts per round, 3–6s between requests, 30-minute stop on any rate-limit signal). Those
+**lower the probability but cannot remove the risk** — and the risk sat on the user's account while
+the payoff was a list of article titles. That trade does not pay, so the whole channel is gone
+rather than getting one more guardrail.
+
+**What to use instead**:
+
+| What it used to do | What to do now |
+|---|---|
+| Collect a competitor Official Account's article list | Configure `BEACON_NEWRANK_KEY` (a commercial data source; the server fetches it, your account is never used), or export JSON locally with [wechat-article-exporter](https://github.com/jooooock/wechat-article-exporter) and import it under "Competitors → Import WeChat articles" |
+| Sync your own Official Account metrics | No automated path for now. The other four creator back offices (WeChat Channels / Douyin / Xiaohongshu / Bilibili) are unaffected — click once to sync as before |
+| Publishing to Official Accounts | **Unaffected** — it uses WeChat's official API (drafts) |
+
+Data already collected is untouched and is not deleted.
+
+## Not Supported Yet / In Progress
+
+This section lists what Beacon **cannot do yet**. It exists so the feature table above does not
+read as a promise: each item below either has no usable data channel, or has not been verified
+against a real environment.
+
+| Item | Status |
+|---|---|
+| **Competitor data for WeChat Official Accounts** | **Bring your own commercial source.** Without `BEACON_NEWRANK_KEY` there is no automated path at all (the extension route was removed); file import only |
+| **Competitor data for WeChat Channels** | **Not supported.** No public profile page and no official content API — neither the server nor the extension can reach it. Subscribing yields no data, and the UI says so instead of pretending to collect |
+| **Syncing your own Official Account metrics** | **No channel** (removed together with the above); manual entry in the dashboard only |
+| **Chinese text on AI covers** | **Being tuned.** Image generation ships, but Chinese headline typography has not been calibrated style-by-style on real output |
+| **TikTok comment collection** | **Not verified on a real account** (needs a login); the other five platforms are verified |
+| **Off-site backup replica** | **Not configured.** Daily backups and weekly restore drills run, but the copy currently lives on the same host (set the four `BEACON_BACKUP_S3_*` variables to enable) |
 
 ## Who Is It For
 
@@ -173,7 +223,7 @@ These are not required for core functionality:
 |---|---|---|
 | **WeChat OAuth** | `BEACON_WECHAT_APPID` + `SECRET` | SMS-only login |
 | **WeChat Pay** | `BEACON_PAY_VENDOR="wxpay"` + merchant keys | Paid features unavailable |
-| **Competitor Data** | `BEACON_TIKHUB_KEY`, `BEACON_YOUTUBE_API_KEY`, etc. | Mock data for those platforms |
+| **Competitor Data** | `BEACON_TIKHUB_KEY`, `BEACON_YOUTUBE_API_KEY`, `BEACON_NEWRANK_KEY`, etc. | No server-side source for that platform: the ones the extension can reach (Douyin / Xiaohongshu / Bilibili / YouTube / X / TikTok) are collected in your own browser instead; **WeChat Official Accounts and Channels have no automated path at all** and the UI says "source not enabled" |
 | **Vector Embeddings** | `BEACON_EMBED_*` | Falls back to keyword matching |
 | **Feishu Bot** | Configure in `/settings` | No push notifications |
 | **Sentry** | `BEACON_SENTRY_DSN` | Local logs only |
@@ -249,12 +299,12 @@ All data collection in Beacon follows transparent, compliant practices:
 
 | Principle | Implementation |
 |---|---|
-| **User-Initiated Only** | All data collection is triggered by the user, never automated scraping in the background |
-| **Official APIs First** | Competitor monitoring prefers official APIs (YouTube Data API, RSSHub) over page scraping |
+| **User-Initiated by Default** | Manual collection is always started by a click. **Two exceptions**: the daily scheduled batch collection (on by default, switchable off in the extension settings) and tasks you dispatch from your own workspace. Both are disclosed line by line in the extension's privacy policy, close their tabs when done, and notify you with the result of every round |
+| **Official APIs First** | Competitor monitoring prefers official APIs and commercial sources (YouTube Data API, RSSHub, NewRank, TikHub) over page scraping, and **uses no platform's unofficial internal endpoints** — the last such channel (WeChat Official Account back office) was removed on 2026-09-03 |
 | **Browser Extension Consent** | The extension only activates when the user explicitly clicks; no silent data harvesting |
 | **Rate Limiting & Throttling** | Built-in request throttling to respect platform rate limits and terms of service |
 | **Privacy Policy Disclosure** | Extension privacy policy fully discloses data collected, stored, and transmitted |
-| **Data Minimization** | Only collects publicly available content metadata; does not scrape private or login-gated data |
+| **Data Minimization** | For competitors, only metadata visible on public pages. **Your own creator back office** is login-gated by definition: there the extension reads only *your own* posts' metrics, only when you click, never handling cookies and never logging in for you |
 | **Right to Delete** | Users can request full data deletion; account removal wipes all collected data with cryptographic verification |
 | **No Credential Harvesting** | The extension never reads, stores, or transmits platform login credentials |
 

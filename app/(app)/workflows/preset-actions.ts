@@ -39,10 +39,10 @@ export async function actSavePreset(input: {
     if (!title) return { ok: false, error: '给这张卡起个名字' };
     if (!goal) return { ok: false, error: '写清楚要它做什么' };
 
-    // 【无人值守不能从这里配】它只对挂了定时的才有意义（人不在跟前）。
-    // 页面上点一下的时候人就在跟前，没有理由不问他——
-    // 真要无人值守，去给这张卡挂一条定时（那边会按 origin='schedule' 放行）。
-    const authMode = input.authMode === 'preauthorized' ? 'preauthorized' : 'confirm_each';
+    // 三档都能存（2026-09-03 起缺省「直接跑完」）。此前无人值守只有挂了定时的卡才生效，
+    // 页面上点卡会被压回逐步确认——用户拍板改为：只要是任务就直接完成。
+    const authMode: 'confirm_each' | 'preauthorized' | 'unattended' =
+      input.authMode === 'preauthorized' || input.authMode === 'confirm_each' ? input.authMode : 'unattended';
     const tools = authMode === 'preauthorized' ? [...new Set(input.preauthorizedTools)] : [];
 
     // 指定的智能体必须是这个租户看得见的（内置或自建）

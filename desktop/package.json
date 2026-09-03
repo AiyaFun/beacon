@@ -1,7 +1,7 @@
 {
   "name": "beacon-desktop",
   "private": true,
-  "version": "1.2.5",
+  "version": "1.2.6",
   "scripts": {
     "tauri": "tauri",
     "dev": "tauri dev",

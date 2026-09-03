@@ -14,9 +14,9 @@ import type { ToolContext } from '../agent/tools';
 //    陌生群成员 @ 一句不能花租户的额度、动租户的数据——身份靠 Member.oaIdentity 对上。
 // ② 可关：09-02 起默认开（DEFAULT_OFF_COMMANDS 已清空——①③两道闸本身就是关卡，不必再多勾一次），
 //    管理员在设置页取消勾选即关；关了之后自然语言里的「帮我写一篇…」也只答不做。
-// ③ 确认类永远回站内：/执行 走 origin:'api'（resolveAuth 强制 confirm_each，那道闸有守卫）；
-//    /派 用卡上存的授权合同（与页面上点卡完全同权——resolveAuth 照样把「无人值守」压回确认档）。
-//    群里**没有任何确认通道**：等确认时回执只给链接，点头必须去网页。
+// ③ 群里派的活**直接跑完**（2026-09-03 起）：/执行 走 origin:'bot'，缺省档 unattended，与页面同权；
+//    /派 用卡上存的授权合同。只有签合约那几样（发布计划/长期记忆/定时/新智能体）仍会停下来——
+//    群里**没有任何确认通道**：那时回执只给链接，点头必须去网页。
 // ④ 闭环：派出的运行记 botChatRef，终态/等确认经 afterTransition 把回执发回本群；
 //    /任务 /终止 只圈定 botChatRef 等于本群的运行，群成员碰不到站内或别的群派的任务。
 
@@ -148,7 +148,7 @@ export async function cmdDispatchPreset(workspaceId: string, ctx: InboundCtx, ar
       '可以派的一键任务卡：',
       ...presets.map((p, i) => `${i + 1}. ${p.title} — ${shortGoal(p.goal)}`),
       '',
-      '用法：/派 卡名（授权范围按卡上存的来；要点头的操作会停下来等你去网页确认）',
+      '用法：/派 卡名（按卡上存的授权范围直接跑；只有建发布计划这类要签合约的才会停下来等你去网页确认）',
     ].join('\n');
   }
 
@@ -171,7 +171,7 @@ export async function cmdDispatchPreset(workspaceId: string, ctx: InboundCtx, ar
   void import('./progress').then((m) => m.startProgressCard(r.turn.runId)).catch(() => {});
   return [
     `✅ 已派出「${hits[0].title}」，${STATUS_LABEL[r.turn.status] ?? r.turn.status}。`,
-    '授权按这张卡存的范围来；要你点头的操作会停下来，去网页确认（群里不能确认）。',
+    '按这张卡存的授权范围直接跑；只有建发布计划这类要签合约的才会停下来，去网页确认（群里不能确认）。',
     `跑完/要确认时我会在群里说一声。看进度 → ${runLink(r.turn.runId)}`,
   ].join('\n');
 }
@@ -180,7 +180,7 @@ export async function cmdDispatchPreset(workspaceId: string, ctx: InboundCtx, ar
 export type DispatchAgent = { id: string; name: string; persona: string };
 
 /**
- * /执行 <目标>：一句话派给 AI 执行器。走 origin:'api'，每个写/花钱动作都要到站内确认。
+ * /执行 <目标>：一句话派给 AI 执行器。走 origin:'bot'，缺省直接跑完（与页面同权）。
  * 自然语言里「帮我写一篇…」这类句子也走这里（lib/bot/intent 判成 run），与敲 /执行 完全同权。
  */
 export async function cmdDispatchGoal(
@@ -199,11 +199,12 @@ export async function cmdDispatchGoal(
   const chatRef = ctx.integrationId && ctx.chatId ? chatRefOf(ctx.provider ?? 'feishu', ctx.integrationId, ctx.chatId) : undefined;
   const { startAgentRun } = await import('../agent/run');
   try {
-    // origin:'api'：resolveAuth 会把授权档强制成 confirm_each（那道闸有专门守卫）。
-    // 群通道与对外 API 同一个待遇——它们都「人不在站内」，没有资格更宽。
+    // origin:'bot'：与页面派发同权，缺省直接跑完（DEFAULT_AUTH_MODE）。
+    // 此前走 origin:'api' 被强制成每步确认，群里派的活必然要回网页点头——用户拍板改掉。
+    // 派活人已过 resolveDispatcher 三道身份闸，这里不再比「另一个模型代签」的对外 API 更严。
     // 选了智能体就让它出面：身份与职责拼进系统提示，运行记录上也记着是谁跑的
     const turn = await startAgentRun(who.ctx, g, {
-      origin: 'api',
+      origin: 'bot',
       botChatRef: chatRef,
       ...(agent ? {
         agentTemplateId: agent.id,
@@ -213,7 +214,7 @@ export async function cmdDispatchGoal(
     void import('./progress').then((m) => m.startProgressCard(turn.runId)).catch(() => {});
     return [
       `✅ ${agent ? `已交给「${agent.name}」，` : ''}任务已开始（${STATUS_LABEL[turn.status] ?? turn.status}）。`,
-      '每一步会改数据或花额度的操作都会停下来等你去网页点头——想少点头就把这件事存成一键任务卡再 /派。',
+      '会直接跑完，不逐步问你；只有建发布计划这类要签合约的才会停下来等你去网页点头。',
       `跑完/要确认时我会在群里说一声。看进度 → ${runLink(turn.runId)}`,
     ].join('\n');
   } catch (e) {

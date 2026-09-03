@@ -37,9 +37,8 @@ const SELF_SUPPORTED = [
   TT_SELF_PROFILE,
   TT_SELF_VIDEO, // 单条作品页，与 B站/抖音的 video 页同档
   // 创作者后台（本人登录态下的自有数据，含公开页拿不到的完播率/完读率）。
-  // 只认后台路径，不认任何他人主页/作品页；公众号只认 /cgi-bin 后台，不认 /s 文章正文页。
+  // 只认后台路径，不认任何他人主页/作品页。
   /^https:\/\/channels\.weixin\.qq\.com\/platform\//,
-  /^https:\/\/mp\.weixin\.qq\.com\/cgi-bin\//,
   /^https:\/\/creator\.douyin\.com\//,
   /^https:\/\/creator\.xiaohongshu\.com\//,
   /^https:\/\/member\.bilibili\.com\//,
@@ -230,12 +229,9 @@ function renderList(competitors) {
 
 function filterAndRenderList() {
   const q = (document.getElementById('searchComp')?.value || '').toLowerCase().trim();
-  // 可采性**只看 collectable**，别再掺 url：公众号没有公开主页（url 恒为 null）却是可采的
-  //（走用户自己后台那条路）。按 url 过滤会让它从列表里消失，而下面的「待刷新 N」又把它算进去
-  // ——「说有 3 个待刷新，列表里只有 2 个」正是那种最难查的对不上。
-  // 早先的补丁是 `c.url || c.platform === 'wechat'`，那只是把这一个平台写死进条件里；
-  // 下一个「可采但没有公开主页」的平台（视频号）进来时会原样再消失一次。
-  // 现在两处用同一个判据，采不采得动交给按钮去表达（没有入口就置灰说明，不是把整行藏起来）。
+  // 可采性**只看 collectable**，别再掺 url：按 url 过滤会让「可采但没有公开主页」的平台
+  // 从列表里消失，而下面的「待刷新 N」又把它算进去——「说有 3 个待刷新，列表里只有 2 个」
+  // 正是那种最难查的对不上。采不采得动交给按钮去表达（没有入口就置灰说明，不是把整行藏起来）。
   const list = allCompetitors.filter(
     (c) => c.collectable && (!q || c.name.toLowerCase().includes(q) || c.handle.toLowerCase().includes(q)),
   );
@@ -262,81 +258,21 @@ function filterAndRenderList() {
       `<div class="csub"><span class="dot ${done ? 'fresh' : 'stale'}"></span>${done ? '今日已刷新' : '待刷新'} · <span class="badge">${PLATFORM_NAME[c.platform] || escHtml(c.platform)}</span></div>`;
     const go = document.createElement('button');
     go.className = 'go';
-    // 后台通道（公众号）/ 打开主页 / 两样都没有。第三种**置灰并说明**，不隐藏——
+    // 打开主页 / 没有入口。后者**置灰并说明**，不隐藏——
     // 藏起来用户会以为这个号没订阅上，置灰他至少知道「订阅了，但这个平台还采不动」。
-    const isWechat = c.platform === 'wechat';
     const canOpen = !!c.url;
-    go.textContent = isWechat ? '后台采集' : canOpen ? (done ? '再采' : '打开采集') : '暂无入口';
-    if (!isWechat && !canOpen) {
+    go.textContent = canOpen ? (done ? '再采' : '打开采集') : '暂无入口';
+    if (!canOpen) {
       go.disabled = true;
-      go.title = '这个平台还没有可直接打开的采集入口，也没有后台通道——先在网页端看它的说明';
+      go.title = '这个平台还没有可直接打开的采集入口——先在网页端看它的说明';
     }
-    go.addEventListener('click', async () => {
-      if (!isWechat) { if (canOpen) chrome.tabs.create({ url: c.url }); return; }
-      // 公众号：后台开自己的公众号后台采，全程不跳走当前页面。结果与被节流拦下的理由
-      // 都要说出来——静默失败会让用户以为坏了然后猛点。
-      go.disabled = true;
-      go.textContent = '采集中…';
-      let r = await ask({ type: 'wechat-collect-one', name: c.handle });
-      // 还没确认过风险：把告知摆出来让用户读完再决定，确认了才重试这一次采集。
-      // 不确认就到此为止——一个请求都没发出去过（闸在 sw.js 的 collectWechatOne 最前面）。
-      if (r?.code === 'risk_unacked') {
-        const agreed = await askWechatRisk();
-        r = agreed ? await ask({ type: 'wechat-collect-one', name: c.handle }) : { ok: false, error: '已取消——未确认风险，公众号采集保持关闭' };
-      }
-      go.disabled = false;
-      go.textContent = '后台采集';
-      const sub = row.querySelector('.csub');
-      if (sub) {
-        sub.textContent = r?.ok
-          ? `已采 ${r.posts} 篇${r.partial ? `（${r.partial}）` : ''}`
-          : r?.error || '采集失败';
-        sub.style.color = r?.ok ? 'var(--green)' : 'var(--red)';
-      }
-      if (r?.ok) loadList(true);
+    go.addEventListener('click', () => {
+      if (canOpen) chrome.tabs.create({ url: c.url });
     });
     row.appendChild(meta);
     row.appendChild(go);
     clistEl.appendChild(row);
   }
-}
-
-// 摆出风险告知，等用户勾选并点确认。resolve(true) 才算同意。
-//
-// 用就地面板而不是 window.confirm：扩展 popup 里的原生弹窗行为在各版本 Chrome 上不一致
-// （有的直接被吞掉），而这是一次**必须让用户真的看见**的告知——被吞掉等于没告知。
-// 勾选框与确认按钮分开：只点按钮不算，必须先勾。
-function askWechatRisk() {
-  const panel = document.getElementById('wechatRisk');
-  const check = document.getElementById('wechatRiskCheck');
-  const ok = document.getElementById('wechatRiskOk');
-  const cancel = document.getElementById('wechatRiskCancel');
-  if (!panel || !check || !ok || !cancel) return Promise.resolve(false);
-
-  check.checked = false;
-  ok.disabled = true;
-  panel.style.display = '';
-  panel.scrollIntoView({ block: 'nearest' });
-
-  return new Promise((resolve) => {
-    const cleanup = () => {
-      panel.style.display = 'none';
-      check.removeEventListener('change', onCheck);
-      ok.removeEventListener('click', onOk);
-      cancel.removeEventListener('click', onCancel);
-    };
-    const onCheck = () => { ok.disabled = !check.checked; };
-    const onOk = async () => {
-      if (!check.checked) return; // 双保险：按钮 disabled 之外再挡一次
-      await ask({ type: 'wechat-risk-ack', acked: true });
-      cleanup();
-      resolve(true);
-    };
-    const onCancel = () => { cleanup(); resolve(false); };
-    check.addEventListener('change', onCheck);
-    ok.addEventListener('click', onOk);
-    cancel.addEventListener('click', onCancel);
-  });
 }
 
 document.getElementById('searchComp')?.addEventListener('input', filterAndRenderList);
@@ -389,8 +325,7 @@ chrome.runtime.onMessage.addListener((msg) => {
     }
   } else if (msg?.type === 'batch-self-done') {
     const el = document.getElementById('selfmsg');
-    if (el) el.textContent = `✓ ${msg.total} 个账号采集完成，回填 ${msg.posts} 条作品`
-      + (msg.wechat ? '；公众号后台正在后台回填' : '');
+    if (el) el.textContent = `✓ ${msg.total} 个账号采集完成，回填 ${msg.posts} 条作品`;
     loadSelfList();
     loadAccounts(true);
   }
@@ -482,7 +417,7 @@ selfBtn.addEventListener('click', async () => {
     if (!tab?.id) { show('无法获取当前标签页', false); return; }
     const url = tab.url || '';
     if (!SELF_SUPPORTED.some((re) => re.test(url))) {
-      show('请在你自己的作品页（B站/抖音/小红书/X/YouTube/TikTok），或创作者后台的「数据中心 · 作品数据」页使用（视频号/公众号/抖音/小红书/B站）', false);
+      show('请在你自己的作品页（B站/抖音/小红书/X/YouTube/TikTok），或创作者后台的「数据中心 · 作品数据」页使用（视频号/抖音/小红书/B站）', false);
       return;
     }
     let collected;
@@ -606,12 +541,10 @@ async function getActiveTabContext() {
 
 // ── 我的账号清单 + 一键采集 ──
 // 与竞对清单同一个形态，只是走自有通道（/api/ingest/self）。
-// 「能不能一键采」按账号如实标：X 靠 handle 开自己主页；创作者后台要登录态换 token、
-// 站内还得跳两次，那是另一套流程（sw.js runSelfAuto），一键采会顺带触发它；
+// 「能不能一键采」按账号如实标：X 靠 handle 开自己主页；创作者后台要登录态、
 // 公开作品页与 multi 账号没有「一个地址采全部」这回事，只能手动。
 function selfCollectHint(a) {
   if (a.platform === 'x') return a.handle ? { ok: true, text: '可一键采集' } : { ok: false, text: '需在账号里补 handle' };
-  if (a.platform === 'wechat') return { ok: true, text: '一键采集时后台自动回填' };
   if (a.platform === 'multi') return { ok: false, text: '多平台账号 · 请在具体作品页回填' };
   return { ok: false, text: '需打开创作者后台/作品页手动回填' };
 }
@@ -887,22 +820,6 @@ document.querySelectorAll('.chip').forEach((chip) => {
       });
     }
   } catch { /* 检查更新失败不该影响面板其余功能 */ }
-
-  // 上一轮公众号自动回填的结果。
-  // ⚠️ 这条通道跑在后台、采完就关标签页，唯一的输出是一条系统通知——而通知在 macOS 上
-  // 没给权限就被静默丢弃。用户点完只看到「公众号标签页开了又关」，面板里一个字都没有。
-  // 结果落盘后（sw.js finishSelfAuto），这里在面板打开时把它读出来。
-  try {
-    const { lastSelfAutoLog } = await chrome.storage.local.get('lastSelfAutoLog');
-    const el = document.getElementById('selfmsg');
-    if (el && lastSelfAutoLog?.timestamp && !el.textContent.trim()) {
-      const t = new Date(lastSelfAutoLog.timestamp).toLocaleString('zh-CN', {
-        month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
-      });
-      el.textContent = `上次公众号回填（${t}）：${lastSelfAutoLog.summary || '已触发'}`;
-      el.style.color = lastSelfAutoLog.ok ? 'var(--green)' : 'var(--text-3)';
-    }
-  } catch { /* 读不到就当没有，不影响面板其余功能 */ }
 
   // Render Schedule Badge Pill
   try {

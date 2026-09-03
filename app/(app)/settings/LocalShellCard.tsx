@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from 'react';
 import { Card } from '@/components/ui';
-import { actSaveShellPolicy, actDetectCdp } from './shell-actions';
+import { actSaveShellPolicy, actDetectCdp, actToggleLocalBrowser } from './shell-actions';
 
 /**
  * 本机命令执行的开关与白名单（只在整机版/私有化出现）。
@@ -22,13 +22,35 @@ export function LocalShellCard({
   const [secs, setSecs] = useState(String(timeoutSec));
   const [cdp, setCdp] = useState(cdpUrl ?? '');
   const [detecting, setDetecting] = useState(false);
+  const [toggling, setToggling] = useState(false);
+  const [toggleMsg, setToggleMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [advanced, setAdvanced] = useState(false);
   const [detect, setDetect] = useState<{ ok: boolean; text: string } | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [pending, start] = useTransition();
 
   return (
-    <Card title="本机命令执行" sub="让 AI 在这台机器上跑命令 · 默认关闭">
-      <p className="small muted" style={{ margin: '0 0 12px', lineHeight: 1.9 }}>
+    <Card title="本机权限" sub="AI 在这台电脑上能做什么 · 电脑操作 / 浏览器操作">
+      {/* 【为什么先给一眼看得懂的总览】用户要的是「像 Claude Code 那样的电脑操作 / 浏览器操作权限设置」：
+          两行状态先说清现在开了什么，细节在下面各自那段。 */}
+      <div className="stack" style={{ gap: 4, marginBottom: 12 }}>
+        <div className="small">
+          🖥 <b>电脑操作</b>（在本机跑命令）：{on ? <b>已开启</b> : '未开启'}
+          {on && dir ? <span className="muted">，限于 {dir}{full ? '，不限命令' : ''}</span> : null}
+        </div>
+        {canBrowser && (
+          <div className="small">
+            🌐 <b>浏览器操作</b>（驱动本机 Chrome 读页面、采集）：{cdp.trim() ? <b>已开启</b> : '未开启'}
+            {cdp.trim() ? <span className="muted">，端点 {cdp.trim()}</span> : null}
+            <span className="muted" style={{ display: 'block', lineHeight: 1.8 }}>
+              开着的话，AI 的采集任务（采竞对主页、回填你自己的 X / TikTok 主页、读网页）<b>优先</b>用它当场跑完并直接给结果，不排给插件等。
+            </span>
+          </div>
+        )}
+      </div>
+      <div className="divider" />
+      <b className="small">电脑操作 · 本机命令执行</b>
+      <p className="small muted" style={{ margin: '4px 0 12px', lineHeight: 1.9 }}>
         开启后，AI 可以在<b>你指定的目录里</b>执行<b>你列出的命令</b>。不经 shell——
         管道、<code className="mono">;</code>、<code className="mono">&&</code> 这些不会被解释，
         参数里指向目录外的路径会被拒绝。
@@ -79,43 +101,75 @@ export function LocalShellCard({
       {canBrowser && (
         <>
           <div className="divider" />
-          <b className="small">用本机浏览器抓取</b>
+          <b className="small">浏览器操作 · 用本机浏览器抓取</b>
           <p className="small muted" style={{ margin: '4px 0 10px', lineHeight: 1.85 }}>
             填了调试端点之后，AI 能用<b>你自己这个 Chrome</b> 打开网页读内容——
             需要登录才看得见的东西也读得到，因为用的就是你的登录态。
             <b>它只读</b>：不点击、不填写、不提交任何表单，也<b>不会替你输入账号密码</b>。
             也不会去看你已经开着的那些标签，每次都新开一个页面、用完关掉。
           </p>
-          <label className="small">
-            浏览器调试端点（留空 = 关闭；只能填本机地址）
-            <input className="input" value={cdp} onChange={(e) => setCdp(e.target.value)} placeholder="http://127.0.0.1:9222" />
-          </label>
-          {/* 【能探到就别让人手打】原来的流程是托盘弹一句「请填成 http://127.0.0.1:9222」，
-              用户切窗口手打一遍——打成 localhost:9222 少了协议、或打成 9223，
-              都会得到一个「看起来配好了、采集时才报错」的状态 */}
-          <div className="row" style={{ gap: 8, marginTop: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* 【一个开关】用户要的是 Claude Code 那种「点一下就能用」。整机版的服务就在他电脑上，
+              点开 → 服务端自己把 Chrome 带端口拉起来 → 写库；拉不起来就如实说、不写库。
+              手填端点收进「高级」，给端口不是 9222 的人留着。 */}
+          <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 6 }}>
             <button
-              type="button" className="btn btn-sm" disabled={detecting}
+              type="button" className={`btn btn-sm ${cdp.trim() ? '' : 'btn-primary'}`} disabled={toggling}
+              data-act="toggle-local-browser"
               onClick={() => {
-                setDetect(null); setDetecting(true);
-                void actDetectCdp().then((r) => {
-                  setDetecting(false);
-                  if (r.ok && r.url) { setCdp(r.url.split('（')[0]); setDetect({ ok: true, text: `找到了：${r.url}` }); }
-                  else setDetect({ ok: false, text: r.error ?? '没找到' });
+                const next = !cdp.trim();
+                setToggleMsg(null); setToggling(true);
+                void actToggleLocalBrowser(next).then((r) => {
+                  setToggling(false);
+                  if (!r.ok) { setToggleMsg({ ok: false, text: r.error ?? '没开起来' }); return; }
+                  if (next) {
+                    setCdp(r.url ?? '');
+                    setToggleMsg({ ok: true, text: r.started ? `已开启：Chrome 已带调试端口启动（${r.url}）` : `已开启：Chrome 本来就带着端口在跑（${r.url}）` });
+                  } else {
+                    setCdp('');
+                    setToggleMsg({ ok: true, text: '已关闭。你的 Chrome 没有被动过。' });
+                  }
                 });
               }}
             >
-              {detecting ? '找着…' : '自动检测'}
+              {toggling ? (cdp.trim() ? '关闭中…' : '启动中…') : (cdp.trim() ? '关闭浏览器操作' : '开启浏览器操作')}
             </button>
-            {detect && (
-              <span className="small" style={{ color: detect.ok ? 'var(--text-2)' : 'var(--red)' }}>{detect.text}</span>
+            {toggleMsg && (
+              <span className="small" style={{ color: toggleMsg.ok ? 'var(--text-2)' : 'var(--red)', lineHeight: 1.7 }}>{toggleMsg.text}</span>
             )}
           </div>
-          <p className="small muted" style={{ margin: '6px 0 0', lineHeight: 1.85 }}>
-            <b>推荐做法：</b>在桌面客户端的托盘菜单点<b>「启动采集浏览器」</b>，回来点上面的<b>「自动检测」</b>，
-            什么都不用敲。托盘里还有<b>「生成采集浏览器快捷方式」</b>——
-            在桌面放一个启动器，以后用它开 Chrome 就一直带着调试端口，不必每次先完全退出。
-          </p>
+          <button type="button" className="btn btn-sm btn-ghost" onClick={() => setAdvanced((v) => !v)}>
+            {advanced ? '收起高级' : '高级：手填端点 / 自动检测'}
+          </button>
+          {advanced && (
+            <div className="stack" style={{ gap: 6, marginTop: 6 }}>
+              <label className="small">
+                浏览器调试端点（留空 = 关闭；只能填本机地址；改完要点下面的「保存」）
+                <input className="input" value={cdp} onChange={(e) => setCdp(e.target.value)} placeholder="http://127.0.0.1:9222" />
+              </label>
+              <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <button
+                  type="button" className="btn btn-sm" disabled={detecting}
+                  onClick={() => {
+                    setDetect(null); setDetecting(true);
+                    void actDetectCdp().then((r) => {
+                      setDetecting(false);
+                      if (r.ok && r.url) { setCdp(r.url.split('（')[0]); setDetect({ ok: true, text: `找到了：${r.url}` }); }
+                      else setDetect({ ok: false, text: r.error ?? '没找到' });
+                    });
+                  }}
+                >
+                  {detecting ? '找着…' : '自动检测'}
+                </button>
+                {detect && (
+                  <span className="small" style={{ color: detect.ok ? 'var(--text-2)' : 'var(--red)' }}>{detect.text}</span>
+                )}
+              </div>
+              <p className="small muted" style={{ margin: 0, lineHeight: 1.85 }}>
+                桌面客户端托盘里还有<b>「启动采集浏览器」</b>与<b>「生成采集浏览器快捷方式」</b>——
+                后者在桌面放一个启动器，以后用它开 Chrome 就一直带着调试端口。
+              </p>
+            </div>
+          )}
           {/* 【必须说破的两件事】不写清楚，用户上线才会撞上，而且都会先怀疑是我们坏了：
               ① Chrome 同一个 profile 只跑一个进程，**运行中的 Chrome 无法再打开调试端口**——
                  他日常那个开着的话，带参数再启动什么都不会发生；

@@ -95,8 +95,10 @@ describe('竞对回传 · 台账', () => {
     expect(runs2[0].coveredFrom?.toISOString()).toBe(d('2026-07-29').toISOString());
   });
 
-  it('通道：公众号是「插件·后台」，其它平台是「插件·主页」；调用方显式指定优先（如文件导入）', async () => {
-    expect(defaultChannelFor('wechat')).toBe('plugin_backend');
+  it('通道：竞对回传一律「插件·主页」；调用方显式指定优先（如文件导入）', async () => {
+    // 公众号那条「插件·后台」通道已于 2026-09-03 移除（它用的是用户自己的后台登录态）。
+    // plugin_backend 仍然存在，但只属于自有数据那条路，不会由竞对回传落进来。
+    expect(defaultChannelFor('wechat')).toBe('plugin_home');
     expect(defaultChannelFor('douyin')).toBe('plugin_home');
 
     await ingestCompetitorData(

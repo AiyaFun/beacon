@@ -68,12 +68,6 @@ const LOCAL_KEYS_ON_UNLINK = [
   'competitors', 'competitorsAt', 'workspace', // 竞对清单 + 工作区名
   'selfAccounts', 'selfAccountsAt',            // 自有账号清单
   'lastScheduledCollectLog',                   // 最近一次定时采集摘要
-  'lastSelfAutoLog',                           // 最近一次公众号自动回填结果
-  'wechatThrottle',                            // 公众号采集节流记录
-  'wechatFakeids',                             // 公众号名 → fakeid 缓存
-  // 公众号采集的风险确认。**要清**：确认是「这个人对这次使用」作出的意思表示，
-  // 换了工作区/换了人还沿用上一个人的确认，等于没告知过就开始采。
-  'wechatRiskAck',
   'authFail',
 ];
 
@@ -87,12 +81,11 @@ async function unlinkWorkspace(reason) {
   unlinking = true;
   try {
     // 先停表再清数据：反过来的话，两者之间只要有一次闹钟触发，就会把缓存又写回来一份
-    await chrome.alarms.clear('beacon-self-auto');
     await chrome.alarms.clear('beacon-scheduled-collect');
     await chrome.alarms.clear('beacon-daily');
     // 定时开关必须落盘关掉，不能只清闹钟：scheduledCollect 的默认值是**开**（!== false），
     // 只清闹钟的话，下次浏览器启动 armScheduledCollectAlarm 会照默认值原样挂回去。
-    await chrome.storage.sync.set({ selfAutoCollect: false, scheduledCollect: false });
+    await chrome.storage.sync.set({ scheduledCollect: false });
     await chrome.storage.sync.remove(SYNC_KEYS_ON_UNLINK);
     await chrome.storage.local.remove(LOCAL_KEYS_ON_UNLINK);
     try { await chrome.action.setBadgeText({ text: '' }); } catch { /* ignore */ }
@@ -401,7 +394,7 @@ function selfIngestSummary(data, platform) {
     // 也只有那儿实现了 __beaconSelfDiagnose。在 X / 公开作品页上照抄这套说辞，
     // 用户会照着去点一个根本不存在的自检，再收到一句「当前页面不是受支持的创作者后台」——
     // 真机 2026-07-27 就是这么绕了一圈（那次真正的原因是中文界面下指标没读到）。
-    const isBackend = ['wechat', 'shipinhao'].includes(platform) || platform === undefined;
+    const isBackend = ['shipinhao', 'douyin', 'xiaohongshu', 'bilibili'].includes(platform) || platform === undefined;
     return {
       ok: false,
       text: `认出了 ${skipped} 条作品，但一个指标都没读到，因此一条都没入库。`
@@ -491,7 +484,6 @@ async function ingestSelf(payload, opts = {}) {
       // 名字取页面上的昵称（X 上就是「Aiya哎呀」），后台页取不到昵称就用平台名兜底，事后可改。
       //
       // 放在这里而不是三个界面里：三个入口都走这条函数，写在各自的点击处理里迟早漏一个；
-      // 每天自动回填那条路（selfAutoRun）根本没有界面，也只有放在这儿才覆盖得到。
       //
       // ⚠️ 只重试一次（retried 标记）：建号后仍报没账号说明是别的问题（比如绑定的账号
       // 属于别的工作区），再循环下去就是无限建号。
@@ -876,126 +868,14 @@ function armDailyAlarm() {
   chrome.alarms.create('beacon-daily', { delayInMinutes: minutesUntil9(), periodInMinutes: 1440 });
 }
 
-// ── 自有创作者后台 · 每日自动回填 ─────────────────────────────────────
-// ⚠️ 这是全插件**唯一**一处「代替用户打开登录态后台页」的行为，合规约束逐条对应
-//    store/privacy.md 里新写的那一段：
-//   ① 默认关闭，必须由用户在设置页显式开启（selfAutoCollect），关掉就一行代码都不跑；
-//   ② 只打开用户自己的创作者后台域名，只读已渲染的数字——不点击、不调接口、不碰 Cookie；
-//   ③ 标签页在后台创建（active:false），采完立即关闭，不抢用户的焦点；
-//   ④ 每轮结束必发通知说明「刚刚自动采了什么」，不做静默无感的事；
-//   ⑤ 登录态过期就停手并如实告知，绝不尝试登录。
-// 编排方式与竞对批量采集（batchCollect）同源：开后台标签页 → 内容脚本回传 → 关标签页。
-const SELF_AUTO_ENTRY = {
-  // 公众号后台每个地址都要 token，且 token 会过期——所以先开 /cgi-bin/home，
-  // 让服务端凭会话 Cookie 重定向补上 token，内容脚本再带着它跳到数据页。
-  // 其它平台的入口等真机验证过再往这里加：加错了只是白开一个标签页等超时，
-  // 却会让用户以为「在采」，那比不加更糟。
-  wechat: 'https://mp.weixin.qq.com/cgi-bin/home',
-};
-const SELF_AUTO_TIMEOUT_MS = 90000;
-let selfAutoRun = null;
-
-async function selfAutoSettings() {
-  const s = await chrome.storage.sync.get(['selfAutoCollect', 'selfAutoHour']);
-  const hour = Number(s.selfAutoHour);
-  return { on: s.selfAutoCollect === true, hour: Number.isInteger(hour) && hour >= 0 && hour <= 23 ? hour : 9 };
-}
-
-function minutesUntilHour(hour) {
-  const now = new Date();
-  const next = new Date(now);
-  next.setHours(hour, 0, 0, 0);
-  if (next <= now) next.setDate(next.getDate() + 1);
-  return Math.max(1, Math.round((next - now) / 60000));
-}
-
-async function armSelfAutoAlarm() {
-  const { on, hour } = await selfAutoSettings();
-  if (!on) { await chrome.alarms.clear('beacon-self-auto'); return; }
-  chrome.alarms.create('beacon-self-auto', { delayInMinutes: minutesUntilHour(hour), periodInMinutes: 1440 });
-}
-
+// ── 「我的数据」采集结果通知 ─────────────────────────────────────────
+// 一键采集全程在后台开标签页跑、采完就关，不发通知的话用户什么都看不见。
 function notifySelfAuto(message) {
   try {
     chrome.notifications.create('beacon-self-auto-' + Date.now(), {
       type: 'basic', iconUrl: 'icon128.png', title: '烽火台 · 自动回填', message, priority: 0,
     });
   } catch { /* 通知不可用不影响采集本身 */ }
-}
-
-async function finishSelfAuto(note) {
-  const run = selfAutoRun;
-  selfAutoRun = null;
-  if (!run) return;
-  clearTimeout(run.timer);
-  // 服务端派的活在这里交回真实结果。判据用「有没有真的写进数据」而不是「有没有报错」：
-  // 卡在登录页会走超时分支，那条路上一条数据都没采到，不能算成功。
-  if (run.taskId) {
-    const got = run.updated + run.created;
-    reportBrowserTask(run.taskId, got > 0, got > 0 ? `更新 ${run.updated} 新增 ${run.created}` : (note || '没采到数据'))
-      .catch(() => {});
-  }
-  // 切到前台等用户登录的那一页**归用户了**，不许自动关掉——他可能正在扫码，
-  // 或者刚登录完想留着这一页。「采完立即关闭」只对始终在后台的那种情形成立。
-  if (run.tabId != null && !run.surfaced) await chrome.tabs.remove(run.tabId).catch(() => {});
-  const n = run.updated + run.created;
-  // 「认出了作品但一个指标都没读到」与「一行都没认出来」是两个完全不同的故障，
-  // 修法也不同（等渲染 / 补列名 vs 补选择器）。混报成一句「没读到新数据」等于没报。
-  const zero = run.skipped > 0
-    ? `这一轮认出了 ${run.skipped} 条作品但没读到指标，一条都没入库——请手动打开后台页点一次回填并看自检`
-    : '这一轮没读到新数据（后台页可能没渲染完）';
-  const summary = note || (n > 0 ? `已自动回填 ${n} 条数据到数据看板` : zero);
-  // ⚠️ 系统通知是**收不到的**：macOS 上 Chrome 的通知权限没给就静默丢弃，用户看到的
-  // 只有「一个公众号标签页开了又关」。这条通道全程在后台跑、标签页采完就关，
-  // 不落盘就等于没有任何可回看的交代——与定时采集的 lastScheduledCollectLog 同一套做法。
-  await chrome.storage.local
-    .set({ lastSelfAutoLog: { timestamp: Date.now(), ok: !note && n > 0, summary } })
-    .catch(() => {});
-  notifySelfAuto(summary);
-}
-
-async function runSelfAuto(opts = {}) {
-  const { on } = await selfAutoSettings();
-  // force = 用户在插件里**主动点**了「一键采集我的数据」。定时那条路仍然受开关约束，
-  // 但主动点击不该被一个「每天自动回填」的开关挡住——那是两件事。
-  // opts.platform = 服务端派下来的「去这个平台的后台回填」（BrowserTask），
-  // 它同样属于「有人明确要求」，不该被自动回填的开关挡住。
-  const requested = opts.force || !!opts.platform;
-  if (!on && !requested) return { ok: false, message: '自动回填开关是关着的' };
-  if (selfAutoRun) return { ok: false, message: '上一轮回填还没收尾' }; // 不叠加
-  const { token } = await getConfig();
-  if (!token) {
-    notifySelfAuto('自动回填没执行：插件设置里还没填采集令牌');
-    return { ok: false, message: '还没填采集令牌' };
-  }
-  // 入口只给裸地址：公众号会用会话 Cookie 302 到带 token 的地址，
-  // **重定向会把我们自己加的查询参数丢掉**，所以「这是不是自动回填的标签页」
-  // 绝不能靠 URL 上的标记来传递——由 SW 按 tabId 认，内容脚本每次加载问一句。
-  const entry = SELF_AUTO_ENTRY.wechat;
-  let tab = null;
-  try {
-    tab = await chrome.tabs.create({ url: entry, active: false });
-  } catch (e) {
-    notifySelfAuto(`自动回填没能打开后台页：${e?.message || e}`);
-    return;
-  }
-  // interactive = 用户此刻主动点的（popup 的「采集我的数据」、设置页的「试跑」）。
-  // 只有这种时候撞到未登录才把登录页切到前台：定时那轮多半人不在电脑前。
-  selfAutoRun = {
-    tabId: tab.id, step: 0, hops: 0, updated: 0, created: 0, skipped: 0,
-    interactive: !!(opts.force || opts.interactive), surfaced: false,
-    // 服务端派下来的活：真正的结果要等 finishSelfAuto 才知道（这个函数开完标签页就返回，
-    // 采集是内容脚本一步步回消息推进的）。把 taskId 带在 run 状态上，收尾时再交活——
-    // 在这里交等于「开了个标签页」就报成功，而它可能卡在登录页直到超时。
-    taskId: opts.taskId || null,
-  };
-  // 兜底：内容脚本任何一步没回话（页面改版、卡在登录页、跳转成环），都不能把标签页留在那儿
-  selfAutoRun.timer = setTimeout(() => { finishSelfAuto('自动回填超时：后台页没能在 90 秒内给出数据'); }, SELF_AUTO_TIMEOUT_MS);
-}
-
-// 只认自己开的那个标签页发来的消息——普通浏览时的后台页不参与自动回填
-function isSelfAutoTab(sender) {
-  return !!(selfAutoRun && sender?.tab?.id != null && sender.tab.id === selfAutoRun.tabId);
 }
 
 // ── 右键「收进灵感箱」──
@@ -1320,14 +1200,9 @@ async function runScheduledCollect() {
 
   const startTime = new Date().toISOString();
 
-  // 【为什么不在这里挑目标】原先这里写的是 `c.collectable && c.url`，而**公众号的 url 恒为 null**
-  // （它是唯一「可采却没有公开主页」的平台，走用户自己后台的接口那条路）。于是只订阅公众号的用户
-  // targets 恒为 0，整个 batchCollect 一次都不跑——定时采集对他等于不存在，而界面上开关是开着的。
-  // 这是仓库里已经写死过的一条判断的复发：**可采性只能看 collectable，不能看 url**。
-  //
-  // 修法不是把条件改对，是**不再有第二份条件**：谁该采由 batchCollect 一处说了算（它本来就把
-  // 公众号单独分流了），这里只负责报它交回来的数。自己再数一遍还会数错——原来的分子是
-  // 「今天被采过的竞对数」（含手动采的、含公众号），分母却把公众号排除在外，能报出 3/2 这种比。
+  // 【为什么不在这里挑目标】谁该采由 batchCollect 一处说了算，这里只负责报它交回来的数。
+  // 自己再数一遍必然数错——曾经的分子是「今天被采过的竞对数」（含手动采的），分母却是
+  // 另一套过滤条件算出来的，能报出 3/2 这种比。**不再有第二份条件**。
   let batchRes = { total: 0, collected: 0, notes: [] };
   try {
     const r = await batchCollect(null);
@@ -1336,13 +1211,8 @@ async function runScheduledCollect() {
     /* ignore */
   }
 
-  // 如果同时也开启了自有创作者后台回填，联动触发一次
-  const { on: selfOn } = await selfAutoSettings();
-  if (selfOn) {
-    await runSelfAuto();
-  }
 
-  // notes 里是「被频控拦下」「本轮超出公众号上限」这类原因。丢掉它们，用户看到的就只是
+  // notes 里是「这一页没采到数据」这类原因。丢掉它们，用户看到的就只是
   // 「成功更新 0/3」，然后开始猜是不是插件坏了——被拦下必须说出为什么（同 batch-done 的口径）。
   const notes = batchRes.notes || [];
   const log = {
@@ -1482,7 +1352,6 @@ chrome.runtime.onInstalled.addListener(() => {
   armTaskPollAlarm();
   setupContextMenus();
   armDailyAlarm();
-  armSelfAutoAlarm();
   armScheduledCollectAlarm();
   armUpdateAlarm();
   getCompetitors(true).then((r) => updateBadge(r.competitors));
@@ -1515,7 +1384,6 @@ chrome.runtime.onStartup.addListener(() => {
   // 而不是再等到下一个闹钟点
   drainBrowserTasks().catch(() => {});
   chrome.alarms.get('beacon-daily', (a) => { if (!a) armDailyAlarm(); });
-  armSelfAutoAlarm();
   armScheduledCollectAlarm();
   chrome.alarms.get(UPDATE_ALARM, (a) => { if (!a) armUpdateAlarm(); });
   getCompetitors(true).then((r) => updateBadge(r.competitors));
@@ -1535,11 +1403,14 @@ chrome.runtime.onStartup.addListener(() => {
 // 静默吞掉的话，那条活会一直卡到租约过期再被别人领走，反复失败三次才判死。
 const MAX_TASKS_PER_WAKE = 3;
 
+const SUPPORTED_TASK_KINDS = ['collect_competitor', 'collect_self_profile', 'open_and_read'];
+
 async function claimBrowserTask() {
   const { host, token } = await getConfig();
   if (!host || !token) return null;
   try {
-    const res = await apiFetch(`${host}/api/ingest/tasks`, { headers: { 'x-beacon-ingest-token': token } });
+    // 自报会做哪些 kind：服务端只派这些，旧版插件不会再领到自己不认识的活（与 runBrowserTask 的分支一一对应）
+    const res = await apiFetch(`${host}/api/ingest/tasks`, { headers: { 'x-beacon-ingest-token': token, 'x-beacon-ingest-kinds': SUPPORTED_TASK_KINDS.join(',') } });
     if (!res.ok) return null;
     const data = await res.json();
     return data && data.ok ? data.task : null;
@@ -1577,17 +1448,46 @@ async function runBrowserTask(task) {
     if (r && r.busy) return { ok: false, note: '插件正忙着别的采集，稍后重试' };
     return { ok: true, note: `更新 ${(r && r.collected) || 0}/${(r && r.total) || 0}` };
   }
-  if (task.kind === 'collect_self') {
-    // 这一支**不在这里交活**：runSelfAuto 开完标签页就返回，真正的结果要等内容脚本
-    // 一步步回消息、最后由 finishSelfAuto 汇总。taskId 传下去，让它收尾时交。
-    const r = await runSelfAuto({ platform: task.payload.platform, taskId: task.id });
-    // 只有「压根没启动」（开关关着/没令牌/上一轮没收尾）才在这里交回失败——
-    // 那种情况 finishSelfAuto 永远不会被调用，不交的话这条活会一直挂到租约过期
-    if (r && r.ok === false) return { ok: false, note: r.message || '回填没启动', reported: false };
-    return { ok: true, note: '', deferred: true };
-  }
+  if (task.kind === 'collect_self_profile') return collectSelfProfileTask(task);
   if (task.kind === 'open_and_read') return openAndRead(task.payload);
   return { ok: false, note: `这个版本的插件还不认识「${task.kind}」，请更新插件` };
+}
+
+/**
+ * 服务端派下来的「去自己的主页回填」（X / TikTok 这类没有创作者后台、自有数据就在主页上的平台）。
+ * 与用户手点「一键采集我的数据」（batchCollectSelf）同源：后台开标签页 → 主动要解析结果 → 走自有通道回填。
+ * 账号由服务端解析好带在 payload 里（accountId + handle），这里**不再猜归属**；
+ * 打开的页面认出的 handle 对不上就一条都不回填——绝不把别人的主页当成用户自己的。
+ */
+async function collectSelfProfileTask(task) {
+  if (batchRunning) return { ok: false, note: '插件正忙着别的采集，稍后重试' };
+  const platform = task.payload && task.payload.platform;
+  const handle = task.payload && task.payload.handle;
+  const url = selfCollectUrl({ platform, handle });
+  if (!url) return { ok: false, note: '这个平台没有可打开的主页地址' };
+  batchRunning = true;
+  startKeepAlive();
+  let tab = null;
+  try {
+    tab = await chrome.tabs.create({ url, active: false });
+    const payload = await collectFromTab(tab.id);
+    if (!payload || !payload.posts || payload.posts.length === 0) {
+      return { ok: false, note: '主页没读到作品（可能要先登录该平台，或页面没加载完）' };
+    }
+    const norm = (h) => String(h || '').replace(/^@/, '').toLowerCase();
+    if (norm(payload.handle) !== norm(handle)) {
+      return { ok: false, note: `打开的页面是 @${payload.handle} 的主页，不是 @${handle}，没有回填` };
+    }
+    const res = await ingestSelf({ ...payload, accountId: task.accountId || task.payload.accountId, channel: 'plugin_home' });
+    if (!res || !res.ok) return { ok: false, note: (res && res.error) || '回填失败' };
+    return { ok: true, note: `回填 ${(res.updated || 0) + (res.created || 0)} 条作品` };
+  } catch (e) {
+    return { ok: false, note: (e && e.message) || '采集出错' };
+  } finally {
+    if (tab && tab.id != null) chrome.tabs.remove(tab.id).catch(() => {});
+    batchRunning = false;
+    stopKeepAlive();
+  }
 }
 
 /**
@@ -1661,11 +1561,7 @@ async function drainBrowserTasks() {
     } catch (e) {
       outcome = { ok: false, note: (e && e.message) || '执行时出错' };
     }
-    // deferred = 这条活的结果由别的回调交（collect_self 走 finishSelfAuto）。
-    // 在这儿再交一次会把「刚启动」记成最终结果，把真实结果覆盖掉。
-    if (!outcome.deferred) await reportBrowserTask(task.id, outcome.ok, outcome.note, outcome.data);
-    // 异步收尾的那条已经占住了插件（selfAutoRun 不叠加），这一轮别再领下一个
-    if (outcome.deferred) return;
+    await reportBrowserTask(task.id, outcome.ok, outcome.note, outcome.data);
   }
 }
 
@@ -1674,7 +1570,6 @@ chrome.alarms.onAlarm.addListener((a) => {
   // 拉失败保留上一份缓存，见 refreshParserRules。
   if (a.name === 'beacon-daily') refreshParserRules().catch(() => {});
   if (a.name === 'beacon-daily') dailyReminder();
-  if (a.name === 'beacon-self-auto') runSelfAuto();
   if (a.name === 'beacon-scheduled-collect') runScheduledCollect();
   if (a.name === UPDATE_ALARM) checkForUpdate(true);
   // 顺着已有的两个采集闹钟领一次服务端派的活：不新开闹钟（多一个定时器就多一处会忘的状态，
@@ -1684,18 +1579,10 @@ chrome.alarms.onAlarm.addListener((a) => {
 });
 // 设置页改了开关/时间点就立刻重排闹钟——否则要等下次浏览器重启才生效
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'sync' && ('selfAutoCollect' in changes || 'selfAutoHour' in changes)) armSelfAutoAlarm();
   if (area === 'sync' && ('scheduledCollect' in changes || 'scheduledCollectHour' in changes)) armScheduledCollectAlarm();
   if (area === 'sync' && 'taskPoll' in changes) armTaskPollAlarm();
   // 评论开关一改，右键菜单立刻跟上（菜单只在 onInstalled 建一次，不重建就要等下次装插件才生效）
   if (area === 'sync' && ('commentCollectOwn' in changes || 'commentCollectRival' in changes)) setupContextMenus();
-});
-// 自动回填的标签页被用户手动关掉时立即收尾，别让状态卡住下一轮
-chrome.tabs.onRemoved.addListener((tabId) => {
-  if (selfAutoRun && tabId === selfAutoRun.tabId) {
-    selfAutoRun.tabId = null;
-    finishSelfAuto('自动回填中断：后台页被关闭了');
-  }
 });
 chrome.notifications.onClicked.addListener(async () => {
   const { host } = await getConfig();
@@ -1727,8 +1614,8 @@ function waitForCollect(platform, handle, timeoutMs) {
   });
 }
 
-// opts.interactive 一路传到 collectWechatOne：用户点「全部采集」时人在电脑前，
-// 撞到未登录可以把登录页摆给他；定时那轮（runScheduledCollect）人多半不在，不弹前台页。
+// opts.interactive：用户点「全部采集」时人在电脑前，没采到的那一页可以摆给他看；
+// 定时那轮（runScheduledCollect）人多半不在，不弹前台页。
 // ── 执行可视化（0.9.10，默认关）─────────────────────────────────────────────
 //
 // 开启后，用户**当场点击**的「批量采集 / 回填我的数据」把工作标签页开在前台，
@@ -1764,13 +1651,8 @@ async function batchCollect(reportTabId, opts = {}) {
     if (opts.onlyCompetitorId) {
       collectable = collectable.filter((c) => String(c.id) === String(opts.onlyCompetitorId));
     }
-    // 公众号没有公开主页（url 为 null），走后台接口那条路，且每轮有上限——单独分流。
-    const wechatAll = collectable.filter((c) => c.platform === 'wechat');
-    const wechatTargets = wechatAll.slice(0, WECHAT_RULES.maxAccountsPerRun);
-    // 超出每轮上限的必须报出来。悄悄截断会让用户以为「全采了」，其实一半没动
-    const wechatSkipped = wechatAll.length - wechatTargets.length;
-    const targets = collectable.filter((c) => c.platform !== 'wechat' && c.url);
-    const total = targets.length + wechatTargets.length;
+    const targets = collectable.filter((c) => c.url);
+    const total = targets.length;
     let done = 0;
     let collected = 0;
     const notes = [];
@@ -1820,27 +1702,6 @@ async function batchCollect(reportTabId, opts = {}) {
       if (shown) notifyLogin(note, '烽火台 · 有一页没采到');
     }
 
-    // 公众号：一个一个来，换号之间按规则再等一段——这条通道用的是用户自己的后台会话，慢比快重要
-    for (let i = 0; i < wechatTargets.length; i++) {
-      const c = wechatTargets[i];
-      reportBatch(reportTabId, { type: 'batch-progress', done, total, current: c.name });
-      const r = await collectWechatOne(c.handle, { interactive: !!opts.interactive });
-      if (r.ok) {
-        collected++;
-        if (r.partial) notes.push(`${c.name}：${r.partial}`);
-      } else {
-        notes.push(`${c.name}：${r.error}`);
-        // 撞频控就整轮停手：剩下的号继续打只会把冷却拖得更长，别一起赔进去。
-        // （被 24h 冷却挡下的 throttled 不算故障，跳过继续即可。）
-        if (r.code === 'rate_limited') { done++; break; }
-      }
-      done++;
-      if (i < wechatTargets.length - 1) await new Promise((res) => setTimeout(res, WECHAT_RULES.betweenAccountsMs));
-    }
-    if (wechatSkipped > 0) {
-      notes.push(`还有 ${wechatSkipped} 个公众号本轮没采（每轮最多 ${WECHAT_RULES.maxAccountsPerRun} 个），稍后再来一轮`);
-    }
-
     await getCompetitors(true);
     reportBatch(reportTabId, { type: 'batch-done', total, collected, notes });
     // 把这一趟的真实结果交出去：定时采集要照它报数，不许自己再数一遍（见 runScheduledCollect）
@@ -1860,8 +1721,8 @@ async function batchCollect(reportTabId, opts = {}) {
 // 【哪些账号能一键采】必须有一个「打开就能读到自有数据」的地址：
 //   · X / TikTok —— 没有创作者后台，自有数据就在自己主页上（见 content/x.js、content/tiktok.js），
 //     有 handle 就能开；TikTok 主页九宫格上每条封面都带播放量，一个地址能采一整页；
-//   · 创作者后台（公众号等）—— 地址要登录态换 token、还要在站内跳两次，那是另一套步进机
-//     （runSelfAuto），下面单独触发，不塞进这个循环；
+//   · 创作者后台 —— 地址要登录态、还要在站内跳转，没有「打开就能读」这回事，
+//     只能由用户自己打开后台页再点回填；
 //   · B站/抖音/小红书的公开作品页 —— 一个账号对应 N 篇作品，没有「一个地址采全部」这回事；
 //   · multi（多平台）账号 —— 它不对应任何一个具体平台的页面。
 // 认不出入口的账号**如实标成不可一键采**，而不是白开一个标签页让用户以为在采。
@@ -1906,7 +1767,7 @@ async function collectFromTab(tabId, timeoutMs = 25000) {
 //
 // 【三条自我约束，都是有意为之】
 //   ① **每次最多 20 条**（用户 2026-08-11 定的）。超出的**必须报出来**——
-//      悄悄截断会让用户以为「全采了」，其实一大半没动（与公众号那条 maxAccountsPerRun 同理）。
+//      悄悄截断会让用户以为「全采了」，其实一大半没动。
 //   ② **逐条串行 + 页间等待**。20 个详情页连着并发打开，对站点是一串突发请求，
 //      对用户是 20 个后台标签页同时抢 CPU。串行 + 间隔既礼貌也稳。
 //   ③ **只在用户显式点击时跑**，绝不塞进批量采集。批量是 N 个竞对，
@@ -1999,154 +1860,15 @@ async function collectPostDetails(tabId, reportTabId) {
   }
 }
 
-// ── 公众号竞对采集 ────────────────────────────────────────────────────────────
-// 公众号没有公开主页，走不了「打开主页顺手采」那一套。这条路是：开用户**自己**的公众号后台
-// 标签页 → content/wechat-competitor.js 用当前地址栏的 token 同源调接口 → 回传 → 关页。
-// 服务器全程不接触登录态，请求也从用户自己的 IP 发出。
-//
-// ⚠️ 下面的数字必须与 lib/wechat-collect-rules.ts 一致——网页上展示给用户的就是那份，
-// 对不上就是「界面写一天一次、代码点一次采一次」，用户号被限了都不知道为什么。
-// tests/ingest/wechat-collect-rules.test.ts 会把这里的数字读回去比对。
-// 这里管**两次采集之间**的节流；一次采集内部翻几页、每个请求隔多久由内容脚本管。
-const WECHAT_RULES = {
-  perAccountCooldownHours: 12,
-  maxAccountsPerRun: 5,
-  betweenAccountsMs: 30000,
-  rateLimitCooldownMinutes: 30,
-  fakeidCacheDays: 30,
-};
-
-// 冷却**只看本机**，不看服务端的 lastCrawledAt。
-//
-// 曾经短暂改成「取本机与服务端记录的较晚者」，是把两件事混了，2026-07-29 当天改回：
-// 冷却存在的目的是保护**用户自己那个公众号后台账号**的频率预算，而别人用他自己的号、
-// 他自己的 IP 采过，根本不消耗你的额度——拦你什么也没保护到，只拦掉了「我想要更新的数据」。
-// 另外竞对档案是全局共享表，别人采到的文章本来就落在同一个档案下、你订阅就能看到，
-// 所以那条拦截既没道理也没必要。真正该拦的只有两件事：你自己刚采过、以及撞了频控。
-
-async function readWechatThrottle() {
-  const { wechatThrottle } = await chrome.storage.local.get('wechatThrottle');
-  return wechatThrottle && typeof wechatThrottle === 'object'
-    ? { perAccount: wechatThrottle.perAccount || {}, blockedUntil: Number(wechatThrottle.blockedUntil) || 0 }
-    : { perAccount: {}, blockedUntil: 0 };
-}
-
-// ── 公众号采集的风险确认闸（0.9.8 起）──────────────────────────────
-//
-// 【为什么要有这道闸】这条通道与插件其它所有采集**性质不同**：其它的都是读用户屏幕上
-// 已经渲染出来的公开页面，而这一条是用**用户自己的公众平台登录态**去调 `searchbiz` /
-// `appmsgpublish` 这两个**非官方**后台接口，查的还是**别人的**公众号。
-// 它可能违反《微信公众平台服务协议》，而踩线的后果落在**用户自己的公众号账号**上
-// （限接口、封功能），我们既挡不住也申诉不了。
-//
-// 代码里一直知道这件事（见 lib/wechat-collect-rules.ts 文件头「踩线的后果由用户自己的号
-// 承担，所以一律往保守取」），但**从没告诉过用户**——节流规则降低的是概率，
-// 不能代替告知。2026-08-24 合规审查把这个缺口补上：首次使用必须显式确认。
-//
-// 【为什么闸在这里而不在 UI】UI 有三个入口（弹窗、侧栏、网页派下来的任务），
-// 挂在任何一个上都会漏掉另外两个。collectWechatOne 是所有入口的**唯一咽喉**。
-const WECHAT_RISK_KEY = 'wechatRiskAck';
-// 告知内容实质变化时升这个版本号 → 用户需要重新确认一次。
-const WECHAT_RISK_VERSION = 1;
-
-async function wechatRiskAcked() {
-  const { [WECHAT_RISK_KEY]: ack } = await chrome.storage.local.get(WECHAT_RISK_KEY);
-  return !!ack && Number(ack.version) >= WECHAT_RISK_VERSION;
-}
-
-async function ackWechatRisk() {
-  await chrome.storage.local.set({
-    [WECHAT_RISK_KEY]: { version: WECHAT_RISK_VERSION, at: Date.now() },
-  });
-}
-
-async function revokeWechatRisk() {
-  await chrome.storage.local.remove(WECHAT_RISK_KEY);
-}
-
-// 放行返回 null，拦下返回**给用户看的理由**。静默跳过是不行的：用户点了没反应，
-// 会以为功能坏了然后猛点——那正是我们要避免的行为。
-async function wechatGate(name) {
-  const t = await readWechatThrottle();
-  const now = Date.now();
-  if (t.blockedUntil > now) {
-    return `刚被微信提示操作频繁，已暂停公众号采集，约 ${Math.ceil((t.blockedUntil - now) / 60000)} 分钟后可再试`;
-  }
-  const last = Number(t.perAccount[name] || 0);
-  const cooldownMs = WECHAT_RULES.perAccountCooldownHours * 3600_000;
-  if (last && now - last < cooldownMs) {
-    const left = Math.ceil((cooldownMs - (now - last)) / 3600_000);
-    // 说清是「你自己」采的——别人采过不会走到这里，见上面 wechatGate 上方的注释
-    return `「${name}」你在 ${WECHAT_RULES.perAccountCooldownHours} 小时内已采过，约 ${left} 小时后可再采`;
-  }
-  return null;
-}
-
-async function markWechatCollected(name) {
-  const t = await readWechatThrottle();
-  t.perAccount[name] = Date.now();
-  await chrome.storage.local.set({ wechatThrottle: t });
-}
-
-async function markWechatRateLimited() {
-  const t = await readWechatThrottle();
-  t.blockedUntil = Date.now() + WECHAT_RULES.rateLimitCooldownMinutes * 60_000;
-  await chrome.storage.local.set({ wechatThrottle: t });
-}
-
-// ── 公众号名 → fakeid 的本机缓存 ──
-//
-// 采一个公众号是三个请求：searchbiz 按名字搜号换 fakeid，再最多两页 appmsgpublish。
-// 其中**搜号那一个口的配额最紧**——2026-08-13 用户撞的频控就是它。而 fakeid 对一个号是固定的，
-// 每次采集都拿名字去重问一遍早就知道的答案，纯属白烧最贵的那个额度。存下来之后重复采集
-// 3 个请求降到 2 个，且省掉的正好是最容易被限的那一个。
-//
-// TTL 见 WECHAT_RULES.fakeidCacheDays：万一存错了、或号真的迁移了，最多一个月自己纠正一次，
-// 不用用户干预。命中续用**不刷新时间戳**——否则天天在采的号永远轮不到复核，TTL 等于没有。
-const WECHAT_FAKEID_TTL_MS = WECHAT_RULES.fakeidCacheDays * 86400_000;
-
-async function readWechatFakeids() {
-  const { wechatFakeids } = await chrome.storage.local.get('wechatFakeids');
-  return wechatFakeids && typeof wechatFakeids === 'object' ? wechatFakeids : {};
-}
-
-async function cachedWechatFakeid(name) {
-  const e = (await readWechatFakeids())[name];
-  if (!e || typeof e.fakeid !== 'string' || !e.fakeid) return '';
-  return Date.now() - (Number(e.at) || 0) < WECHAT_FAKEID_TTL_MS ? e.fakeid : '';
-}
-
-async function rememberWechatFakeid(name, fakeid) {
-  if (typeof fakeid !== 'string' || !fakeid) return;
-  const all = await readWechatFakeids();
-  if (all[name] && all[name].fakeid === fakeid) return; // 值没变就不动时间戳，让 TTL 照常走到期
-  all[name] = { fakeid, at: Date.now() };
-  await chrome.storage.local.set({ wechatFakeids: all });
-}
-
-async function forgetWechatFakeid(name) {
-  const all = await readWechatFakeids();
-  if (!(name in all)) return;
-  delete all[name];
-  await chrome.storage.local.set({ wechatFakeids: all });
-}
-
-// ── 需要登录时：把页面交回给用户，等他登录完再继续 ─────────────────────
-//
-// 用户 2026-08-18 明确要求的行为：没登录就**跳到公众号页面等登录，然后接着执行**，
-// 而不是像原来那样当场关掉标签页报一句「登录态已过期」。
+// ── 把页面交回给用户：需要登录时不擅自关页 ─────────────────────────────
 //
 // 三条边界，改这段前先读（政策 store/privacy.md 同步写了同样三条）：
 //   ① 登录动作**全部由用户本人完成**——插件只把已经打开的那一页切到前台，
 //      不填账号密码、不点登录按钮、不碰二维码，一如既往「不代替用户登录」；
-//   ② 等待有硬上限（LOGIN_WAIT_MS），到点就如实收尾，绝不无限期挂着；
+//   ② 等待有硬上限，到点就如实收尾，绝不无限期挂着；
 //   ③ 一旦切到前台，这一页就**归用户了**——不再由插件自动关闭（关掉用户正在看的页面
 //      比不关更糟），与「后台采集完立即关闭」那条规则的分界就在这里。
-const LOGIN_WAIT_MS = 5 * 60_000;   // 等用户扫码的上限
-const LOGIN_POLL_MS = 3000;         // 探登录态的间隔：只读页面、不发平台请求
 
-// 把标签页摆到用户面前。windows.update 是为了「插件开的页在另一个窗口」时也真的可见——
-// 只切 tab 不聚焦窗口的话，用户还是什么都看不到，却以为已经提示过他了。
 async function surfaceTab(tabId) {
   try {
     const tab = await chrome.tabs.update(tabId, { active: true });
@@ -2167,143 +1889,6 @@ function notifyLogin(message, title = '烽火台 · 需要你先登录') {
       type: 'basic', iconUrl: 'icon128.png', title, message, priority: 2,
     });
   } catch { /* 通知不可用不影响流程本身 */ }
-}
-
-// 等用户在公众号后台登录完成。问的是只读探针（content/wechat-competitor.js 的 loginState），
-// **一个微信接口都不打**——等待期间反复调采集接口，正是最容易把用户账号撞进频控的做法。
-// 返回 'ok' | 'timeout' | 'gone'（用户把页关了）。
-async function waitForWechatLogin(tabId, timeoutMs = LOGIN_WAIT_MS) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    await new Promise((res) => setTimeout(res, LOGIN_POLL_MS));
-    if (!(await chrome.tabs.get(tabId).catch(() => null))) return 'gone';
-    // 登录成功后微信会跳到带 token 的后台首页，内容脚本随之重新注入——
-    // 探针取到 token 就说明会话已经活了。
-    const r = await chrome.tabs.sendMessage(tabId, { type: 'beacon-wechat-login-state' }).catch(() => null);
-    if (r?.ok) return 'ok';
-  }
-  return 'timeout';
-}
-
-// 向后台标签页要数据。页面可能还在重定向补 token，内容脚本没就绪 → 轮询重试，
-// 但失败原因要原样带回来（「没就绪」和「登录态过期」是两回事，不能都报成超时）。
-//
-// ⚠️ 真机 2026-07-29：用户站在已登录的后台页面上点采集，等满 60 秒报「一直没有响应」。
-// 真因是 **Chrome 不会往已经打开的页面补注入内容脚本**——插件更新/安装之前就打开的那个标签页
-// 里根本没有本脚本，sendMessage 永远找不到接收方，再等多久都一样。
-// 让用户自己去猜「要按 F5」是不可接受的：这里用 activeTab 授予的临时权限补注入一次
-//（scripting 权限，**不需要 host 权限**），补不上时的文案也直接说清该按 F5。
-async function ensureWechatScript(tabId) {
-  try {
-    await chrome.scripting.executeScript({ target: { tabId }, files: ['content/wechat-competitor.js'] });
-    return true;
-  } catch {
-    return false; // 非活动标签页拿不到 activeTab 授权，只能等声明式注入
-  }
-}
-
-async function askWechatTab(tabId, name, fakeid, timeoutMs = 60000) {
-  const deadline = Date.now() + timeoutMs;
-  let injected = false;
-  while (Date.now() < deadline) {
-    try {
-      const r = await chrome.tabs.sendMessage(tabId, { type: 'beacon-wechat-collect', name, fakeid });
-      if (r) return r;
-    } catch {
-      // 找不到接收方＝这页没有内容脚本。补注入一次就够，失败也不必反复试。
-      if (!injected) {
-        injected = true;
-        await ensureWechatScript(tabId);
-      }
-    }
-    await new Promise((res) => setTimeout(res, 1500));
-  }
-  return {
-    ok: false,
-    code: 'timeout',
-    error: '这个公众号后台页面里没有采集脚本在跑——请在该页面按 F5 刷新一次再点采集（插件更新之前就打开的页面需要刷新才会注入）',
-  };
-}
-
-// 用户当前就停在公众号后台时，直接用那个页面，不另开标签页。
-//
-// ⚠️ 真机 2026-07-29：用户登着后台却收到「没登录」——我们自己开的 /cgi-bin/home 地址里
-// 不一定带 token，而用户手动点进来的页面一定带。优先用现成的那个，既更可靠也不打扰
-// （activeTab 权限在用户点插件图标时授予，够读当前标签页的 url；不需要 host 权限）。
-async function activeWechatBackendTab() {
-  try {
-    const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (t?.id && typeof t.url === 'string' && t.url.startsWith('https://mp.weixin.qq.com/cgi-bin/')) return t;
-  } catch {
-    /* 拿不到就退回自己开页 */
-  }
-  return null;
-}
-
-// opts.interactive = 用户此刻正坐在电脑前点了这个按钮。
-// 只有这种时候才允许把标签页切到前台等他登录：定时/后台那轮多半人不在，
-// 弹一个前台页出来既打断不了别人也帮不到自己，只会在他回来时看到一堆莫名其妙的窗口。
-async function collectWechatOne(name, opts = {}) {
-  // 风险确认在最前面：还没告知过用户，就一个请求都不该发出去。
-  // 定时那轮（interactive=false）同样拦——用户没确认过，自动跑更不能开始。
-  if (!(await wechatRiskAcked())) {
-    return {
-      ok: false,
-      code: 'risk_unacked',
-      error: '公众号采集使用你自己的公众号后台登录态调用非官方接口，可能违反微信平台协议、导致你的号被限。请先在插件里确认知悉该风险。',
-    };
-  }
-  const blocked = await wechatGate(name);
-  if (blocked) return { ok: false, code: 'throttled', error: blocked };
-
-  const existing = await activeWechatBackendTab();
-  let tab = null;
-  let surfaced = false; // 切到前台之后这一页就归用户了，finally 里不再关它
-  try {
-    // 借用用户已打开的后台页面时**不能关它**——那是用户自己的标签页
-    tab = existing || (await chrome.tabs.create({ url: SELF_AUTO_ENTRY.wechat, active: false }));
-    let r = await askWechatTab(tab.id, name, await cachedWechatFakeid(name));
-
-    // 停在登录页：不再当场失败关页，而是把这一页摆到用户面前，等他自己扫码，然后接着采。
-    if (r?.needLogin && opts.interactive) {
-      surfaced = await surfaceTab(tab.id);
-      if (surfaced) {
-        notifyLogin(`采集「${name}」需要你的公众号后台登录态——已把登录页切到前台，扫码登录后会自动继续。`);
-        const waited = await waitForWechatLogin(tab.id);
-        if (waited === 'ok') {
-          r = await askWechatTab(tab.id, name, await cachedWechatFakeid(name));
-        } else {
-          return {
-            ok: false,
-            code: 'login_required',
-            error: waited === 'gone'
-              ? '登录页被关掉了，本次采集已停止——重新登录公众号后台后再点一次采集'
-              : `等了 ${Math.round(LOGIN_WAIT_MS / 60000)} 分钟仍未登录，本次采集已停止——登录后再点一次采集`,
-          };
-        }
-      }
-    }
-    // 撞频控立刻进冷却——不管这次拿没拿到数据，继续打只会更糟
-    if (r?.code === 'rate_limited') await markWechatRateLimited();
-    // 缓存的 fakeid 被证伪（拿它拉列表微信报错）→ 当场扔掉，别留着让下次继续拿它去撞。
-    // 这一次若重搜成功，下面的 rememberWechatFakeid 会立刻把新的写回来。
-    if (r?.staleFakeid) await forgetWechatFakeid(name);
-    if (!r?.ok) return { ok: false, code: r?.code, error: r?.error || '采集失败' };
-    // 能成功拉出列表就说明这个 fakeid 是对的，先记下来——即便下面回传失败，
-    // 下次也不必再为同一个号烧一次搜号配额。
-    await rememberWechatFakeid(name, r.fakeid);
-
-    const res = await ingest(r.payload);
-    if (!res.ok) return { ok: false, error: res.error };
-    // 冷却按「发起过一次成功采集」记，不按「采到几条」：没有新文章也是一次真实请求
-    await markWechatCollected(name);
-    return { ok: true, posts: r.payload.posts.length, partial: r.partial, competitor: res.competitor };
-  } catch (e) {
-    return { ok: false, error: String(e?.message || e) };
-  } finally {
-    // 只关自己开的那个；借用用户的标签页、或已经切到前台交给用户的，都留着
-    if (!existing && !surfaced && tab?.id) await chrome.tabs.remove(tab.id).catch(() => {});
-  }
 }
 
 async function batchCollectSelf(reportTabId) {
@@ -2345,15 +1930,11 @@ async function batchCollectSelf(reportTabId) {
       done++;
     }
 
-    // 公众号后台走既有的那套步进机（要换 token、站内跳两次），它自带超时与通知
-    const wechat = accounts.find((a) => a.platform === 'wechat');
-    if (wechat) runSelfAuto({ force: true });
-
-    reportBatch(reportTabId, { type: 'batch-self-done', total, posts, wechat: !!wechat });
+    reportBatch(reportTabId, { type: 'batch-self-done', total, posts });
     notifySelfAuto(
-      total === 0 && !wechat
+      total === 0
         ? '没有可一键采集的账号：X 账号需要填 handle，创作者后台请手动回填一次'
-        : `我的数据采集完成：${total} 个账号，回填 ${posts} 条作品${wechat ? '；公众号后台正在后台回填' : ''}`,
+        : `我的数据采集完成：${total} 个账号，回填 ${posts} 条作品`,
     );
   } finally {
     batchRunning = false;
@@ -2507,21 +2088,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     sendResponse({ ok: true, started: true });
     return true;
   }
-  if (msg?.type === 'wechat-risk-status') {
-    wechatRiskAcked().then((acked) => sendResponse({ ok: true, acked, version: WECHAT_RISK_VERSION }));
-    return true;
-  }
-  if (msg?.type === 'wechat-risk-ack') {
-    // 只认 true。前端传别的（undefined、'false' 字符串）一律当作撤回——
-    // 这道闸宁可多问一次，也不能因为一个手滑的参数就默认放行。
-    const p = msg.acked === true ? ackWechatRisk() : revokeWechatRisk();
-    p.then(() => sendResponse({ ok: true, acked: msg.acked === true }));
-    return true;
-  }
-  if (msg?.type === 'wechat-collect-one') {
-    respond(collectWechatOne(String(msg.name || ''), { interactive: true }), sendResponse, '公众号采集');
-    return true;
-  }
   if (msg?.type === 'batch-collect-self') {
     batchCollectSelf(_sender?.tab?.id);
     sendResponse({ ok: true, started: true });
@@ -2566,81 +2132,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     respond(ingestSelf(msg.payload), sendResponse, '回填');
     return true;
   }
-  // ── 自动回填三件套（只接受自己开的那个标签页） ──
-  // 内容脚本每次加载都问一句：我是不是自动回填的标签页、现在走到第几站。
-  // hops 是防跳转成环的硬闸：登录态中途失效时数据页会被踢回首页，
-  // 那样内容脚本会一直「没到数据页 → 再跳一次」，光靠 90 秒超时会白转 90 秒。
-  if (msg?.type === 'beacon-self-auto-run-now') {
-    // 与定时触发同一条路径（不给试跑开捷径，否则试跑通过不代表定时通过）。
-    // 唯一的差别是 interactive：试跑时用户就在设置页看着，撞到未登录可以把登录页摆给他；
-    // 这不会造成「试跑绿、定时红」——他登完这一次，定时那轮用的就是同一个活着的会话。
-    runSelfAuto({ interactive: true });
-    sendResponse({ ok: true });
-    return undefined;
-  }
   if (msg?.type === 'beacon-run-scheduled-now') {
     runScheduledCollect();
-    sendResponse({ ok: true });
-    return undefined;
-  }
-  if (msg?.type === 'beacon-self-auto-hello') {
-    if (!isSelfAutoTab(_sender)) { sendResponse({ auto: false }); return undefined; }
-    selfAutoRun.hops++;
-    if (selfAutoRun.hops > 8) {
-      finishSelfAuto('自动回填中止：后台页反复跳转（多半是登录态失效），已停手');
-      sendResponse({ auto: false });
-      return undefined;
-    }
-    sendResponse({ auto: true, step: selfAutoRun.step });
-    return undefined;
-  }
-  if (msg?.type === 'beacon-self-auto-advance') {
-    if (!isSelfAutoTab(_sender)) { sendResponse({ step: -1 }); return undefined; }
-    selfAutoRun.step++;
-    sendResponse({ step: selfAutoRun.step });
-    return undefined;
-  }
-  if (msg?.type === 'beacon-self-auto-payload') {
-    if (!isSelfAutoTab(_sender)) { sendResponse({ ok: false }); return undefined; }
-    ingestSelf(msg.payload).then((r) => {
-      if (selfAutoRun && r?.ok) {
-        selfAutoRun.updated += r.updated || 0;
-        selfAutoRun.created += r.created || 0;
-        selfAutoRun.skipped += r.skipped || 0;
-      }
-      // 回传失败（令牌失效、没有同平台账号等）也要把原因带给用户，别只说「没读到数据」
-      if (selfAutoRun && r && !r.ok && !selfAutoRun.error) selfAutoRun.error = r.error;
-      sendResponse({ ok: !!r?.ok });
-    });
-    return true;
-  }
-  if (msg?.type === 'beacon-self-auto-done') {
-    if (isSelfAutoTab(_sender)) finishSelfAuto(selfAutoRun?.error ? `自动回填失败：${selfAutoRun.error}` : '');
-    sendResponse({ ok: true });
-    return undefined;
-  }
-  if (msg?.type === 'beacon-self-auto-abort') {
-    if (isSelfAutoTab(_sender)) {
-      // 「没登录」不是终局：把这一页切到前台交给用户，等他扫码，本轮接着跑。
-      // 登录成功后公众号会跳回带 token 的后台首页 → 内容脚本重新加载 → 再问一次 hello →
-      // 这次 autoRoutes 算得出来，于是从当前这一站继续。插件全程不碰登录动作本身。
-      if (msg.needLogin && selfAutoRun.interactive && !selfAutoRun.surfaced) {
-        const run = selfAutoRun;
-        run.surfaced = true;
-        run.hops = 0; // 登录过程会跳好几次，不能算进「跳转成环」那道闸
-        clearTimeout(run.timer);
-        run.timer = setTimeout(
-          () => { finishSelfAuto(`等了 ${Math.round(LOGIN_WAIT_MS / 60000)} 分钟仍未登录，本轮自动回填已停止`); },
-          LOGIN_WAIT_MS,
-        );
-        surfaceTab(run.tabId).then((ok) => {
-          if (ok) notifyLogin('回填我的公众号数据需要后台登录态——已把登录页切到前台，扫码登录后会自动继续。');
-          else finishSelfAuto('自动回填中止：登录页已被关闭');
-        });
-      } else {
-        finishSelfAuto(msg.reason || '自动回填中止');
-      }
-    }
     sendResponse({ ok: true });
     return undefined;
   }

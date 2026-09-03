@@ -5,8 +5,9 @@ import { AUTH_GROUPS, groupOf, toolsForGroups, type AuthGroupKey } from '@/lib/a
 
 // ── 派发时的授权卡 ────────────────────────────────────────────────────────────
 //
-// 默认什么都不用管：不展开就是「每一步都先问你」，与以前完全一样。
-// 想让它一口气跑完的人，展开勾两下再派——这一下点击就是授权本身。
+// 缺省什么都不用管：不展开就是「直接跑完，不逐步问我」（2026-09-03 用户拍板：
+// 只要是任务就直接完成）。想盯着它一步步来的人，展开选「每一步都先问我」，
+// 还可以只给其中几类动作提前放行——这一下点击就是授权本身。
 //
 // 【为什么这个组件两个壳共用】任务台首页的派活框与助手页的执行面板，
 // 是同一件事的两个入口。授权只做在其中一处的话，另一边的用户就得先切外壳
@@ -15,12 +16,23 @@ import { AUTH_GROUPS, groupOf, toolsForGroups, type AuthGroupKey } from '@/lib/a
 export type ToolBrief = { name: string; label: string; costly?: boolean; contract?: boolean };
 
 export type DispatchAuthValue = {
-  authMode: 'confirm_each' | 'preauthorized';
+  authMode: 'unattended' | 'confirm_each' | 'preauthorized';
   preauthorizedTools: string[];
 };
 
-/** 缺省：一步都不预先授权（= 旧行为）。 */
-export const DEFAULT_AUTH: DispatchAuthValue = { authMode: 'confirm_each', preauthorizedTools: [] };
+/** 缺省：直接跑完，不逐步问。 */
+export const DEFAULT_AUTH: DispatchAuthValue = { authMode: 'unattended', preauthorizedTools: [] };
+
+/** 缺省档之外的那一档：逐步确认，一个动作都没提前放行。 */
+export const ASK_EACH: DispatchAuthValue = { authMode: 'confirm_each', preauthorizedTools: [] };
+
+export function authSummary(value: DispatchAuthValue, groupCount: number): string {
+  if (value.authMode === 'unattended') return '直接跑完，不逐步问我';
+  if (value.authMode === 'preauthorized' && value.preauthorizedTools.length > 0) {
+    return `已提前授权 ${groupCount} 组动作，其余先问我`;
+  }
+  return '每一步都先问我';
+}
 
 export function DispatchAuth({
   tools,
@@ -40,16 +52,15 @@ export function DispatchAuth({
     AUTH_GROUPS.filter((g) => tools.some((t) => groupOf(t) === g.key && value.preauthorizedTools.includes(t.name)))
       .map((g) => g.key),
   );
+  const askEach = value.authMode !== 'unattended';
 
   function toggle(key: AuthGroupKey) {
     const next = new Set(checked);
     if (next.has(key)) next.delete(key);
     else next.add(key);
     const names = toolsForGroups(tools, [...next]);
-    onChange(names.length ? { authMode: 'preauthorized', preauthorizedTools: names } : DEFAULT_AUTH);
+    onChange(names.length ? { authMode: 'preauthorized', preauthorizedTools: names } : ASK_EACH);
   }
-
-  const on = value.authMode === 'preauthorized' && value.preauthorizedTools.length > 0;
 
   return (
     <div className="small" style={{ marginTop: 8 }}>
@@ -59,22 +70,45 @@ export function DispatchAuth({
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
       >
-        {on ? `已提前授权 ${checked.size} 组动作` : '每一步都先问我'}
+        {authSummary(value, checked.size)}
         <span style={{ marginLeft: 6, opacity: 0.6 }}>{open ? '收起' : '改一下'}</span>
       </button>
 
       {open && (
         <div className="card" style={{ padding: 12, marginTop: 8 }}>
-          <p className="small muted" style={{ margin: '0 0 10px' }}>
-            勾上的这几类，这次执行中不再逐个问你；没勾的照旧停下来等你点头。
-            {callBudget ? `本次最多消耗 ${callBudget} 次 AI 调用。` : ''}
-          </p>
+          <label className="row" style={{ gap: 8, alignItems: 'flex-start', cursor: 'pointer', marginBottom: 8 }}>
+            <input
+              type="radio"
+              name="dispatch-auth-mode"
+              checked={!askEach}
+              onChange={() => onChange(DEFAULT_AUTH)}
+              style={{ marginTop: 3 }}
+            />
+            <span>
+              <strong>直接跑完</strong>
+              <span className="muted" style={{ marginLeft: 6 }}>会改数据、花额度的动作都不逐个问你，做完汇报。</span>
+            </span>
+          </label>
+          <label className="row" style={{ gap: 8, alignItems: 'flex-start', cursor: 'pointer', marginBottom: 8 }}>
+            <input
+              type="radio"
+              name="dispatch-auth-mode"
+              checked={askEach}
+              onChange={() => onChange(ASK_EACH)}
+              style={{ marginTop: 3 }}
+            />
+            <span>
+              <strong>每一步都先问我</strong>
+              <span className="muted" style={{ marginLeft: 6 }}>可以只给下面几类提前放行，没勾的照旧停下来等你点头。</span>
+            </span>
+          </label>
+          {callBudget ? <p className="small muted" style={{ margin: '0 0 10px' }}>本次最多消耗 {callBudget} 次 AI 调用。</p> : null}
 
-          {AUTH_GROUPS.map((g) => {
+          {askEach && AUTH_GROUPS.map((g) => {
             const inGroup = tools.filter((t) => groupOf(t) === g.key);
             if (inGroup.length === 0) return null;
             return (
-              <div key={g.key} style={{ marginBottom: 10 }}>
+              <div key={g.key} style={{ marginBottom: 10, marginLeft: 24 }}>
                 <label className="row" style={{ gap: 8, alignItems: 'flex-start', cursor: 'pointer' }}>
                   <input
                     type="checkbox"
@@ -97,11 +131,11 @@ export function DispatchAuth({
             );
           })}
 
-          {/* 签合约那一组即使勾了也仍然会问——机制级的闸，不是这张卡说了算。
-              不写清楚的话，用户勾了它、发现还是被问，会以为是 bug。 */}
+          {/* 签合约那一组无论哪一档都仍然会问——机制级的闸，不是这张卡说了算。
+              不写清楚的话，用户选了直接跑完、发现还是被问，会以为是 bug。 */}
           <p className="small muted" style={{ margin: '10px 0 0' }}>
             建发布计划、写长期记忆、配定时、拼新智能体这几样
-            <strong>无论如何都会再问你一次</strong>：它们做完之后会一直生效，不该由 AI 一个人决定。
+            <strong>无论选哪种都会再问你一次</strong>：它们做完之后会一直生效，不该由 AI 一个人决定。
           </p>
         </div>
       )}

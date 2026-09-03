@@ -135,19 +135,27 @@ describe('派一条一键任务', () => {
     expect(row?.messages, '白名单外的工具不该出现在这次执行里').not.toContain('create_draft(');
   });
 
-  // 页面上点一下的时候人就在跟前，没有理由不问他。
-  // 真要无人值守，去给这张卡挂一条定时（那边按 origin='schedule' 放行）。
-  it('页面上派的一键任务不许用无人值守', async () => {
+  // 2026-09-03 起：页面点卡与定时派同权，卡上存的档就是派出去的档。
+  it('页面上派的一键任务按卡上存的档来（无人值守也照存照用）', async () => {
     const p = await makePreset({ authMode: 'unattended' });
     h.script = [{ text: '好' }];
     const r = await dispatchPreset(ctx, { presetId: p.id, origin: 'preset' });
     await settleAgentKicks();
 
     const row = await prisma.agentRun.findUnique({ where: { id: (r as { turn: { runId: string } }).turn.runId } });
+    expect(row?.authMode).toBe('unattended');
+  });
+
+  it('卡上存的「每一步先问我」照样生效（缺省放开不等于不能收紧）', async () => {
+    const p = await makePreset({ authMode: 'confirm_each' });
+    h.script = [{ text: '好' }];
+    const r = await dispatchPreset(ctx, { presetId: p.id, origin: 'preset' });
+    await settleAgentKicks();
+    const row = await prisma.agentRun.findUnique({ where: { id: (r as { turn: { runId: string } }).turn.runId } });
     expect(row?.authMode).toBe('confirm_each');
   });
 
-  it('同一张卡挂定时派出去时，无人值守才生效', async () => {
+  it('同一张卡挂定时派出去时，无人值守同样生效', async () => {
     const p = await makePreset({ authMode: 'unattended' });
     h.script = [{ text: '好' }];
     const r = await dispatchPreset(ctx, { presetId: p.id, origin: 'schedule' });
@@ -297,13 +305,13 @@ describe('定时能指两种东西', () => {
     expect(taskBranch, '派发那一刻就记成功了——它还没跑完').not.toMatch(/lastStatus: 'done'/);
   });
 
-  it('卡片保存时不许存无人值守（那只对挂了定时的有意义）', () => {
-    // 【为什么在保存那一层也拦】startAgentRun 里那道闸已经会把它打回 confirm_each，
-    // 但卡上存着一个「无人值守」而实际从不生效，用户会以为自己配好了。
-    // 要无人值守就去挂定时——那条路会如实按 origin='schedule' 放行。
+  it('卡片保存时三档都能存，且认不出的值落到缺省「直接跑完」', () => {
+    // 2026-09-03 起卡上可以存无人值守（页面点卡与定时同权）。守的是：
+    // 客户端塞一个三档之外的字符串时不许原样落库——运行时 needsConfirm 会把它当最保守档，
+    // 用户以为配的是「直接跑完」，实际每步都问。
     const src = fs.readFileSync(path.join(process.cwd(), 'app/(app)/workflows/preset-actions.ts'), 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-    expect(src, '保存时没把授权档收成两种').toMatch(/=== 'preauthorized' \? 'preauthorized' : 'confirm_each'/);
+    expect(src).toMatch(/=== 'preauthorized' \|\| input\.authMode === 'confirm_each' \? input\.authMode : 'unattended'/);
   });
 
   it('两种指向都要有名字，被删了要如实说', () => {

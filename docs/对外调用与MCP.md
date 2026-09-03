@@ -69,7 +69,7 @@ curl "http://127.0.0.1:3070/api/v1/runs?limit=5" \
 - `beacon_run_status` —— 看一次执行走到哪了
 - `beacon_recent_runs` —— 最近几次
 - `beacon_collect_competitor` —— 让用户的浏览器插件去采一个**已订阅**的竞对
-- `beacon_collect_self` —— 让插件回填用户本人创作后台的数据（目前只有公众号）
+- `beacon_collect_self` —— 让浏览器打开用户本人的主页回填自有数据（platform=x / tiktok；创作者后台没有可派的路，公众号那条已于 2026-09-03 移除）
 - `beacon_read_page` —— 让插件打开白名单站点里的一页、把可见正文读回来
 - `beacon_browser_task_status` —— 看一个浏览器任务走到哪了
 
