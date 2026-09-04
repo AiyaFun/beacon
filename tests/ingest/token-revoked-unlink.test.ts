@@ -110,7 +110,7 @@ function loadSw(status: number | number[]) {
         get: noop,
         clear: (n: string) => { alarmsCleared.push(n); return Promise.resolve(true); },
       },
-      tabs: { onRemoved: listener, create: noop, remove: noop, sendMessage: noop },
+      tabs: { onRemoved: listener, onUpdated: listener, create: noop, remove: noop, sendMessage: noop },
       action: { setBadgeText: () => Promise.resolve(), setBadgeBackgroundColor: () => Promise.resolve() },
       notifications: {
         create: (_id: string, o: { title?: string; message?: string }) => { notified.push(o); },

@@ -69,6 +69,7 @@ function loadSw(opts: { competitors: Competitor[] }) {
       scripting: { executeScript: () => Promise.resolve() },
       tabs: {
         onRemoved: listener,
+        onUpdated: listener,
         query: () => Promise.resolve([{ id: 7, url: 'https://space.bilibili.com/1' }]),
         create: ({ url }: { url: string }) => {
           opened.push(url);

@@ -22,6 +22,13 @@ STRIP=(
   "deploy/appliance"    # 整机版装机脚本（交付物）
   "deploy/README.md"    # 部署方案
   "docs/上线清单-"      # 内部上线清单（含服务器细节）
+  # ── 官方发行版专有的可选后台模块（用户 2026-09-04 拍板：cnb 保留，GitHub 不发）──
+  # 它是「打开**你自己的**公众号后台、只读**你自己**作品的数字」那一条。
+  # 剥掉这两个文件之后，插件里的 SELF_AUTO_ENTRY 注册表为空 → 整条通道不存在，
+  # 设置页那一块也不显示（options.js 按 available 判）。**不是留个关着的开关**。
+  "extension/sw-self-backends.js"
+  "extension/content/self-backend-wechat.js"
+  "tests/ingest/self-backfill-wechat.test.ts"
 )
 
 say() { printf '\033[36m▸\033[0m %s\n' "$*"; }
@@ -75,7 +82,25 @@ TMP_FILES=$(cd "$WT" && find . -maxdepth 2 -path ./.git -prune -o \( -name '*-tm
 ROOT_MINT=$(cd "$WT" && find . -maxdepth 1 -name '*.ts' -exec grep -lE 'issueLocalLoginTicket' {} + 2>/dev/null || true)
 [ -z "$ROOT_MINT" ] || die "根目录存在直接调用凭据签发的临时脚本：$ROOT_MINT"
 
-say "✅ 校验通过：剥离清单生效，无私钥材料，无临时凭证脚本"
+# 可选后台模块剥掉之后，公开树里不许再有**能走到公众号后台的路**。
+#
+# 【为什么不是 grep 那个域名】域名会出现在一堆正当的地方：政策与 README 里整段解释它、
+# 界面文案里举一条文章链接当例子、注释里说明「为什么它不在这儿」。禁掉这些只会逼人
+# 把解释删掉，那比留着更糟。所以判据盯的是**通路**，共三条，缺一条这个能力都跑不起来：
+#   ① 站点配置文件本身（上面的剥离清单已经删了，这里复验没有任何代码再引用它）；
+#   ② manifest 里不许出现该域名（它本来就不在——走的是按需单站点授权，不是声明式注入）；
+#   ③ 入口注册表文件不在（同 ①，STRIP 循环已验）。
+# 只看代码行：注释里指名道姓地说「这个钩子是给它用的」是**应该保留**的线索，
+# 删了下一个人就不知道那个通用钩子为什么存在。
+DANGLING=$(cd "$WT" && grep -rn "self-backend-wechat" \
+  --include='*.js' --include='*.ts' --include='*.tsx' --include='*.json' \
+  . --exclude-dir=.git --exclude-dir=node_modules 2>/dev/null \
+  | grep -vE ':[0-9]+: *(//|\*|/\*)' | head -3 || true)
+[ -z "$DANGLING" ] || die "公开树里还有指向已剥离站点模块的引用：$DANGLING"
+grep -q "mp\.weixin\.qq\.com" "$WT/extension/manifest.json" \
+  && die "manifest 里出现了公众号域名——这条通道必须走按需单站点授权，不能声明式注入" || true
+
+say "✅ 校验通过：剥离清单生效，无私钥材料，无临时凭证脚本，无通往公众号后台的路"
 
 cd "$WT"
 git add -A

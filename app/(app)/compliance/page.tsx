@@ -10,6 +10,8 @@ import { FeedbackPanel } from './FeedbackPanel';
 import type { CustomWord } from './actions';
 import { MakeTabs } from '@/components/MakeTabs';
 import { HubHeader } from '@/components/HubHeader';
+import { getServerLang } from '@/lib/i18n/server';
+import { getDictionary } from '@/lib/i18n/dict';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,6 +19,8 @@ const TIER_ORDER = ['legal', 'platform', 'industry', 'custom'] as const;
 
 export default async function CompliancePage() {
   const s = await getSession();
+  const lang = await getServerLang();
+  const dict = getDictionary(lang);
 
   // 可见词库：全局三级（legal/platform/industry）+ 本租户自定义级
   const [words, recentDrafts, feedbackItems] = await Promise.all([
@@ -67,8 +71,8 @@ export default async function CompliancePage() {
   return (
     <>
       <HubHeader
-        title="做内容"
-        hint="按目标平台检测并规避敏感词，四级词库：法律／平台／行业／自定义"
+        title={dict.tabs.makeTitle}
+        hint={lang === 'en' ? 'Detect and avoid sensitive terms per platform. 4-tier lexicon: Legal / Platform / Industry / Custom' : '按目标平台检测并规避敏感词，四级词库：法律／平台／行业／自定义'}
         tabs={<MakeTabs active="check" inline />}
       />
 
@@ -87,15 +91,18 @@ export default async function CompliancePage() {
       </div>
 
       <div className="grid-asym-left" style={{ marginBottom: 16 }}>
-        {/* ⚠️ 这里此前写的是「本地秒查（不联网、不出库）」——三处都不成立：
-            actCheck 是 server action（文案离开浏览器）、llmSemanticReview 无条件把原文拼进
-            prompt 发给模型、命中且关联草稿时还会 prisma.complianceCheck.create。
-            用户可能把未发布的商业稿贴进来，「不联网」这四个字直接影响他要不要贴。 */}
-        <Card title="实时检测器" sub="词库秒查 + AI 语义复核（文案会发往服务端）">
+        <Card
+          title={lang === 'en' ? 'Real-time Compliance Checker' : '实时检测器'}
+          sub={lang === 'en' ? 'Lexicon match + AI semantic review (text sent to server)' : '词库秒查 + AI 语义复核（文案会发往服务端）'}
+        >
           <Checker drafts={draftOptions} />
         </Card>
 
-        <Fold title="四级词库总览" sub="共几级、各拦什么" note={<span className="small muted">看一次就够</span>}>
+        <Fold
+          title={lang === 'en' ? '4-Tier Lexicon Overview' : '四级词库总览'}
+          sub={lang === 'en' ? 'Tiers and coverage rules' : '共几级、各拦什么'}
+          note={<span className="small muted">{lang === 'en' ? 'Reference' : '看一次就够'}</span>}
+        >
           <div className="stack" style={{ gap: 16 }}>
             {TIER_ORDER.map((tier) => {
               const list = byTier.get(tier) ?? [];

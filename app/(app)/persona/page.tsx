@@ -18,12 +18,13 @@ import { OptimizeMemoryButton } from './OptimizeMemoryButton';
 import { PageTabs } from '@/components/PageTabs';
 import { AssetTabs } from '@/components/AssetTabs';
 import { HubHeader } from '@/components/HubHeader';
+import { getServerLang } from '@/lib/i18n/server';
+import { getDictionary } from '@/lib/i18n/dict';
 
 export const dynamic = 'force-dynamic';
 
 type MemoryTypeKey = keyof typeof MEMORY_TYPES;
 
-// 置信度配色：高=绿 / 中=琥珀 / 低=灰
 function confColor(c: number): string {
   if (c >= 0.7) return 'var(--green)';
   if (c >= 0.5) return 'var(--amber)';
@@ -36,7 +37,9 @@ export default async function PersonaPage({
   searchParams: Promise<{ [k: string]: string | string[] | undefined }>;
 }) {
   const s = await getSession();
-  const sp = await searchParams; // ?tab=… 深链：通知/其它页面可以直接指到某个页签
+  const sp = await searchParams;
+  const lang = await getServerLang();
+  const dict = getDictionary(lang);
   const [account, memories, allAccounts] = await Promise.all([
     s.accountId ? prisma.creatorAccount.findUnique({ where: { id: s.accountId } }) : null,
     // 记忆按账号隔离：当前账号的记忆 + 工作区级共享记忆（accountId 为空）
@@ -116,8 +119,8 @@ export default async function PersonaPage({
   return (
     <>
       <HubHeader
-        title="记忆与素材"
-        hint="记忆越用越懂你的账号；数据只提议，人设你说了算"
+        title={lang === 'en' ? 'Memory & Materials' : '记忆与素材'}
+        hint={lang === 'en' ? 'Memory evolves with your account; suggestions from data, final persona is yours' : '记忆越用越懂你的账号；数据只提议，人设你说了算'}
         tabs={<AssetTabs active="persona" inline />}
       />
 
@@ -127,19 +130,19 @@ export default async function PersonaPage({
         tabs={[
           {
             key: 'persona',
-            label: '人设',
-            hint: '这个账号是谁、说话什么味道——推荐与初稿都以它为准',
+            label: lang === 'en' ? 'Persona' : '人设',
+            hint: lang === 'en' ? 'Identity & tone of voice — grounds recommendations and drafts' : '这个账号是谁、说话什么味道——推荐与初稿都以它为准',
             node: (
               <>
       <Card
-        title="人设卡"
+        title={dict.assets.personaTitle}
         sub={account ? account.name : undefined}
         style={{ marginBottom: 16 }}
         action={
           <div className="row" style={{ gap: 12, alignItems: 'center' }}>
             <div className="stack" style={{ gap: 2, minWidth: 120 }}>
               <div className="row-between">
-                <span className="small muted">完善度</span>
+                <span className="small muted">{lang === 'en' ? 'Completeness' : '完善度'}</span>
                 <span className="small"><b>{completeness}%</b></span>
               </div>
               <Meter value={completeness} />

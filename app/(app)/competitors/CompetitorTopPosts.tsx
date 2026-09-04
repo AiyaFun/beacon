@@ -10,6 +10,7 @@ import { CompetitorTrendCell } from './CompetitorTrendCell';
 import { beijingDayKey } from '@/lib/beijing';
 import { topPostsCsv } from './top-posts-csv';
 import { analyzePosts, filterPosts, sortPosts } from './top-posts-view';
+import { useI18n } from '@/lib/i18n';
 
 type CompetitorPost = {
   id: string;
@@ -130,6 +131,7 @@ export function CompetitorTopPosts({
   postGrowth: Record<string, PostGrowth>;
   windowLabel: string;
 }) {
+  const { lang } = useI18n();
   const [timeRange, setTimeRange] = useState<TimeRangeKey>('all');
   const [sortBy, setSortBy] = useState<SortKey>('interaction');
   const [viewMode, setViewMode] = useState<ViewModeKey>('cards');
@@ -206,8 +208,14 @@ export function CompetitorTopPosts({
     return (
       <div className="empty-state" style={{ padding: '48px 20px', textAlign: 'center' }}>
         <div style={{ fontSize: 40, marginBottom: 12 }}>📊</div>
-        <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 6 }}>还没有采集到对标作品</div>
-        <div className="small muted">添加对标账号后，点击“采集竞对”即可在此实时呈现全网高热作品榜单。</div>
+        <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 6 }}>
+          {lang === 'en' ? 'No competitor posts crawled yet' : '还没有采集到对标作品'}
+        </div>
+        <div className="small muted">
+          {lang === 'en'
+            ? 'Add benchmark accounts and click "Crawl Competitors" to view viral posts across platforms.'
+            : '添加对标账号后，点击“采集竞对”即可在此实时呈现全网高热作品榜单。'}
+        </div>
       </div>
     );
   }
@@ -218,6 +226,34 @@ export function CompetitorTopPosts({
   const showPodium = viewMode === 'cards' && sortedPosts.length >= 3 && !searchQuery;
   const top3 = showPodium ? sortedPosts.slice(0, 3) : [];
   const remainingPosts = showPodium ? sortedPosts.slice(3) : sortedPosts;
+
+  const timeRangeOptions = lang === 'en'
+    ? [
+        ['all', 'All'],
+        ['24h', '⚡ 24h Surging'],
+        ['7d', '📅 7-Day Hot'],
+        ['30d', '🗓️ 30-Day Viral'],
+      ] as const
+    : [
+        ['all', '全部'],
+        ['24h', '⚡ 24h 飙升'],
+        ['7d', '📅 7天高热'],
+        ['30d', '🗓️ 30天爆款'],
+      ] as const;
+
+  const sortOptions = lang === 'en'
+    ? [
+        ['interaction', '🔥 Interaction'],
+        ['views', '👁️ Views'],
+        ['engagement', '⚡ Rate'],
+        ['growth', '🚀 Growth'],
+      ] as const
+    : [
+        ['interaction', '🔥 互动量'],
+        ['views', '👁️ 播放总量'],
+        ['engagement', '⚡ 互动率'],
+        ['growth', '🚀 飙升增速'],
+      ] as const;
 
   return (
     <div className="stack" style={{ gap: 14 }}>
@@ -239,20 +275,13 @@ export function CompetitorTopPosts({
           {/* 时间范围 Filter Tabs */}
           <div className="row wrap" style={{ gap: 4, alignItems: 'center' }}>
             <span className="small muted" style={{ marginRight: 4, fontWeight: 600 }}>
-              <Icon.clock size={13} style={{ display: 'inline', verticalAlign: '-2px' }} /> 时间:
+              <Icon.clock size={13} style={{ display: 'inline', verticalAlign: '-2px' }} /> {lang === 'en' ? 'Time:' : '时间:'}
             </span>
-            {(
-              [
-                ['all', '全部'],
-                ['24h', '⚡ 24h 飙升'],
-                ['7d', '📅 7天高热'],
-                ['30d', '🗓️ 30天爆款'],
-              ] as const
-            ).map(([key, label]) => (
+            {timeRangeOptions.map(([key, label]) => (
               <button
                 key={key}
                 className={`filter-btn ${timeRange === key ? 'active' : ''}`}
-                onClick={() => setTimeRange(key)}
+                onClick={() => setTimeRange(key as TimeRangeKey)}
               >
                 {label}
               </button>
@@ -264,16 +293,16 @@ export function CompetitorTopPosts({
             <button
               className={`view-toggle-btn ${viewMode === 'cards' ? 'active' : ''}`}
               onClick={() => setViewMode('cards')}
-              title="切换为精致爆款卡片视图"
+              title={lang === 'en' ? 'Card view' : '切换为精致爆款卡片视图'}
             >
-              🖼️ 卡片视图
+              {lang === 'en' ? '🖼️ Cards' : '🖼️ 卡片视图'}
             </button>
             <button
               className={`view-toggle-btn ${viewMode === 'table' ? 'active' : ''}`}
               onClick={() => setViewMode('table')}
-              title="切换为高密度表格视图"
+              title={lang === 'en' ? 'Table view' : '切换为高密度表格视图'}
             >
-              📊 紧凑表格
+              {lang === 'en' ? '📊 Table' : '📊 紧凑表格'}
             </button>
           </div>
         </div>
@@ -283,20 +312,13 @@ export function CompetitorTopPosts({
           {/* 排序 Mode Pills */}
           <div className="row wrap" style={{ gap: 4, alignItems: 'center' }}>
             <span className="small muted" style={{ marginRight: 4, fontWeight: 600 }}>
-              <Icon.fire size={13} style={{ display: 'inline', verticalAlign: '-2px' }} /> 排序:
+              <Icon.fire size={13} style={{ display: 'inline', verticalAlign: '-2px' }} /> {lang === 'en' ? 'Sort:' : '排序:'}
             </span>
-            {(
-              [
-                ['interaction', '🔥 互动量'],
-                ['views', '👁️ 播放总量'],
-                ['engagement', '⚡ 互动率'],
-                ['growth', '🚀 飙升增速'],
-              ] as const
-            ).map(([key, label]) => (
+            {sortOptions.map(([key, label]) => (
               <button
                 key={key}
                 className={`sort-pill ${sortBy === key ? 'active' : ''}`}
-                onClick={() => setSortBy(key)}
+                onClick={() => setSortBy(key as SortKey)}
               >
                 {label}
               </button>
@@ -309,7 +331,7 @@ export function CompetitorTopPosts({
               <Icon.pen size={12} className="search-icon" />
               <input
                 type="text"
-                placeholder="搜索爆款标题或创作者..."
+                placeholder={lang === 'en' ? 'Search title, keyword or creator…' : '搜索爆款标题或创作者...'}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="search-input"
@@ -321,9 +343,9 @@ export function CompetitorTopPosts({
               )}
             </div>
 
-            <button onClick={exportCSV} className="btn btn-sm btn-ghost" title="导出当前榜单 CSV 文件">
+            <button onClick={exportCSV} className="btn btn-sm btn-ghost" title={lang === 'en' ? 'Export current list as CSV' : '导出当前榜单 CSV 文件'}>
               <Icon.download size={13} />
-              <span>导出 CSV</span>
+              <span>{lang === 'en' ? 'Export CSV' : '导出 CSV'}</span>
             </button>
           </div>
         </div>
@@ -335,7 +357,9 @@ export function CompetitorTopPosts({
         >
           <div className="row" style={{ gap: 8, alignItems: 'center' }}>
             <span>
-              已筛选 <b style={{ color: 'var(--brand)' }}>{sortedPosts.length}</b> 条作品 (全量 {topPosts.length} 条)
+              {lang === 'en'
+                ? <>Filtered <b style={{ color: 'var(--brand)' }}>{sortedPosts.length}</b> posts (Total {topPosts.length})</>
+                : <>已筛选 <b style={{ color: 'var(--brand)' }}>{sortedPosts.length}</b> 条作品 (全量 {topPosts.length} 条)</>}
             </span>
             {undatedHidden > 0 && (
               <span

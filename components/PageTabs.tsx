@@ -28,12 +28,34 @@ export type PageTab = {
   node: React.ReactNode;
 };
 
+import { useI18n } from '@/lib/i18n';
+
+const TAB_LABEL_EN: Record<string, string> = {
+  topics: 'Select Topics',
+  inspiration: 'Inspiration Inbox',
+  advisor: 'Find Angles',
+  skills: 'Run Skills',
+  cover: 'Title & Cover',
+  multi: 'Multi-Platform',
+  review: 'Draft Review',
+  performance: 'Performance',
+  insights: 'Platform Insights',
+  growth: 'Growth Tracking',
+  persona: 'Personas',
+  material: 'Assets',
+  accounts: 'Accounts',
+  hot: 'Trending Topics',
+  rivals: 'Competitor Radar',
+  library: 'Saved Library',
+};
+
 export function PageTabs({ tabs, initial,
   variant,
 }: { tabs: PageTab[]; initial?: string 
   /** 'sub' = 次级标签条：这一页已经有一层主标签时用它，视觉上分出主次 */
   variant?: 'sub';
 }) {
+  const { lang } = useI18n();
   const [active, setActive] = useState(
     initial && tabs.some((t) => t.key === initial) ? initial : (tabs[0]?.key ?? ''),
   );
@@ -51,23 +73,26 @@ export function PageTabs({ tabs, initial,
   return (
     <div>
       <div className={`tabs${variant === "sub" ? " tabs-sub" : ""}`} role="tablist">
-        {tabs.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            role="tab"
-            aria-selected={t.key === cur.key}
-            className={`tab ${t.key === cur.key ? 'active' : ''}`}
-            onClick={() => setActive(t.key)}
-          >
-            {t.label}
-            {t.badge ? (
-              <span className="badge badge-gray" style={{ marginLeft: 6, fontSize: 10 }}>
-                {t.badge}
-              </span>
-            ) : null}
-          </button>
-        ))}
+        {tabs.map((t) => {
+          const displayLabel = lang === 'en' && TAB_LABEL_EN[t.key] ? TAB_LABEL_EN[t.key] : t.label;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              role="tab"
+              aria-selected={t.key === cur.key}
+              className={`tab ${t.key === cur.key ? 'active' : ''}`}
+              onClick={() => setActive(t.key)}
+            >
+              {displayLabel}
+              {t.badge ? (
+                <span className="badge badge-gray" style={{ marginLeft: 6, fontSize: 10 }}>
+                  {t.badge}
+                </span>
+              ) : null}
+            </button>
+          );
+        })}
       </div>
 
       {cur.hint && (

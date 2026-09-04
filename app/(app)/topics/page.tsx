@@ -21,6 +21,8 @@ import { PickTabs } from './PickTabs';
 import { InspirationPanel } from '../inspiration/InspirationPanel';
 import { AdvisorPanel } from '../advisor/AdvisorPanel';
 import { HubHeader } from '@/components/HubHeader';
+import { getServerLang } from '@/lib/i18n/server';
+import { getDictionary } from '@/lib/i18n/dict';
 
 export const dynamic = 'force-dynamic';
 
@@ -269,17 +271,16 @@ export default async function TopicsPage({
 }) {
   const s = await getSession();
   const sp = await searchParams;
+  const lang = await getServerLang();
+  const dict = getDictionary(lang);
 
-  // 「定选题」三合一（2026-08-25）：灵感箱 /inspiration、选题智囊团 /advisor 并进本页。
-  // 顶层 view 参数切换、只渲染当前 tab（同 /data 看效果的早返回模式）——
-  // 两个面板各自取数，切到才查；默认视图不为它们多查一行。
   const view = sp.view === 'inspiration' || sp.view === 'advisor' ? sp.view : 'topics';
   if (view !== 'topics') {
     return (
       <>
         <HubHeader
-          title="挑选题"
-          hint="把情报变成「今天写哪一条」：候选、灵感、专家会诊"
+          title={dict.topics.pageTitle}
+          hint={lang === 'en' ? 'Turn intelligence into actionable topics: Candidates, Sparks, and Expert Consultations' : '把情报变成「今天写哪一条」：候选、灵感、专家会诊'}
           tabs={<PickTabs active={view} inline />}
         />
         {view === 'inspiration' ? <InspirationPanel /> : <AdvisorPanel />}
@@ -294,25 +295,17 @@ export default async function TopicsPage({
     orderBy: [{ totalScore: 'desc' }, { createdAt: 'desc' }],
   });
 
-  // 各状态计数
   const counts: Record<string, number> = {};
   for (const t of topics) counts[t.state] = (counts[t.state] ?? 0) + 1;
 
-  // 信任分层排序：有据推荐（evidence 非空）优先展示，同层内保持 DB 的分数降序（stable sort）。
-  // 只调整同一分区/队列内的先后，不跨队列搬动——队列本身是排产逻辑，不能被证据有无覆盖。
   const shown = topics
     .filter((t) => t.state === active)
     .sort((a, b) => (a.evidence ? 0 : 1) - (b.evidence ? 0 : 1));
-  // 作战卡只给当前分区看得见的那些算——它要扫竞对作品做同题匹配，
-  // 对全部历史选题算一遍是白花的钱（而且用户看不到）。
+
   const battles = await buildBattleCards(s.workspaceId, s.accountId, shown).catch(
     () => new Map<string, BattleCard>(),
   );
 
-  // 团队投票：**只在多人租户里取数与渲染**。一个人给自己的选题投票是纯噪声，
-  // 而且会让个人用户以为「不投票就不算数」。单人时整块不出现，也省掉这两次查询。
-  // 冷启动引导：八个候选源里有几个真在工作、沉默的怎么解锁。
-  // 全是 count / 轻量 select，不进 LLM。失败不该挡住选题页主体。
   const readiness = await loadReadiness(s.workspaceId, s.accountId).catch(() => null);
 
   const memberCount = await prisma.member.count({ where: { tenantId: s.tenantId, status: 'active' } });
@@ -331,30 +324,37 @@ export default async function TopicsPage({
       if (v.memberId === s.memberId) cur.mine = v.value === 'down' ? 'down' : 'up';
     }
   }
-  // 「已推荐」按时间队列分组展示：先做哪个是排产问题，不是分数问题（lib/topic/queue.ts）。
-  // 其余分区（已采纳/已拒绝/候选）是归档视图，平铺即可。
+
   const grouped = active === 'recommended';
   const reserve = topics.filter(
     (t) => t.queue === 'evergreen' && (t.state === 'recommended' || t.state === 'candidate'),
   ).length;
 
+  const stateLabels: Record<string, string> = {
+    recommended: lang === 'en' ? 'Recommended' : TOPIC_STATES.recommended,
+    accepted: lang === 'en' ? 'Accepted' : TOPIC_STATES.accepted,
+    rejected: lang === 'en' ? 'Rejected' : TOPIC_STATES.rejected,
+    candidate: lang === 'en' ? 'Candidates' : TOPIC_STATES.candidate,
+  };
+
   return (
     <>
       <HubHeader
-        title="挑选题"
-        hint="先海选、再由 AI 精选 · 每条推荐都要说清「为什么是你、为什么是现在」"
+        title={dict.topics.pageTitle}
+        hint={lang === 'en' ? 'Broad sweep filtered down by AI curation · Every idea must explain "Why you, why now"' : '先海选、再由 AI 精选 · 每条推荐都要说清「为什么是你、为什么是现在」'}
         tabs={<PickTabs active="topics" inline />}
         action={
-          <ActionButton action={actGenerate} primary loadingText="全流程运行中…">
-            生成今日推荐
+          <ActionButton action={actGenerate} primary loadingText={lang === 'en' ? 'Running pipeline…' : '全流程运行中…'}>
+            {lang === 'en' ? "Generate Today's Topics" : '生成今日推荐'}
           </ActionButton>
         }
       />
 
-      {/* 流程说明收进折叠（2026-08-26 用户「把重点内容提前，该缩起来缩起来」）：
-          它是「懂一次就够」的机制说明，摊开摆在推荐列表前面，每天都把真正要挑的题
-          压到第二屏。三格流程条本体没动——那是真机打磨过的（竖杠换行那次）。 */}
-      <Fold title="推荐是怎么选出来的" sub="候选池 → 海选 → AI 精选" note={<span className="small muted">看一次就够</span>}>
+      <Fold
+        title={lang === 'en' ? 'How topics are curated' : '推荐是怎么选出来的'}
+        sub={lang === 'en' ? 'Candidate Pool → Broad Filter → AI Curation' : '候选池 → 海选 → AI 精选'}
+        note={<span className="small muted">{lang === 'en' ? 'Read once' : '看一次就够'}</span>}
+      >
 
         <div className="row wrap" style={{ gap: 8, alignItems: 'center', marginBottom: 12 }}>
           <span className="badge badge-brand">两阶段打分</span>
@@ -407,7 +407,7 @@ export default async function TopicsPage({
             href={t.key === 'recommended' ? '/topics' : `/topics?state=${t.key}`}
             className={`tab${active === t.key ? ' active' : ''}`}
           >
-            {t.name}
+            {stateLabels[t.key] ?? t.name}
             <span className="badge badge-gray" style={{ marginLeft: 6 }}>
               {counts[t.key] ?? 0}
             </span>
@@ -415,7 +415,6 @@ export default async function TopicsPage({
         ))}
       </div>
 
-      {/* 批量处理：只在「已推荐」分区出现——其余分区是归档视图，没有待处理动作 */}
       {active === 'recommended' && shown.length > 1 && <BulkBar ids={shown.map((t) => t.id)} />}
 
       {shown.length === 0 ? (
@@ -423,13 +422,13 @@ export default async function TopicsPage({
           icon="🎯"
           text={
             active === 'recommended'
-              ? '还没有今日推荐——点右上角「生成今日推荐」跑一次全流程'
-              : `「${TOPIC_STATES[active as keyof typeof TOPIC_STATES]}」分区暂无选题`
+              ? (lang === 'en' ? 'No recommendations for today — click "Generate Today’s Topics" to run pipeline.' : '还没有今日推荐——点右上角「生成今日推荐」跑一次全流程')
+              : (lang === 'en' ? `No topics in "${stateLabels[active] ?? active}"` : `「${TOPIC_STATES[active as keyof typeof TOPIC_STATES]}」分区暂无选题`)
           }
           action={
             active === 'recommended' ? (
-              <ActionButton action={actGenerate} primary loadingText="全流程运行中…">
-                生成今日推荐
+              <ActionButton action={actGenerate} primary loadingText={lang === 'en' ? 'Running pipeline…' : '全流程运行中…'}>
+                {lang === 'en' ? "Generate Today's Topics" : '生成今日推荐'}
               </ActionButton>
             ) : undefined
           }

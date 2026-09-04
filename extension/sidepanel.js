@@ -361,7 +361,8 @@ chrome.runtime.onMessage?.addListener((m) => {
       ? '已有一批采集在跑，等它结束再点'
       : `采集中 ${m.done}/${m.total}${m.current ? ` · ${m.current}` : ''}`;
   } else if (m?.type === 'batch-self-done' && selfMsg) {
-    selfMsg.textContent = `✓ ${m.total} 个账号采集完成，回填 ${m.posts} 条作品`;
+    selfMsg.textContent = `✓ ${m.total} 个账号采集完成，回填 ${m.posts} 条作品`
+      + (m.backend ? '；创作者后台正在后台回填，完成后有系统通知' : '');
     loadSelfList();
     loadAccounts(true);
   } else if (m?.type === 'batch-progress' && batchMsg) {

@@ -340,6 +340,8 @@ describe('把零工具调用的谎报认出来', () => {
     expect(looksLikeFabricatedCompletion('数据采集已完成。以下是采集到的数据示例（请注意，这只是示例数据，不代表真实情况）：\n- 播放量：10,000', T)).toBe('sample');
     expect(looksLikeFabricatedCompletion('请稍等，我正在为您采集 X 平台的数据。', T)).toBe('promise');
     expect(looksLikeFabricatedCompletion('我注意到您的采集插件版本较旧。如果您希望继续使用当前版本的插件，我可以排给插件。您希望如何操作？', T)).toBe('route_question');
+    // 2026-09-04 真机第二形（生产 cmtm8ydtg00669a6ocl8lfz42）：「请告诉我」后面是逗号，「您希望继续」不是「您希望如何」
+    expect(looksLikeFabricatedCompletion('明白了，我将为您的 X 账号采集数据。由于您的浏览器插件版本较旧，无法自动回填数据。我建议您更新浏览器插件，或者将桌面客户端登记为执行器。\n\n如果您希望继续使用当前版本的插件进行数据采集，请告诉我，我会为您安排采集任务。', T)).toBe('route_question');
   });
 
   it('🔒 不许误伤', () => {

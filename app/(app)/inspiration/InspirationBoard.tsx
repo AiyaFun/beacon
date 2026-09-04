@@ -10,6 +10,7 @@ import {
   actDeleteInspiration,
   actMineQuestions,
 } from './actions';
+import { useI18n } from '@/lib/i18n';
 
 const SOURCE_BADGE: Record<string, { name: string; cls: string; title: string }> = {
   plugin: { name: '采集助手', cls: 'badge-brand', title: '在网页上一键收藏进来的' },
@@ -82,6 +83,15 @@ export function InspirationBoard({ items }: { items: InspirationView[] }) {
     });
   }
 
+  const { lang } = useI18n();
+
+  const tabLabels: Record<string, string> = {
+    open: lang === 'en' ? 'Inbox' : '待用',
+    comments: lang === 'en' ? 'Audience Questions' : '读者提问',
+    used: lang === 'en' ? 'Converted' : '已转选题',
+    archived: lang === 'en' ? 'Archived' : '已归档',
+  };
+
   return (
     <div className="stack" style={{ gap: 16 }}>
       <div className="row wrap" style={{ gap: 10, alignItems: 'center' }}>
@@ -91,16 +101,16 @@ export function InspirationBoard({ items }: { items: InspirationView[] }) {
             className={`btn btn-sm ${tab === t.key ? 'btn-primary' : ''}`}
             onClick={() => setTab(t.key)}
           >
-            {t.name} ({t.key === 'comments' ? items.filter(isComment).length : items.filter((i) => i.state === t.key).length})
+            {tabLabels[t.key] ?? t.name} ({t.key === 'comments' ? items.filter(isComment).length : items.filter((i) => i.state === t.key).length})
           </button>
         ))}
-        <span className="small muted">{active.hint}</span>
+        <span className="small muted hide-mobile">{active.hint}</span>
         <div style={{ flex: 1 }} />
         <button className="btn btn-sm" onClick={() => { setShowMine((v) => !v); setShowForm(false); }}>
-          <Icon.chat size={13} /> 从评论里挖问题
+          <Icon.chat size={13} /> {lang === 'en' ? 'Mine from Comments' : '从评论里挖问题'}
         </button>
         <button className="btn btn-sm btn-primary" onClick={() => { setShowForm((v) => !v); setShowMine(false); }}>
-          <Icon.plus size={13} /> 手动记一条
+          <Icon.plus size={13} /> {lang === 'en' ? 'Add Inspiration' : '手动记一条'}
         </button>
       </div>
 
@@ -110,10 +120,10 @@ export function InspirationBoard({ items }: { items: InspirationView[] }) {
       {shown.length === 0 ? (
         <p className="small muted" style={{ textAlign: 'center', padding: 28, margin: 0 }}>
           {tab === 'open'
-            ? '收集箱是空的。装上采集助手后，刷到任何值得记一笔的内容都能一键存进来；也可以点右上角手动记。'
+            ? (lang === 'en' ? 'Inspiration inbox is empty. Save posts from the web extension or add manually above.' : '收集箱是空的。装上采集助手后，刷到任何值得记一笔的内容都能一键存进来；也可以点右上角手动记。')
             : tab === 'comments'
-              ? '还没有读者提问。在插件设置中开启「评论提问采集」，然后在作品详情页点「读评论提问」，或在上方点「从评论里挖问题」粘贴评论文本。'
-              : `「${active.name}」暂无内容`}
+              ? (lang === 'en' ? 'No audience questions yet. Enable comment mining in extension or paste comments above.' : '还没有读者提问。在插件设置中开启「评论提问采集」，然后在作品详情页点「读评论提问」，或在上方点「从评论里挖问题」粘贴评论文本。')
+              : (lang === 'en' ? `No items in "${tabLabels[active.key] ?? active.name}"` : `「${active.name}」暂无内容`)}
         </p>
       ) : (
         <div className="stack" style={{ gap: 10 }}>
@@ -167,21 +177,21 @@ export function InspirationBoard({ items }: { items: InspirationView[] }) {
                         <span className="muted">{relDays(it.lastAskedAt)}最近一次</span>
                       )}
                       <span className={`badge ${it.state === 'open' ? 'badge-green' : 'badge-gray'}`} style={{ fontSize: 10 }}>
-                        {it.state === 'open' ? '待用' : it.state === 'used' ? '已转选题' : '已归档'}
+                        {it.state === 'open' ? (lang === 'en' ? 'Open' : '待用') : it.state === 'used' ? (lang === 'en' ? 'Converted' : '已转选题') : (lang === 'en' ? 'Archived' : '已归档')}
                       </span>
                     </div>
                   )}
                   <div className="small muted row wrap" style={{ gap: 8 }}>
-                    <span>{relDays(it.createdAt)}收藏</span>
+                    <span>{relDays(it.createdAt)}{lang === 'en' ? ' saved' : '收藏'}</span>
                     {it.author && <span>· {it.author}</span>}
                     {it.url && (
                       <a href={it.url} target="_blank" rel="noreferrer noopener">
-                        看原内容
+                        {lang === 'en' ? 'View Original' : '看原内容'}
                       </a>
                     )}
                     {it.contentChars > 0 && (
-                      <span title="他人作品，仅供你分析参考，别直接复用其文字">
-                        · 正文已存 {it.contentChars} 字
+                      <span title={lang === 'en' ? 'Saved for reference only' : '他人作品，仅供你分析参考，别直接复用其文字'}>
+                        · {lang === 'en' ? `${it.contentChars} chars saved` : `正文已存 ${it.contentChars} 字`}
                       </span>
                     )}
                   </div>
@@ -189,18 +199,19 @@ export function InspirationBoard({ items }: { items: InspirationView[] }) {
                 <div className="row" style={{ gap: 6 }}>
                   {it.state === 'open' ? (
                     <button className="btn btn-sm" disabled={pending} onClick={() => run(() => actArchiveInspiration(it.id))}>
-                      归档
+                      {lang === 'en' ? 'Archive' : '归档'}
                     </button>
                   ) : (
                     <button className="btn btn-sm" disabled={pending} onClick={() => run(() => actRestoreInspiration(it.id))}>
-                      放回待用
+                      {lang === 'en' ? 'Restore' : '放回待用'}
                     </button>
                   )}
                   <button
                     className="btn btn-sm"
                     disabled={pending}
                     onClick={() => {
-                      if (window.confirm(`删除「${it.title}」？删除后不可恢复。`)) run(() => actDeleteInspiration(it.id));
+                      const confirmMsg = lang === 'en' ? `Delete "${it.title}"? Cannot be undone.` : `删除「${it.title}」？删除后不可恢复。`;
+                      if (window.confirm(confirmMsg)) run(() => actDeleteInspiration(it.id));
                     }}
                   >
                     <Icon.x size={12} />

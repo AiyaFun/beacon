@@ -1,0 +1,28 @@
+export const assistantDict = {
+  zh: {
+    assistantTitle: 'AI 创作助手',
+    assistantHint: '多轮深度对话 · 支持工具调用 · 账号上下文与风格记忆',
+    skillsTitle: '工作流技能',
+    skillsHint: '可装配给 AI 助手的专门能力 · 包含爆款拆解、选题扩展、自动生图等',
+    workflowsTitle: '自动化工作流',
+    workflowsHint: '编排周期性定时巡检、自动抓取与推送流水线',
+    inputPlaceholder: '向 AI 助手提问或安排任务，Shift+Enter 换行…',
+    startTask: '开始执行',
+    cancelTask: '停止',
+    installedSkills: '已装配技能',
+    availableSkills: '可添加技能',
+  },
+  en: {
+    assistantTitle: 'AI Assistant',
+    assistantHint: 'Multi-turn interactive co-pilot · Tool calling support · Account context & persona memory',
+    skillsTitle: 'Workflow Skills',
+    skillsHint: 'Specialized capabilities equipped to your AI Assistant · Viral teardown, topic expansion, etc.',
+    workflowsTitle: 'Automated Workflows',
+    workflowsHint: 'Schedule recurring audits, crawlers, and notifications',
+    inputPlaceholder: 'Ask a question or assign a task to AI Assistant, Shift+Enter for newline…',
+    startTask: 'Run Task',
+    cancelTask: 'Stop',
+    installedSkills: 'Equipped Skills',
+    availableSkills: 'Available Skills',
+  },
+} as const;

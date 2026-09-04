@@ -5,6 +5,7 @@ import {
   agentStatus, agentDetail, activeBadge, workflowStatus, publishStatus, collectStatus, collectDetail,
   sortRuns, countByStatus, TRIGGER_LABEL, type RunEntry,
 } from '@/lib/runs';
+import { codeOfDir } from './helpers/anchor';
 
 const ROOT = path.resolve(__dirname, '..');
 const SRC = fs.readFileSync(path.join(ROOT, 'lib/runs/index.ts'), 'utf8');
@@ -99,12 +100,12 @@ describe('每一类的 href 都要指到真的有这块内容的地方', () => {
     // 还带取消按钮。守的性质没变：**落点那一页必须真的有这块内容**。
     expect(SRC, '浏览器任务又落回插件页了').not.toMatch(/href: '\/extension#browser-tasks'/);
     expect(SRC).toMatch(/href: '\/runs'/);
-    const runs = code('app/(app)/runs/page.tsx');
+    const runs = codeOfDir('app/(app)/runs');
     expect(runs, '运行中心没有认 browser 这一类').toMatch(/kind === 'browser'/);
   });
 
   it('带锚点/带 query 的 href 不许让「去XX」按钮退化成「去相关页面」', () => {
-    const page = code('app/(app)/runs/page.tsx');
+    const page = codeOfDir('app/(app)/runs');
     // navLabel 要先剥 # 与 ? 再去 NAV 里找，否则 /extension#x、/assistant?run=x
     // 都找不到，一律落到「去相关页面」这种废话
     expect(page).toMatch(/href\.split\(\/\[#\?\]\/\)\[0\]/);

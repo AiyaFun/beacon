@@ -38,6 +38,7 @@ function loadSw(accounts: Record<string, unknown>[], opts: { collect?: unknown }
       alarms: { onAlarm: listener, create: noop, get: noop, clear: noop },
       tabs: {
         onRemoved: listener,
+        onUpdated: listener,
         create: ({ url }: { url: string }) => { const t = { id: nextTabId++, url }; opened.push(t); return Promise.resolve(t); },
         remove: (id: number) => { removed.push(id); return Promise.resolve(); },
         sendMessage: (_id: number, m: { type: string }) => {

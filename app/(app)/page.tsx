@@ -21,6 +21,8 @@ import { trialProgress } from '@/lib/pay/trial';
 import { buildBattleReport } from '@/lib/battle/report';
 import { BattleReport } from '@/components/BattleReport';
 import { actGenerateRecommendations, actCrawlCompetitors } from './actions';
+import { WeekBattleHeader } from '@/components/WeekBattleHeader';
+import { PersonaGuideBanner } from '@/components/PersonaGuideBanner';
 
 export const dynamic = 'force-dynamic';
 
@@ -126,45 +128,12 @@ export default async function Dashboard() {
         </div>
       )}
 
-        <div className="row wrap" style={{ gap: 8, alignItems: 'baseline', marginBottom: 12 }}>
-          <h2 style={{ fontSize: 17, margin: 0 }}>本周作战</h2>
-          <span className="small muted">{fmtDateLong(new Date())} · 这周该做什么，每条后面就是执行入口</span>
-          <span className="row" style={{ gap: 8, marginLeft: 'auto' }}>
-            {competitors > 0 && (
-              <ActionButton action={actCrawlCompetitors} loadingText="采集中…">采集竞对</ActionButton>
-            )}
-            {/* 人设空白时这里**不再重复一个建人设按钮**：下面那条醒目横幅
-                （「AI 还不认识你」）已经带着同一个入口，同屏两个同去处的主按钮
-                只会让人以为是两件事（2026-08-26 用户指出的重复跳转）。 */}
-            {!personaBlank && (
-              <ActionButton action={actGenerateRecommendations} primary loadingText={['正在采集热榜…', '正在聚类分析…', '正在 AI 精选推荐…']}>刷新选题</ActionButton>
-            )}
-          </span>
-        </div>
+        <WeekBattleHeader competitors={competitors} personaBlank={personaBlank} />
 
       {/* 试用节奏卡：临期高亮 + 续费入口；非试用时组件内部返回 null，不占位 */}
       <TrialProgressCard trial={trial} />
 
-      {personaBlank && (
-        <div className="alert-gradient-brand" style={{ padding: '16px 20px', marginBottom: 20 }}>
-          <div className="row-between wrap" style={{ gap: 12, alignItems: 'center' }}>
-            <div className="row" style={{ gap: 12, alignItems: 'center' }}>
-              <div className="icon-box-brand">
-                <Icon.sparkles size={18} />
-              </div>
-              <div>
-                <b style={{ color: 'var(--brand)', fontSize: 15 }}>AI 还不认识你</b>
-                <div className="small" style={{ marginTop: 2, opacity: 0.9 }}>
-                  人设是所有推荐的地基——空着的话，热点再准也匹配不到你头上。
-                </div>
-              </div>
-            </div>
-            <Link href="/persona" className="btn btn-primary" style={{ fontSize: 14, padding: '8px 18px' }}>
-              1 分钟创建专属人设 →
-            </Link>
-          </div>
-        </div>
-      )}
+      {personaBlank && <PersonaGuideBanner />}
 
       {/* 任务台首页第一屏 = 本周作战报告（与 /battle 共用 BattleReport）；
           工作台保持原来的「统计格 + 今日推荐 Top3」布局，一个字不动。 */}

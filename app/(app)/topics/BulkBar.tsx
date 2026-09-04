@@ -9,7 +9,10 @@ import { actBulkAccept, actBulkReject } from './actions';
 //
 // 设计取舍：批量拒绝**必须填一个共同原因**。拒绝原因会写进偏好记忆用于纠偏，
 // 允许空原因批量拒绝＝往记忆里灌一堆「未说明原因」的噪声，让推荐越用越差。
+import { useI18n } from '@/lib/i18n';
+
 export function BulkBar({ ids }: { ids: string[] }) {
+  const { lang } = useI18n();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState('');
@@ -27,7 +30,11 @@ export function BulkBar({ ids }: { ids: string[] }) {
     setSelected(new Set());
     setRejecting(false);
     setReason('');
-    setMsg(r.failed ? `已${verb} ${r.done} 条，${r.failed} 条未成功（可能已被处理，刷新看看）` : `已${verb} ${r.done} 条`);
+    const vText = lang === 'en' ? (verb === '采纳' ? 'accepted' : 'rejected') : verb;
+    const feedback = lang === 'en'
+      ? (r.failed ? `${vText} ${r.done}, ${r.failed} failed` : `${vText} ${r.done} topics`)
+      : (r.failed ? `已${verb} ${r.done} 条，${r.failed} 条未成功（可能已被处理，刷新看看）` : `已${verb} ${r.done} 条`);
+    setMsg(feedback);
     router.refresh();
   }
 
@@ -51,24 +58,24 @@ export function BulkBar({ ids }: { ids: string[] }) {
       <div className="row wrap" style={{ gap: 10, alignItems: 'center' }}>
         <label className="row small" style={{ gap: 6, cursor: 'pointer', alignItems: 'center' }}>
           <input type="checkbox" checked={allOn} onChange={toggleAll} />
-          全选本区 {ids.length} 条
+          {lang === 'en' ? `Select all ${ids.length} topics` : `全选本区 ${ids.length} 条`}
         </label>
 
         {selected.size > 0 && (
           <>
-            <span className="badge badge-brand">已选 {selected.size}</span>
+            <span className="badge badge-brand">{lang === 'en' ? `Selected ${selected.size}` : `已选 ${selected.size}`}</span>
             <button className="btn btn-sm btn-primary" onClick={accept} disabled={pending}>
-              {pending ? '处理中…' : `批量采纳 ${selected.size} 条`}
+              {pending ? (lang === 'en' ? 'Processing…' : '处理中…') : (lang === 'en' ? `Batch Accept (${selected.size})` : `批量采纳 ${selected.size} 条`)}
             </button>
             <button
               className="btn btn-sm btn-ghost"
               onClick={() => setRejecting((v) => !v)}
               disabled={pending}
             >
-              {rejecting ? '先不拒了' : '批量拒绝…'}
+              {rejecting ? (lang === 'en' ? 'Cancel' : '先不拒了') : (lang === 'en' ? 'Batch Reject…' : '批量拒绝…')}
             </button>
             <button className="btn btn-sm btn-ghost" onClick={() => setSelected(new Set())} disabled={pending}>
-              取消选择
+              {lang === 'en' ? 'Deselect All' : '取消选择'}
             </button>
           </>
         )}
@@ -81,15 +88,15 @@ export function BulkBar({ ids }: { ids: string[] }) {
             className="input"
             autoFocus
             style={{ maxWidth: 320 }}
-            placeholder="这批为什么不合适？（会记进偏好，让后续推荐更准）"
+            placeholder={lang === 'en' ? 'Why reject these? (Tunes future recommendations)' : '这批为什么不合适？（会记进偏好，让后续推荐更准）'}
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && reason.trim() && !pending) reject(); }}
           />
           <button className="btn btn-sm btn-primary" onClick={reject} disabled={pending || !reason.trim()}>
-            确认拒绝 {selected.size} 条
+            {lang === 'en' ? `Confirm Reject (${selected.size})` : `确认拒绝 ${selected.size} 条`}
           </button>
-          <span className="small muted">批量拒绝必须写原因——空原因会往记忆里灌噪声</span>
+          <span className="small muted">{lang === 'en' ? 'Reason required to tune preference memory' : '批量拒绝必须写原因——空原因会往记忆里灌噪声'}</span>
         </div>
       )}
 

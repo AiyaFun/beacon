@@ -8,7 +8,10 @@ import { actConvene } from './actions';
 // 召集智囊团：可带本次议题（seed），空议题=开放式会诊。
 // 失败（权限不足 / AI 额度用尽等）红字完整展示——配额文案里带
 // 「升级套餐 / 配自己的 Key」的自救指引，不截断。
+import { useI18n } from '@/lib/i18n';
+
 export function ConveneForm({ panelSize }: { panelSize: number }) {
+  const { lang } = useI18n();
   const [seed, setSeed] = useState('');
   const [err, setErr] = useState('');
   const [pending, start] = useTransition();
@@ -22,7 +25,7 @@ export function ConveneForm({ panelSize }: { panelSize: number }) {
         setSeed('');
         router.refresh();
       } catch (e) {
-        setErr((e as Error).message || '会诊没开起来，请稍后重试');
+        setErr((e as Error).message || (lang === 'en' ? 'Session failed to start, please try again later' : '会诊没开起来，请稍后重试'));
       }
     });
   }
@@ -33,13 +36,13 @@ export function ConveneForm({ panelSize }: { panelSize: number }) {
         <input
           className="input"
           style={{ width: 260 }}
-          placeholder="本次议题（选填），如：五一假期蹭什么热点"
+          placeholder={lang === 'en' ? 'Topic prompt (optional), e.g. holiday trend hook' : '本次议题（选填），如：五一假期蹭什么热点'}
           value={seed}
           onChange={(e) => setSeed(e.target.value)}
           disabled={pending}
         />
         <button className="btn btn-primary" onClick={run} disabled={pending}>
-          <Icon.users size={15} /> {pending ? `${panelSize} 人物会诊中…` : `召集智囊团（${panelSize} 席）`}
+          <Icon.users size={15} /> {pending ? (lang === 'en' ? 'Council in session…' : `${panelSize} 人物会诊中…`) : (lang === 'en' ? `Convene Council (${panelSize})` : `召集智囊团（${panelSize} 席）`)}
         </button>
       </div>
       {err && (

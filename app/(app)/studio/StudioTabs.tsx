@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useI18n } from '@/lib/i18n';
 
 // 工坊下半区的标签页：技能出成品 / 标题与封面 / 一稿多平台 / 草稿会诊。
 //
@@ -33,7 +34,16 @@ export function jumpToStudioTab(key: string, anchor?: string): void {
   window.dispatchEvent(new CustomEvent<StudioTabEvent>('studio:tab', { detail: { key, anchor } }));
 }
 
+const STUDIO_TAB_EN: Record<string, string> = {
+  skills: 'Run Skills',
+  cover: 'Title & Cover',
+  multi: 'Multi-Platform',
+  review: 'Draft Review',
+  batch: 'Batch Generation',
+};
+
 export function StudioTabs({ tabs, initialTab }: { tabs: StudioTab[]; initialTab?: string }) {
+  const { lang } = useI18n();
   const [active, setActive] = useState(
     initialTab && tabs.some((t) => t.key === initialTab) ? initialTab : (tabs[0]?.key ?? ''),
   );
@@ -59,21 +69,24 @@ export function StudioTabs({ tabs, initialTab }: { tabs: StudioTab[]; initialTab
   return (
     <div>
       <div className="tabs tabs-sub" role="tablist">
-        {tabs.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            role="tab"
-            aria-selected={t.key === cur.key}
-            className={`tab ${t.key === cur.key ? 'active' : ''}`}
-            onClick={() => setActive(t.key)}
-          >
-            {t.label}
-            {t.badge ? (
-              <span className="badge badge-gray" style={{ marginLeft: 6, fontSize: 10 }}>{t.badge}</span>
-            ) : null}
-          </button>
-        ))}
+        {tabs.map((t) => {
+          const displayLabel = lang === 'en' && STUDIO_TAB_EN[t.key] ? STUDIO_TAB_EN[t.key] : t.label;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              role="tab"
+              aria-selected={t.key === cur.key}
+              className={`tab ${t.key === cur.key ? 'active' : ''}`}
+              onClick={() => setActive(t.key)}
+            >
+              {displayLabel}
+              {t.badge ? (
+                <span className="badge badge-gray" style={{ marginLeft: 6, fontSize: 10 }}>{t.badge}</span>
+              ) : null}
+            </button>
+          );
+        })}
       </div>
 
       {cur.hint && (

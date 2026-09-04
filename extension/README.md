@@ -98,7 +98,7 @@ Chromium，同一个包通用；Safari 因需 Apple 签名 + App Store，标注�
    身份只认 `/@` 开头的路径——`/foryou`、`/explore`、`/tag/xxx` 这些功能页一律不建账号。
    和 X 一样没有创作者后台可认：你自己的数据就在你自己主页上，所以主页上点「这是我的作品」
    要多一次确认（读到「编辑资料 / Edit profile」才直接放行）。
-   **公众号竞对：已于 2026-09-03 整条移除**（原 `content/wechat-competitor.js`，0.6.0–1.3.24）。
+   **公众号竞对：已于 2026-09-03 整条移除，且不会恢复**（原 `content/wechat-competitor.js`，0.6.0–1.3.24）。
    那条路是在**你自己已登录的公众号后台**（`mp.weixin.qq.com/cgi-bin/*`）里，用地址栏的 token
    同源调后台自带的 `searchbiz` + `appmsgpublish` 两个接口。它们**不是微信官方开放的数据接口**，
    以自动化方式调用可能违反《微信公众平台服务协议》，而**被限接口、被封功能的是你自己的公众号账号**，
@@ -113,9 +113,12 @@ Chromium，同一个包通用；Safari 因需 Apple 签名 + App Store，标注�
    在你自己的创作者后台「数据中心 · 作品数据」页点「📥 这是我的作品 · 回填数据看板」，
    插件读取该页已渲染的**你自己作品**数据，走 `/api/ingest/self` 回填。支持：
    视频号 `channels.weixin.qq.com/platform/*`、抖音 `creator.douyin.com/*`、
-   小红书 `creator.xiaohongshu.com/*`、B站 `member.bilibili.com/*`。
-   （公众号后台 `mp.weixin.qq.com/*` 已于 2026-09-03 一并移除：插件不再匹配该域名下的任何页面，
-   自有公众号数据也不再回填——见上一条的理由。）
+   小红书 `creator.xiaohongshu.com/*`、B站 `member.bilibili.com/*`（这四个在 manifest 里声明）。
+   **公众号后台 `mp.weixin.qq.com/cgi-bin/*` 是第五个，但走的路不同**：它不在 manifest 里，
+   由用户在设置页**单独授权**后、由 SW 用 `chrome.scripting` 按需注入
+   （`content/self-backend-wechat.js` 提供站点配置，`sw-self-backends.js` 提供入口）。
+   这两个文件是**官方发行版专有**的可选模块——开源发行版把它们剥掉，
+   注册表为空、设置页那一块不显示，整条通道不存在。
    **为什么值得走这条**：公开作品页拿不到**完播率/完读率**，而它是抖音/B站/视频号算法的
    第一信号，也是「平台算法教练」的个性化诊断此前总说样本不足的原因。创作者后台是唯一能合规拿到它的地方。
    边界：**仅本人登录态、只读（不发布不修改不删除不调接口）、仅自有数据、不采集他人**，

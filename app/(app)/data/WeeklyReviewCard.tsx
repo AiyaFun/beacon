@@ -8,9 +8,12 @@ import { fmtNum } from '@/lib/format';
 import { actRunJobNow } from '../settings/automation-actions';
 import type { WeeklyReview } from '@/lib/insight/review';
 
+import { useI18n } from '@/lib/i18n';
+
 // 周度运营复盘卡。此前周报只走站内通知 + 机器人推送，在 app 里**没有任何入口**——
 // 用户点开通知落到 /data 却找不到周报本体。这里把它显出来，顺带承载 R7「记住了你的 N 件事」。
 export function WeeklyReviewCard({ review }: { review: WeeklyReview | null }) {
+  const { lang } = useI18n();
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState('');
   const router = useRouter();
@@ -20,24 +23,28 @@ export function WeeklyReviewCard({ review }: { review: WeeklyReview | null }) {
       setMsg('');
       const r = await actRunJobNow('weekly_review');
       if (r.ok) {
-        setMsg(r.detail || '周报已生成');
+        setMsg(r.detail || (lang === 'en' ? 'Weekly review generated' : '周报已生成'));
         router.refresh();
       } else {
-        setMsg(r.error || '生成失败');
+        setMsg(r.error || (lang === 'en' ? 'Failed to generate' : '生成失败'));
       }
     });
   }
 
   if (!review) {
     return (
-      <Card title="📅 周度运营复盘" sub="每周一自动生成 · 本周发布满 1 篇即可产出" style={{ marginBottom: 16 }}>
-        <Empty icon="🗓" text="还没有周报——本周发布并回填数据后，下次周任务会自动生成" />
+      <Card
+        title={lang === 'en' ? '📅 Weekly Performance Review' : '📅 周度运营复盘'}
+        sub={lang === 'en' ? 'Auto-generated on Mondays · Requires at least 1 published post' : '每周一自动生成 · 本周发布满 1 篇即可产出'}
+        style={{ marginBottom: 16 }}
+      >
+        <Empty icon="🗓" text={lang === 'en' ? 'No weekly review yet. Publish posts and sync metrics to auto-generate.' : '还没有周报——本周发布并回填数据后，下次周任务会自动生成'} />
         <div style={{ textAlign: 'center', marginTop: 10 }}>
           <button className="btn btn-sm btn-primary" onClick={generate} disabled={pending}>
-            {pending ? '生成中…' : '立即生成本周周报'}
+            {pending ? (lang === 'en' ? 'Generating…' : '生成中…') : (lang === 'en' ? 'Generate Weekly Review Now' : '立即生成本周周报')}
           </button>
           {msg && (
-            <span className="small" style={{ marginLeft: 8, color: msg.includes('失败') ? 'var(--red)' : 'var(--green)' }}>
+            <span className="small" style={{ marginLeft: 8, color: msg.includes('失败') || msg.includes('Failed') ? 'var(--red)' : 'var(--green)' }}>
               {msg}
             </span>
           )}

@@ -14,12 +14,15 @@ const scheduledCollectEl = document.getElementById('scheduledCollect');
 const scheduledCollectHourEl = document.getElementById('scheduledCollectHour');
 const scheduledStatusLogEl = document.getElementById('scheduledStatusLog');
 
+const selfAutoEl = document.getElementById('selfAutoCollect');
+const selfAutoHourEl = document.getElementById('selfAutoHour');
+
 const commentCollectOwnEl = document.getElementById('commentCollectOwn');
 const autoClickPublishEl = document.getElementById('autoClickPublish');
 const commentCollectRivalEl = document.getElementById('commentCollectRival');
 
 // Populate hour dropdowns (00:00 - 23:00)
-[scheduledCollectHourEl].forEach((selectEl) => {
+[scheduledCollectHourEl, selfAutoHourEl].forEach((selectEl) => {
   selectEl.innerHTML = '';
   for (let h = 0; h < 24; h++) {
     const o = document.createElement('option');
@@ -53,6 +56,91 @@ async function renderScheduledStatusLog() {
   scheduledStatusLogEl.textContent = `⏰ 最近一次定时采集：${dateStr} | ${lastScheduledCollectLog.summary || '已触发'}`;
 }
 
+// 自有后台自动回填：这一块**存不存在**由插件自己说了算（sw-self-backends.js 是可选模块，
+// 开源发行版没有它）。没有就整块不显示——一个永远不会发生任何事的开关比没有更糟。
+// 授权也在这儿：chrome.permissions.request 必须在**用户手势**里调，设置页的点击正是手势，
+// 转发给 sw.js 就不是了（那边的 onMessage 处理器不算手势上下文）。
+let selfAutoInfo = null;
+
+async function renderSelfAutoBlock() {
+  const block = document.getElementById('selfAutoBlock');
+  if (!block) return;
+  selfAutoInfo = await chrome.runtime.sendMessage({ type: 'beacon-self-auto-info' }).catch(() => null);
+  if (!selfAutoInfo?.available) { block.style.display = 'none'; return; }
+  block.style.display = '';
+  const sub = document.getElementById('selfAutoSub');
+  if (sub && selfAutoInfo.label) {
+    sub.innerHTML = `开启后，每天在指定时间用后台标签页打开您<b>自己的${selfAutoInfo.label}</b>，`
+      + '只读您自己作品已渲染出来的指标（阅读/完读率等公开页拿不到的数字），采完自动关闭标签页。'
+      + '需要先授权站点、且登录态有效；不点击、不发布、不调用平台接口、不碰 Cookie。';
+  }
+  const btn = document.getElementById('selfAutoGrant');
+  const gsub = document.getElementById('selfAutoGrantSub');
+  if (btn) {
+    btn.querySelector('span').textContent = selfAutoInfo.granted ? '已授权' : '去授权';
+    btn.disabled = !!selfAutoInfo.granted;
+  }
+  if (gsub) {
+    gsub.textContent = selfAutoInfo.granted
+      ? `已授权 ${selfAutoInfo.origin}（可在 chrome://extensions 的「网站权限」里随时撤销）`
+      : `${selfAutoInfo.origin} 不在插件的安装权限里——按需单独授权，随时可撤销。不授权则这一项完全不发生。`;
+  }
+  await renderSelfAutoLog();
+}
+
+// 最近一次自动回填的结果。试跑与定时走的是同一条路（runSelfAuto），
+// 所以这里显示的就是定时那一轮也会得到的结论——不给「请查看系统通知」这种查不到的指引。
+async function renderSelfAutoLog() {
+  const el = document.getElementById('selfAutoStatusLog');
+  if (!el) return;
+  const { lastSelfAutoLog } = await chrome.storage.local.get('lastSelfAutoLog');
+  if (!lastSelfAutoLog || !lastSelfAutoLog.timestamp) {
+    el.textContent = '📥 后台回填：还没跑过';
+    return;
+  }
+  const dateStr = new Date(lastSelfAutoLog.timestamp).toLocaleString('zh-CN', {
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  });
+  el.textContent = `📥 最近一次后台回填：${dateStr} | ${lastSelfAutoLog.summary || '已触发'}`;
+}
+
+document.getElementById('selfAutoGrant')?.addEventListener('click', async () => {
+  if (!selfAutoInfo?.origin) return;
+  let granted = false;
+  try { granted = await chrome.permissions.request({ origins: [`${selfAutoInfo.origin}/*`] }); }
+  catch (e) { show(`授权没成功：${e && e.message ? e.message : e}`, false); return; }
+  show(granted ? `已授权 ${selfAutoInfo.origin}` : '你拒绝了授权，这一项保持关闭', granted);
+  await renderSelfAutoBlock();
+});
+
+selfAutoEl?.addEventListener('change', () => {
+  chrome.storage.sync.set({ selfAutoCollect: selfAutoEl.checked });
+  show(
+    selfAutoEl.checked
+      ? `已开启：每天 ${String(selfAutoHourEl.value).padStart(2, '0')}:00 自动回填后台数据`
+      : '已关闭后台数据自动回填',
+    true,
+  );
+});
+
+selfAutoHourEl?.addEventListener('change', () => {
+  chrome.storage.sync.set({ selfAutoHour: Number(selfAutoHourEl.value) });
+  if (selfAutoEl?.checked) show(`已改为每天 ${String(selfAutoHourEl.value).padStart(2, '0')}:00 执行回填`, true);
+});
+
+document.getElementById('selfAutoRunNow')?.addEventListener('click', async () => {
+  if (!selfAutoInfo?.granted) { show('请先点上面的「去授权」，没授权时一行都不会执行', false); return; }
+  show('已开始试跑：将在后台标签页打开你自己的后台并自动处理，结果会显示在下面那一行', true);
+  const r = await chrome.runtime.sendMessage({ type: 'beacon-self-auto-run-now' }).catch(() => null);
+  if (r && r.ok === false && r.message) show(r.message, false);
+  // 一轮最长 90 秒（SELF_AUTO_TIMEOUT_MS），中途每 3 秒刷一次；结果落盘后这行就会变。
+  const started = Date.now();
+  const poll = setInterval(async () => {
+    await renderSelfAutoLog();
+    if (Date.now() - started > 95000) clearInterval(poll);
+  }, 3000);
+});
+
 // Read settings
 chrome.storage.sync
   .get([
@@ -64,6 +152,8 @@ chrome.storage.sync
     'dailyReminder',
     'scheduledCollect',
     'scheduledCollectHour',
+    'selfAutoCollect',
+    'selfAutoHour',
     'commentCollectOwn',
     'autoClickPublish',
     'commentCollectRival',
@@ -84,12 +174,16 @@ chrome.storage.sync
     scheduledCollectEl.checked = s.scheduledCollect !== false; // 默认开启
     scheduledCollectHourEl.value = String(Number.isInteger(s.scheduledCollectHour) ? s.scheduledCollectHour : 9);
 
+    if (selfAutoEl) selfAutoEl.checked = s.selfAutoCollect === true;
+    if (selfAutoHourEl) selfAutoHourEl.value = String(Number.isInteger(s.selfAutoHour) ? s.selfAutoHour : 9);
+
     commentCollectOwnEl.checked = s.commentCollectOwn === true;
     // 默认关：只有显式存过 true 才算开（=== true，不是真值判断）
     autoClickPublishEl.checked = s.autoClickPublish === true;
     commentCollectRivalEl.checked = s.commentCollectRival === true;
 
     renderScheduledStatusLog();
+    renderSelfAutoBlock();
   });
 
 // ── 回填归属：绑定一个创作账号 ──
@@ -202,6 +296,7 @@ document.getElementById('save').addEventListener('click', async () => {
     dailyReminder: dailyReminderEl.checked,
     scheduledCollect: scheduledCollectEl.checked,
     scheduledCollectHour: Number(scheduledCollectHourEl.value),
+    ...(selfAutoEl ? { selfAutoCollect: selfAutoEl.checked, selfAutoHour: Number(selfAutoHourEl.value) } : {}),
   });
   show('✓ 配置与定时采集规则已成功保存！', true);
 });

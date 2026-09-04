@@ -444,8 +444,11 @@ const dispatchBrowserTask: AgentTool = {
     const finalKind = String(payload.kind ?? kind);
     const label = BROWSER_KIND_LABEL[finalKind as keyof typeof BROWSER_KIND_LABEL] ?? finalKind;
     // 配了本机浏览器却没开着：说破为什么这次排队了、怎么让下次当场跑——不然用户以为开关坏了
+    // 「插件」还是「桌面客户端」：用户原话「但是我没安装插件」——他登记的是客户端，回执却叫它插件
+    const who = vetted.executors === 'desktop' ? '你的桌面客户端' : vetted.executors === 'both' ? '插件/桌面客户端' : '插件';
+    const when = vetted.executors === 'desktop' ? '客户端每分钟领一次活，跑完自动交回' : `${who}下次醒来会执行`;
     const offlineNote = localState.state === 'offline'
-      ? `（本机浏览器已开启但 Chrome 现在没带调试端口跑着，所以这次排给了插件；想当场采，${LOCAL_BROWSER_WAKE_HINT}）`
+      ? `（本机浏览器已开启但 Chrome 现在没带调试端口跑着，所以这次排给了${who}；想当场采，${LOCAL_BROWSER_WAKE_HINT}）`
       : '';
     // 模型说「没这份数据我答不了」时，就把整次执行停在这儿等结果。
     // 叫醒由 lib/browser-task 在四种结局（完成/判死/过期/取消）上触发——
@@ -455,13 +458,13 @@ const dispatchBrowserTask: AgentTool = {
         ok: true,
         data: { taskId: r.id, kind },
         waitFor: browserWaitToken(r.id),
-        summary: `已排给插件：${label}。这次执行先停在这里等它的结果。${offlineNote}`,
+        summary: `已排给${who}：${label}。这次执行先停在这里等它的结果。${offlineNote}`,
       };
     }
     return {
       ok: true,
       data: { taskId: r.id, kind },
-      summary: `已排给插件：${label}。插件下次醒来会执行，现在还没有数据。${offlineNote}`,
+      summary: `已排给${who}：${label}。${when}，现在还没有数据。${offlineNote}`,
     };
   },
 };

@@ -2,6 +2,7 @@ import { Topbar } from '@/components/Topbar';
 import { DemoBanner } from '@/components/DemoBanner';
 import { ExpiryBanner } from '@/components/ExpiryBanner';
 import { LegalUpdateBanner } from '@/components/LegalUpdateBanner';
+import { DesktopBrowserUsePrompt } from '@/components/DesktopBrowserUsePrompt';
 import { GlobalAIAssistant } from '@/components/GlobalAIAssistant';
 import { TaskSidebar } from '@/components/TaskSidebar';
 import { SidebarUser } from '@/components/SidebarUser';
@@ -88,6 +89,9 @@ export async function TenantShell({
             个人信息，不是账单。 */}
         {!demo && <LegalUpdateBanner memberId={session.memberId} />}
         <div className="content">
+          {/* 桌面壳里的「允许浏览器操作？」权限提示（2026-09-04）：只在 __TAURI_INTERNALS__ 在且还没登记时出现，
+              浏览器里渲染为空。放在每一页顶部而不是设置页深处——用户找不到那张卡等于功能不存在。 */}
+          {!demo && <DesktopBrowserUsePrompt />}
           {children}
           {/* 「下一步去哪儿」：写完→查红线→发出去 这条链路的页脚路标（components/NextSteps.tsx） */}
           <NextSteps nav={shellNav} />

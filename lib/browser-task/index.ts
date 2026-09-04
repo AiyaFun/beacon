@@ -66,6 +66,22 @@ export async function collectorKinds(workspaceId: string): Promise<Set<string>> 
   return out;
 }
 
+/**
+ * 这个工作区里能领活的是什么东西：浏览器插件、桌面客户端，还是两者都有（2026-09-04）。
+ * 只用于措辞——「已排给插件」还是「已排给你的桌面客户端」。判据是签发时的标签前缀（lib/ingest/token）。
+ */
+export async function collectorAgents(workspaceId: string): Promise<Set<'plugin' | 'desktop'>> {
+  const { isDesktopExecutorLabel } = await import('@/lib/ingest/token');
+  const [rows, legacy] = await Promise.all([
+    prisma.ingestToken.findMany({ where: { workspaceId, revokedAt: null }, select: { label: true } }),
+    prisma.workspace.count({ where: { id: workspaceId, ingestToken: { not: null } } }),
+  ]);
+  const out = new Set<'plugin' | 'desktop'>();
+  if (legacy > 0) out.add('plugin');
+  for (const r of rows) out.add(isDesktopExecutorLabel(r.label) ? 'desktop' : 'plugin');
+  return out;
+}
+
 /** 排一个活。payload 先过 zod——白名单之外的 kind 与形状一律拒收。 */
 export async function enqueueBrowserTask(input: {
   workspaceId: string;

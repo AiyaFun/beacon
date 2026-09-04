@@ -162,13 +162,16 @@ export async function actSetDefault(id: string) {
 // 2026-07-30 起**按设备签发**（lib/ingest/token.ts）：此前整个工作区共用一枚，
 // 吊销只有全有或全无两档——成员离职、设备丢了、只想收回自己那一台，全都做不到。
 
-export async function actIssueIngestToken(force = false) {
+export async function actIssueIngestToken(force = false, opts: { agent?: 'desktop' } = {}) {
   const s = await getSession();
   requireRole(s, 'competitor.manage');
-  const { issueIngestToken, deviceLabelFromUA } = await import('@/lib/ingest/token');
+  const { issueIngestToken, deviceLabelFromUA, DESKTOP_LABEL_PREFIX } = await import('@/lib/ingest/token');
   // 标签在服务端按 UA 生成，不接受客户端自报：那是要进「已授权设备」列表的说明字段，
   // 让客户端填 = 一个可以随便伪造、看起来却很权威的名字。
-  const label = deviceLabelFromUA((await headers()).get('user-agent'));
+  // 唯一放行的自报是「我是桌面壳」（agent: 'desktop'）：它只决定标签前缀，进而决定派活回执
+  // 说「已排给插件」还是「已排给你的桌面客户端」——冒充的代价只是回执用词不对（2026-09-04）。
+  const ua = deviceLabelFromUA((await headers()).get('user-agent'));
+  const label = opts.agent === 'desktop' ? `${DESKTOP_LABEL_PREFIX}${ua.split(' · ').pop()}` : ua;
   const r = await issueIngestToken({ workspaceId: s.workspaceId, memberId: s.memberId, label, force });
   revalidatePath('/settings/keys');
   revalidatePath('/extension');

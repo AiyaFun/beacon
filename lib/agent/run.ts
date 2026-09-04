@@ -415,7 +415,7 @@ function waitingText(
     // 等智能体跑完的人会跑去开浏览器，而那件事跟浏览器毫无关系。
     if (waitingOn?.startsWith('workflow:')) return '派出去的智能体正在跑，它跑完就自动接着做';
     if (waitingOn?.startsWith('run:')) return '派出去的子任务正在跑，它跑完就自动接着做';
-    return '已把活排给你的浏览器插件，等它下次醒来跑完就自动接着做';
+    return '已把活排给你的采集执行器（桌面客户端每分钟领一次；浏览器插件等它下次醒来），跑完就自动接着做';
   }
   if (status === 'waiting_quota') {
     const at = quotaResumeAt ? beijingClock(quotaResumeAt) : '北京时间 0 点';
@@ -1524,7 +1524,10 @@ export function looksLikeFabricatedCompletion(
 ): 'sample' | 'promise' | 'route_question' | null {
   if (!text || tools.length === 0) return null;
   if (/示例数据|模拟数据|不代表真实|仅为示例|虚构的数据|假设的数据|示例结果/.test(text)) return 'sample';
-  if (/(插件|客户端|本机浏览器)[\s\S]{0,200}(您希望如何|你希望如何|请告诉我您|请告诉我你|请选择|如何操作|您的选择|你的选择)/.test(text)) return 'route_question';
+  // 2026-09-04 真机第二形：「…或者将桌面客户端登记为执行器。如果您希望继续使用当前版本的插件…，请告诉我，我会为您安排」
+  // ——「请告诉我」后面跟的是逗号不是「您」，「您希望继续」不是「您希望如何」。判据放宽成：
+  // 提到了路由名词，且在其后 300 字内出现任何一种「把选择权递给用户」的句式。
+  if (/(插件|客户端|本机浏览器)[\s\S]{0,300}(您希望|你希望|请告诉我|告诉我您|告诉我你|请选择|如何操作|您的选择|你的选择|您可以选择|你可以选择|是否需要我|需要我为您|需要我帮您)/.test(text)) return 'route_question';
   if (text.length < 600 && /请稍等|稍等片刻|正在为您|正在为你|我这就去|马上为您|马上为你/.test(text)) return 'promise';
   return null;
 }

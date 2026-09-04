@@ -35,6 +35,19 @@ const TOUCH_INTERVAL_MS = 10 * 60 * 1000;
 const MAX_ACTIVE = 20;
 
 /** 按 User-Agent 生成设备标签。认不出来不猜，返回通用名——猜错的标签比没有标签更误导。 */
+/**
+ * 桌面客户端登记为执行器时的标签前缀（2026-09-04）。
+ *
+ * 【为什么用标签前缀而不是加一列】区分「插件」还是「桌面客户端」只影响**措辞**：
+ * 派活回执说「已排给插件」还是「已排给你的桌面客户端」。真机原话：「但是我没安装插件」——
+ * 他登记的是客户端，系统却把所有执行器都叫插件。能力仍由执行器领活时自报（kinds），
+ * 这个前缀只由服务端在签发时写，客户端只能说「我是桌面壳」，说谎的代价是回执用词不对，没别的。
+ */
+export const DESKTOP_LABEL_PREFIX = '桌面客户端 · ';
+export function isDesktopExecutorLabel(label: string | null | undefined): boolean {
+  return String(label ?? '').startsWith(DESKTOP_LABEL_PREFIX);
+}
+
 export function deviceLabelFromUA(ua: string | null | undefined): string {
   const s = String(ua || '');
   if (!s) return '浏览器插件';

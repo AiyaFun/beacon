@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { Icon } from './icons';
 import { activeBadge } from '@/lib/runs/badge';
 import { type ToolBrief } from './DispatchAuth';
+import { useI18n } from '@/lib/i18n';
 
 // ── 任务台首屏：说一句话，它就去办 ──────────────────────────────────────────
 //
@@ -95,24 +96,23 @@ export function TaskDeckHome({
     router.push(`/assistant?goal=${encodeURIComponent(q.slice(0, 2000))}`);
   }
 
+  const { lang, dict } = useI18n();
+
   return (
     <div style={{ display: 'grid', gap: 16, marginBottom: 16 }}>
       <div className="card" style={{ padding: 18 }}>
         <div className="row wrap" style={{ gap: 8, alignItems: 'baseline', marginBottom: 12 }}>
-          <h1 style={{ fontSize: 20, margin: 0 }}>今天要做什么，{memberName}？</h1>
-          {/* ⚠️ 文案必须跟着真实行为走：这一框现在**只是起个头**——
-              带到「新任务 → 让它去做」预填好，按了那边的开始才真的跑（也才花配额）。
-              早先写「说一句话，我去办」而回车直接开跑，用户以为自己在聊天就付了钱。
-              也不能反过来写成「它会先答你」——落点是执行那一侧，不是对话。 */}
-          <span className="small muted">写下要做的事，带到「新任务」预填好——你在那边按开始它才真的跑。</span>
+          <h1 style={{ fontSize: 20, margin: 0 }}>
+            {dict.today.greeting.replace('{name}', memberName || (lang === 'en' ? 'Creator' : '创作者'))}
+          </h1>
         </div>
 
         <textarea
+          data-flow="新任务-预填"
           className="textarea"
           rows={3}
           value={goal}
-         
-          placeholder="例如：把我监控的对标账号都采一遍最新数据，然后告诉我谁涨得最快"
+          placeholder={dict.today.placeholder}
           onChange={(e) => setGoal(e.target.value)}
           onKeyDown={(e) => {
             // Enter 直接派活、Shift+Enter 换行：这一框绝大多数时候只写一行
@@ -126,29 +126,24 @@ export function TaskDeckHome({
 
         <div className="row wrap" style={{ gap: 8 }}>
           <button className="btn btn-primary" disabled={!goal.trim()} onClick={() => dispatch(goal)}>
-            去派活 →
+            {dict.today.dispatchBtn}
           </button>
-          {QUICK.map((q) => (
+          {dict.today.quick.map((q) => (
             <button key={q} className="btn btn-sm btn-ghost" onClick={() => setGoal(q)}>
               {q}
             </button>
           ))}
         </div>
 
-        {/* 授权范围的选择在「新任务 → 让它去做」那一侧（AgentPanel 用的是同一个
-            DispatchAuth 组件）。这里已经不直接派活了，摆一个此刻不起作用的授权卡
-            只会让人以为自己已经授过权。两壳对等仍然成立：功能都在，只是收在一处。 */}
-
         {err && <div className="small" style={{ marginTop: 10, color: 'var(--red)' }}>{err}</div>}
       </div>
 
-      {/* 活动条：**只放还没结束的**。历史清单在侧栏和运行中心已经各有一份，
-          再摆一份同源列表只会让首屏变长而信息没变多 */}
+      {/* 活动条：**只放还没结束的** */}
       {active.length > 0 && (
         <div className="card" style={{ padding: 14 }}>
           <div className="row-between" style={{ marginBottom: 8 }}>
-            <strong className="small">正在办的事</strong>
-            <Link href="/runs" className="small muted">全部记录 →</Link>
+            <strong className="small">{dict.today.activeTitle}</strong>
+            <Link href="/runs" className="small muted">{dict.today.allRecords}</Link>
           </div>
           <div className="stack" style={{ gap: 6 }}>
             {active.map((r) => (

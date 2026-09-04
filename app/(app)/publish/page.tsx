@@ -11,25 +11,19 @@ import { CHANNEL_INTRO } from './PlanTasks';
 import { OpenPlans, NewPlan } from './PlanBoard';
 import { MakeTabs } from '@/components/MakeTabs';
 import { HubHeader } from '@/components/HubHeader';
+import { getServerLang } from '@/lib/i18n/server';
+import { getDictionary } from '@/lib/i18n/dict';
 
 export const dynamic = 'force-dynamic';
 
-// 发布中心：一篇稿子从「写完了」到「真的发出去了」中间的那一段。
-//
-// 【为什么值得一整页】此前它只是创作工坊里一个抽屉，于是三件事看不见：
-//   ① 同时有几条计划在跑（一稿多平台时很常见），关掉抽屉就找不回来了；
-//   ② 哪些任务在等你去点发布——「插件已填好」不是「已发布」，这一步全靠用户自己记；
-//   ③ 每个平台到底能不能替你发。能力矩阵原来藏在抽屉里的一行小字里。
-//
-// 【口径】整页按**当前账号**过滤（与 /data 一致）。工作区里有多个创作账号时，
-// 页面上要写明这件事——否则用户在 A 账号页面上找 B 账号的任务，会以为任务丢了。
 export default async function PublishPage() {
   const s = await getSession();
+  const lang = await getServerLang();
+  const dict = getDictionary(lang);
 
   const [openPlans, recentDone, drafts, records, wxCred, account] = await Promise.all([
     listPlans({ workspaceId: s.workspaceId, accountId: s.accountId }, { status: 'open', take: 8 }),
     listPlans({ workspaceId: s.workspaceId, accountId: s.accountId }, { status: 'done', take: 5 }),
-    // 能开发布计划的稿子：有正文、还没发布、没被放弃
     prisma.draft.findMany({
       where: { accountId: s.accountId, status: { notIn: ['published', 'abandoned'] }, versions: { some: {} } },
       orderBy: { updatedAt: 'desc' },
@@ -50,24 +44,42 @@ export default async function PublishPage() {
   ]);
 
   const allTasks = openPlans.flatMap((p) => p.tasks);
-  // 「等你去点发布」= 插件填好了 / 已进公众号草稿箱。这两个状态都**不是**已发布。
   const waitingOnYou = allTasks.filter((t) => t.status === 'filled' || t.status === 'submitted').length;
   const missingLink = records.filter((r) => r.needsBackfill).length;
 
   return (
     <>
       <HubHeader
-        title="做内容"
-        hint={`把稿子发出去的那一段 · 只显示当前账号（${account?.name ?? '未命名账号'}）的计划与记录`}
+        title={dict.tabs.makeTitle}
+        hint={lang === 'en'
+          ? `Publishing pipeline · Current account: ${account?.name ?? 'Unnamed'}`
+          : `把稿子发出去的那一段 · 只显示当前账号（${account?.name ?? '未命名账号'}）的计划与记录`}
         tabs={<MakeTabs active="publish" inline />}
-        meta={<span className="small muted hide-mobile">当前账号：{account?.name ?? '未命名'}</span>}
+        meta={<span className="small muted hide-mobile">{lang === 'en' ? 'Current Account: ' : '当前账号：'}{account?.name ?? (lang === 'en' ? 'Unnamed' : '未命名')}</span>}
       />
 
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
-        <Stat label="进行中的计划" value={openPlans.length} foot={`共 ${allTasks.length} 条平台任务`} />
-        <Stat label="等你去点发布" value={waitingOnYou} foot="已填进后台 / 已进草稿箱" />
-        <Stat label="可发布的稿子" value={drafts.length} foot="有正文且未发布" />
-        <Stat label="缺链接的记录" value={missingLink} foot="补上才能自动回流" href="/data" />
+        <Stat
+          label={lang === 'en' ? 'Active Schedules' : '进行中的计划'}
+          value={openPlans.length}
+          foot={lang === 'en' ? `${allTasks.length} platform tasks` : `共 ${allTasks.length} 条平台任务`}
+        />
+        <Stat
+          label={lang === 'en' ? 'Waiting on You' : '等你去点发布'}
+          value={waitingOnYou}
+          foot={lang === 'en' ? 'Draft ready in backend' : '已填进后台 / 已进草稿箱'}
+        />
+        <Stat
+          label={lang === 'en' ? 'Ready Drafts' : '可发布的稿子'}
+          value={drafts.length}
+          foot={lang === 'en' ? 'Drafts with body ready' : '有正文且未发布'}
+        />
+        <Stat
+          label={lang === 'en' ? 'Missing URL' : '缺链接的记录'}
+          value={missingLink}
+          foot={lang === 'en' ? 'Link post to sync data' : '补上才能自动回流'}
+          href="/data"
+        />
       </div>
 
       <Card title="进行中的发布计划" sub="每个平台一条任务，各走各的通道，互不牵连">

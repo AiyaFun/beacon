@@ -13,6 +13,8 @@ import { Checkout } from './Checkout';
 import { RefundButton } from './RefundButton';
 import { fmtDateFull, fmtDateTime } from '@/lib/format';
 import { HubHeader } from '@/components/HubHeader';
+import { getServerLang } from '@/lib/i18n/server';
+import { getDictionary } from '@/lib/i18n/dict';
 
 export const dynamic = 'force-dynamic';
 
@@ -56,8 +58,8 @@ function periodText(periodMonths: number): string {
 
 export default async function BillingPage() {
   const s = await getSession();
-  // 本月产出账本口径：只统计「本自然月内新产生」的东西（**北京时间**的自然月，与 lib/quota.ts 同口径），
-  // 全部为 count/关系过滤，零 LLM 成本。诚实原则：全为真实库记录，无一处写死数字。
+  const lang = await getServerLang();
+  const dict = getDictionary(lang);
   const monthStart = beijingStartOfMonth();
   const [tenant, orders, usage, valueReceipt] = await Promise.all([
     prisma.tenant.findUnique({ where: { id: s.tenantId }, select: { plan: true, planExpiresAt: true } }),
@@ -83,7 +85,6 @@ export default async function BillingPage() {
 
   const rawPlan = tenant?.plan ?? 'free';
   const expiresAt = tenant?.planExpiresAt ?? null;
-  // 到期即按 free 算 —— 懒判断，不依赖任何 cron（lib/pay/plan.ts）
   const current = effectivePlan(rawPlan, expiresAt);
   const expired = isPlanExpired(rawPlan, expiresAt);
   const manageable = can(s.role, 'billing.manage');
@@ -91,33 +92,60 @@ export default async function BillingPage() {
   const configured = payVendorConfigured();
   const invoice = invoiceContact();
 
+  const planLabels: Record<string, string> = {
+    free: lang === 'en' ? 'Free Tier' : '免费版',
+    trial: lang === 'en' ? 'Trial' : '试用中',
+    personal: lang === 'en' ? 'Pro Plan' : '标准版',
+    byok: lang === 'en' ? 'BYOK Plan' : '自带 Key 版',
+    team: lang === 'en' ? 'Team Plan' : '团队版',
+    enterprise: lang === 'en' ? 'Enterprise' : '企业版',
+  };
+
   return (
     <>
       <HubHeader
-        title="套餐与计费"
-        hint={`新用户注册即送 ${TRIAL_DAYS} 天标准版 · 微信扫码支付 · 手动续费`}
-        action={<span className="badge badge-gradient-brand">{PLAN_LABEL[current]}</span>}
+        title={dict.settings.billingTitle}
+        hint={lang === 'en' ? `New users get ${TRIAL_DAYS} days free Pro trial · Pay via WeChat / Stripe · Manual renewal` : `新用户注册即送 ${TRIAL_DAYS} 天标准版 · 微信扫码支付 · 手动续费`}
+        action={<span className="badge badge-gradient-brand">{planLabels[current] ?? current}</span>}
       />
 
       <div className="grid grid-4" style={{ marginBottom: 20 }}>
         <Stat
-          label="当前套餐"
-          value={<span className="text-gradient-brand">{PLAN_LABEL[current]}</span>}
-          foot={expired ? '已到期，按免费版计' : current === 'trial' ? '试用期 · 额度同标准版' : expiresAt ? '订阅中' : current === 'free' ? '未订阅' : '无到期日'}
+          label={lang === 'en' ? 'Current Plan' : '当前套餐'}
+          value={<span className="text-gradient-brand">{planLabels[current] ?? current}</span>}
+          foot={
+            expired
+              ? (lang === 'en' ? 'Expired, free limits apply' : '已到期，按免费版计')
+              : current === 'trial'
+                ? (lang === 'en' ? 'Trial · Pro limits apply' : '试用期 · 额度同标准版')
+                : expiresAt
+                  ? (lang === 'en' ? 'Active Subscription' : '订阅中')
+                  : current === 'free'
+                    ? (lang === 'en' ? 'Not subscribed' : '未订阅')
+                    : (lang === 'en' ? 'Lifetime Access' : '无到期日')
+          }
         />
         <Stat
-          label="有效期至"
+          label={lang === 'en' ? 'Valid Through' : '有效期至'}
           value={expiresAt ? fmtDateFull(expiresAt) : '—'}
           foot={
             expiresAt
               ? expired
-                ? '已过期'
-                : `剩余 ${Math.max(0, Math.ceil((expiresAt.getTime() - Date.now()) / 86_400_000))} 天`
-              : '免费版无到期日'
+                ? (lang === 'en' ? 'Expired' : '已过期')
+                : (lang === 'en' ? `${Math.max(0, Math.ceil((expiresAt.getTime() - Date.now()) / 86_400_000))} days left` : `剩余 ${Math.max(0, Math.ceil((expiresAt.getTime() - Date.now()) / 86_400_000))} 天`)
+              : (lang === 'en' ? 'No expiration for free tier' : '免费版无到期日')
           }
         />
-        <Stat label="AI 日额度" value={tier.daily} foot="平台 Key · BYOK 不占用" />
-        <Stat label="AI 月额度" value={tier.monthly} foot="按当前生效档位" />
+        <Stat
+          label={lang === 'en' ? 'Daily AI Quota' : 'AI 日额度'}
+          value={tier.daily}
+          foot={lang === 'en' ? 'Platform key · BYOK unmetered' : '平台 Key · BYOK 不占用'}
+        />
+        <Stat
+          label={lang === 'en' ? 'Monthly AI Quota' : 'AI 月额度'}
+          value={tier.monthly}
+          foot={lang === 'en' ? 'Based on active plan' : '按当前生效档位'}
+        />
       </div>
 
       {expired && (

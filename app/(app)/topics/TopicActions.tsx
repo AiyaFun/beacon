@@ -4,6 +4,7 @@ import { useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { actAccept, actReject } from './actions';
 import { publishAccepted } from './accepted-bus';
+import { useI18n } from '@/lib/i18n';
 
 // 已推荐选题卡片底部的「采纳 / 拒绝」操作。
 // 拒绝展开内联小面板收集原因（快捷理由或自由输入）；原因原文传给
@@ -69,18 +70,24 @@ export function TopicActions({ topicId, title }: { topicId: string; title: strin
     });
   }
 
+  const { lang } = useI18n();
+
+  const quickReasons = lang === 'en'
+    ? ['Not interested', 'Already covered', 'Off-brand']
+    : QUICK_REASONS;
+
   return (
     <div className="stack" style={{ gap: 8 }}>
       <div className="row" style={{ gap: 8, alignItems: 'center' }}>
         <button className="btn btn-sm btn-primary" onClick={accept} disabled={pending}>
-          采纳
+          {lang === 'en' ? 'Accept' : '采纳'}
         </button>
         <button
           className="btn btn-sm btn-ghost"
           onClick={() => { setRejecting((v) => !v); setMsg(null); }}
           disabled={pending}
         >
-          {rejecting ? '先不拒了' : '拒绝'}
+          {rejecting ? (lang === 'en' ? 'Cancel' : '先不拒了') : (lang === 'en' ? 'Reject' : '拒绝')}
         </button>
         {msg?.ok && <span className="small" style={{ color: 'var(--green)' }}>{msg.text}</span>}
       </div>
@@ -88,17 +95,17 @@ export function TopicActions({ topicId, title }: { topicId: string; title: strin
       {rejecting && (
         <div style={{ background: 'var(--surface-2)', borderRadius: 'var(--radius-sm)', padding: 10 }}>
           <div className="small muted" style={{ marginBottom: 8 }}>
-            这条哪里不合适？说一声，之后的推荐会更懂你
+            {lang === 'en' ? 'What’s off with this topic? Feedback tunes future recommendations.' : '这条哪里不合适？说一声，之后的推荐会更懂你'}
           </div>
           <div className="wrap">
-            {QUICK_REASONS.map((q) => (
+            {quickReasons.map((q) => (
               <button key={q} className="btn btn-sm" onClick={() => reject(q)} disabled={pending}>
                 {q}
               </button>
             ))}
             {!custom && (
               <button className="btn btn-sm btn-ghost" onClick={() => setCustom(true)} disabled={pending}>
-                其他…
+                {lang === 'en' ? 'Other…' : '其他…'}
               </button>
             )}
           </div>
@@ -107,14 +114,14 @@ export function TopicActions({ topicId, title }: { topicId: string; title: strin
               <input
                 className="input"
                 autoFocus
-                placeholder="随便说说，比如：话题过时了"
+                placeholder={lang === 'en' ? 'Tell us why, e.g. topic is outdated' : '随便说说，比如：话题过时了'}
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter' && !pending) reject(reason); }}
                 disabled={pending}
               />
               <button className="btn btn-sm btn-primary" onClick={() => reject(reason)} disabled={pending} style={{ flexShrink: 0 }}>
-                {pending ? '提交中…' : '提交'}
+                {pending ? (lang === 'en' ? 'Submitting…' : '提交中…') : (lang === 'en' ? 'Submit' : '提交')}
               </button>
             </div>
           )}

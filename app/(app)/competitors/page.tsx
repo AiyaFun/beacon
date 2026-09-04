@@ -29,12 +29,11 @@ import { COMMENT_TEXT_PURGE_DAYS } from '@/lib/comment-collect-rules';
 import { ReaderVoice } from '@/components/ReaderVoice';
 import { IntelTabs } from '@/components/IntelTabs';
 import { HubHeader } from '@/components/HubHeader';
+import { getServerLang } from '@/lib/i18n/server';
+import { getDictionary } from '@/lib/i18n/dict';
 
 export const dynamic = 'force-dynamic';
 
-// 页面自上而下只分四段：指标 → 平台筛选 → 管理区（全部折叠）→ 高热作品榜。
-// 管理区（添加账号 / 公众号文章导入 / 对标名单）此前是左侧一条常驻侧栏，账号和说明一多
-// 就把主内容——作品榜——挤成半屏还看不完；现在收进折叠卡，作品榜吃满整宽。
 export default async function CompetitorsPage({
   searchParams,
 }: {
@@ -42,6 +41,8 @@ export default async function CompetitorsPage({
 }) {
   const s = await getSession();
   const sp = await searchParams;
+  const lang = await getServerLang();
+  const dict = getDictionary(lang);
   const requestedPlatform = sp.platform && sp.platform in PLATFORMS ? sp.platform : null;
   // 增长区块的时间窗。与平台筛选共用 query string，两者互不干扰（切窗口不会丢掉平台筛选）
   const windowKey: WindowKey = (WINDOW_KEYS as string[]).includes(sp.window ?? '') ? (sp.window as WindowKey) : '7d';
@@ -196,46 +197,43 @@ export default async function CompetitorsPage({
   return (
     <>
       <HubHeader
-        title="看情报"
-        hint="多平台对标账号统一视图 · 全局共享采集，同一竞对只采一次"
+        title={dict.tabs.intelTitle}
+        hint={lang === 'en' ? 'Unified cross-platform view of benchmark accounts · Shared deduplicated crawls' : '多平台对标账号统一视图 · 全局共享采集，同一竞对只采一次'}
         tabs={<IntelTabs active="rivals" inline />}
         action={
           <span className="row wrap" style={{ gap: 8, justifyContent: 'flex-end' }}>
             {collectableCount > 0 && <BatchCollectButton count={collectableCount} />}
-            <ActionButton action={actCrawlCompetitors} primary loadingText="采集中…">采集竞对</ActionButton>
+            <ActionButton action={actCrawlCompetitors} primary loadingText={dict.today.crawling}>{dict.today.crawlRivals}</ActionButton>
           </span>
         }
       />
 
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
-        {/* 监控账号数点得开：名单是「我在盯谁、采到没有」的答案，不该只躺在页面下方 */}
         <MonitorStat
-          label="监控账号数"
+          label={lang === 'en' ? 'Tracked Accounts' : '监控账号数'}
           value={accountCount}
-          foot={platformFilter ? platformName(platformFilter) : '工作区订阅'}
-          dialogTitle="监控明细"
-          dialogSub={`${accountCount} 个账号${neverCrawled > 0 ? ` · ${neverCrawled} 个未采集` : ''}`}
+          foot={platformFilter ? platformName(platformFilter) : (lang === 'en' ? 'Workspace subscriptions' : '工作区订阅')}
+          dialogTitle={lang === 'en' ? 'Watchlist Details' : '监控明细'}
+          dialogSub={lang === 'en' ? `${accountCount} accounts${neverCrawled > 0 ? ` · ${neverCrawled} uncrawled` : ''}` : `${accountCount} 个账号${neverCrawled > 0 ? ` · ${neverCrawled} 个未采集` : ''}`}
         >
           {rosterOrEmpty}
         </MonitorStat>
-        <Stat label="覆盖平台数" value={platformSet.size} foot="跨平台对标覆盖" />
-        <Stat label="本周新作品" value={weekPosts} foot="近 7 天采集入库" />
+        <Stat label={lang === 'en' ? 'Platforms' : '覆盖平台数'} value={platformSet.size} foot={lang === 'en' ? 'Cross-platform coverage' : '跨平台对标覆盖'} />
+        <Stat label={lang === 'en' ? 'New Posts This Week' : '本周新作品'} value={weekPosts} foot={lang === 'en' ? 'Collected past 7 days' : '近 7 天采集入库'} />
         <Stat
-          label="平均互动率"
+          label={lang === 'en' ? 'Avg Engagement' : '平均互动率'}
           value={avgEngage === null ? '—' : `${(avgEngage * 100).toFixed(1)}%`}
           foot={
             avgEngage === null
-              ? '在库作品都来自不公开播放量的平台，算不出来'
-              : `点赞评论收藏 / 播放（${engRates.length}/${allPosts.length} 条有播放量）`
+              ? (lang === 'en' ? 'Posts come from platforms without public views' : '在库作品都来自不公开播放量的平台，算不出来')
+              : (lang === 'en' ? `Engagement / views (${engRates.length}/${allPosts.length} posts)` : `点赞评论收藏 / 播放（${engRates.length}/${allPosts.length} 条有播放量）`)
           }
         />
       </div>
 
-      {/* 次级：页顶已有「看热点/看同行/我存的资料」导航标签，这条是页内平台筛选——
-          两条同款样式叠着分不出层级（与 /data 的处理一致） */}
       <div className="tabs tabs-sub">
         <Link href="/competitors" className={`tab${!platformFilter ? ' active' : ''}`}>
-          全部 {allWatchlist.length}
+          {lang === 'en' ? 'All' : '全部'} {allWatchlist.length}
         </Link>
         {[...platformCounts.entries()].map(([p, n]) => (
           <Link key={p} href={`/competitors?platform=${p}`} className={`tab${platformFilter === p ? ' active' : ''}`}>
@@ -260,15 +258,10 @@ export default async function CompetitorsPage({
       <div id="growth" />
       <div className="fold-row" style={{ marginBottom: 20 }}>
         <Fold
-          title="添加对标账号"
-          // 数字从 PLATFORM_LIST 现算：手写的「6 个平台」在平台加到 8 个之后就一直是错的，
-          // 而下面渲染的正是同一个列表，用户一眼就能数出对不上。
-          sub={`粘主页链接自动识别 · 支持 ${PLATFORM_LIST.length} 个平台`}
+          title={lang === 'en' ? 'Add Competitor' : '添加对标账号'}
+          sub={lang === 'en' ? `Paste profile link · Supports ${PLATFORM_LIST.length} platforms` : `粘主页链接自动识别 · 支持 ${PLATFORM_LIST.length} 个平台`}
           defaultOpen={allWatchlist.length === 0}
         >
-          {/* 【把「这个平台有没有数据源」放到他真正会痛的那一刻】
-              设置页里也有这张表，但没人会先去设置页看一眼再来加竞对。
-              加完才发现空白，他的结论是「产品坏了」——而真相是这条通道还不存在。 */}
           <AddCompetitorForm
             sourceStatus={Object.fromEntries(
               PLATFORM_LIST.map((p) => [p.key, competitorSourceStatus(p.key)]),
@@ -278,15 +271,17 @@ export default async function CompetitorsPage({
 
         {wechatAccounts.length > 0 && (
           <Fold
-            title="公众号文章导入"
-            sub={`${wechatAccounts.length} 个公众号 · 只能导入`}
-            note={<span className="small muted hide-mobile">本地导出后导入</span>}
+            title={lang === 'en' ? 'Import WeChat Articles' : '公众号文章导入'}
+            sub={lang === 'en' ? `${wechatAccounts.length} accounts · Import only` : `${wechatAccounts.length} 个公众号 · 只能导入`}
+            note={<span className="small muted hide-mobile">{lang === 'en' ? 'Export locally, then import' : '本地导出后导入'}</span>}
           >
             <div className="stack" style={{ gap: 10 }}>
               <div className="small muted">
-                插件不会去公众号后台采集（这条通道已在 2026-09-03 整条移除：它用的是你自己的后台登录态调非官方接口，
-                踩线被限的是你自己的号）。公众号竞对文章只有两条路：用 wechat-article-exporter 在本地导出 JSON 再导进来，
-                或由服务端配置的商业数据源获取。
+                {lang === 'en'
+                  ? 'The extension never looks up other people\u2019s Official Accounts (that channel was removed on 2026-09-03). Competitor articles can only be imported from a file you export yourself, or fetched via a commercial data source configured on the server.'
+                  : '插件不会去查别人的公众号（这条通道已在 2026-09-03 整条移除：它用的是你自己的后台登录态调非官方接口，'
+                    + '踩线被限的是你自己的号）。公众号**竞对**文章只有两条路：用 wechat-article-exporter 在本地导出 JSON 再导进来，'
+                    + '或由服务端配置的商业数据源获取。（读你**自己**公众号后台的数据是另一件事，在「看数据」页。）'}
               </div>
               <ImportWechatArticles accounts={wechatAccounts} />
             </div>
@@ -294,12 +289,12 @@ export default async function CompetitorsPage({
         )}
 
         <Fold
-          title="对标账号"
-          sub={`${accountCount} 个${platformFilter ? ` · ${platformName(platformFilter)}` : ''}`}
+          title={lang === 'en' ? 'Competitor Watchlist' : '对标账号'}
+          sub={lang === 'en' ? `${accountCount} accounts${platformFilter ? ` · ${platformName(platformFilter)}` : ''}` : `${accountCount} 个${platformFilter ? ` · ${platformName(platformFilter)}` : ''}`}
           note={
             neverCrawled > 0 ? (
-              <span className="badge badge-amber" title="未配置采集通道时不会入库任何作品">
-                {neverCrawled} 个未采集
+              <span className="badge badge-amber" title={lang === 'en' ? 'No posts crawled yet' : '未配置采集通道时不会入库任何作品'}>
+                {lang === 'en' ? `${neverCrawled} uncrawled` : `${neverCrawled} 个未采集`}
               </span>
             ) : undefined
           }
@@ -308,17 +303,17 @@ export default async function CompetitorsPage({
         </Fold>
 
         <Fold
-          title="采集记录"
-          sub="每次抓取覆盖的时间段 · 最近 30 次"
+          title={lang === 'en' ? 'Crawl Logs' : '采集记录'}
+          sub={lang === 'en' ? 'Time coverage per crawl · Past 30 runs' : '每次抓取覆盖的时间段 · 最近 30 次'}
           note={
             runs[0] ? (
-              <span className="small muted hide-mobile">最近一次 {relTime(runs[0].ranAt)}</span>
+              <span className="small muted hide-mobile">{lang === 'en' ? `Latest ${relTime(runs[0].ranAt)}` : `最近一次 ${relTime(runs[0].ranAt)}`}</span>
             ) : undefined
           }
         >
           <CollectionRuns
             rows={runs}
-            emptyText="还没有采集记录——点右上角「采集竞对」，或用插件采一次，这里会记下每批数据覆盖的时间段"
+            emptyText={lang === 'en' ? 'No crawl records yet — click "Crawl Competitors" above or run extension.' : '还没有采集记录——点右上角「采集竞对」，或用插件采一次，这里会记下每批数据覆盖的时间段'}
           />
         </Fold>
 
@@ -328,32 +323,35 @@ export default async function CompetitorsPage({
             默认收起的话，用户点完「24 小时」会落在一张关着的卡上，看起来像点了没反应。
             带了 window 参数就说明他正在看增长，那就保持展开。 */}
         <Fold
-          title="竞对增长"
-          sub={`${WINDOW_LABEL[windowKey]}净增 · 每次采集一个时点`}
-          note={growthRows.length > 0 ? <span className="small muted hide-mobile">{growthRows.length} 个账号</span> : undefined}
+          title={lang === 'en' ? 'Competitor Growth' : '竞对增长'}
+          sub={lang === 'en' ? `${WINDOW_LABEL[windowKey]} net growth · One snapshot per crawl` : `${WINDOW_LABEL[windowKey]}净增 · 每次采集一个时点`}
+          note={growthRows.length > 0 ? <span className="small muted hide-mobile">{growthRows.length} {lang === 'en' ? 'accounts' : '个账号'}</span> : undefined}
           defaultOpen={!!sp.window}
         >
           {growthRows.length === 0 ? (
-            <Empty text="还没有可用于算增长的竞对数据——增长需要至少两次采集。采两轮（或等定时采集跑过两轮）后，这里就会出现曲线。" />
+            <Empty text={lang === 'en' ? 'No competitor growth data yet — growth curves appear after at least two crawls.' : '还没有可用于算增长的竞对数据——增长需要至少两次采集。采两轮（或等定时采集跑过两轮）后，这里就会出现曲线。'} />
           ) : (
             <>
               {!hasGrowth && (
                 <div className="small muted" style={{ marginBottom: 10 }}>
-                  这个时间窗内还没有竞对采集记录。换一个更长的时间窗，或者去采一次。
+                  {lang === 'en' ? 'No crawls found in this window. Switch to a longer window or trigger a crawl.' : '这个时间窗内还没有竞对采集记录。换一个更长的时间窗，或者去采一次。'}
                 </div>
               )}
               <GrowthBoard
                 windowKey={windowKey}
                 rows={growthRows}
                 windowHrefs={windowHrefs}
-                empty="这个时间窗内没有竞对采集记录。"
+                empty={lang === 'en' ? 'No competitor crawl records in this window.' : '这个时间窗内没有竞对采集记录。'}
               />
             </>
           )}
         </Fold>
       </div>
 
-      <Card title="高热作品榜" sub={`按互动量取 TOP ${topPosts.length} · 每行带 ${WINDOW_LABEL[windowKey]}增长`}>
+      <Card
+        title={dict.competitors.topPostsTitle}
+        sub={lang === 'en' ? `TOP ${topPosts.length} by engagement · ${WINDOW_LABEL[windowKey]} delta` : `按互动量取 TOP ${topPosts.length} · 每行带 ${WINDOW_LABEL[windowKey]}增长`}
+      >
         <CompetitorTopPosts
           topPosts={topPosts}
           snapsByPostMap={Object.fromEntries(
@@ -367,13 +365,10 @@ export default async function CompetitorsPage({
         />
       </Card>
 
-      {/* 同行读者原声。与 /data 的「读者原声」严格分开（同增长追踪那两块的口径）：
-          自有作品的评论是你的读者，竞对作品下的是**别人的**读者——混在一页里看，
-          很容易把同行的需求当成自己受众的需求。 */}
       <div id="rival-voice" style={{ marginTop: 16 }} />
       <Card
-        title="🗣 同行读者原声"
-        sub={`竞对作品评论区里读者在关心什么 · 最近 ${rivalVoice.total} 条 · 先判断他们的读者是不是你的读者`}
+        title={lang === 'en' ? '🗣 Competitor Audience Voice' : '🗣 同行读者原声'}
+        sub={lang === 'en' ? `What readers care about in rival comment sections · Latest ${rivalVoice.total} comments` : `竞对作品评论区里读者在关心什么 · 最近 ${rivalVoice.total} 条 · 先判断他们的读者是不是你的读者`}
       >
         <ReaderVoice
           comments={rivalVoice.recent.map((c) => ({
@@ -387,7 +382,7 @@ export default async function CompetitorsPage({
           topics={rivalVoice.concerns}
           kinds={rivalVoice.kinds}
           retentionDays={COMMENT_TEXT_PURGE_DAYS}
-          emptyHint="还没采到同行评论。在插件设置里打开「评论提问采集（竞对作品）」，然后到同行的作品详情页点侧栏的「读评论提问」。"
+          emptyHint={lang === 'en' ? 'No competitor comments collected yet. Enable comment crawling in extension settings.' : '还没采到同行评论。在插件设置里打开「评论提问采集（竞对作品）」，然后到同行的作品详情页点侧栏的「读评论提问」。'}
         />
       </Card>
     </>

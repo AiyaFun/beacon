@@ -596,6 +596,9 @@ function beaconRowIdInfo(row, cfg) {
 // anchor（产出这条 ID 的那个 <a>）也一并带出来：它的文字必然是这篇作品的标题，
 // 比任何按类名猜标题的做法都准。
 function beaconRowIdInfoUncached(row, cfg) {
+  // 后台可以自带一套抠 ID 的办法（见 content/self-backend-wechat.js：公众号整行常常
+  // 连一个规范链接都没有，ID 要从散落的 data-* 里拼）。有就用它的，别在这里堆平台分支。
+  if (typeof cfg.rowIdOf === 'function') return cfg.rowIdOf(row, cfg);
   for (const a of row.querySelectorAll(cfg.linkSelector)) {
     const id = cfg.idOf(a.getAttribute('href'));
     if (id) return { id, via: 'link', anchor: a };
@@ -667,6 +670,11 @@ function beaconQueryAll(sel) {
   return out;
 }
 
+// 供**可选后台模块**（先于本文件加载，见下方 BACKENDS 的说明）在被调用时取用。
+// 挂 globalThis 而不是让它们各抄一份：抄出来的副本会各自漂，而这两件事
+//（同源 iframe 一起查、URL 解析）错一点就是整站采不到。
+globalThis.__beaconBackendUtils = { urlOf: beaconUrlOf, queryAll: beaconQueryAll };
+
 // ── 无链接后台的 ID 兜底 ─────────────────────────────────────────────
 // 现实里有一类后台整行连一个 <a> 都没有（点击靠 onclick/JS 路由），此时 linkSelector
 // 再怎么补都是空的。ID 只可能在两个地方：任意 data-* 属性（antd 表格的 data-row-key 最常见），
@@ -731,8 +739,14 @@ function beaconScanAttrs(row, cfg) {
 // 现场诊断用 extension/tools/backend-probe.js（在 DevTools 控制台跑，控制台在 MAIN world
 // 才看得见框架状态），它会把 [DOM]（插件可用）与 [框架]（插件读不到）分开标注。
 
-// ── 公众号后台的 token：三类可达来源，按可靠性递降 ──────────────────────
+// ── 支持哪些创作者后台 ────────────────────────────────────────────────────
+//
+// 【可选模块从哪来】`__beaconBackendExtras` 里是**不在 manifest 里声明**、由 SW 在用户
+// 单独授权后按需注入的后台（目前只有公众号，见 content/self-backend-wechat.js）。
+// 它们先于本文件加载，把自己的配置放进那个全局对象，这里合并进来——
+// 少一个文件（开源发行版就少这一个）只是少一个后台，其余四个照常工作。
 const BACKENDS = {
+  ...(globalThis.__beaconBackendExtras || {}),
   // ── 微信视频号 ──
   'channels.weixin.qq.com': {
     platform: 'shipinhao',
@@ -1326,3 +1340,101 @@ globalThis.__beaconParse = function (opts) {
 // 供 popup 判断当前页是否是受支持的自有后台（与 SELF_SUPPORTED 正则互为双保险）
 globalThis.__beaconSelfBackend = BACKENDS[location.hostname]?.platform ?? null;
 
+// ── 每日自动回填 · 执行端（通用）───────────────────────────────────────
+// 只对**声明了 autoRoutes 的后台**生效；没有任何后台声明时这一段一行都不执行。
+// ⚠️ 「这是不是自动回填的标签页」由 service worker 按 tabId 认定，内容脚本每次加载问一句。
+// **不能靠 URL 上的标记传递**：入口页可能用会话 Cookie 302 到带 token 的地址，
+// 重定向会把自己加的查询参数丢掉，第一跳就断了。
+// 用户平时自己浏览创作者后台时，SW 会答「不是」，这段**一行都不执行**——
+// 「默认不打扰」是这条通道的底线，不能因为加了自动化就顺手改掉手动模式的语义。
+const BEACON_AUTO_POLL_MS = 1200;
+const BEACON_AUTO_POLL_MAX = 12; // ~14 秒：后台列表是异步出数的，一上来解析必然是空的
+
+function beaconAutoSend(type, body) {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage({ type, ...(body || {}) }, (r) => {
+        resolve(chrome.runtime.lastError ? null : r);
+      });
+    } catch {
+      resolve(null); // 非扩展环境（如单元测试）直接当「不是自动标签页」
+    }
+  });
+}
+
+// 等页面把数据渲染出来。解析成功就立刻返回，不硬等满 14 秒。
+function beaconAutoWaitForData() {
+  return new Promise((resolve) => {
+    let tries = 0;
+    const tick = () => {
+      tries++;
+      let payload = null;
+      try { payload = globalThis.__beaconParse(); } catch { payload = null; }
+      const got = payload && ((payload.posts && payload.posts.length > 0) || payload.dailyStats || payload.audience);
+      if (got) { resolve(payload); return; }
+      if (tries >= BEACON_AUTO_POLL_MAX) { resolve(null); return; }
+      setTimeout(tick, BEACON_AUTO_POLL_MS);
+    };
+    setTimeout(tick, BEACON_AUTO_POLL_MS);
+  });
+}
+
+async function beaconAutoRun() {
+  const hello = await beaconAutoSend('beacon-self-auto-hello');
+  if (!hello || !hello.auto) return; // 普通浏览：什么都不做
+
+  const cfg = BACKENDS[location.hostname];
+  if (!cfg || !cfg.autoRoutes) {
+    await beaconAutoSend('beacon-self-auto-abort', { reason: '这个创作者后台还不支持自动回填' });
+    return;
+  }
+
+  let u;
+  try { u = new URL(location.href); } catch { return; }
+  const routes = cfg.autoRoutes(u);
+  if (!routes || routes.length === 0) {
+    // 走不下去就停手：**绝不尝试登录**（不填表单、不点按钮、不碰二维码）。
+    // ⚠️ 理由必须分得清「没登录」和「登录了但这一页取不到 token」——这条通道全程静默，
+    // 用户唯一能看到的就是这一句话，说成「登录态已过期」会把登着的人指去重新扫码。
+    // needLogin=true 时 sw.js 会把这一页切到前台交给用户，等他登录完页面自己会跳回来，
+    // 内容脚本随之重新加载、再问一次 hello，本轮从当前这一站继续（见 sw.js 的 abort 分支）。
+    const info = (typeof cfg.noRoutesInfo === 'function' && cfg.noRoutesInfo()) || {};
+    await beaconAutoSend('beacon-self-auto-abort', {
+      reason: info.reason || '创作者后台登录态已过期，请重新登录后再试（本轮自动回填已停止）',
+      needLogin: !!info.needLogin,
+    });
+    return;
+  }
+
+  const step = Number.isInteger(hello.step) ? hello.step : 0;
+  if (step >= routes.length) { await beaconAutoSend('beacon-self-auto-done'); return; }
+
+  // 入口页只负责让服务端把登录态换成带 token 的地址，拿到就跳当前这一站
+  const onDataPage = cfg.dataPaths ? cfg.dataPaths.some((re) => re.test(beaconRoute())) : true;
+  if (!onDataPage) { location.href = routes[step]; return; }
+
+  const payload = await beaconAutoWaitForData();
+  if (payload) await beaconAutoSend('beacon-self-auto-payload', { payload });
+
+  const adv = await beaconAutoSend('beacon-self-auto-advance');
+  const next = adv && Number.isInteger(adv.step) ? adv.step : routes.length;
+  if (next < routes.length) location.href = routes[next];
+  else await beaconAutoSend('beacon-self-auto-done');
+}
+
+// 供测试与现场排查：算出这一轮要走哪几个页面，纯函数、无副作用、不发消息。
+// token 的处理是这条通道里最敏感的一环，必须能被单独验证。
+globalThis.__beaconAutoRoutes = function (href) {
+  const cfg = BACKENDS[location.hostname];
+  if (!cfg || !cfg.autoRoutes) return null;
+  try { return cfg.autoRoutes(new URL(href || location.href)); } catch { return null; }
+};
+
+// 同上：走不下去时那句话本身也要能被单独验证——它是这条静默通道唯一的对外输出，
+// 说错方向（把「登着但这页没 token」说成「登录态过期」）比不说更糟。
+globalThis.__beaconAutoNoRoutesInfo = function () {
+  const cfg = BACKENDS[location.hostname];
+  return (cfg && typeof cfg.noRoutesInfo === 'function' && cfg.noRoutesInfo()) || null;
+};
+
+try { beaconAutoRun(); } catch { /* 自动回填出错绝不能影响手动采集 */ }

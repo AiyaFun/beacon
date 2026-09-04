@@ -20,11 +20,10 @@ import { HubHeader } from '@/components/HubHeader';
 import { ProcedureList, type ProcView } from './ProcedureList';
 import { can as canEdition } from '@/lib/edition';
 import { RecipeList } from './RecipeList';
+import { getServerLang } from '@/lib/i18n/server';
+import { getDictionary } from '@/lib/i18n/dict';
 
 export const dynamic = 'force-dynamic';
-
-// 技能中心：内置技能全租户可见、按租户安装；自定义技能（提示词模板）归属本租户。
-// 装好的技能在创作工坊对草稿/终稿一键生成平台成品。
 
 export default async function SkillsPage({
   searchParams,
@@ -33,6 +32,8 @@ export default async function SkillsPage({
 }) {
   const s = await getSession();
   const sp = await searchParams;
+  const lang = await getServerLang();
+  const dict = getDictionary(lang);
 
   // 「能力」标签：同一页的第三个视角（技能 / 智能体 / 能力）。
   // 服务端 view 参数、只渲染当前 tab —— 与 /data、/topics 同一个模式。
@@ -119,21 +120,23 @@ export default async function SkillsPage({
   return (
     <>
       <HubHeader
-        title="技能 · 连接器"
-        hint={`${AGENT_ROLES.skill.oneLine} · 装上后创作工坊一键用，AI 助手也会自己挑着用`}
+        title={lang === 'en' ? 'Skills & Connectors' : '技能 · 连接器'}
+        hint={lang === 'en' ? 'Equip capabilities for Studio and AI Assistant' : `${AGENT_ROLES.skill.oneLine} · 装上后创作工坊一键用，AI 助手也会自己挑着用`}
         tabs={<RoleTabs active="skill" inline />}
       />
 
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
-        <Stat label="可用技能" value={skills.length} foot="内置 + 本团队自定义" />
-        <Stat label="已安装" value={installed} foot="创作工坊里可直接用" />
-        <Stat label="自定义技能" value={custom} foot="你自己教 AI 的活" />
-        <Stat label="内置技能" value={skills.length - custom} foot="平台维护，持续更新" />
+        <Stat label={lang === 'en' ? 'Available Skills' : '可用技能'} value={skills.length} foot={lang === 'en' ? 'Built-in + Custom' : '内置 + 本团队自定义'} />
+        <Stat label={lang === 'en' ? 'Installed' : '已安装'} value={installed} foot={lang === 'en' ? 'Usable in Studio' : '创作工坊里可直接用'} />
+        <Stat label={lang === 'en' ? 'Custom Skills' : '自定义技能'} value={custom} foot={lang === 'en' ? 'Created by your team' : '你自己教 AI 的活'} />
+        <Stat label={lang === 'en' ? 'Built-in Skills' : '内置技能'} value={skills.length - custom} foot={lang === 'en' ? 'Maintained by platform' : '平台维护，持续更新'} />
       </div>
 
       {readOnly && (
         <div className="small muted" style={{ marginBottom: 12 }}>
-          你是只读成员：可以浏览技能，但安装/卸载/创建需要编辑及以上权限。
+          {lang === 'en'
+            ? 'You have read-only access: you can browse skills, but installing/editing requires editor permissions.'
+            : '你是只读成员：可以浏览技能，但安装/卸载/创建需要编辑及以上权限。'}
         </div>
       )}
 

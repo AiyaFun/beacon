@@ -140,7 +140,7 @@ describe('🔒 sw.js · 三个入口共用的出口自动带上 accountId', () =
           onChanged: listener,
         },
         alarms: { onAlarm: listener, create: noop, get: noop, clear: noop },
-        tabs: { onRemoved: listener, create: noop, remove: noop, sendMessage: noop },
+        tabs: { onRemoved: listener, onUpdated: listener, create: noop, remove: noop, sendMessage: noop },
         action: { setBadgeText: noop, setBadgeBackgroundColor: noop },
         notifications: { create: noop, onClicked: listener },
         contextMenus: { removeAll: noop, create: noop, onClicked: listener },

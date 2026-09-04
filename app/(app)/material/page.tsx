@@ -6,11 +6,15 @@ import { MaterialEditor } from './MaterialEditor';
 import type { MaterialItem, MaterialType } from './types';
 import { AssetTabs } from '@/components/AssetTabs';
 import { HubHeader } from '@/components/HubHeader';
+import { getServerLang } from '@/lib/i18n/server';
+import { getDictionary } from '@/lib/i18n/dict';
 
 export const dynamic = 'force-dynamic';
 
 export default async function MaterialPage() {
   const s = await getSession();
+  const lang = await getServerLang();
+  const dict = getDictionary(lang);
 
   const raw = await prisma.material.findMany({
     where: { accountId: s.accountId },
@@ -30,22 +34,22 @@ export default async function MaterialPage() {
   return (
     <>
       <HubHeader
-        title="记忆与素材"
-        hint="录入个人经历、案例、观点、口头禅与文风样本——热点人人可抄，经历与语感不可复制"
+        title={lang === 'en' ? 'Memory & Materials' : '记忆与素材'}
+        hint={lang === 'en' ? 'Input personal stories, cases, opinions & writing samples · Ground AI in your lived experience' : '录入个人经历、案例、观点、口头禅与文风样本——热点人人可抄，经历与语感不可复制'}
         tabs={<AssetTabs active="material" inline />}
       />
 
       <div className="grid grid-5" style={{ marginBottom: 16 }}>
-        <Stat label="经历" value={byType('experience')} foot="个人真实故事" />
-        <Stat label="案例" value={byType('case')} foot="客户/项目经验" />
-        <Stat label="观点" value={byType('opinion')} foot="独到见解立场" />
-        <Stat label="口头禅" value={byType('catchphrase')} foot="标志性表达" />
-        <Stat label="文风样本" value={byType('sample')} foot="AI 照着它写" />
+        <Stat label={lang === 'en' ? 'Stories' : '经历'} value={byType('experience')} foot={lang === 'en' ? 'Personal anecdotes' : '个人真实故事'} />
+        <Stat label={lang === 'en' ? 'Cases' : '案例'} value={byType('case')} foot={lang === 'en' ? 'Project takeaways' : '客户/项目经验'} />
+        <Stat label={lang === 'en' ? 'Perspectives' : '观点'} value={byType('opinion')} foot={lang === 'en' ? 'Unique stances' : '独到见解立场'} />
+        <Stat label={lang === 'en' ? 'Catchphrases' : '口头禅'} value={byType('catchphrase')} foot={lang === 'en' ? 'Signature style' : '标志性表达'} />
+        <Stat label={lang === 'en' ? 'Style Samples' : '文风样本'} value={byType('sample')} foot={lang === 'en' ? 'AI tone benchmark' : 'AI 照着它写'} />
       </div>
 
       <Card
-        title="素材管理"
-        sub="差异化生成原料：生成时可指定注入，推荐选题时自动匹配"
+        title={dict.assets.materialTitle}
+        sub={lang === 'en' ? 'Differentiated raw material: injected during generation, matched during topic recommendations' : '差异化生成原料：生成时可指定注入，推荐选题时自动匹配'}
       >
         <MaterialEditor items={items} />
       </Card>

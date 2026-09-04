@@ -325,7 +325,8 @@ chrome.runtime.onMessage.addListener((msg) => {
     }
   } else if (msg?.type === 'batch-self-done') {
     const el = document.getElementById('selfmsg');
-    if (el) el.textContent = `✓ ${msg.total} 个账号采集完成，回填 ${msg.posts} 条作品`;
+    if (el) el.textContent = `✓ ${msg.total} 个账号采集完成，回填 ${msg.posts} 条作品`
+      + (msg.backend ? '；创作者后台正在后台回填' : '');
     loadSelfList();
     loadAccounts(true);
   }
@@ -820,6 +821,22 @@ document.querySelectorAll('.chip').forEach((chip) => {
       });
     }
   } catch { /* 检查更新失败不该影响面板其余功能 */ }
+
+  // 上一轮创作者后台自动回填的结果。
+  // ⚠️ 这条通道跑在后台、采完就关标签页，唯一的输出是一条系统通知——而通知在 macOS 上
+  // 没给权限就被静默丢弃。用户点完只看到「一个标签页开了又关」，面板里一个字都没有。
+  // 结果落盘后（sw.js finishSelfAuto），这里在面板打开时把它读出来。
+  try {
+    const { lastSelfAutoLog } = await chrome.storage.local.get('lastSelfAutoLog');
+    const el = document.getElementById('selfmsg');
+    if (el && lastSelfAutoLog?.timestamp && !el.textContent.trim()) {
+      const t = new Date(lastSelfAutoLog.timestamp).toLocaleString('zh-CN', {
+        month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+      });
+      el.textContent = `上次后台回填（${t}）：${lastSelfAutoLog.summary || '已触发'}`;
+      el.style.color = lastSelfAutoLog.ok ? 'var(--green)' : 'var(--text-3)';
+    }
+  } catch { /* 读不到就当没有，不影响面板其余功能 */ }
 
   // Render Schedule Badge Pill
   try {

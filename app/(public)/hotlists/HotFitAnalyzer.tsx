@@ -3,6 +3,7 @@
 import { useState, useTransition } from 'react';
 import { actAnalyzeHotFit } from '@/app/(app)/actions';
 import type { HotFitAnalysis } from '@/lib/topic/combine';
+import { useI18n } from '@/lib/i18n';
 
 // 「账号内容 × 实时热点」结合分析：选一个实时热点，看它跟你的账号怎么结合。
 // ⚠️ 仅对登录用户渲染（见 page.tsx）：actAnalyzeHotFit 走 LLM + getSession()+requireRole 守卫。
@@ -12,15 +13,16 @@ export function HotFitAnalyzer({ options }: { options: string[] }) {
   const [result, setResult] = useState<HotFitAnalysis | null>(null);
   const [err, setErr] = useState('');
   const [pending, start] = useTransition();
+  const { dict } = useI18n();
 
   function run() {
     const hot = custom.trim() || selected;
-    if (!hot) { setErr('先选一个热点，或自己输入'); return; }
+    if (!hot) { setErr(dict.intel.fitSelectErr); return; }
     setErr('');
     start(async () => {
       const r = await actAnalyzeHotFit(hot);
       if (r.ok && r.analysis) setResult(r.analysis);
-      else setErr(r.error ?? '分析失败');
+      else setErr(r.error ?? dict.intel.fitFailedErr);
     });
   }
 
@@ -30,7 +32,7 @@ export function HotFitAnalyzer({ options }: { options: string[] }) {
     <div>
       <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
         <select className="select" style={{ maxWidth: 320 }} value={selected} onChange={(e) => { setSelected(e.target.value); setCustom(''); }}>
-          <option value="">— 选一个实时热点 —</option>
+          <option value="">{dict.intel.fitSelectTopic}</option>
           {options.map((o) => (
             <option key={o} value={o}>{o.length > 26 ? o.slice(0, 26) + '…' : o}</option>
           ))}
@@ -38,12 +40,12 @@ export function HotFitAnalyzer({ options }: { options: string[] }) {
         <input
           className="input"
           style={{ maxWidth: 240 }}
-          placeholder="或自己输入热点"
+          placeholder={dict.intel.fitCustomPlaceholder}
           value={custom}
           onChange={(e) => setCustom(e.target.value)}
         />
         <button className="btn btn-primary btn-sm" onClick={run} disabled={pending}>
-          {pending ? '分析中…' : '结合我的账号分析'}
+          {pending ? dict.intel.fitPending : dict.intel.fitBtn}
         </button>
         {err && <span className="small" style={{ color: 'var(--red)' }}>{err}</span>}
       </div>
@@ -53,7 +55,7 @@ export function HotFitAnalyzer({ options }: { options: string[] }) {
           <div className="row-between" style={{ marginBottom: 10 }}>
             <b className="small">「{result.hotTitle.length > 30 ? result.hotTitle.slice(0, 30) + '…' : result.hotTitle}」</b>
             <span className="row" style={{ gap: 6 }}>
-              <span className="small muted">契合度</span>
+              <span className="small muted">{dict.intel.fitScore}</span>
               <span style={{ fontSize: 20, fontWeight: 750, color: fitColor(result.fit) }}>{result.fit}</span>
               {result.mocked && <span className="badge badge-gray">Mock</span>}
             </span>

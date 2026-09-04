@@ -68,6 +68,7 @@ const LOCAL_KEYS_ON_UNLINK = [
   'competitors', 'competitorsAt', 'workspace', // 竞对清单 + 工作区名
   'selfAccounts', 'selfAccountsAt',            // 自有账号清单
   'lastScheduledCollectLog',                   // 最近一次定时采集摘要
+  'lastSelfAutoLog',                           // 最近一次自有后台自动回填结果
   'authFail',
 ];
 
@@ -81,11 +82,12 @@ async function unlinkWorkspace(reason) {
   unlinking = true;
   try {
     // 先停表再清数据：反过来的话，两者之间只要有一次闹钟触发，就会把缓存又写回来一份
+    await chrome.alarms.clear('beacon-self-auto');
     await chrome.alarms.clear('beacon-scheduled-collect');
     await chrome.alarms.clear('beacon-daily');
     // 定时开关必须落盘关掉，不能只清闹钟：scheduledCollect 的默认值是**开**（!== false），
     // 只清闹钟的话，下次浏览器启动 armScheduledCollectAlarm 会照默认值原样挂回去。
-    await chrome.storage.sync.set({ scheduledCollect: false });
+    await chrome.storage.sync.set({ scheduledCollect: false, selfAutoCollect: false });
     await chrome.storage.sync.remove(SYNC_KEYS_ON_UNLINK);
     await chrome.storage.local.remove(LOCAL_KEYS_ON_UNLINK);
     try { await chrome.action.setBadgeText({ text: '' }); } catch { /* ignore */ }
@@ -868,14 +870,145 @@ function armDailyAlarm() {
   chrome.alarms.create('beacon-daily', { delayInMinutes: minutesUntil9(), periodInMinutes: 1440 });
 }
 
-// ── 「我的数据」采集结果通知 ─────────────────────────────────────────
-// 一键采集全程在后台开标签页跑、采完就关，不发通知的话用户什么都看不见。
+// ── 自有创作者后台 · 自动回填 ─────────────────────────────────────────
+// ⚠️ 这是全插件**唯一**一处「代替用户打开登录态后台页」的行为，合规约束逐条对应
+//    store/privacy.md 里的那一段：
+//   ① 默认关闭，必须由用户在设置页显式开启（selfAutoCollect），关掉就一行代码都不跑；
+//   ② 只打开用户自己的创作者后台域名，只读已渲染的数字——不点击、不发布、不调平台接口、不碰 Cookie；
+//   ③ 标签页在后台创建（active:false），采完立即关闭，不抢用户的焦点；
+//   ④ 每轮结束必发通知说明「刚刚自动采了什么」，不做静默无感的事；
+//   ⑤ 登录态过期就停手并如实告知，绝不尝试登录。
+//
+// 【为什么入口是一张可选注册表】能自动回填的后台**不在 manifest 里声明**，走「按需单站点
+// 授权」（optional_host_permissions + 用户在设置页点一次授权）+ 由本 SW 注入内容脚本。
+// 好处有三：装机时不必要求这些域名的权限；用户不授权就一行都不注入；
+// 而对**开源发行版**，只要不带上注册表那个文件（scripts/publish-github.sh 的剥离清单），
+// 整个能力自然就不存在——注册表为空时下面这一套全部惰性，不是死代码。
+// 可选模块：官方发行版有，开源发行版没有。缺文件时 importScripts 抛错，这里咽掉。
+// 它往 globalThis 上挂注册表（而不是直接改这里的 const）——那样它就不依赖本文件的作用域，
+// 单独跑得起来、也测得了。
+try { importScripts('sw-self-backends.js'); } catch { /* 没有可选后台模块，注册表保持为空 */ }
+const SELF_AUTO_ENTRY = globalThis.__beaconSelfAutoEntries || {};
+
+const SELF_AUTO_TIMEOUT_MS = 90000;
+let selfAutoRun = null;
+
+/** 有哪些平台可以自动回填。空数组 = 这个发行版不含任何可选后台模块。 */
+function selfAutoPlatforms() { return Object.keys(SELF_AUTO_ENTRY); }
+
+async function selfAutoSettings() {
+  const s = await chrome.storage.sync.get(['selfAutoCollect', 'selfAutoHour']);
+  const hour = Number(s.selfAutoHour);
+  return { on: s.selfAutoCollect === true, hour: Number.isInteger(hour) && hour >= 0 && hour <= 23 ? hour : 9 };
+}
+
+function minutesUntilHour(hour) {
+  const now = new Date();
+  const next = new Date(now);
+  next.setHours(hour, 0, 0, 0);
+  if (next <= now) next.setDate(next.getDate() + 1);
+  return Math.max(1, Math.round((next - now) / 60000));
+}
+
+async function armSelfAutoAlarm() {
+  const { on, hour } = await selfAutoSettings();
+  if (!on || selfAutoPlatforms().length === 0) { await chrome.alarms.clear('beacon-self-auto'); return; }
+  chrome.alarms.create('beacon-self-auto', { delayInMinutes: minutesUntilHour(hour), periodInMinutes: 1440 });
+}
+
 function notifySelfAuto(message) {
   try {
     chrome.notifications.create('beacon-self-auto-' + Date.now(), {
       type: 'basic', iconUrl: 'icon128.png', title: '烽火台 · 自动回填', message, priority: 0,
     });
   } catch { /* 通知不可用不影响采集本身 */ }
+}
+
+async function finishSelfAuto(note) {
+  const run = selfAutoRun;
+  selfAutoRun = null;
+  if (!run) return;
+  clearTimeout(run.timer);
+  // 切到前台等用户登录的那一页**归用户了**，不许自动关掉——他可能正在扫码，
+  // 或者刚登录完想留着这一页。「采完立即关闭」只对始终在后台的那种情形成立。
+  if (run.tabId != null && !run.surfaced) await chrome.tabs.remove(run.tabId).catch(() => {});
+  const n = run.updated + run.created;
+  // 「认出了作品但一个指标都没读到」与「一行都没认出来」是两个完全不同的故障，
+  // 修法也不同（等渲染 / 补列名 vs 补选择器）。混报成一句「没读到新数据」等于没报。
+  const zero = run.skipped > 0
+    ? `这一轮认出了 ${run.skipped} 条作品但没读到指标，一条都没入库——请手动打开后台页点一次回填并看自检`
+    : '这一轮没读到新数据（后台页可能没渲染完）';
+  const summary = note || (n > 0 ? `已自动回填 ${n} 条数据到数据看板` : zero);
+  // ⚠️ 系统通知是**收不到的**：macOS 上 Chrome 的通知权限没给就静默丢弃，用户看到的
+  // 只有「一个标签页开了又关」。这条通道全程在后台跑、标签页采完就关，
+  // 不落盘就等于没有任何可回看的交代——与定时采集的 lastScheduledCollectLog 同一套做法。
+  await chrome.storage.local
+    .set({ lastSelfAutoLog: { timestamp: Date.now(), ok: !note && n > 0, summary } })
+    .catch(() => {});
+  notifySelfAuto(summary);
+}
+
+/**
+ * 往自动回填的标签页里注入内容脚本。
+ *
+ * 【为什么每次加载都要注入】这些后台**不在 manifest 的 content_scripts 里**（见上面注册表
+ * 那段说明），浏览器不会自动注入；而这条通道要在站内跳两次，每跳一次脚本就没了。
+ * 注入清单里的顺序有讲究：可选后台模块必须排在 self-backend.js **之前**，
+ * 它要先把自己的配置放进 __beaconBackendExtras，后者读的是加载那一刻的值。
+ */
+async function injectSelfAuto(tabId, entry) {
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, files: entry.inject });
+    return true;
+  } catch {
+    return false; // 没授权/页面还没稳定，下一次 onUpdated 再来
+  }
+}
+
+async function runSelfAuto(opts = {}) {
+  const { on } = await selfAutoSettings();
+  // force = 用户在插件里**主动点**了「一键采集我的数据」。定时那条路仍然受开关约束，
+  // 但主动点击不该被一个「每天自动回填」的开关挡住——那是两件事。
+  const requested = opts.force || !!opts.platform;
+  if (!on && !requested) return { ok: false, message: '自动回填开关是关着的' };
+  const platform = opts.platform || selfAutoPlatforms()[0];
+  const entry = platform ? SELF_AUTO_ENTRY[platform] : null;
+  if (!entry) return { ok: false, message: '这个版本的插件没有可自动回填的创作者后台' };
+  // 没授权就**什么都不做**，也绝不在这里偷偷申请：chrome.permissions.request 必须在
+  // 用户手势里调（设置页那颗「授权」按钮）。说清楚要点哪儿，比静默失败有用。
+  if (!(await hasSiteGrant(entry.origin))) {
+    return { ok: false, needGrant: true, origin: entry.origin, message: `还没授权 ${entry.origin}——到插件设置页点一次「授权」再试` };
+  }
+  if (selfAutoRun) return { ok: false, message: '上一轮回填还没收尾' }; // 不叠加
+  const { token } = await getConfig();
+  if (!token) {
+    notifySelfAuto('自动回填没执行：插件设置里还没填采集令牌');
+    return { ok: false, message: '还没填采集令牌' };
+  }
+  // 入口只给裸地址：后台会用会话 Cookie 302 到带 token 的地址，
+  // **重定向会把我们自己加的查询参数丢掉**，所以「这是不是自动回填的标签页」
+  // 绝不能靠 URL 上的标记来传递——由 SW 按 tabId 认，内容脚本每次加载问一句。
+  let tab = null;
+  try {
+    tab = await chrome.tabs.create({ url: entry.url, active: false });
+  } catch (e) {
+    notifySelfAuto(`自动回填没能打开后台页：${e?.message || e}`);
+    return { ok: false, message: String(e?.message || e) };
+  }
+  // interactive = 用户此刻主动点的（popup 的「采集我的数据」、设置页的「试跑」）。
+  // 只有这种时候撞到未登录才把登录页切到前台：定时那轮多半人不在电脑前。
+  selfAutoRun = {
+    tabId: tab.id, entry, step: 0, hops: 0, updated: 0, created: 0, skipped: 0,
+    interactive: !!(opts.force || opts.interactive), surfaced: false,
+  };
+  // 兜底：内容脚本任何一步没回话（页面改版、卡在登录页、跳转成环），都不能把标签页留在那儿
+  selfAutoRun.timer = setTimeout(() => { finishSelfAuto('自动回填超时：后台页没能在 90 秒内给出数据'); }, SELF_AUTO_TIMEOUT_MS);
+  return { ok: true };
+}
+
+// 只认自己开的那个标签页发来的消息——普通浏览时的后台页不参与自动回填
+function isSelfAutoTab(sender) {
+  return !!(selfAutoRun && sender?.tab?.id != null && sender.tab.id === selfAutoRun.tabId);
 }
 
 // ── 右键「收进灵感箱」──
@@ -1352,6 +1485,7 @@ chrome.runtime.onInstalled.addListener(() => {
   armTaskPollAlarm();
   setupContextMenus();
   armDailyAlarm();
+  armSelfAutoAlarm();
   armScheduledCollectAlarm();
   armUpdateAlarm();
   getCompetitors(true).then((r) => updateBadge(r.competitors));
@@ -1384,6 +1518,7 @@ chrome.runtime.onStartup.addListener(() => {
   // 而不是再等到下一个闹钟点
   drainBrowserTasks().catch(() => {});
   chrome.alarms.get('beacon-daily', (a) => { if (!a) armDailyAlarm(); });
+  armSelfAutoAlarm();
   armScheduledCollectAlarm();
   chrome.alarms.get(UPDATE_ALARM, (a) => { if (!a) armUpdateAlarm(); });
   getCompetitors(true).then((r) => updateBadge(r.competitors));
@@ -1570,6 +1705,7 @@ chrome.alarms.onAlarm.addListener((a) => {
   // 拉失败保留上一份缓存，见 refreshParserRules。
   if (a.name === 'beacon-daily') refreshParserRules().catch(() => {});
   if (a.name === 'beacon-daily') dailyReminder();
+  if (a.name === 'beacon-self-auto') runSelfAuto();
   if (a.name === 'beacon-scheduled-collect') runScheduledCollect();
   if (a.name === UPDATE_ALARM) checkForUpdate(true);
   // 顺着已有的两个采集闹钟领一次服务端派的活：不新开闹钟（多一个定时器就多一处会忘的状态，
@@ -1580,9 +1716,22 @@ chrome.alarms.onAlarm.addListener((a) => {
 // 设置页改了开关/时间点就立刻重排闹钟——否则要等下次浏览器重启才生效
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'sync' && ('scheduledCollect' in changes || 'scheduledCollectHour' in changes)) armScheduledCollectAlarm();
+  if (area === 'sync' && ('selfAutoCollect' in changes || 'selfAutoHour' in changes)) armSelfAutoAlarm();
   if (area === 'sync' && 'taskPoll' in changes) armTaskPollAlarm();
   // 评论开关一改，右键菜单立刻跟上（菜单只在 onInstalled 建一次，不重建就要等下次装插件才生效）
   if (area === 'sync' && ('commentCollectOwn' in changes || 'commentCollectRival' in changes)) setupContextMenus();
+});
+// 自动回填的标签页每加载完一次就补一次注入（这些后台不在 manifest 里，浏览器不会自动注入），
+// 被用户手动关掉时立即收尾，别让状态卡住下一轮。
+chrome.tabs.onUpdated.addListener((tabId, info) => {
+  if (!selfAutoRun || tabId !== selfAutoRun.tabId) return;
+  if (info.status === 'complete') injectSelfAuto(tabId, selfAutoRun.entry);
+});
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (selfAutoRun && tabId === selfAutoRun.tabId) {
+    selfAutoRun.tabId = null;
+    finishSelfAuto('自动回填中断：后台页被关闭了');
+  }
 });
 chrome.notifications.onClicked.addListener(async () => {
   const { host } = await getConfig();
@@ -1930,11 +2079,15 @@ async function batchCollectSelf(reportTabId) {
       done++;
     }
 
-    reportBatch(reportTabId, { type: 'batch-self-done', total, posts });
+    // 有可自动回填的创作者后台（要换 token、站内跳两次）就顺带触发一轮，它自带超时与通知
+    const auto = accounts.find((a) => selfAutoPlatforms().includes(a.platform));
+    if (auto) runSelfAuto({ force: true });
+
+    reportBatch(reportTabId, { type: 'batch-self-done', total, posts, backend: !!auto });
     notifySelfAuto(
-      total === 0
+      total === 0 && !auto
         ? '没有可一键采集的账号：X 账号需要填 handle，创作者后台请手动回填一次'
-        : `我的数据采集完成：${total} 个账号，回填 ${posts} 条作品`,
+        : `我的数据采集完成：${total} 个账号，回填 ${posts} 条作品${auto ? '；创作者后台正在后台回填' : ''}`,
     );
   } finally {
     batchRunning = false;
@@ -2131,6 +2284,93 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === 'beacon-ingest-self') {
     respond(ingestSelf(msg.payload), sendResponse, '回填');
     return true;
+  }
+  // 设置页要知道这个发行版有没有可自动回填的后台（没有就不显示那一块开关），
+  // 以及那个站点授权了没有——「开关开着却什么都不发生」是最难查的一种坏。
+  if (msg?.type === 'beacon-self-auto-info') {
+    (async () => {
+      const platforms = selfAutoPlatforms();
+      const entry = platforms[0] ? SELF_AUTO_ENTRY[platforms[0]] : null;
+      sendResponse({
+        available: platforms.length > 0,
+        platforms,
+        origin: entry?.origin ?? null,
+        label: entry?.label ?? null,
+        granted: entry ? await hasSiteGrant(entry.origin) : false,
+      });
+    })();
+    return true;
+  }
+  if (msg?.type === 'beacon-self-auto-run-now') {
+    // 与定时触发同一条路径（不给试跑开捷径，否则试跑通过不代表定时通过）。
+    // 唯一的差别是 interactive：试跑时用户就在设置页看着，撞到未登录可以把登录页摆给他。
+    respond(runSelfAuto({ interactive: true, force: true }), sendResponse, '试跑回填');
+    return true;
+  }
+  // ── 自动回填三件套（只接受自己开的那个标签页） ──
+  // 内容脚本每次加载都问一句：我是不是自动回填的标签页、现在走到第几站。
+  // hops 是防跳转成环的硬闸：登录态中途失效时数据页会被踢回首页，
+  // 那样内容脚本会一直「没到数据页 → 再跳一次」，光靠 90 秒超时会白转 90 秒。
+  if (msg?.type === 'beacon-self-auto-hello') {
+    if (!isSelfAutoTab(_sender)) { sendResponse({ auto: false }); return undefined; }
+    selfAutoRun.hops++;
+    if (selfAutoRun.hops > 8) {
+      finishSelfAuto('自动回填中止：后台页反复跳转（多半是登录态失效），已停手');
+      sendResponse({ auto: false });
+      return undefined;
+    }
+    sendResponse({ auto: true, step: selfAutoRun.step });
+    return undefined;
+  }
+  if (msg?.type === 'beacon-self-auto-advance') {
+    if (!isSelfAutoTab(_sender)) { sendResponse({ step: -1 }); return undefined; }
+    selfAutoRun.step++;
+    sendResponse({ step: selfAutoRun.step });
+    return undefined;
+  }
+  if (msg?.type === 'beacon-self-auto-payload') {
+    if (!isSelfAutoTab(_sender)) { sendResponse({ ok: false }); return undefined; }
+    ingestSelf(msg.payload).then((r) => {
+      if (selfAutoRun && r?.ok) {
+        selfAutoRun.updated += r.updated || 0;
+        selfAutoRun.created += r.created || 0;
+        selfAutoRun.skipped += r.skipped || 0;
+      }
+      // 回传失败（令牌失效、没有同平台账号等）也要把原因带给用户，别只说「没读到数据」
+      if (selfAutoRun && r && !r.ok && !selfAutoRun.error) selfAutoRun.error = r.error;
+      sendResponse({ ok: !!r?.ok });
+    });
+    return true;
+  }
+  if (msg?.type === 'beacon-self-auto-done') {
+    if (isSelfAutoTab(_sender)) finishSelfAuto(selfAutoRun?.error ? `自动回填失败：${selfAutoRun.error}` : '');
+    sendResponse({ ok: true });
+    return undefined;
+  }
+  if (msg?.type === 'beacon-self-auto-abort') {
+    if (isSelfAutoTab(_sender)) {
+      // 「没登录」不是终局：把这一页切到前台交给用户，等他扫码，本轮接着跑。
+      // 登录成功后后台会跳回带 token 的首页 → 内容脚本重新注入 → 再问一次 hello →
+      // 这次 autoRoutes 算得出来，于是从当前这一站继续。插件全程不碰登录动作本身。
+      if (msg.needLogin && selfAutoRun.interactive && !selfAutoRun.surfaced) {
+        const run = selfAutoRun;
+        run.surfaced = true;
+        run.hops = 0; // 登录过程会跳好几次，不能算进「跳转成环」那道闸
+        clearTimeout(run.timer);
+        run.timer = setTimeout(
+          () => { finishSelfAuto('等了 5 分钟仍未登录，本轮自动回填已停止'); },
+          5 * 60_000,
+        );
+        surfaceTab(run.tabId).then((ok) => {
+          if (ok) notifyLogin('回填我的创作者后台数据需要登录态——已把登录页切到前台，登录后会自动继续。');
+          else finishSelfAuto('自动回填中止：登录页已被关闭');
+        });
+      } else {
+        finishSelfAuto(msg.reason || '自动回填中止');
+      }
+    }
+    sendResponse({ ok: true });
+    return undefined;
   }
   if (msg?.type === 'beacon-run-scheduled-now') {
     runScheduledCollect();

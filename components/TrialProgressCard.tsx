@@ -1,15 +1,41 @@
+'use client';
+
+import React from 'react';
 import Link from 'next/link';
 import { Card, Meter } from '@/components/ui';
 import { Icon } from '@/components/icons';
 import type { TrialProgress } from '@/lib/pay/trial';
+import { useI18n } from '@/lib/i18n';
 
-// 试用运营节奏卡：把「注册即送 30 天」的静默倒计时，变成有进度、有里程碑、临期有续费入口的动线。
-// 只在 isTrial 时渲染（由 trialProgress 判定），到期后交给 billing 的到期提示，不在这里重复。
+const MILESTONE_EN: Record<number, string> = {
+  1: 'Create persona · Draft 1st post',
+  7: 'Week 1 review · Analytics flow',
+  25: 'Monthly ledger · Renewal decision',
+};
+
 export function TrialProgressCard({ trial }: { trial: TrialProgress }) {
+  const { lang, dict } = useI18n();
+
   if (!trial.isTrial) return null;
 
   const near = trial.nearingEnd;
   const accent = near ? 'var(--amber)' : 'var(--brand)';
+
+  const dayTitle = lang === 'en'
+    ? `Trial · Day ${trial.dayNumber} / ${trial.totalDays}`
+    : `试用中 · 第 ${trial.dayNumber} / ${trial.totalDays} 天`;
+
+  const remainingText = near
+    ? (lang === 'en' ? `Only ${trial.remaining} days left` : `仅剩 ${trial.remaining} 天`)
+    : (lang === 'en' ? `${trial.remaining} days left` : `还剩 ${trial.remaining} 天`);
+
+  const btnText = near
+    ? (lang === 'en' ? 'Renew Now to Keep Service →' : '立即续费，别断档 →')
+    : (lang === 'en' ? 'View Plans' : '查看套餐');
+
+  const bottomTip = lang === 'en'
+    ? 'Trial ending soon — visit "Billing" to review this month\'s output ledger before deciding to renew. Will fall back to Free plan after expiration.'
+    : '试用快结束了——到「套餐与计费」看这一个月的产出账本（推荐/成稿/发布/拦截都在里面），再决定要不要续。断档后按免费版额度算。';
 
   return (
     <Card
@@ -23,53 +49,52 @@ export function TrialProgressCard({ trial }: { trial: TrialProgress }) {
       <div className="row-between" style={{ alignItems: 'center', marginBottom: 10, gap: 12 }}>
         <div className="row" style={{ gap: 8, alignItems: 'center' }}>
           <span style={{ color: accent, display: 'inline-flex' }}><Icon.sparkles size={16} /></span>
-          <b style={{ fontSize: 14.5 }}>试用中 · 第 {trial.dayNumber} / {trial.totalDays} 天</b>
-          {near ? (
-            <span className="badge badge-amber">仅剩 {trial.remaining} 天</span>
-          ) : (
-            <span className="small muted">还剩 {trial.remaining} 天</span>
-          )}
+          <b style={{ fontSize: 14.5 }}>{dayTitle}</b>
+          <span className={near ? 'badge badge-amber' : 'small muted'}>{remainingText}</span>
         </div>
         <Link href="/billing" className={`btn btn-sm ${near ? 'btn-primary' : 'btn-ghost'}`}>
-          {near ? '立即续费，别断档 →' : '查看套餐'}
+          {btnText}
         </Link>
       </div>
 
       <Meter value={trial.pct} color={accent} />
 
-      {/* 三个里程碑：已到达打勾，未到达灰点。回答「这 30 天该按什么节奏用」 */}
+      {/* 三个里程碑 */}
       <div className="row wrap" style={{ gap: 14, marginTop: 12 }}>
-        {trial.milestones.map((m) => (
-          <div key={m.day} className="row" style={{ gap: 6, alignItems: 'center' }}>
-            <span
-              style={{
-                width: 16,
-                height: 16,
-                borderRadius: '50%',
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0,
-                background: m.reached ? 'var(--green)' : 'var(--border)',
-                color: m.reached ? '#fff' : 'var(--muted)',
-                fontSize: 10,
-              }}
-            >
-              {m.reached ? '✓' : m.day}
-            </span>
-            <span
-              className="small"
-              style={{ color: m.reached ? 'var(--text)' : 'var(--muted)', textDecoration: m.reached ? 'none' : 'none' }}
-            >
-              <b style={{ fontWeight: 600 }}>Day {m.day}</b> · {m.label}
-            </span>
-          </div>
-        ))}
+        {trial.milestones.map((m) => {
+          const mLabel = lang === 'en' && MILESTONE_EN[m.day] ? MILESTONE_EN[m.day] : m.label;
+          return (
+            <div key={m.day} className="row" style={{ gap: 6, alignItems: 'center' }}>
+              <span
+                style={{
+                  width: 16,
+                  height: 16,
+                  borderRadius: '50%',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                  background: m.reached ? 'var(--green)' : 'var(--border)',
+                  color: m.reached ? '#fff' : 'var(--muted)',
+                  fontSize: 10,
+                }}
+              >
+                {m.reached ? '✓' : m.day}
+              </span>
+              <span
+                className="small"
+                style={{ color: m.reached ? 'var(--text)' : 'var(--muted)' }}
+              >
+                <b style={{ fontWeight: 600 }}>Day {m.day}</b> · {mLabel}
+              </span>
+            </div>
+          );
+        })}
       </div>
 
       {near && (
         <div className="small" style={{ marginTop: 10, color: 'var(--amber)', lineHeight: 1.6 }}>
-          试用快结束了——到「套餐与计费」看这一个月的<b>产出账本</b>（推荐/成稿/发布/拦截都在里面），再决定要不要续。断档后按免费版额度算。
+          {bottomTip}
         </div>
       )}
     </Card>

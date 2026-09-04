@@ -92,6 +92,36 @@ describe('派活按能力过滤', () => {
   });
 });
 
+describe('回执里叫对执行器的名字（2026-09-04 用户原话「但是我没安装插件」）', () => {
+  it('只有桌面客户端登记时：executors=desktop；只有插件：plugin；都有：both', async () => {
+    const { DESKTOP_LABEL_PREFIX } = await import('@/lib/ingest/token');
+    await prisma.creatorAccount.create({ data: { workspaceId, name: '我的X', platform: 'x', handle: 'me' } });
+    const d = await issueIngestToken({ workspaceId, memberId, label: `${DESKTOP_LABEL_PREFIX}macOS` });
+    await resolveIngestToken(d.token, { kinds: 'collect_self_profile,collect_competitor' });
+    let r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'x' });
+    expect(r.ok && r.executors, '登记的是桌面客户端，回执却当成插件').toBe('desktop');
+    const pl = await issueIngestToken({ workspaceId, memberId, label: 'Chrome · macOS' });
+    await resolveIngestToken(pl.token, { kinds: 'collect_self_profile' });
+    r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'x' });
+    expect(r.ok && r.executors).toBe('both');
+    await prisma.ingestToken.update({ where: { id: d.id }, data: { revokedAt: new Date() } });
+    r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'x' });
+    expect(r.ok && r.executors).toBe('plugin');
+  });
+
+  it('🔒 派活工具的回执按 executors 措辞；桌面壳签令牌带 agent=desktop 且服务端只用它决定前缀', () => {
+    const tools = strip(read('lib/agent/tools.ts'));
+    expect(tools).toMatch(/vetted\.executors === 'desktop' \? '你的桌面客户端'/);
+    expect(tools).toMatch(/已排给\$\{who\}/);
+    expect(tools, '还有写死的「已排给插件」').not.toMatch(/已排给插件：/);
+    const actions = strip(read('app/(app)/settings/actions.ts'));
+    expect(actions).toMatch(/opts\.agent === 'desktop' \? `\$\{DESKTOP_LABEL_PREFIX\}/);
+    for (const f of ['components/DesktopBrowserUsePrompt.tsx', 'components/DesktopExecutorCard.tsx']) {
+      expect(strip(read(f)), `${f} 签令牌没带 agent: 'desktop'`).toMatch(/actIssueIngestToken\(false, \{ agent: 'desktop' \}\)/);
+    }
+  });
+});
+
 describe('🔒 接线', () => {
   it('领活路由：能力头传给鉴权与领活；采主页类任务附带 target；交活时 parsed 先落库再 completeTask', () => {
     const r = strip(read('app/api/ingest/tasks/route.ts'));
@@ -123,7 +153,7 @@ describe('🔒 接线', () => {
     const c = read('components/DesktopExecutorCard.tsx');
     expect(c).toContain('__TAURI_INTERNALS__');
     expect(c).toContain('if (!inDesktop) return null');
-    orderedBefore(c, 'await actIssueIngestToken()', "invoke('register_executor', { base: location.origin, token })");
+    orderedBefore(c, 'await actIssueIngestToken(false', "invoke('register_executor', { base: location.origin, token })");
     for (const bad of ['localStorage', 'sessionStorage', 'document.cookie']) expect(c).not.toContain(bad);
     expect(read('app/(app)/extension/page.tsx')).toContain('<DesktopExecutorCard />');
   });

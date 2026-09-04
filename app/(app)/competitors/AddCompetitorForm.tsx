@@ -7,6 +7,7 @@ import { parseCompetitorUrl } from '@/lib/competitor-url';
 import { relTime } from '@/lib/format';
 import { Icon } from '@/components/icons';
 import { actAddCompetitor } from './actions';
+import { useI18n } from '@/lib/i18n';
 
 // 各平台 handle 的取值提示（体验关键：告诉用户去哪里拿这个 ID）
 const HANDLE_HINT: Record<string, { placeholder: string; hint: string }> = {
@@ -26,6 +27,7 @@ export function AddCompetitorForm({ sourceStatus = {} }: {
   /** 每个平台现在取不取得到数据：server=服务端可取 / plugin=要装插件 / none=没有通道 */
   sourceStatus?: Record<string, string>;
 } = {}) {
+  const { lang } = useI18n();
   const [platform, setPlatform] = useState(PLATFORM_LIST[0].key as string);
   const [handle, setHandle] = useState('');
   const [name, setName] = useState('');
@@ -95,7 +97,7 @@ export function AddCompetitorForm({ sourceStatus = {} }: {
         <input
           className="input"
           style={{ flex: 1, minWidth: 280 }}
-          placeholder="粘贴竞对主页链接一键识别（支持 B站/抖音/小红书 等平台）"
+          placeholder={lang === 'en' ? 'Paste competitor profile URL for auto-detection (Bilibili, Douyin, RED, etc.)' : '粘贴竞对主页链接一键识别（支持 B站/抖音/小红书 等平台）'}
           value={urlInput}
           onChange={(e) => onUrlChange(e.target.value)}
         />
@@ -135,23 +137,25 @@ export function AddCompetitorForm({ sourceStatus = {} }: {
         <input
           className="input"
           style={{ width: 130 }}
-          placeholder="显示名（选填）"
+          placeholder={lang === 'en' ? 'Name (optional)' : '显示名（选填）'}
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
         <input
           className="input"
           style={{ width: 130 }}
-          placeholder="备注（选填）"
+          placeholder={lang === 'en' ? 'Note (optional)' : '备注（选填）'}
           value={label}
           onChange={(e) => setLabel(e.target.value)}
         />
         <button className="btn btn-sm btn-primary" onClick={submit} disabled={pending || !handle.trim()}>
-          <Icon.plus size={14} /> {pending ? '添加中…' : '添加对标'}
+          <Icon.plus size={14} /> {pending ? (lang === 'en' ? 'Adding…' : '添加中…') : (lang === 'en' ? 'Add Competitor' : '添加对标')}
         </button>
       </div>
       <div className="small muted">
-        直接粘主页链接自动识别，或手动选平台填 ID（{hint.hint}）。显示名/粉丝会在首次采集时自动补全。
+        {lang === 'en'
+          ? 'Paste profile URL to auto-detect, or select platform and enter ID. Name & follower count update on first crawl.'
+          : `直接粘主页链接自动识别，或手动选平台填 ID（${hint.hint}）。显示名/粉丝会在首次采集时自动补全。`}
       </div>
       {msg && (
         <span className="small" style={{ color: msg.ok ? 'var(--green)' : 'var(--red)' }}>{msg.text}</span>

@@ -67,7 +67,7 @@ export function DesktopExecutorCard() {
           <button type="button" className="btn btn-sm btn-primary" disabled={busy} data-act="register-desktop-executor" onClick={async () => {
             setBusy(true); setMsg(null);
             try {
-              const issued = await actIssueIngestToken();
+              const issued = await actIssueIngestToken(false, { agent: 'desktop' });
               const token = (issued as { token?: string }).token;
               if (!token) throw new Error('没签出令牌');
               await (window as TauriWin).__TAURI_INTERNALS__!.invoke('register_executor', { base: location.origin, token });

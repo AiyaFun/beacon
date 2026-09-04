@@ -89,17 +89,22 @@ you a finished piece and stop; pasting, publishing and collecting the results we
   tokens and bot secrets in one place, with a **side-effect-free** connectivity check (no test
   messages sent, no images actually generated; webhook-only bots are honestly marked "can't test").
 
-## Removed: WeChat Official Account scraping (2026-09-03)
+## Removed: WeChat Official Account **competitor** scraping (2026-09-03)
 
-**What changed**: the channel that collected data through *your own logged-in WeChat Official
-Account back office* is gone. The extension no longer matches **any page under
-`mp.weixin.qq.com`**. Two features were deleted with it:
+**What changed**: the channel that used *your own logged-in WeChat Official Account back office*
+to look up **other people's** accounts is gone — calling the back office's own `searchbiz`
+(search an account by name) and `appmsgpublish` (list that account's already-published public
+articles) endpoints to fetch a competitor's article list. **This one is not coming back.**
 
-1. **Competitor collection for Official Accounts** — calling the back office's own `searchbiz`
-   (search an account by name) and `appmsgpublish` (list that account's already-published public
-   articles) endpoints to fetch a competitor's article list;
-2. **Daily auto-sync of your own Official Account metrics** — opening your own back office in a
-   background tab on a schedule to read reads / "wow" / read-through rate for your own posts.
+**What stays**: reading **your own** posts' numbers in **your own** back office (reads, "wow",
+read-through rate — none of which are on a public page, and read-through is the first signal the
+Official Account algorithm uses). That is the same channel, under the same constraints, as the
+WeChat Channels / Douyin / Xiaohongshu / Bilibili creator back offices. Two differences:
+`mp.weixin.qq.com` is **not among the extension's install-time permissions** — you grant it once
+from the extension's settings page (revocable at any time) — and it ships as an **optional module
+of the official build**: this open-source repository **does not include it** (it is removed at
+publish time per the strip list in `scripts/publish-github.sh`; without it the registry inside the
+extension is empty and the settings block does not render).
 
 **Why**: those endpoints are **not part of WeChat's official open API**. Calling them in an
 automated way **may violate the WeChat Official Accounts Platform service agreement** ("no
@@ -118,7 +123,7 @@ rather than getting one more guardrail.
 | What it used to do | What to do now |
 |---|---|
 | Collect a competitor Official Account's article list | Configure `BEACON_NEWRANK_KEY` (a commercial data source; the server fetches it, your account is never used), or export JSON locally with [wechat-article-exporter](https://github.com/jooooock/wechat-article-exporter) and import it under "Competitors → Import WeChat articles" |
-| Sync your own Official Account metrics | No automated path for now. The other four creator back offices (WeChat Channels / Douyin / Xiaohongshu / Bilibili) are unaffected — click once to sync as before |
+| Sync your own Official Account metrics | **Kept** (official build): grant the site once in the extension's settings, then sync manually or on a daily schedule |
 | Publishing to Official Accounts | **Unaffected** — it uses WeChat's official API (drafts) |
 
 Data already collected is untouched and is not deleted.
@@ -133,7 +138,7 @@ against a real environment.
 |---|---|
 | **Competitor data for WeChat Official Accounts** | **Bring your own commercial source.** Without `BEACON_NEWRANK_KEY` there is no automated path at all (the extension route was removed); file import only |
 | **Competitor data for WeChat Channels** | **Not supported.** No public profile page and no official content API — neither the server nor the extension can reach it. Subscribing yields no data, and the UI says so instead of pretending to collect |
-| **Syncing your own Official Account metrics** | **No channel** (removed together with the above); manual entry in the dashboard only |
+| **Syncing your own Official Account metrics** | **Not included in the open-source build** — it is an optional module of the official build (and needs a per-site grant). Building the extension from this repository, the feature does not exist |
 | **Chinese text on AI covers** | **Being tuned.** Image generation ships, but Chinese headline typography has not been calibrated style-by-style on real output |
 | **TikTok comment collection** | **Not verified on a real account** (needs a login); the other five platforms are verified |
 | **Off-site backup replica** | **Not configured.** Daily backups and weekly restore drills run, but the copy currently lives on the same host (set the four `BEACON_BACKUP_S3_*` variables to enable) |

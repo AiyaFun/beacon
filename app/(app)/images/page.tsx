@@ -11,19 +11,15 @@ import { COVER_RETENTION_DAYS, COVER_MAX_PER_WORKSPACE } from '@/lib/cover/rules
 import { ImageStudio } from './ImageStudio';
 import { MakeTabs } from '@/components/MakeTabs';
 import { HubHeader } from '@/components/HubHeader';
+import { getServerLang } from '@/lib/i18n/server';
+import { getDictionary } from '@/lib/i18n/dict';
 
 export const dynamic = 'force-dynamic';
 
-// AI 出图工位：手头没有稿子、就是想要几张图的时候来这一页。
-//
-// 【与创作工坊里那两处的分工，页面上要写清楚】
-//   · 「标题与封面」——给某一篇出封面，**要把标题写在图上**；
-//   · 「正文配图」——按某一篇的正文自动拆画面；
-//   · 这一页——自己写画面、不绑草稿、一律不上字。
-// 三处共用同一条出图链路（llmImage → 配额/预算/红线/AIGC 打标/落库回收），
-// 所以「今日还能出几张」「保留期」这些口径在三处必然一致。
 export default async function ImagesPage() {
   const s = await getSession();
+  const lang = await getServerLang();
+  const dict = getDictionary(lang);
 
   const [configured, source, library, gallery] = await Promise.all([
     imageConfigured(s.tenantId),
@@ -38,22 +34,34 @@ export default async function ImagesPage() {
   return (
     <>
       <HubHeader
-        title="做内容"
-        hint="不绑草稿的出图工位 · 自己写画面、批量出图、一律不上字"
+        title={dict.tabs.makeTitle}
+        hint={lang === 'en' ? 'Standalone Image Studio · Custom prompts, batch generation, text-free imagery' : '不绑草稿的出图工位 · 自己写画面、批量出图、一律不上字'}
         tabs={<MakeTabs active="images" inline />}
-        action={<Link href="/studio?tab=title" className="btn btn-sm">要上字的封面 →</Link>}
+        action={<Link href="/studio?tab=title" className="btn btn-sm">{lang === 'en' ? 'Text Cover Studio →' : '要上字的封面 →'}</Link>}
       />
 
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
         <Stat
-          label="生图渠道"
-          value={configured ? (source === 'byok' ? '自己的 Key' : '平台') : '未配置'}
-          foot={configured ? '火山方舟即梦' : '去接入与密钥配一个'}
+          label={lang === 'en' ? 'Image Channel' : '生图渠道'}
+          value={configured ? (source === 'byok' ? (lang === 'en' ? 'Custom Key' : '自己的 Key') : (lang === 'en' ? 'Platform' : '平台')) : (lang === 'en' ? 'Unconfigured' : '未配置')}
+          foot={configured ? (lang === 'en' ? 'Volcengine Ark Jimeng' : '火山方舟即梦') : (lang === 'en' ? 'Configure in Settings' : '去接入与密钥配一个')}
           href={configured ? undefined : '/settings/keys'}
         />
-        <Stat label="今日剩余" value={quota ? `${quota.remaining}/${quota.cap}` : '—'} foot="出图张数按天算" />
-        <Stat label="库里的图" value={gallery.length} foot={`每工作区最多留 ${COVER_MAX_PER_WORKSPACE} 张`} />
-        <Stat label="已钉住" value={pinned} foot="钉住的不会被保留期清掉" />
+        <Stat
+          label={lang === 'en' ? 'Remaining Today' : '今日剩余'}
+          value={quota ? `${quota.remaining}/${quota.cap}` : '—'}
+          foot={lang === 'en' ? 'Daily generation quota' : '出图张数按天算'}
+        />
+        <Stat
+          label={lang === 'en' ? 'Gallery Assets' : '库里的图'}
+          value={gallery.length}
+          foot={lang === 'en' ? `Max ${COVER_MAX_PER_WORKSPACE} per workspace` : `每工作区最多留 ${COVER_MAX_PER_WORKSPACE} 张`}
+        />
+        <Stat
+          label={lang === 'en' ? 'Pinned Images' : '已钉住'}
+          value={pinned}
+          foot={lang === 'en' ? 'Pinned images are exempt from retention purge' : '钉住的不会被保留期清掉'}
+        />
       </div>
 
       <ImageStudio

@@ -1,3 +1,5 @@
+'use client';
+
 import Link from 'next/link';
 import { fmtNum, fmtDate } from '@/lib/format';
 import { Card, Empty } from '@/components/ui';
@@ -5,6 +7,7 @@ import { ActionButton } from '@/components/ActionButton';
 import { BattleStartDraft } from '@/components/BattleStartDraft';
 import type { BattleReport as BattleReportData, Metric } from '@/lib/battle/report';
 import { actGenerateRecommendations } from '@/app/(app)/actions';
+import { useI18n } from '@/lib/i18n';
 
 // 本周作战报告的**渲染主体** —— 独立成组件，因为它有两个使用处：
 //   · /battle 独立页
@@ -35,6 +38,15 @@ const PLAT_ICON: Record<string, string> = {
 };
 
 export function BattleReport({ report, personaBlank }: { report: BattleReportData; personaBlank: boolean }) {
+  const { lang, dict } = useI18n();
+
+  const METRIC_MAP: Record<string, { label: string; sub: string }> = {
+    '近7天播放': { label: dict.today.metrics.views, sub: dict.today.metrics.viewsSub },
+    '更新条数': { label: dict.today.metrics.posts, sub: dict.today.metrics.postsSub },
+    '平均完播率': { label: dict.today.metrics.completion, sub: dict.today.metrics.completionSub },
+    '互动率': { label: dict.today.metrics.engagement, sub: dict.today.metrics.engagementSub },
+  };
+
   // 没有推荐 → 引导去生成（真链路：热榜 → 竞对 → 按人设排优先级）
   if (!report.hasRecommendations) {
     return (
@@ -43,15 +55,21 @@ export function BattleReport({ report, personaBlank }: { report: BattleReportDat
           icon="🔥"
           text={
             personaBlank
-              ? '先花 1 分钟建人设，Beacon 才知道该往谁头上匹配热点——建完这里就会排出本周该做的选题。'
-              : '还没有本周选题。让 Beacon 跑一次全流程（热榜 → 竞对 → 按你的人设排优先级），出你的作战报告。'
+              ? (lang === 'en'
+                  ? 'Set up your persona in 1 min so Beacon knows how to match hot topics — topics will be scheduled here.'
+                  : '先花 1 分钟建人设，Beacon 才知道该往谁头上匹配热点——建完这里就会排出本周该做的选题。')
+              : (lang === 'en'
+                  ? 'No topics scheduled for this week yet. Run a full cycle to generate your operations report.'
+                  : '还没有本周选题。让 Beacon 跑一次全流程（热榜 → 竞对 → 按你的人设排优先级），出你的作战报告。')
           }
           action={
             personaBlank ? (
-              <Link href="/persona" className="btn btn-sm btn-primary">去建人设 →</Link>
+              <Link href="/persona" className="btn btn-sm btn-primary">
+                {lang === 'en' ? 'Create Persona →' : '去建人设 →'}
+              </Link>
             ) : (
-              <ActionButton action={actGenerateRecommendations} primary loadingText={['采集热榜…', '比对竞对…', '排优先级…']}>
-                让 Beacon 出周报
+              <ActionButton action={actGenerateRecommendations} primary loadingText={lang === 'en' ? ['Fetching trends…', 'Comparing rivals…', 'Prioritizing…'] : ['采集热榜…', '比对竞对…', '排优先级…']}>
+                {lang === 'en' ? 'Generate Weekly Plan' : '让 Beacon 出周报'}
               </ActionButton>
             )
           }
@@ -66,12 +84,15 @@ export function BattleReport({ report, personaBlank }: { report: BattleReportDat
       <div className="battle-metrics">
         {report.metrics.map((m) => {
           const d = deltaText(m);
+          const mapped = METRIC_MAP[m.label];
+          const displayLabel = mapped ? mapped.label : m.label;
+          const displaySub = mapped ? mapped.sub : m.sub;
           return (
             <div key={m.label} className="battle-m">
-              <div className="k">{m.label}</div>
+              <div className="k">{displayLabel}</div>
               <div className="v">{metricValue(m)}</div>
               {d ? <div className={`d ${d.cls}`}>{d.text}</div> : <div className="d muted">—</div>}
-              <div className="sub">{m.sub}</div>
+              <div className="sub">{displaySub}</div>
             </div>
           );
         })}
@@ -79,14 +100,10 @@ export function BattleReport({ report, personaBlank }: { report: BattleReportDat
 
       <div className="battle-grid">
         <div className="battle-main">
-          {/* 第一步 · 高潜选题 */}
-          {/* 「看全部选题」挂在卡片右上角，不挂每一行——它跟具体哪一条选题无关，
-              而挂在行上的话有几条就重复几个一模一样的按钮（2026-08-26 用户指出的重复跳转）。
-              行上只留「起稿」，那才是这一行独有的动作。 */}
           <Card
-            title={<span><span className="battle-step a">1</span> 重点做 · 高潜选题</span>}
-            sub="按人设匹配度与热度排序"
-            action={<Link href="/topics" className="btn btn-sm">看全部选题</Link>}
+            title={<span><span className="battle-step a">1</span> {lang === 'en' ? dict.today.step1Title : '重点做 · 高潜选题'}</span>}
+            sub={lang === 'en' ? dict.today.step1Sub : '按人设匹配度与热度排序'}
+            action={<Link href="/topics" className="btn btn-sm">{lang === 'en' ? dict.today.viewAllTopics : '看全部选题'}</Link>}
           >
             <div className="stack" style={{ gap: 12 }}>
               {report.ideas.map((it) => (

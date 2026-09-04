@@ -10,11 +10,10 @@ import { MemberRow } from './MemberRow';
 import { maskPhone } from './util';
 import { edition } from '@/lib/edition';
 import { HubHeader } from '@/components/HubHeader';
+import { getServerLang } from '@/lib/i18n/server';
+import { getDictionary } from '@/lib/i18n/dict';
 
 export const dynamic = 'force-dynamic';
-
-// 成员与权限：成员列表 / 邀请 / 待处理邀请 / 改角色 / 停用移除。
-// 页面守卫：viewer / editor 打开只看到无权限提示，不加载任何成员数据。
 
 const ROLE_BADGE: Record<Role, string> = {
   owner: 'badge-brand',
@@ -25,6 +24,8 @@ const ROLE_BADGE: Record<Role, string> = {
 
 export default async function MembersPage() {
   const s = await getSession();
+  const lang = await getServerLang();
+  const dict = getDictionary(lang);
 
   if (!can(s.role, 'member.view')) {
 
@@ -70,29 +71,29 @@ export default async function MembersPage() {
   return (
     <>
       <HubHeader
-        title="成员与权限"
-        hint="邀请协作者并按角色分权 · 所有者不可被移除或降级，权限变更即刻生效"
-        action={<span className="badge badge-brand"><Icon.users size={13} /> 我的角色：{ROLE_LABEL[s.role as Role] ?? s.role}</span>}
+        title={dict.settings.membersTitle}
+        hint={lang === 'en' ? 'Invite team members and manage role-based access' : '邀请协作者并按角色分权 · 所有者不可被移除或降级，权限变更即刻生效'}
+        action={<span className="badge badge-brand"><Icon.users size={13} /> {lang === 'en' ? 'My Role: ' : '我的角色：'}{ROLE_LABEL[s.role as Role] ?? s.role}</span>}
       />
 
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
-        <Stat label="成员总数" value={members.length} foot="含已停用" />
-        <Stat label="活跃成员" value={activeCount} foot="可正常登录" />
-        <Stat label="待处理邀请" value={invites.length} foot="7 天有效期" />
-        <Stat label="计费席位" value={activeCount} foot="停用不占席位" />
+        <Stat label={lang === 'en' ? 'Total Members' : '成员总数'} value={members.length} foot={lang === 'en' ? 'Includes deactivated' : '含已停用'} />
+        <Stat label={lang === 'en' ? 'Active Members' : '活跃成员'} value={activeCount} foot={lang === 'en' ? 'Able to log in' : '可正常登录'} />
+        <Stat label={lang === 'en' ? 'Pending Invites' : '待处理邀请'} value={invites.length} foot={lang === 'en' ? 'Valid for 7 days' : '7 天有效期'} />
+        <Stat label={lang === 'en' ? 'Billed Seats' : '计费席位'} value={activeCount} foot={lang === 'en' ? 'Deactivated excluded' : '停用不占席位'} />
       </div>
 
-      <Card title="成员列表" sub="手机号已脱敏展示" style={{ marginBottom: 16 }}>
+      <Card title={lang === 'en' ? 'Member List' : '成员列表'} sub={lang === 'en' ? 'Phone numbers are masked for privacy' : '手机号已脱敏展示'} style={{ marginBottom: 16 }}>
         <div className="table-wrap">
           <table className="table">
             <thead>
               <tr>
-                <th>姓名</th>
-                <th>手机号</th>
-                <th>角色</th>
-                <th>状态</th>
-                <th>加入时间</th>
-                <th style={{ width: 300 }}>操作</th>
+                <th>{lang === 'en' ? 'Name' : '姓名'}</th>
+                <th>{lang === 'en' ? 'Phone' : '手机号'}</th>
+                <th>{lang === 'en' ? 'Role' : '角色'}</th>
+                <th>{lang === 'en' ? 'Status' : '状态'}</th>
+                <th>{lang === 'en' ? 'Joined At' : '加入时间'}</th>
+                <th style={{ width: 300 }}>{lang === 'en' ? 'Actions' : '操作'}</th>
               </tr>
             </thead>
             <tbody>

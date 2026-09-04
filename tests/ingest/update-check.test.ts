@@ -58,6 +58,7 @@ function loadSw(opts: {
       alarms: { onAlarm: listener, create: noop, get: noop, clear: noop },
       tabs: {
         onRemoved: listener,
+        onUpdated: listener,
         create: (o: { url: string }) => {
           opened.push(o.url);
           return Promise.resolve({ id: 1 });

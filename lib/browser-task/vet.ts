@@ -1,6 +1,6 @@
 import { prisma } from '../db';
 import { platformName } from '../constants';
-import { collectorKinds } from './index';
+import { collectorKinds, collectorAgents } from './index';
 import { selfCollectKindFor, SELF_PROFILE_PLATFORMS } from './kinds';
 import { isReadAllowed, readAllowlistLabels } from './read-allowlist';
 
@@ -34,6 +34,8 @@ export type VetVerdict =
       accountId?: string;
       /** 非空 = 本机浏览器此刻可用：调用方应当**当场**用它跑，而不是排队（本机优先于插件） */
       local?: { cdpUrl: string };
+      /** 排队时谁会来领：只影响回执措辞（「已排给插件」vs「已排给你的桌面客户端」） */
+      executors?: 'plugin' | 'desktop' | 'both';
     }
   | { ok: false; error: string; summary: string };
 
@@ -54,6 +56,12 @@ export type VetOpts = {
   localCdpUrl?: string | null;
 };
 
+/** 排队时谁会来领（只影响回执措辞）。两处 ok 返回都要带上，漏一处回执就又叫回「插件」。 */
+async function queuedExecutors(workspaceId: string): Promise<'plugin' | 'desktop' | 'both'> {
+  const agents = await collectorAgents(workspaceId);
+  return agents.has('desktop') && agents.has('plugin') ? 'both' : agents.has('desktop') ? 'desktop' : 'plugin';
+}
+
 const clampLimit = (n: number | undefined) => Math.min(50, Math.max(1, Math.round(n || 20)));
 
 export async function vetBrowserTaskArgs(workspaceId: string, args: VetArgs, opts: VetOpts = {}): Promise<VetVerdict> {
@@ -69,12 +77,12 @@ export async function vetBrowserTaskArgs(workspaceId: string, args: VetArgs, opt
   // 调用方只在端点**此刻活着**时才传 localCdpUrl（localBrowserState），配了但没开着的照旧排队。
   const caps = await collectorKinds(workspaceId);
   const hasPlugin = caps.size > 0;
-  const OLD_PLUGIN = (label: string) => `你装的采集插件版本旧了，还不会做「${label}」。到「采集助手」页更新插件（zip 装的重新加载一次即可），或把桌面客户端登记为采集执行器；整机版也可以直接用本机浏览器。`;
+  const OLD_PLUGIN = (label: string) => `你装的采集插件版本旧了，还不会做「${label}」。到「采集助手」页更新插件（zip 装的重新加载一次即可），或者在桌面客户端顶部那条「允许这台客户端操作浏览器采集？」点「允许」（不装插件也能采）；整机版也可以直接用本机浏览器。`;
   let local: { cdpUrl: string } | undefined = opts.localCdpUrl ? { cdpUrl: opts.localCdpUrl } : undefined;
   if (!local && !hasPlugin) {
     return {
       ok: false,
-      error: '这个工作区还没有装采集插件（没有可用的采集令牌），派下去也没有浏览器会执行。请先到「采集助手」页装插件并填入采集令牌；整机版/桌面端也可以在「设置 → 本机权限」开启「浏览器操作」（用本机浏览器采），不装插件也能采。',
+      error: '这个工作区还没有装采集插件（没有可用的采集令牌），派下去也没有浏览器会执行。用桌面客户端的话，在它顶部那条「允许这台客户端操作浏览器采集？」点「允许」，不装插件也能采；网页版则到「采集助手」页装插件并填入采集令牌；整机版可在「设置 → 本机权限」开启「浏览器操作」（用本机浏览器采）。',
       summary: '还没装采集插件',
     };
   }
@@ -141,7 +149,7 @@ export async function vetBrowserTaskArgs(workspaceId: string, args: VetArgs, opt
       ok: true,
       payload: { kind: 'collect_self_profile', platform, accountId: picked.account.id, handle: picked.account.handle },
       accountId: picked.account.id,
-      ...(local ? { local } : {}),
+      ...(local ? { local } : { executors: await queuedExecutors(workspaceId) }),
     };
   }
 
@@ -152,7 +160,8 @@ export async function vetBrowserTaskArgs(workspaceId: string, args: VetArgs, opt
         ? { kind, url: args.url ?? '', mode: 'article' as const }
         : { kind, platform: args.platform ?? '' };
 
-  return { ok: true, payload, ...(local ? { local } : {}) };
+  if (local) return { ok: true, payload, local };
+  return { ok: true, payload, executors: await queuedExecutors(workspaceId) };
 }
 
 export type ResolvedSelfAccount =

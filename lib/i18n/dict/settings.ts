@@ -1,0 +1,26 @@
+export const settingsDict = {
+  zh: {
+    settingsTitle: '系统设置',
+    settingsHint: 'API 密钥配置、大模型通道、多平台授权与全局偏好',
+    billingTitle: '版本与用量',
+    billingHint: '工作区套餐规格、Token 与生图额度用量明细',
+    membersTitle: '团队成员',
+    membersHint: '工作区成员权限管理、协作角色与邀请列表',
+    saveSettings: '保存设置',
+    upgradePlan: '升级套餐',
+    inviteMember: '邀请成员',
+    apiKeyChannel: '模型与密钥',
+  },
+  en: {
+    settingsTitle: 'System Settings',
+    settingsHint: 'API keys, LLM channels, platform integrations & workspace preferences',
+    billingTitle: 'Plans & Usage',
+    billingHint: 'Subscription tier, token consumption & image quota breakdown',
+    membersTitle: 'Team Members',
+    membersHint: 'Workspace members, roles & invitation management',
+    saveSettings: 'Save Settings',
+    upgradePlan: 'Upgrade Plan',
+    inviteMember: 'Invite Member',
+    apiKeyChannel: 'Models & Keys',
+  },
+} as const;

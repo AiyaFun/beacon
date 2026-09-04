@@ -612,6 +612,57 @@
     <div id="scheduledStatusLog" class="status-box">
       ⏰ 定时状态：尚未执行或等待触发中
     </div>
+
+    <!-- 自有创作者后台的自动回填。**整块默认隐藏**：只有这个发行版带了可选后台模块
+         （sw-self-backends.js）时 options.js 才把它显示出来——开源发行版里没有那个文件，
+         显示一个永远不会发生任何事的开关，比不显示更糟。 -->
+    <div id="selfAutoBlock" style="display:none">
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-title">每天自动回填我的后台数据</div>
+          <div class="setting-sub" id="selfAutoSub">开启后，每天在指定时间用后台标签页打开您<b>自己的</b>创作者后台，
+            只读您自己作品已渲染出来的指标（阅读/完读率等公开页拿不到的数字），采完自动关闭标签页。
+            需要先授权站点、且登录态有效；不点击、不发布、不调用平台接口、不碰 Cookie。</div>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="selfAutoCollect">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-title">站点授权</div>
+          <div class="setting-sub" id="selfAutoGrantSub">这个后台不在插件的安装权限里——按需单独授权，随时可在浏览器扩展页撤销。</div>
+        </div>
+        <button type="button" id="selfAutoGrant" class="btn btn-ghost btn-sm"><span>去授权</span></button>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-title">回填执行时间</div>
+          <div class="setting-sub">选择自动回填的每日整点。</div>
+        </div>
+        <select id="selfAutoHour" style="width: 120px;"></select>
+      </div>
+
+      <div class="setting-row">
+        <div class="setting-info">
+          <div class="setting-title">测试回填</div>
+          <div class="setting-sub">立即试跑一次，走的是与定时完全相同的那条路。</div>
+        </div>
+        <button type="button" id="selfAutoRunNow" class="btn btn-ghost btn-sm">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          <span>立即试跑</span>
+        </button>
+      </div>
+
+      <!-- 这条通道全程在后台跑、采完就关标签页，系统通知又可能被系统权限静默丢掉。
+           结果落在这里，用户至少有一处查得到「刚才那一下到底发生了什么」。 -->
+      <div id="selfAutoStatusLog" class="status-box">
+        📥 后台回填：还没跑过
+      </div>
+    </div>
   </div>
 
   <!-- Card 3: 创作者后台与辅助功能 -->

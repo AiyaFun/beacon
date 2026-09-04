@@ -25,7 +25,7 @@ function loadSummary(): (d: Record<string, unknown>) => Summary {
       runtime: { onInstalled: listener, onStartup: listener, onMessage: listener, getPlatformInfo: noop },
       storage: { sync: { get: () => Promise.resolve({}) }, local: { get: () => Promise.resolve({}) }, onChanged: listener },
       alarms: { onAlarm: listener, create: noop, get: noop, clear: noop },
-      tabs: { onRemoved: listener, create: noop, remove: noop, sendMessage: noop },
+      tabs: { onRemoved: listener, onUpdated: listener, create: noop, remove: noop, sendMessage: noop },
       action: { setBadgeText: noop, setBadgeBackgroundColor: noop },
       notifications: { create: noop, onClicked: listener },
       contextMenus: { removeAll: noop, create: noop, onClicked: listener },

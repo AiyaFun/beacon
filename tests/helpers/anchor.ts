@@ -1,3 +1,6 @@
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+
 // 源码锚点工具（2026-08-30）。
 //
 // ── 为什么需要它 ──
@@ -16,6 +19,33 @@
 // ── 解法：让 -1 在结构上不可能出现 ──
 // 下面这几个函数找不到锚点就**抛**，错误信息里带上锚点原文。
 // 断言写在哪一段上，就用哪个函数，不要再自己算下标。
+
+// ── 按「功能目录」取源，而不是钉死单个文件（2026-09-03）──────────────────
+//
+// 上面治的是「锚点在文件里找不到」，这里治的是它的**上一层**：
+// 断言读的那个**文件路径**本身过期了。
+//
+// 2026-09-03 真踩：i18n 那批把 `app/(app)/runs/page.tsx` 的整个界面搬进新的
+// `RunsClientView.tsx`，page.tsx 只剩四行壳。四条守卫仍 `code('.../page.tsx')`，
+// 于是「运行中心不许自己指自己」「浏览器任务落点」这些**行为完好无损**的断言集体报红——
+// 报的理由还全是错的（说「按钮没排除指回本页的行」，其实那行好端端在隔壁文件里）。
+//
+// 反过来更危险：如果搬走之后原文件恰好还剩一点相似文本，守卫会**绿**着放行一次真回归。
+//
+// 解法：断言的对象是「这个功能」而不是「这个文件」，就按目录整个读进来。
+// 目录下一个文件都没有时**抛**——否则空目录会让每条断言恒绿。
+export function codeOfDir(dir: string, match: (f: string) => boolean = (f) => /\.tsx?$/.test(f)): string {
+  const abs = join(process.cwd(), dir);
+  const files = readdirSync(abs).filter(match).sort();
+  if (files.length === 0) {
+    throw new Error(`${dir} 下没有匹配的源码文件——再往下每一条断言都会恒绿，那正是这道守卫要防的。`);
+  }
+  return files
+    .map((f) => readFileSync(join(abs, f), 'utf8'))
+    .join('\n')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+}
 
 /** 锚点位置。找不到就抛——不返回 -1。 */
 export function at(src: string, needle: string, from = 0): number {

@@ -12,17 +12,15 @@ import { HubHeader } from '@/components/HubHeader';
 import { can as canEdition } from '@/lib/edition';
 import { LocalShellCard } from './LocalShellCard';
 
-export const dynamic = 'force-dynamic';
+import { getServerLang } from '@/lib/i18n/server';
+import { getDictionary } from '@/lib/i18n/dict';
 
-// 运行设置：**这一页不放任何 Key**。
-//
-// 密钥类（模型渠道 / 生图 / 公众号发布 / 采集令牌 / 机器人）全部收在 /settings/keys，
-// 那一页回答「填在哪、通不通」；这一页回答「后台在跑什么、数据从哪来」。
-// 分开的理由很实际：此前两类东西混在一页，用户找一把 Key 要在三个页面之间来回翻，
-// 而这一页又长到没人愿意往下滚。
+export const dynamic = 'force-dynamic';
 
 export default async function SettingsPage() {
   const s = await getSession();
+  const lang = await getServerLang();
+  const dict = getDictionary(lang);
   const [providers, board, workspace, jobRuns] = await Promise.all([
     prisma.modelProvider.count({ where: { tenantId: s.tenantId } }),
     sourceHealthBoard(),
@@ -57,25 +55,42 @@ export default async function SettingsPage() {
   return (
     <>
       <HubHeader
-        title="运行设置"
-        hint="后台任务、数据源与语义向量的实况 · 所有要填 Key 的地方都在「接入与密钥」"
+        title={dict.settings.settingsTitle}
+        hint={lang === 'en' ? 'Background jobs, data source status & semantic vector status · Configure keys in API Keys' : '后台任务、数据源与语义向量的实况 · 所有要填 Key 的地方都在「接入与密钥」'}
         action={
           <Link href="/settings/keys" className="btn btn-sm btn-primary">
-            <Icon.cpu size={13} /> 接入与密钥
+            <Icon.cpu size={13} /> {lang === 'en' ? 'API Keys & Channels' : '接入与密钥'}
           </Link>
         }
       />
 
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
-        <Stat label="模型渠道" value={providers} foot="去「接入与密钥」管理" href="/settings/keys" />
-        <Stat label="启用中的任务" value={enabledJobs} foot={`共 ${AUTOMATION_ITEMS.length} 项`} />
-        <Stat label="最近失败任务" value={failedRecently} foot="看下方任务卡的详情" />
-        <Stat label="热榜数据源" value={board.hot.length} foot="含降级链路" />
+        <Stat
+          label={lang === 'en' ? 'Model Providers' : '模型渠道'}
+          value={providers}
+          foot={lang === 'en' ? 'Manage in API Keys' : '去「接入与密钥」管理'}
+          href="/settings/keys"
+        />
+        <Stat
+          label={lang === 'en' ? 'Active Jobs' : '启用中的任务'}
+          value={enabledJobs}
+          foot={lang === 'en' ? `${AUTOMATION_ITEMS.length} total tasks` : `共 ${AUTOMATION_ITEMS.length} 项`}
+        />
+        <Stat
+          label={lang === 'en' ? 'Recent Failures' : '最近失败任务'}
+          value={failedRecently}
+          foot={lang === 'en' ? 'See task details below' : '看下方任务卡的详情'}
+        />
+        <Stat
+          label={lang === 'en' ? 'Hotlist Sources' : '热榜数据源'}
+          value={board.hot.length}
+          foot={lang === 'en' ? 'Includes fallback routes' : '含降级链路'}
+        />
       </div>
 
       <Card
-        title="🤖 自动化任务"
-        sub="每日推荐 / 数据同步 / 自动复盘等定时任务的开关 · 可关可调可见"
+        title={lang === 'en' ? '🤖 Automated Background Tasks' : '🤖 自动化任务'}
+        sub={lang === 'en' ? 'Scheduled jobs for daily recommendations, sync & weekly review' : '每日推荐 / 数据同步 / 自动复盘等定时任务的开关 · 可关可调可见'}
         style={{ marginBottom: 16 }}
       >
         <AutomationCard config={automationConfig} lastRuns={lastRuns} />

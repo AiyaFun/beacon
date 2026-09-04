@@ -7,21 +7,15 @@ import { LibraryBoard, type LibraryItem } from './LibraryBoard';
 import { VideoAnalyzeCard } from './VideoAnalyzeCard';
 import { IntelTabs } from '@/components/IntelTabs';
 import { HubHeader } from '@/components/HubHeader';
+import { getServerLang } from '@/lib/i18n/server';
+import { getDictionary } from '@/lib/i18n/dict';
 
 export const dynamic = 'force-dynamic';
 
-// 内容资讯库：把从各平台读到的资讯正文 + 摘要 + 要点 + 「对本账号的用处」集中在一页。
-//
-// 【和灵感收集箱的分工】收集箱是「刷到个好东西，先记一笔」——标题 + 链接 + 一句备注，轻。
-// 资讯库是「这篇我读过了，要点在这，对我的用处在这」——有正文、有结构化结论，重。
-// 两者共用 InspirationItem 一张表（source='clip' 即资讯库条目），因为它们的生命周期是连着的：
-// 库里的一条随时可以「转成选题」，那正是收集箱既有的出口。拆成两张表只会让这条路断掉。
-//
-// ⚠️ 存的是他人作品正文，仅供用户自己分析：页面上必须标出来源与「别直接复用其文字」，
-// 且这些正文**绝不进入生成语料池**（护栏见 lib/clip/index.ts 顶部）。
-
 export default async function LibraryPage() {
   const s = await getSession();
+  const lang = await getServerLang();
+  const dict = getDictionary(lang);
 
   const [rows, arkChannels] = await Promise.all([
     prisma.inspirationItem.findMany({
@@ -33,8 +27,6 @@ export default async function LibraryPage() {
       orderBy: { createdAt: 'desc' },
       take: 200,
     }),
-    // 视频拆解只走用户自己的方舟渠道（平台不垫付）——没配就把入口置灰并给出引导，
-    // 而不是让他点了之后才看到一句「未配置」。
     prisma.modelProvider.count({ where: { tenantId: s.tenantId, vendor: 'doubao', status: { not: 'failed' } } }),
   ]);
 
@@ -48,8 +40,6 @@ export default async function LibraryPage() {
     summary: r.summary,
     points: parseJson<string[]>(r.points, []),
     analysis: r.analysis,
-    // 只下发字数与前 300 字预览：一页 200 条 × 两万字会把首屏拖垮，
-    // 而列表要回答的问题只是「这条讲了什么、值不值得点开」。
     excerpt: (r.content ?? '').slice(0, 300),
     chars: r.content?.length ?? 0,
     state: r.state,
@@ -63,8 +53,8 @@ export default async function LibraryPage() {
   return (
     <>
       <HubHeader
-        title="看情报"
-        hint="跨平台阅读存档 · 全文结构化摘要 · 核心要点提炼 · 账号定制洞察"
+        title={dict.tabs.intelTitle}
+        hint={lang === 'en' ? 'Cross-platform content library · Full structured summaries · Key takeaways · Tailored insights' : '跨平台阅读存档 · 全文结构化摘要 · 核心要点提炼 · 账号定制洞察'}
         tabs={<IntelTabs active="library" inline />}
       />
 
@@ -99,9 +89,9 @@ export default async function LibraryPage() {
             📚
           </div>
           <div>
-            <div className="small muted" style={{ fontSize: '0.75rem', lineHeight: 1.2 }}>库内总条目</div>
+            <div className="small muted" style={{ fontSize: '0.75rem', lineHeight: 1.2 }}>{lang === 'en' ? 'Total Saved' : '库内总条目'}</div>
             <div style={{ fontWeight: 700, fontSize: '1.05rem', lineHeight: 1.3, color: 'var(--text)' }}>
-              {items.length} <span className="small muted" style={{ fontWeight: 400, fontSize: '0.75rem' }}>/ 200 条</span>
+              {items.length} <span className="small muted" style={{ fontWeight: 400, fontSize: '0.75rem' }}>{lang === 'en' ? '/ 200 items' : '/ 200 条'}</span>
             </div>
           </div>
         </div>
@@ -124,9 +114,9 @@ export default async function LibraryPage() {
             ✨
           </div>
           <div>
-            <div className="small muted" style={{ fontSize: '0.75rem', lineHeight: 1.2 }}>AI 智能摘要</div>
+            <div className="small muted" style={{ fontSize: '0.75rem', lineHeight: 1.2 }}>{lang === 'en' ? 'AI Summaries' : 'AI 智能摘要'}</div>
             <div style={{ fontWeight: 700, fontSize: '1.05rem', lineHeight: 1.3, display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text)' }}>
-              <span>{withSummary} 条</span>
+              <span>{withSummary} {lang === 'en' ? 'items' : '条'}</span>
               <span className="badge badge-green" style={{ padding: '1px 6px', fontSize: '0.7rem' }}>
                 {summaryPct}%
               </span>
@@ -152,9 +142,9 @@ export default async function LibraryPage() {
             🌐
           </div>
           <div>
-            <div className="small muted" style={{ fontSize: '0.75rem', lineHeight: 1.2 }}>已覆盖平台</div>
+            <div className="small muted" style={{ fontSize: '0.75rem', lineHeight: 1.2 }}>{lang === 'en' ? 'Platforms' : '已覆盖平台'}</div>
             <div style={{ fontWeight: 700, fontSize: '1.05rem', lineHeight: 1.3, color: 'var(--text)' }}>
-              {platforms} <span className="small muted" style={{ fontWeight: 400, fontSize: '0.75rem' }}>个平台</span>
+              {platforms} <span className="small muted" style={{ fontWeight: 400, fontSize: '0.75rem' }}>{lang === 'en' ? 'platforms' : '个平台'}</span>
             </div>
           </div>
         </div>
@@ -165,9 +155,9 @@ export default async function LibraryPage() {
 
       {/* 存入指引折叠指南 */}
       <Fold
-        title="💡 怎么把内容存进资讯库？"
-        sub="支持 4 种多端采集方式，自动提炼摘要与要点"
-        note={<span className="badge badge-blue" style={{ fontSize: '0.75rem' }}>展开查看指引</span>}
+        title={lang === 'en' ? '💡 How to save content to your library?' : '💡 怎么把内容存进资讯库？'}
+        sub={lang === 'en' ? 'Supports 4 capture methods · Automatic summary & takeaways' : '支持 4 种多端采集方式，自动提炼摘要与要点'}
+        note={<span className="badge badge-blue" style={{ fontSize: '0.75rem' }}>{lang === 'en' ? 'View Guide' : '展开查看指引'}</span>}
         defaultOpen={false}
       >
         <div className="stack small" style={{ gap: 12, lineHeight: 1.7, padding: '4px 0' }}>

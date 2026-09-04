@@ -36,20 +36,24 @@ export type RosterRow = {
   weekPosts: number;
 };
 
-function Status({ row }: { row: RosterRow }) {
-  if (!row.lastCrawledAt) return <span className="badge badge-amber">未采集</span>;
+import { getServerLang } from '@/lib/i18n/server';
+
+function Status({ row, lang }: { row: RosterRow; lang: string }) {
+  if (!row.lastCrawledAt) return <span className="badge badge-amber">{lang === 'en' ? 'Not collected' : '未采集'}</span>;
   if (Date.now() - row.lastCrawledAt.getTime() > STALE_MS)
-    return <span className="badge badge-gray">7 天没采到</span>;
+    return <span className="badge badge-gray">{lang === 'en' ? 'Inactive >7d' : '7 天没采到'}</span>;
   return null;
 }
 
-export function CompetitorRoster({ rows }: { rows: RosterRow[] }) {
-  // 按平台分组：账号一多，混排的名单没法扫——「我在抖音上盯了几个」这种问题得数半天
+export async function CompetitorRoster({ rows }: { rows: RosterRow[] }) {
+  const lang = await getServerLang();
+
+  // 按平台分组
   const groups = PLATFORM_LIST.map((p) => ({
     key: p.key as string,
     rows: rows.filter((r) => r.platform === p.key),
   })).filter((g) => g.rows.length > 0);
-  // 兜底：平台常量里没有的历史数据也要显示出来，不能静默丢
+
   const known = new Set(PLATFORM_LIST.map((p) => p.key as string));
   const rest = rows.filter((r) => !known.has(r.platform));
   if (rest.length > 0) groups.push({ key: rest[0].platform, rows: rest });
@@ -62,7 +66,7 @@ export function CompetitorRoster({ rows }: { rows: RosterRow[] }) {
             <span className="badge" style={{ background: 'var(--surface-2)', color: platformColor(g.key) }}>
               {platformName(g.key)}
             </span>
-            <span className="small muted">{g.rows.length} 个</span>
+            <span className="small muted">{g.rows.length} {lang === 'en' ? 'accounts' : '个'}</span>
           </div>
           {g.rows.map((r) => (
             <div key={r.watchId} className="list-row" style={{ gap: 10 }}>
@@ -76,17 +80,18 @@ export function CompetitorRoster({ rows }: { rows: RosterRow[] }) {
                 <div className="row wrap" style={{ gap: 6 }}>
                   <b className="small">{r.name}</b>
                   {r.label && <span className="badge badge-gray">{r.label}</span>}
-                  <Status row={r} />
+                  <Status row={r} lang={lang} />
                 </div>
                 <div className="small muted" style={{ marginTop: 2 }}>
                   @{r.handle}
-                  {r.followers > 0 ? ` · ${fmtNum(r.followers)} 粉丝` : ''} · 在库 {r.posts} 篇
-                  {r.weekPosts > 0 ? ` · 近 7 天 +${r.weekPosts}` : ''} ·{' '}
-                  {r.lastCrawledAt ? `${relTime(r.lastCrawledAt)}采集` : '未采集'}
+                  {r.followers > 0 ? (lang === 'en' ? ` · ${fmtNum(r.followers)} followers` : ` · ${fmtNum(r.followers)} 粉丝`) : ''}
+                  {lang === 'en' ? ` · ${r.posts} in library` : ` · 在库 ${r.posts} 篇`}
+                  {r.weekPosts > 0 ? (lang === 'en' ? ` · +${r.weekPosts} in 7d` : ` · 近 7 天 +${r.weekPosts}`) : ''} ·{' '}
+                  {r.lastCrawledAt ? (lang === 'en' ? `Crawled ${relTime(r.lastCrawledAt)}` : `${relTime(r.lastCrawledAt)}采集`) : (lang === 'en' ? 'Never crawled' : '未采集')}
                 </div>
               </div>
-              <ActionButton action={actRemoveWatch.bind(null, r.watchId)} loadingText="移除中…">
-                移除
+              <ActionButton action={actRemoveWatch.bind(null, r.watchId)} loadingText={lang === 'en' ? 'Removing…' : '移除中…'}>
+                {lang === 'en' ? 'Remove' : '移除'}
               </ActionButton>
             </div>
           ))}

@@ -69,6 +69,7 @@ function loadSw(opts: {
       scripting: { executeScript: () => Promise.resolve([{ result: opts.parsed }]) },
       tabs: {
         onRemoved: listener,
+        onUpdated: listener,
         get: () => Promise.resolve({ id: 1, url: opts.tabUrl }),
         create: () => Promise.resolve({ id: 1 }),
         remove: noop,

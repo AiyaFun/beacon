@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { codeOfDir } from '../helpers/anchor';
 
 const read = (p: string) => readFileSync(join(process.cwd(), p), 'utf8');
 /** 源码断言前先剥注释——本仓踩过三次「探测器被自己的注释骗」 */
@@ -27,7 +28,9 @@ describe('侧栏「最近」：一件事只占一行', () => {
   it('🔒 同类同名的重复运行收成一条，带次数', () => {
     // 真机截图：6 条里只有 2 件事——「去采一个竞对」重复 4 次、「抖音·这不科学」2 次。
     // 同一个模板连跑 3 遍就占满整个列表，真正不同的那几件被挤没了。
-    const src = code('components/TaskSidebar.tsx');
+    // 去重在 TaskSidebar.tsx、渲染与次数在 TaskSidebarRecent.tsx（2026-09-03 i18n 拆出来的），
+    // 所以按前缀把这一族文件一起读——搬到哪个文件里都算数，全删了才红。
+    const src = codeOfDir('components', (f) => /^TaskSidebar.*\.tsx$/.test(f));
     expect(src, '没有按「类型+标题」去重').toMatch(/\$\{r\.kind\}\|\$\{r\.title\}/);
     expect(src, '渲染的还是原始 recent，去重白做了').toMatch(/rows\.map\(/);
     expect(src, '没把重复次数显示出来').toMatch(/times > 1/);
@@ -97,7 +100,9 @@ describe('运行中心：按钮不许自己指自己', () => {
   it('🔒 href 指回 /runs 的行不渲染「去运行中心」', () => {
     // 2026-08-26 真机截图：浏览器任务落点改成 /runs 后，用户**在运行中心里**看到
     // 「去运行中心 →」——原地跳转，点了以为坏了（原话「点击后完成无法跑得动」）。
-    const src = code('app/(app)/runs/page.tsx');
+    // 【读整个 runs 目录，不钉死 page.tsx】2026-09-03：i18n 把界面搬进 RunsClientView.tsx，
+    // page.tsx 只剩一层壳，这条守卫因此报了个理由完全错误的红（行为其实好好的在隔壁）。
+    const src = codeOfDir('app/(app)/runs');
     expect(src, '跳转按钮没有排除指回本页的行').toMatch(/r\.href\.split\(\/\[#\?\]\/\)\[0\] !== '\/runs'/);
     // 等浏览器领活的行要有真出口（检查插件），不是什么按钮都没有
     expect(src, '等浏览器领活的行没有给出口').toMatch(/href="\/extension"/);

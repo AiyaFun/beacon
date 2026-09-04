@@ -9,6 +9,7 @@ import { VerdictButtons } from './VerdictButtons';
 import { ConveneForm } from './ConveneForm';
 import { WeakDimConvene } from './WeakDimConvene';
 import { PanelManager, type PanelPersona } from './PanelManager';
+import { getServerLang } from '@/lib/i18n/server';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,14 +17,12 @@ const TRIGGER_LABEL: Record<string, string> = {
   manual: '主动召唤',
   cold_start: '冷启动',
   repeated_reject: '连续被拒',
-  draft_review: '草稿会诊', // W-6：这场评的是已成稿的正文，采纳的意见不进选题池，回创作工坊改稿
+  draft_review: '草稿会诊',
 };
 
-// 「找角度（智囊团）」面板 —— 原 /advisor 页的主体，2026-08-25 并进 /topics 作为一个标签。
-// 自包含取数；只在 view=advisor 时被渲染（topics/page.tsx 早返回）。
-// 原 PageHead 上的「召集智囊团」按钮（ConveneForm）挪到面板顶行——那是这一页的主动作，不能丢。
 export async function AdvisorPanel() {
   const s = await getSession();
+  const lang = await getServerLang();
 
   const [account, ownPosts, publishRecords, session, personas] = await Promise.all([
     prisma.creatorAccount.findUnique({ where: { id: s.accountId } }),
@@ -61,30 +60,49 @@ export async function AdvisorPanel() {
     <>
       <div className="row-between wrap" style={{ gap: 10, marginBottom: 14 }}>
         <span className="small muted">
-          {panelSize} 位人物混编会诊 · 受众侧模拟第一反应，专家侧做多维把关 · 采纳/否决驱动人物成长
+          {lang === 'en'
+            ? `${panelSize} persona council · Audience reaction & expert evaluation`
+            : `${panelSize} 位人物混编会诊 · 受众侧模拟第一反应，专家侧做多维把关 · 采纳/否决驱动人物成长`}
         </span>
         <ConveneForm panelSize={panelSize} />
       </div>
 
-      <Card sub="什么时候用" title="触发场景" style={{ marginBottom: 16 }}>
+      <Card
+        sub={lang === 'en' ? 'When to use' : '什么时候用'}
+        title={lang === 'en' ? 'Trigger Scenarios' : '触发场景'}
+        style={{ marginBottom: 16 }}
+      >
         <div className="grid grid-3">
-          <TriggerHint icon="bulb" title="没头绪 / 没灵感" desc="推荐流刷了几天都没想做的，让 12 个脑子重新发散一次。" />
-          <TriggerHint icon="sparkles" title="新账号冷启动" desc="还没有历史内容，先把前 10 条的方向定下来。" />
-          <TriggerHint icon="refresh" title="选题连续被拒" desc="最近推荐你都不满意，说明该换一批视角重新会诊。" />
+          <TriggerHint
+            icon="bulb"
+            title={lang === 'en' ? 'Out of Ideas' : '没头绪 / 没灵感'}
+            desc={lang === 'en' ? 'Refresh angles across 12 diverse expert perspectives.' : '推荐流刷了几天都没想做的，让 12 个脑子重新发散一次。'}
+          />
+          <TriggerHint
+            icon="sparkles"
+            title={lang === 'en' ? 'Cold Start' : '新账号冷启动'}
+            desc={lang === 'en' ? 'Define direction for the first 10 seed posts without historical data.' : '还没有历史内容，先把前 10 条的方向定下来。'}
+          />
+          <TriggerHint
+            icon="refresh"
+            title={lang === 'en' ? 'Repeated Rejections' : '选题连续被拒'}
+            desc={lang === 'en' ? 'Time to change lenses and find differentiated hooks.' : '最近推荐你都不满意，说明该换一批视角重新会诊。'}
+          />
         </div>
         <div className="divider" />
         <div className="small muted">
-          <Icon.shield size={13} /> 会诊结果（采纳/否决）会写入账号记忆并反哺人物权重——常被采纳的人物在下次会诊里说话更算数；唱反调者与合规审查员豁免降权。被采纳的提案会自动进入选题池，创作工坊可直接取用。
-          <br />
-          注：受众侧为 AI 模拟粉丝画像，仅代表「这类观众预计会怎么反应」，非真实用户调研。
+          <Icon.shield size={13} />{' '}
+          {lang === 'en'
+            ? 'Council verdicts feedback into persona weights. Accepted angles automatically flow into the topic bank.'
+            : '会诊结果（采纳/否决）会写入账号记忆并反哺人物权重——常被采纳的人物在下次会诊里说话更算数。被采纳的提案会自动进入选题池。'}
         </div>
       </Card>
 
       <Card
-        title="智囊团人物管理"
-        sub="身份自定义 · 采纳/否决自学习"
+        title={lang === 'en' ? 'Advisor Council Personas' : '智囊团人物管理'}
+        sub={lang === 'en' ? 'Custom roles · Self-learning from adoption' : '身份自定义 · 采纳/否决自学习'}
         style={{ marginBottom: 16 }}
-        action={<span className="badge badge-brand">启用 {enabledCount} 席</span>}
+        action={<span className="badge badge-brand">{lang === 'en' ? `${enabledCount} active` : `启用 ${enabledCount} 席`}</span>}
       >
         <PanelManager
           personas={personas.map((p) => ({
@@ -107,10 +125,10 @@ export async function AdvisorPanel() {
       </Card>
 
       <Card
-        title="账号项目体检报告"
-        sub="六维 · 基于真实数据 + 启发式"
+        title={lang === 'en' ? 'Account Health Audit' : '账号项目体检报告'}
+        sub={lang === 'en' ? '6 Dimensions · Data-driven + Heuristic' : '六维 · 基于真实数据 + 启发式'}
         style={{ marginBottom: 16 }}
-        action={<span className="badge badge-brand">综合 {card.total} 分</span>}
+        action={<span className="badge badge-brand">{lang === 'en' ? `Score ${card.total}` : `综合 ${card.total} 分`}</span>}
       >
         <div className="grid grid-6" style={{ marginBottom: 14 }}>
           {ACCOUNT_HEALTH_DIMENSIONS.map((d) => (

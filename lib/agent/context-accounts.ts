@@ -50,7 +50,7 @@ export function renderAccountsContext(c: AccountsContext): string {
     : '- （工作区里还没有账号）';
   const oldPlugin = c.plugin.installed && c.plugin.kinds && !c.plugin.kinds.includes('collect_self_profile');
   const plugin = c.plugin.installed
-    ? `已连接${c.plugin.lastSeenAt ? `（最近活跃 ${fmtDate(c.plugin.lastSeenAt)}）` : '（还没回传过数据）'}${oldPlugin ? '；**版本旧了，不会回填自己的主页**（派了会被拒，如实告诉用户去更新插件或把桌面客户端登记为执行器）' : ''}`
+    ? `已连接${c.plugin.lastSeenAt ? `（最近活跃 ${fmtDate(c.plugin.lastSeenAt)}）` : '（还没回传过数据）'}${oldPlugin ? '；**版本旧了，不会回填自己的主页**（派了会被拒，如实告诉用户去更新插件，或在桌面客户端顶部那条「允许这台客户端操作浏览器采集？」点「允许」）' : ''}`
     : '没装';
   const local = c.localBrowser === 'ready'
     ? '就绪（采集任务会直接用它当场跑完并返回结果，不排队）'

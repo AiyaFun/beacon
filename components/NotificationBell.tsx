@@ -4,6 +4,8 @@ import { useEffect, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { actMarkNotificationsRead } from '@/app/(app)/notification-actions';
 
+import { useI18n } from '@/lib/i18n';
+
 export type NotifItem = { id: string; kind: string; title: string; body: string; link: string | null; read: boolean; createdAt: string };
 
 const KIND_EMOJI: Record<string, string> = {
@@ -14,15 +16,16 @@ const KIND_EMOJI: Record<string, string> = {
   system: '🔔',
 };
 
-function relTime(iso: string): string {
+function formatRelTime(iso: string, lang: string): string {
   const diff = Date.now() - new Date(iso).getTime();
   const h = Math.floor(diff / 3600_000);
-  if (h < 1) return '刚刚';
-  if (h < 24) return `${h}小时前`;
-  return `${Math.floor(h / 24)}天前`;
+  if (h < 1) return lang === 'en' ? 'Just now' : '刚刚';
+  if (h < 24) return lang === 'en' ? `${h}h ago` : `${h}小时前`;
+  return lang === 'en' ? `${Math.floor(h / 24)}d ago` : `${Math.floor(h / 24)}天前`;
 }
 
 export function NotificationBell({ count, items }: { count: number; items: NotifItem[] }) {
+  const { lang } = useI18n();
   const [open, setOpen] = useState(false);
   const [, start] = useTransition();
   const router = useRouter();
@@ -37,10 +40,7 @@ export function NotificationBell({ count, items }: { count: number; items: Notif
   function markAll() {
     start(async () => { await actMarkNotificationsRead(); });
   }
-  // 先等「标已读」落库再跳转。此前是「发起 action + 立刻 window.location.href」，硬跳转
-  // 会与写库竞速：落地页的顶栏在服务端渲染时往往还没读到那条已读，红点不消——用户点过了
-  // 却看不出点过，只能靠再导航一次才刷新。改成 await + router.push（软导航），
-  // 让 action 里的 revalidatePath('/','layout') 直接把新的未读数带出来。
+
   function openItem(it: NotifItem) {
     setOpen(false);
     start(async () => {
@@ -50,13 +50,12 @@ export function NotificationBell({ count, items }: { count: number; items: Notif
   }
 
   return (
-    // notif-wrap：手机端顶栏靠这个类把铃铛钉在屏内（见 globals.css 移动端媒体查询）
     <div className="notif-wrap" style={{ position: 'relative' }}>
       <button
         className="btn btn-sm btn-ghost"
         onClick={() => setOpen((v) => !v)}
-        title="通知"
-        aria-label={`通知${count > 0 ? `（${count} 条未读）` : ''}`}
+        title={lang === 'en' ? 'Notifications' : '通知'}
+        aria-label={lang === 'en' ? `Notifications${count > 0 ? ` (${count} unread)` : ''}` : `通知${count > 0 ? `（${count} 条未读）` : ''}`}
         aria-expanded={open}
         style={{ position: 'relative', padding: '4px 8px' }}
       >
@@ -80,11 +79,17 @@ export function NotificationBell({ count, items }: { count: number; items: Notif
             style={{ position: 'absolute', right: 0, top: 36, width: 'min(320px, calc(100vw - 32px))', maxHeight: 420, overflowY: 'auto', zIndex: 50, padding: 8 }}
           >
             <div className="row-between" style={{ padding: '4px 6px 8px' }}>
-              <b className="small">通知</b>
-              {count > 0 && <button className="btn btn-sm btn-ghost" onClick={markAll}>全部已读</button>}
+              <b className="small">{lang === 'en' ? 'Notifications' : '通知'}</b>
+              {count > 0 && (
+                <button className="btn btn-sm btn-ghost" onClick={markAll}>
+                  {lang === 'en' ? 'Mark All as Read' : '全部已读'}
+                </button>
+              )}
             </div>
             {items.length === 0 ? (
-              <div className="small muted" style={{ padding: '16px', textAlign: 'center' }}>暂无通知</div>
+              <div className="small muted" style={{ padding: '16px', textAlign: 'center' }}>
+                {lang === 'en' ? 'No notifications' : '暂无通知'}
+              </div>
             ) : (
               <div className="stack" style={{ gap: 2 }}>
                 {items.map((it) => (
@@ -104,7 +109,7 @@ export function NotificationBell({ count, items }: { count: number; items: Notif
                       <div className="stack" style={{ gap: 2, minWidth: 0 }}>
                         <span className="small" style={{ fontWeight: 600 }}>{it.title}</span>
                         {it.body && <span className="small muted" style={{ lineHeight: 1.5 }}>{it.body}</span>}
-                        <span className="small muted" style={{ fontSize: 11 }}>{relTime(it.createdAt)}</span>
+                        <span className="small muted" style={{ fontSize: 11 }}>{formatRelTime(it.createdAt, lang)}</span>
                       </div>
                     </div>
                   </div>

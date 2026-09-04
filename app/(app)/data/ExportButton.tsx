@@ -3,8 +3,11 @@
 import { useState, useTransition } from 'react';
 import { actExportData } from './actions';
 
+import { useI18n } from '@/lib/i18n';
+
 // CSV 导出：调 server action 拿 base64，浏览器侧解码触发下载。导出=当前筛选所见即所得。
 export function ExportButton({ range, platform }: { range: string; platform: string }) {
+  const { lang } = useI18n();
   const [pending, start] = useTransition();
   const [err, setErr] = useState('');
 
@@ -13,7 +16,7 @@ export function ExportButton({ range, platform }: { range: string; platform: str
     start(async () => {
       const r = await actExportData(scope, { range, platform });
       if (!r.ok || !r.dataBase64) {
-        setErr(r.error ?? '导出失败');
+        setErr(r.error ?? (lang === 'en' ? 'Export failed' : '导出失败'));
         return;
       }
       const bin = atob(r.dataBase64);
@@ -31,10 +34,10 @@ export function ExportButton({ range, platform }: { range: string; platform: str
   return (
     <div className="row" style={{ gap: 6, alignItems: 'center' }}>
       <button className="btn btn-sm btn-ghost" disabled={pending} onClick={() => download('publish')}>
-        {pending ? '导出中…' : '导出明细'}
+        {pending ? (lang === 'en' ? 'Exporting…' : '导出中…') : (lang === 'en' ? 'Export CSV' : '导出明细')}
       </button>
       <button className="btn btn-sm btn-ghost" disabled={pending} onClick={() => download('snapshot')}>
-        导出逐日
+        {lang === 'en' ? 'Export Daily CSV' : '导出逐日'}
       </button>
       {err && <span className="small" style={{ color: 'var(--red)' }}>{err}</span>}
     </div>

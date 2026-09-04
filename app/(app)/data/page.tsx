@@ -44,18 +44,12 @@ import { GenesPanel } from '@/components/insight/GenesPanel';
 import { AlgorithmPanel } from '@/components/insight/AlgorithmPanel';
 import { CitationCard } from '@/components/insight/CitationCard';
 import { HubHeader } from '@/components/HubHeader';
+import { getServerLang } from '@/lib/i18n/server';
+import { getDictionary } from '@/lib/i18n/dict';
 
-/**
- * 表格里的一个数字格。
- *
- * 【为什么不用 fmtNum】它内部是 `n ?? 0`——展示总量时那是对的（没有就是 0 条），
- * 但**逐条作品的指标格**不是：「这次没采到评论数」和「真的零评论」是两件事，
- * 而用户拿这张表做的正是「哪条互动差」的判断。
- * 与同一行的完播率（早就是「—」）、竞对页的同名指标（也是「—」）对齐。
- */
 function numCell(v: number | undefined | null) {
   if (v === undefined || v === null) {
-    return <span className="muted" title="这次没有采到这一项（不是 0）——去作品详情页重采一次">—</span>;
+    return <span className="muted" title="Not available">—</span>;
   }
   return fmtNum(v);
 }
@@ -90,17 +84,16 @@ export default async function DataPage({
 }) {
   const s = await getSession();
   const sp = await searchParams;
+  const lang = await getServerLang();
+  const dict = getDictionary(lang);
 
-  // 「看效果」三合一（2026-08-25）：爆款基因 /genes、平台算法教练 /algorithm 并进本页。
-  // 顶层用 view 参数切换，**只渲染当前 tab**——「平台怎么想」会调 LLM，全渲染会白烧调用，
-  // 所以走早返回：view=genes/algorithm 时直接出对应 Panel（各自取数），不跑下面 /data 的重取数。
   const view = sp.view === 'genes' || sp.view === 'algorithm' ? sp.view : 'data';
   if (view !== 'data') {
     return (
       <>
         <HubHeader
-          title="看效果"
-          hint="发完之后回答三件事：跑得怎么样、什么样的跑得动、平台为什么这么推"
+          title={dict.tabs.effectTitle}
+          hint={lang === 'en' ? 'Cross-platform post performance · Viral content drivers · Platform recommendation algorithm insights' : '发完之后回答三件事：跑得怎么样、什么样的跑得动、平台为什么这么推'}
           tabs={<EffectTabs active={view} inline />}
         />
         {view === 'genes' ? (
@@ -325,8 +318,8 @@ export default async function DataPage({
   return (
     <>
       <HubHeader
-        title="看效果"
-        hint="发布登记 + 多通道数据回流，看清每篇内容前 7 天的真实增长"
+        title={dict.tabs.effectTitle}
+        hint={lang === 'en' ? 'Track posts and growth across channels for the first 7 days' : '发布登记 + 多通道数据回流，看清每篇内容前 7 天的真实增长'}
         tabs={<EffectTabs active="data" inline />}
         action={<ExportButton range={range} platform={platformFilter} />}
       />
@@ -338,10 +331,30 @@ export default async function DataPage({
       {/* 数据点亮进度：四个真实数据源信号，未全亮时引导用户去点亮（全亮自动隐藏） */}
       <DataIllumination
         signals={[
-          { key: 'posts', label: '作品表现数据', lit: records.length > 0, how: '装插件在作品页一键回填，或用下方「手动回填」登记第一条' },
-          { key: 'history', label: '历史作品基线', lit: ownPosts.length > 0, how: '用下方「导入历史作品」上传 CSV，建立你的历史水位' },
-          { key: 'followers', label: '粉丝增长数据', lit: followerPoints.length > 0, how: '在创作者后台「粉丝分析」页用插件回填；在自己的主页上点回填也能记下当天的粉丝数' },
-          { key: 'audience', label: '受众画像', lit: audienceBuckets != null, how: '同上，创作者后台「粉丝/受众分析」页用插件回填' },
+          {
+            key: 'posts',
+            label: lang === 'en' ? 'Post Performance' : '作品表现数据',
+            lit: records.length > 0,
+            how: lang === 'en' ? 'Use extension to sync from post page, or log your first post manually below' : '装插件在作品页一键回填，或用下方「手动回填」登记第一条',
+          },
+          {
+            key: 'history',
+            label: lang === 'en' ? 'Historical Baseline' : '历史作品基线',
+            lit: ownPosts.length > 0,
+            how: lang === 'en' ? 'Upload CSV via "Import History" below to establish benchmarks' : '用下方「导入历史作品」上传 CSV，建立你的历史水位',
+          },
+          {
+            key: 'followers',
+            label: lang === 'en' ? 'Follower Growth' : '粉丝增长数据',
+            lit: followerPoints.length > 0,
+            how: lang === 'en' ? 'Sync via extension on follower analytics or profile page' : '在创作者后台「粉丝分析」页用插件回填；在自己的主页上点回填也能记下当天的粉丝数',
+          },
+          {
+            key: 'audience',
+            label: lang === 'en' ? 'Audience Demographics' : '受众画像',
+            lit: audienceBuckets != null,
+            how: lang === 'en' ? 'Sync via extension on creator audience analytics page' : '同上，创作者后台「粉丝/受众分析」页用插件回填',
+          },
         ] satisfies IlluminationSignal[]}
       />
 
@@ -362,7 +375,7 @@ export default async function DataPage({
 
       {/* 数据体检 */}
       {healthIssues.length > 0 && (
-        <Card title="🩺 数据体检" sub="检测到需要你确认的数据问题 · 只提示不自动改" style={{ marginBottom: 16 }}>
+        <Card title={lang === 'en' ? '🩺 Data Health' : '🩺 数据体检'} sub={lang === 'en' ? 'Detected data issues requiring confirmation · Notification only' : '检测到需要你确认的数据问题 · 只提示不自动改'} style={{ marginBottom: 16 }}>
           <div className="stack" style={{ gap: 10 }}>
             {healthIssues.map((issue) => (
               <HealthRow key={issue.kind} issue={issue} />
@@ -373,21 +386,33 @@ export default async function DataPage({
 
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
         <Stat
-          label="总播放"
+          label={lang === 'en' ? 'Total Views' : '总播放'}
           value={fmtNum(totalViews)}
           foot={
             viewsDeltaPct === null ? (
-              range === 'all' ? '全部已回填数据合计' : '上一周期无数据'
+              range === 'all' ? (lang === 'en' ? 'All backfilled data combined' : '全部已回填数据合计') : (lang === 'en' ? 'No prior period data' : '上一周期无数据')
             ) : (
               <span style={{ color: viewsDeltaPct >= 0 ? 'var(--green)' : 'var(--red)' }}>
-                环比 {viewsDeltaPct >= 0 ? '▲' : '▼'}{Math.abs(viewsDeltaPct)}%
+                {lang === 'en' ? 'PoP ' : '环比 '}{viewsDeltaPct >= 0 ? '▲' : '▼'}{Math.abs(viewsDeltaPct)}%
               </span>
             )
           }
         />
-        <Stat label="总互动量" value={fmtNum(totalInteractions)} foot="赞 + 评 + 转 + 藏" />
-        <Stat label="发布篇数" value={publishCount} foot={`当前筛选 · ${range === 'all' ? '全部' : range}`} />
-        <Stat label="采纳并发布" value={adoptedPublished} foot="来自 AI 推荐的篇数" />
+        <Stat
+          label={lang === 'en' ? 'Total Engagements' : '总互动量'}
+          value={fmtNum(totalInteractions)}
+          foot={lang === 'en' ? 'Likes + Comments + Shares + Saves' : '赞 + 评 + 转 + 藏'}
+        />
+        <Stat
+          label={lang === 'en' ? 'Posts' : '发布篇数'}
+          value={publishCount}
+          foot={`${lang === 'en' ? 'Filtered · ' : '当前筛选 · '}${range === 'all' ? (lang === 'en' ? 'All' : '全部') : range}`}
+        />
+        <Stat
+          label={lang === 'en' ? 'Adopted & Published' : '采纳并发'}
+          value={adoptedPublished}
+          foot={lang === 'en' ? 'From AI recommendations' : '来自 AI 推荐的篇数'}
+        />
       </div>
 
       {/* 次级：这一页顶上已经有「数据看板 / 什么跑得动 / 平台怎么想」那一层了，
@@ -398,24 +423,31 @@ export default async function DataPage({
         tabs={[
           {
             key: 'overview',
-            label: '总览',
-            hint: '一个核心指标 + 三条安全线，下面是每篇作品的真实表现',
+            label: lang === 'en' ? 'Overview' : '总览',
+            hint: lang === 'en' ? 'Core metric + three guardrails with post-level performance below' : '一个核心指标 + 三条安全线，下面是每篇作品的真实表现',
             node: (
               <>
       <div className="grid-asym-left" style={{ marginBottom: 16 }}>
-        <Card title="核心指标与安全线" sub="一个核心指标 + 三条不能踩的安全线">
+        <Card
+          title={lang === 'en' ? 'Core Metrics & Guardrails' : '核心指标与安全线'}
+          sub={lang === 'en' ? 'One North Star metric + three critical guardrails' : '一个核心指标 + 三条不能踩的安全线'}
+        >
           <div className="stat" style={{ background: 'var(--surface-2)', borderRadius: 10, padding: 14 }}>
-            <div className="stat-label">核心指标 · 周均采纳并发布选题数 / 活跃账号</div>
+            <div className="stat-label">
+              {lang === 'en' ? 'North Star · Weekly adopted & published topics / active accounts' : '核心指标 · 周均采纳并发布选题数 / 活跃账号'}
+            </div>
             <div className="stat-value" style={{ color: 'var(--brand)' }}>{northStar}</div>
             <div className="stat-foot">
-              {adoptedPublished} 篇采纳发布 ÷ {accounts} 个活跃账号（当前筛选估算）
+              {lang === 'en'
+                ? `${adoptedPublished} adopted & published ÷ ${accounts} active accounts (filtered estimate)`
+                : `${adoptedPublished} 篇采纳发布 ÷ ${accounts} 个活跃账号（当前筛选估算）`}
             </div>
           </div>
           <div className="divider" />
           <div className="stack" style={{ gap: 14 }}>
             {clashRate.state === 'ok' ? (
               <Guardrail
-                name="撞题率"
+                name={lang === 'en' ? 'Topic Clash Rate' : '撞题率'}
                 value={clashRate.pct}
                 suffix="%"
                 note={clashRate.note}
@@ -423,19 +455,19 @@ export default async function DataPage({
                 meter={100 - clashRate.pct}
               />
             ) : (
-              <GuardrailPending name="撞题率" note={clashRate.note} />
+              <GuardrailPending name={lang === 'en' ? 'Topic Clash Rate' : '撞题率'} note={clashRate.note} />
             )}
             <Guardrail
-              name="超基线内容占比"
+              name={lang === 'en' ? 'Above-Baseline Content %' : '超基线内容占比'}
               value={aboveBaselinePct}
               suffix="%"
-              note={`基线播放 ${fmtNum(Math.round(baselineViews))} · 越高越好`}
+              note={lang === 'en' ? `Baseline views: ${fmtNum(Math.round(baselineViews))} · Higher is better` : `基线播放 ${fmtNum(Math.round(baselineViews))} · 越高越好`}
               color="var(--brand)"
               meter={aboveBaselinePct}
             />
             {fpRate.state === 'ok' ? (
               <Guardrail
-                name="合规误报率"
+                name={lang === 'en' ? 'Compliance False Positive Rate' : '合规误报率'}
                 value={fpRate.pct}
                 suffix="%"
                 note={fpRate.note}
@@ -443,12 +475,15 @@ export default async function DataPage({
                 meter={100 - fpRate.pct}
               />
             ) : (
-              <GuardrailPending name="合规误报率" note={fpRate.note} />
+              <GuardrailPending name={lang === 'en' ? 'Compliance False Positive Rate' : '合规误报率'} note={fpRate.note} />
             )}
           </div>
         </Card>
 
-        <Card title="推荐 vs 自选" sub="用平均播放看 AI 推荐到底值不值">
+        <Card
+          title={lang === 'en' ? 'Recommended vs Manual' : '推荐 vs 自选'}
+          sub={lang === 'en' ? 'Comparing average views to validate AI value' : '用平均播放看 AI 推荐到底值不值'}
+        >
           {publishCount === 0 ? (
             <Empty icon="📊" text="当前筛选下还没有数据，换个时间段或先在下方登记一条" />
           ) : (
@@ -481,33 +516,33 @@ export default async function DataPage({
         title={
           <div className="row" style={{ gap: 8, alignItems: 'center' }}>
             <Icon.chart size={20} style={{ color: 'var(--brand)' }} />
-            <span>发布效果与表现明细</span>
+            <span>{lang === 'en' ? 'Post Performance Details' : '发布效果与表现明细'}</span>
           </div>
         }
-        sub="每条已登记内容的真实表现 · 展开看逐日趋势 · 更新数据即触发学习"
+        sub={lang === 'en' ? 'Performance per post · Expand for daily trend · Auto-tunes preference memory' : '每条已登记内容的真实表现 · 展开看逐日趋势 · 更新数据即触发学习'}
         style={{ marginBottom: 16 }}
       >
         {publishCount === 0 ? (
-          <Empty icon="📥" text="当前筛选下没有发布记录，用下方「手动回填」登记第一条" />
+          <Empty icon="📥" text={lang === 'en' ? 'No post records for current filter. Add one below.' : '当前筛选下没有发布记录，用下方「手动回填」登记第一条'} />
         ) : (
           <>
             <div className="table-wrap">
               <table className="table">
                 <thead>
                   <tr>
-                    <th>平台</th>
-                    <th>发布时间 / 标题</th>
-                    <th style={{ textAlign: 'right' }}>播放</th>
-                    <th style={{ textAlign: 'right' }}>点赞</th>
-                    <th style={{ textAlign: 'right' }}>评论</th>
-                    <th style={{ textAlign: 'right' }}>转发</th>
-                    <th style={{ textAlign: 'right' }}>收藏</th>
-                    <th style={{ textAlign: 'right' }}>完播</th>
-                    <th>来源</th>
-                    <th>出处</th>
-                    <th>趋势 / 复盘</th>
-                    <th>内容</th>
-                    <th>更新</th>
+                    <th>{lang === 'en' ? 'Platform' : '平台'}</th>
+                    <th>{lang === 'en' ? 'Published / Title' : '发布时间 / 标题'}</th>
+                    <th style={{ textAlign: 'right' }}>{lang === 'en' ? 'Views' : '播放'}</th>
+                    <th style={{ textAlign: 'right' }}>{lang === 'en' ? 'Likes' : '点赞'}</th>
+                    <th style={{ textAlign: 'right' }}>{lang === 'en' ? 'Comments' : '评论'}</th>
+                    <th style={{ textAlign: 'right' }}>{lang === 'en' ? 'Shares' : '转发'}</th>
+                    <th style={{ textAlign: 'right' }}>{lang === 'en' ? 'Saves' : '收藏'}</th>
+                    <th style={{ textAlign: 'right' }}>{lang === 'en' ? 'Completion' : '完播'}</th>
+                    <th>{lang === 'en' ? 'Origin' : '来源'}</th>
+                    <th>{lang === 'en' ? 'Source' : '出处'}</th>
+                    <th>{lang === 'en' ? 'Trend / Review' : '趋势 / 复盘'}</th>
+                    <th>{lang === 'en' ? 'Content' : '内容'}</th>
+                    <th>{lang === 'en' ? 'Sync' : '更新'}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -677,8 +712,8 @@ export default async function DataPage({
           },
           {
             key: 'audience',
-            label: '受众与原声',
-            hint: '粉丝画像说「他们是谁」，读者原声说「他们在关心什么、原话怎么说」',
+            label: lang === 'en' ? 'Audience & Voice' : '受众与原声',
+            hint: lang === 'en' ? 'Audience demographics and real subscriber comments/concerns' : '粉丝画像说「他们是谁」，读者原声说「他们在关心什么、原话怎么说」',
             node: (
               <>
       {/* 账号级数据：粉丝曲线 + 受众画像（只有创作者后台给得到） */}
@@ -713,8 +748,8 @@ export default async function DataPage({
           },
           {
             key: 'growth',
-            label: '增长',
-            hint: '账号涨粉与单条作品在同一时间窗下的净增（竞对增长在竞对监控页）',
+            label: lang === 'en' ? 'Growth' : '增长',
+            hint: lang === 'en' ? 'Follower growth and net post metrics in the same time window' : '账号涨粉与单条作品在同一时间窗下的净增（竞对增长在竞对监控页）',
             node: (
               <>
       {/* 发布时段分析 */}
@@ -745,8 +780,8 @@ export default async function DataPage({
           },
           {
             key: 'review',
-            label: '复盘',
-            hint: '这一周做得怎么样、AI 的判断准不准、什么时段发更好、账号画像学到了什么',
+            label: lang === 'en' ? 'Review' : '复盘',
+            hint: lang === 'en' ? 'Weekly retrospective, AI forecast accuracy, peak publishing times, learned profile traits' : '这一周做得怎么样、AI 的判断准不准、什么时段发更好、账号画像学到了什么',
             node: (
               <>
       {/* 周度运营复盘 + R7「记住了你的 N 件事」 */}
@@ -864,8 +899,8 @@ export default async function DataPage({
           },
           {
             key: 'input',
-            label: '录入数据',
-            hint: '数据从哪来：插件一键回填 / 补链接 / 导入历史作品 / 手动登记',
+            label: lang === 'en' ? 'Log Data' : '录入数据',
+            hint: lang === 'en' ? 'Data sources: extension sync, post URL linking, CSV import, manual entry' : '数据从哪来：插件一键回填 / 补链接 / 导入历史作品 / 手动登记',
             node: (
               <>
       <Card title="🔌 插件一键回填" sub="装上「烽火台采集助手」，打开自己的作品页一键回填，省去手动填数" style={{ marginBottom: 16 }}>
@@ -878,8 +913,8 @@ export default async function DataPage({
           <b style={{ color: 'var(--text)' }}>创作者后台（推荐）</b>：在<b>你自己</b>的创作者后台
           <b style={{ color: 'var(--text)' }}>「数据中心 · 作品数据」</b>页点同一个按钮，能拿到公开作品页
           <b>拿不到的完播率 / 完读率</b>——它是抖音、公众号、B站、视频号算法的第一信号，也是「个性化诊断」
-          此前总说样本不足的原因。支持：视频号（channels.weixin.qq.com）、公众号（mp.weixin.qq.com 后台）、
-          抖音（creator.douyin.com）、小红书（creator.xiaohongshu.com）、B站（member.bilibili.com）。
+          此前总说样本不足的原因。支持：视频号、抖音、小红书、B站的创作者后台；
+          公众号后台需要在插件设置页<b>单独授权一次</b>（它不在插件的安装权限里），且仅官方发行版带这个模块。
           <br />
           边界写在这里，不藏在协议里：<b>仅在你本人登录态下运行</b>、<b>只读不写</b>（不发布、不修改、不调用平台任何接口）、
           <b>只读取你自己账号后台已渲染出来的数据</b>、<b>不采集任何他人的数据</b>；插件不持有、不读取、也不上传

@@ -33,20 +33,23 @@ import { draftFamily } from '@/lib/studio/family';
 import { shouldHintWechatAiSource } from '@/lib/algorithm/ai-source';
 import { MakeTabs } from '@/components/MakeTabs';
 import { HubHeader } from '@/components/HubHeader';
+import { getServerLang } from '@/lib/i18n/server';
+import { getDictionary } from '@/lib/i18n/dict';
 
 export const dynamic = 'force-dynamic';
 
-const STATUS_LABEL: Record<string, { text: string; cls: string }> = {
-  editing: { text: '编辑中', cls: 'badge-gray' },
-  checking: { text: '合规检测中', cls: 'badge-amber' },
-  ready: { text: '待发布', cls: 'badge-green' },
-  published: { text: '已发布', cls: 'badge-brand' },
-  // W-4：长期未完成被系统标记（该切入角已记入「落地难」）。重新生成初稿会自动回到编辑中。
-  abandoned: { text: '已搁置', cls: 'badge-gray' },
+const STATUS_LABEL: Record<string, { zh: string; en: string; cls: string }> = {
+  editing: { zh: '编辑中', en: 'Editing', cls: 'badge-gray' },
+  checking: { zh: '合规检测中', en: 'Checking', cls: 'badge-amber' },
+  ready: { zh: '待发布', en: 'Ready', cls: 'badge-green' },
+  published: { zh: '已发布', en: 'Published', cls: 'badge-brand' },
+  abandoned: { zh: '已搁置', en: 'Shelved', cls: 'badge-gray' },
 };
 
 function statusOf(status: string) {
-  return STATUS_LABEL[status] ?? { text: status, cls: 'badge-gray' };
+  const item = STATUS_LABEL[status];
+  if (!item) return { text: status, cls: 'badge-gray' };
+  return { text: item.zh, cls: item.cls };
 }
 
 export default async function StudioPage({
@@ -56,6 +59,8 @@ export default async function StudioPage({
 }) {
   const s = await getSession();
   const sp = await searchParams;
+  const lang = await getServerLang();
+  const dict = getDictionary(lang);
 
   // 技能列表在 server 端算好再传下去：客户端只拿列表，不碰 prisma
   // （导出不再需要「有没有 Claude Key」这个布尔——两种格式都有本地渲染器，永远可点）
@@ -268,7 +273,7 @@ export default async function StudioPage({
   if (selected) {
     tabs.push({
       key: 'advisor',
-      label: '草稿会诊',
+      label: lang === 'en' ? 'Draft Review' : '草稿会诊',
       badge: draftAdoptedCount || undefined,
       node: (
         <DraftAdvisorCard
@@ -283,11 +288,10 @@ export default async function StudioPage({
   return (
     <>
       <HubHeader
-        title="做内容"
-        hint="AI 起草 · 版本留痕 · 多平台改写 · 发布前合规。AI 初稿和你改后终稿的差异，系统会从中学你的口味。"
+        title={dict.tabs.makeTitle}
+        hint={lang === 'en' ? 'AI drafting · Version history · Multi-platform rewriter · Pre-publish compliance checks' : 'AI 起草 · 版本留痕 · 多平台改写 · 发布前合规。AI 初稿和你改后终稿的差异，系统会从中学你的口味。'}
         tabs={<MakeTabs active="write" inline />}
         action={
-          // 页头只留「开一篇新的」这两个入口。复制/导出/登记发布都跟着**某一份草稿**走（在「当前草稿」条）
           <span className="row wrap" style={{ gap: 8, justifyContent: 'flex-end' }}>
             <NewDraftDialog defaultPlatform={selected?.platform} />
             {!pendingTopic && <DraftButton draftId={selectedId ?? null} />}
@@ -295,9 +299,6 @@ export default async function StudioPage({
         }
       />
 
-      {/* 从选题引擎跳过来的上下文条：带的是哪条、切入角是什么、下一步点哪儿。
-          没有这条，跳过来就是一屏和刚才的选题毫无关系的旧草稿。
-          左侧品牌色竖条表明「这是上下文，不是又一张内容卡」。 */}
       {fromTopic && (
         <div
           className="card"
@@ -312,31 +313,29 @@ export default async function StudioPage({
           <div className="row-between wrap" style={{ gap: 12, alignItems: 'center' }}>
             <div className="stack" style={{ gap: 4, minWidth: 0 }}>
               <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
-                <span className="badge badge-brand">来自选题引擎</span>
+                <span className="badge badge-brand">{lang === 'en' ? 'From Topic Engine' : '来自选题引擎'}</span>
                 <b className="small">{fromTopic.title}</b>
-                {topicDraft && <span className="small muted">这条已经起过稿，已为你定位到它</span>}
+                {topicDraft && <span className="small muted">{lang === 'en' ? 'Draft already started for this topic' : '这条已经起过稿，已为你定位到它'}</span>}
               </div>
               {pendingTopic?.angle && (
-                <div className="small muted">切入角：{pendingTopic.angle}</div>
+                <div className="small muted">{lang === 'en' ? 'Angle: ' : '切入角：'}{pendingTopic.angle}</div>
               )}
             </div>
-            {/* 这一下要起的是**那条选题**，不能落到列表里碰巧排第一的旧草稿上，所以 draftId 传 null */}
             {pendingTopic && <DraftButton draftId={null} topicId={pendingTopic.id} />}
           </div>
         </div>
       )}
 
       <div className="grid-asym-left grid-align-start" style={{ gap: 20 }}>
-        {/* 左栏（300px ~ 360px 侧边栏）：只管「在哪篇稿子上、走到第几版」 */}
         <div className="stack" style={{ gap: 16 }}>
-          <Card title="草稿列表" sub={`${drafts.length} 篇`}>
+          <Card title={dict.studio.draftListTitle} sub={lang === 'en' ? `${drafts.length} drafts` : `${drafts.length} 篇`}>
             <DraftList
               drafts={draftRows}
               selectedId={selectedId}
               emptyText={
                 pendingTopic
-                  ? '还没有草稿——点上面那条横幅里的「AI 生成初稿」，就按带过来的这条选题起一版'
-                  : '还没有草稿——点右上角「AI 生成初稿」，基于已采纳的选题起一版'
+                  ? (lang === 'en' ? 'No drafts yet — click "AI Generate Draft" above to start.' : '还没有草稿——点上面那条横幅里的「AI 生成初稿」，就按带过来的这条选题起一版')
+                  : (lang === 'en' ? 'No drafts yet — click "AI Generate Draft" in the top right to start from an accepted topic.' : '还没有草稿——点右上角「AI 生成初稿」，基于已采纳的选题起一版')
               }
             />
           </Card>
