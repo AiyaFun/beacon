@@ -2,7 +2,7 @@
 //
 // 【为什么要有这个文件】2026-08-20 之前，这四类的说法散在六处各写各的：
 // 智能体的定义写在 /workflows 的 PageHead，技能的写在 /skills 的 PageHead，
-// 能力的写在 AgentTools.tsx 的注释里，助手的写在 AssistantTabs 的页签文案里，
+// 能力的写在 AgentTools.tsx 的注释里，助手的写在首页 TaskDeckHome 的注释里，
 // 而**模型看到的那一份**（systemPrompt）是第五份、任务台侧栏的 hint 是第六份。
 // 六份互相不引用，于是用户在界面上读到的分工与 AI 实际的派活逻辑可以完全对不上——
 // 而这种不一致既不会红也不会 404，只会让用户觉得「这个 AI 不听话」。

@@ -1095,21 +1095,83 @@ button.tab.active { border-bottom-color: var(--brand); }
    （助手页是整幅宽，采集助手页里它在 .grid-2 的一格中只有 475px）。
    按视口断点排的话，宽屏下那一格里就是四条 100px 的窄柱，字全挤成竖排读不了——
    媒体查询问的是「窗口多宽」，这里要问的是「我这个格子多宽」。 */
-.role-ladder { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; margin-bottom: 14px; }
-.role-cell { display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; border: 1px solid var(--border);
-  border-radius: 10px; background: var(--surface-2); text-decoration: none; color: inherit; min-width: 0; }
-.role-cell:hover { border-color: var(--brand); }
+.role-ladder { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin-bottom: 4px; }
+.role-cell {
+  display: flex; flex-direction: column; gap: 6px; padding: 12px 14px;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--surface-2);
+  text-decoration: none; color: inherit; min-width: 0;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.role-cell:hover:not(.active) {
+  border-color: var(--brand);
+  background: var(--surface);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.05);
+}
+.role-cell:hover .role-cell-arrow {
+  transform: translateX(3px);
+  color: var(--brand);
+}
 /* 当前这一类：不是链接，也不该有 hover 反馈 */
-.role-cell.active { border-color: var(--brand); background: var(--brand-soft, var(--surface)); }
-.role-name { font-size: 13px; }
+.role-cell.active {
+  border-color: var(--brand);
+  background: var(--brand-soft, var(--surface));
+  box-shadow: 0 0 0 1px var(--brand), 0 4px 16px rgba(232, 85, 45, 0.08);
+}
+.role-cell-top {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 2px;
+}
+.role-cell-icon-wrap {
+  width: 24px; height: 24px; border-radius: 6px;
+  background: var(--surface); border: 1px solid var(--border);
+  display: grid; place-items: center; color: var(--brand); flex-shrink: 0;
+}
+.role-cell.active .role-cell-icon-wrap {
+  background: var(--brand); color: #fff; border-color: var(--brand);
+}
+.role-level-tag {
+  font-size: 11px; font-weight: 600; color: var(--text-2);
+  background: var(--surface); padding: 2px 7px; border-radius: 6px; border: 1px solid var(--border);
+}
+.role-active-badge {
+  font-size: 10px; font-weight: 700; color: #fff;
+  background: linear-gradient(135deg, var(--brand), #ff7a45);
+  padding: 2px 7px; border-radius: 999px; letter-spacing: 0.2px;
+}
+.role-cell-arrow {
+  font-size: 12px; color: var(--text-3); transition: transform 0.15s ease;
+}
+.role-name { font-size: 13.5px; font-weight: 650; }
 .role-cell.active .role-name { color: var(--brand); }
-.role-one, .role-by { line-height: 1.5; }
-.role-by { opacity: .75; }
+.role-one { line-height: 1.5; font-size: 12px; color: var(--text-2); }
+.role-by { font-size: 11.5px; line-height: 1.4; opacity: .8; margin-top: auto; padding-top: 4px; }
 
-/* ── 「先答后做」的移交条 ────────────────────────────────────────────────
-   放在对话输入框**上方**、紧贴刚读完的那段回答。放页面底部的话，用户要先滚过
-   输入框才看得到，而那时他已经在打下一句了。amber 底色与「等你确认」同一套语义：
+/* ── 「先答后做」的移交卡 ────────────────────────────────────────────────
+   放在对话输入框**上方**、紧贴刚读完的那段回答。amber 底色与「等你确认」同一套语义：
    这是一个会真的动数据的入口，不该长得跟普通按钮一样。 */
+.handoff-card {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;
+  margin-bottom: 12px; padding: 12px 16px; border: 1.5px solid var(--amber);
+  background: linear-gradient(100deg, var(--amber-soft), var(--surface));
+  border-radius: 14px; box-shadow: 0 4px 16px rgba(245, 158, 11, 0.08);
+}
+.handoff-card-left {
+  display: flex; align-items: center; gap: 10px; flex: 1; min-width: 260px;
+}
+.handoff-icon-badge {
+  width: 32px; height: 32px; border-radius: 999px;
+  background: rgba(245, 158, 11, 0.15); color: var(--amber);
+  display: grid; place-items: center; flex-shrink: 0;
+}
+.handoff-text-wrap {
+  display: flex; flex-direction: column; gap: 2px;
+}
+.handoff-title {
+  font-size: 13.5px; font-weight: 650; color: var(--text);
+}
+.handoff-btn {
+  font-weight: 600; padding: 7px 14px; border-radius: 8px;
+}
 .handoff-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 12px; padding: 10px 12px;
   border: 1px solid var(--amber); background: var(--amber-soft); border-radius: 10px; }
 .handoff-why { flex: 1; min-width: 0; line-height: 1.5; }
@@ -1385,11 +1447,386 @@ button.tab.active { border-bottom-color: var(--brand); }
   border-radius: 16px; padding: 20px 22px; box-shadow: 0 18px 48px rgba(0,0,0,.22);
 }
 
-/* ── 新任务页：豆包工作式全屏对话面（2026-08-26 用户按截图指定）──────────── */
-.chat-stage { display: flex; flex-direction: column; height: calc(100vh - 150px); min-height: 480px; }
-.chat-hero-doubao { padding-top: 9vh; }
-.chat-hero-doubao .chat-hero-title { font-size: 30px; }
-.chat-hero-doubao .chat-hero-sub { margin-bottom: 26px; }
+/* ── 问 AI 页面容器与现代化布局 ────────────────────────────────────────── */
+.assistant-page-container {
+  max-width: 960px;
+  margin: 0 auto;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.assistant-resume-banner {
+  padding: 12px 18px;
+  border-radius: 12px;
+  box-shadow: 0 2px 10px rgba(245, 158, 11, 0.1);
+}
+
+.assistant-layout-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+
+.assistant-header-bar {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.assistant-segmented-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px;
+  gap: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.assistant-tab-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 18px;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+  user-select: none;
+}
+
+.assistant-tab-item:hover:not(.active) {
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.assistant-tab-item.active {
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 650;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08), 0 0 0 1px var(--border);
+}
+
+.assistant-tab-pulse {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green, #10b981);
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.3);
+  animation: tab-pulse 1.8s infinite;
+}
+
+@keyframes tab-pulse {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.6); }
+  70% { transform: scale(1.1); box-shadow: 0 0 0 5px rgba(16, 185, 129, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+}
+
+/* ── 问 AI 全屏对话面 ────────────────────────────────────────── */
+.chat-stage {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 195px);
+  min-height: 480px;
+  width: 100%;
+}
+
+.chat-hero-doubao {
+  padding-top: 3vh;
+  padding-bottom: 24px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.chat-hero-badge-wrap {
+  position: relative;
+  margin-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.chat-hero-logo {
+  border-radius: 18px;
+  box-shadow: 0 6px 24px rgba(232, 85, 45, 0.16);
+  border: 2px solid rgba(255, 255, 255, 0.8);
+  transition: transform 0.25s ease;
+}
+
+.chat-hero-badge-wrap:hover .chat-hero-logo {
+  transform: translateY(-2px) scale(1.03);
+}
+
+.chat-hero-sparkle-pill {
+  margin-top: -10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--brand);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+  letter-spacing: 0.3px;
+}
+
+.chat-hero-doubao .chat-hero-title {
+  font-size: 30px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  margin: 0 0 10px;
+  color: var(--text);
+  line-height: 1.3;
+}
+
+.chat-hero-doubao .chat-hero-sub {
+  max-width: 580px;
+  margin: 0 auto 26px;
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--text-2);
+}
+
+.chat-hero-cards {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  width: 100%;
+  max-width: 780px;
+  margin: 0 auto;
+}
+
+@media (max-width: 640px) {
+  .chat-hero-cards {
+    grid-template-columns: 1fr;
+  }
+}
+
+.chat-starter-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.02);
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.chat-starter-card:hover:not(:disabled) {
+  border-color: var(--brand);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(232, 85, 45, 0.1);
+  background: var(--surface);
+}
+
+.chat-starter-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-starter-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.chat-starter-title {
+  font-size: 13.5px;
+  font-weight: 650;
+  color: var(--text);
+  flex: 1;
+}
+
+.chat-starter-arrow {
+  font-size: 13px;
+  color: var(--text-3);
+  transition: transform 0.2s ease, color 0.2s ease;
+}
+
+.chat-starter-card:hover .chat-starter-arrow {
+  transform: translateX(3px);
+  color: var(--brand);
+}
+
+.chat-starter-desc {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+/* ── 消息流与气泡 ────────────────────────────────────────── */
+.chat-messages-viewport {
+  padding: 8px 4px 14px;
+}
+
+.chat-bubble-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-bottom: 6px;
+}
+
+.chat-bubble-row.user {
+  flex-direction: row-reverse;
+  align-self: flex-end;
+  max-width: 82%;
+}
+
+.chat-bubble-row.assistant {
+  align-self: flex-start;
+  max-width: 86%;
+}
+
+.chat-user-avatar {
+  background: linear-gradient(135deg, #475569, #334155) !important;
+  color: #fff !important;
+  box-shadow: 0 2px 6px rgba(51, 65, 85, 0.2);
+}
+
+.chat-ai-avatar {
+  background: linear-gradient(135deg, var(--brand), #ff8f3d) !important;
+  color: #fff !important;
+  box-shadow: 0 2px 8px rgba(232, 85, 45, 0.25);
+}
+
+.chat-bubble {
+  padding: 12px 16px;
+  border-radius: 16px;
+  font-size: 14px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  position: relative;
+  word-break: break-word;
+}
+
+.chat-bubble-user {
+  background: linear-gradient(135deg, var(--brand), #ff6a33);
+  color: #ffffff;
+  border-radius: 18px 18px 4px 18px;
+  box-shadow: 0 3px 12px rgba(232, 85, 45, 0.22);
+}
+
+.chat-bubble-ai {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 18px 18px 18px 4px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.04);
+}
+
+.chat-bubble-error {
+  background: var(--red-soft);
+  border: 1px solid var(--red);
+  color: var(--text);
+  border-radius: 16px;
+}
+
+.chat-bubble-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+  padding-top: 4px;
+}
+
+.chat-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.chat-copy-btn:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
+.chat-thinking-bubble {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.chat-thinking-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--brand);
+  animation: thinking-glow 1.2s infinite ease-in-out;
+}
+
+@keyframes thinking-glow {
+  0%, 100% { transform: scale(0.8); opacity: 0.5; }
+  50% { transform: scale(1.2); opacity: 1; }
+}
+
+/* ── 协同分工底座卡片 ────────────────────────────────────────── */
+.role-ladder-section {
+  margin-top: 14px;
+  padding: 18px 20px 16px;
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.02);
+}
+
+.role-ladder-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 14px;
+}
+
+.role-ladder-icon-badge {
+  font-size: 14px;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--brand-soft);
+}
+
+.role-ladder-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
 /* 底部大圆角输入盒：上部纯净多行输入，下部一体化工具栏 */
 .chat-input-box {
   border: 1.5px solid var(--border-strong);
@@ -2041,3 +2478,11 @@ button.tab.active { border-bottom-color: var(--brand); }
 }
 
 
+
+/* ── 首页那一框的「先问问」对话（2026-09-06 问 AI 并进首页）── */
+.ask-thread { max-height: 440px; overflow-y: auto; padding-right: 6px; }
+.ask-pic-remove {
+  position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--surface); border: 1px solid var(--border); box-shadow: 0 1px 3px rgba(0,0,0,.1);
+  display: grid; place-items: center; cursor: pointer; font-size: 11px; line-height: 1;
+}

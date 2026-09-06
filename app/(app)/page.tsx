@@ -27,6 +27,7 @@ import { actGenerateRecommendations, actCrawlCompetitors } from './actions';
 import { WeekBattleHeader } from '@/components/WeekBattleHeader';
 import { PersonaGuideBanner } from '@/components/PersonaGuideBanner';
 import { getServerLang } from '@/lib/i18n/server';
+import { listSelectableModels } from '@/lib/llm/selectable';
 
 export const dynamic = 'force-dynamic';
 
@@ -76,7 +77,7 @@ export default async function Dashboard({
   //
   // 只有 presetCards 内部那次 workflowTemplate 查询是真依赖 taskPreset 的结果，
   // 所以它留在自己的 IIFE 里串着——**依赖是真的就不能并，不是能并的都要并**。
-  const [runsRaw, wsToolCfg, presetCards, battleReport] = await Promise.all([
+  const [runsRaw, wsToolCfg, presetCards, battleReport, models] = await Promise.all([
     // 任务台首屏那条「正在办的事」。listRuns 已按 (workspaceId, take) 做请求内记忆化，
     // 而 TenantShell 用同样的参数先调过一次 —— 这里实际上不再打库
     listRuns(s.workspaceId, { takePerKind: 8 }),
@@ -109,6 +110,9 @@ export default async function Dashboard({
 
     // 任务台首页第一屏就是本周作战报告（渲染主体与 /battle 页共用 components/BattleReport）
     buildBattleReport(s.workspaceId, s.accountId),
+
+    // 「先问问」可选的模型清单（2026-09-06 问 AI 并进首页那一框）
+    listSelectableModels(s.tenantId, lang),
   ]);
 
   const activeRuns = runsRaw
@@ -135,13 +139,14 @@ export default async function Dashboard({
   return (
     <>
       {/* 任务台：说一句话就能派活的输入框必须是**上屏第一眼**，而不是四张统计卡之后。
-          这一框就是全站唯一的派活入口（2026-09-06 起就地开跑，/assistant 不再有第二个框）。
+          这一框就是全站唯一的派活入口，也是唯一的「问 AI」入口（2026-09-06：开始执行 / 先问问）。
           ?goal= 只预填不开跑——浮标助手的「让它直接去做」把话带到这儿，用户按了才真跑。 */}
       <TaskDeckHome
         memberName={s.memberName}
         initialActive={activeRuns}
         authorizableTools={authTools}
         initialGoal={goal ? goal.slice(0, 2000) : null}
+        models={models}
       />
       {presetCards.length > 0 && (
         <div style={{ marginBottom: 16 }}>
@@ -149,12 +154,12 @@ export default async function Dashboard({
         </div>
       )}
 
-        <WeekBattleHeader competitors={competitors} personaBlank={personaBlank} />
-
-      {/* 试用节奏卡：临期高亮 + 续费入口；非试用时组件内部返回 null，不占位 */}
+      {/* 试用节奏卡与「AI 还不认识你」引导卡放在报告标题**之前**：它们说的是账号状态，
+          夹在「本周作战」标题和报告正文之间会把标题和它的内容拆开 */}
       <TrialProgressCard trial={trial} />
-
       {personaBlank && <PersonaGuideBanner />}
+
+      <WeekBattleHeader competitors={competitors} personaBlank={personaBlank} />
 
       {/* 任务台首页第一屏 = 本周作战报告（与 /battle 共用 BattleReport）；
           工作台保持原来的「统计格 + 今日推荐 Top3」布局，一个字不动。 */}
@@ -171,46 +176,6 @@ export default async function Dashboard({
           <TaskList tasks={tasks} />
         </Fold>
       )}
-      <Fold
-        title={isEn ? "What's New" : '最近更新'}
-        sub={isEn ? 'v1.3.52 → v1.3.55' : 'v1.3.52 → v1.3.55'}
-        defaultOpen
-      >
-        <div className="stack" style={{ gap: 12, fontSize: 13, lineHeight: 1.7 }}>
-          <div>
-            <b>v1.3.55</b> —— {isEn ? 'Visual overhaul' : '全站视觉升级'}
-            <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
-              <li>{isEn ? 'Account switcher: custom dropdown with platform color dots (replaced native select)' : '账号切换器：带平台色标的自定义下拉浮层，告别原生 select'}</li>
-              <li>{isEn ? 'Onboarding wizard: redesigned with progress bar, real-time URL parsing, better validation' : '开场向导：步骤进度条、链接实时解析、表单校验更友好'}</li>
-              <li>{isEn ? 'Account manager: structured card form layout' : '账号管理：结构化卡片表单'}</li>
-              <li>{isEn ? 'Chat input: focus glow, image preview inside box, colored quick-action icons' : '对话输入框：聚焦发光、参考图内嵌、快捷卡片带彩色图标'}</li>
-              <li>{isEn ? 'English labels for model picker and account placeholder name' : '模型选择器与「我的账号」占位名英文补齐'}</li>
-            </ul>
-          </div>
-          <div>
-            <b>v1.3.54</b> —— {isEn ? 'Onboarding creates your own account' : '开场向导真的建「自己的账号」了'}
-            <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
-              <li>{isEn ? 'Paste your profile URL → placeholder becomes "X @yourID"' : '贴主页链接 → 占位行升级为「X @你的ID」'}</li>
-              <li>{isEn ? 'No URL + single platform → platform set, says "haven\'t saved your profile yet"' : '没贴链接、只选了一个平台 → 落平台，明说「还没记下主页」'}</li>
-            </ul>
-          </div>
-          <div>
-            <b>v1.3.53</b> —— {isEn ? 'Single dispatch box' : '派活只剩一个框'}
-            <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
-              <li>{isEn ? 'Home input runs tasks directly; "Ask AI" page is for chat & execution history only' : '首页框就地开跑；「问 AI」只做对话与执行过程查看'}</li>
-            </ul>
-          </div>
-          <div>
-            <b>v1.3.52</b> —— {isEn ? 'Growth & public surface' : '增长缺口整改'}
-            <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
-              <li>{isEn ? 'Public landing page, download/extension/pricing pages visible without login' : '公开首页、下载页/插件页/价格页免登录可看'}</li>
-              <li>{isEn ? '10-min onboarding wizard for new users' : '新用户十分钟开场向导'}</li>
-              <li>{isEn ? 'Invite a creator → both get 7 days Standard' : '邀请创作者，双方各得 7 天标准版'}</li>
-              <li>{isEn ? 'Funnel analytics from landing to first data sync' : '从首页到首次数据回流的漏斗埋点'}</li>
-            </ul>
-          </div>
-        </div>
-      </Fold>
     </>
   );
 }

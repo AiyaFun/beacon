@@ -16,10 +16,10 @@ type Msg = { role: 'user' | 'assistant'; content: string; mocked?: boolean; erro
 // 页面路径到友好名称和功能说明的映射
 export const PAGE_INFOS: Record<string, { name: string; desc: string; nameEn?: string; descEn?: string }> = {
   '/': {
-    name: '今日概览',
-    nameEn: "Today's Overview",
-    desc: '工作区核心看板，包含全平台总播放量、今日推荐Top3选题、今日运营建议、待办任务清单和快速入口。',
-    descEn: "Core workspace dashboard: total cross-platform views, top 3 recommended topics, today's operational advice, task checklist, and quick shortcuts.",
+    name: '今天',
+    nameEn: 'Today',
+    desc: '首页那一框：说一句话「开始执行」就派活（会动数据），「先问问」就对话（只答不动手），答案在框下面；下面是本周作战报告——指标、高潜选题（每条后面就是起稿入口）、低表现作品诊断、对标动向、本周新作、待办清单。',
+    descEn: 'The one box on Today: "Start Execution" dispatches a task, "Just ask" only answers; below it the weekly battle report — metrics, high-potential topics with draft entries, low performers, competitor moves, recent posts, to-dos.',
   },
   '/battle': {
     name: '本周作战',
@@ -112,10 +112,10 @@ export const PAGE_INFOS: Record<string, { name: string; desc: string; nameEn?: s
     descEn: 'Prompt recipe and template marketplace for platform-specific copywriting.',
   },
   '/assistant': {
-    name: 'AI 助手独立页',
-    nameEn: 'AI Assistant',
-    desc: '全屏对话窗口，带人设与历史记忆上下文的自由互动创作助手。',
-    descEn: 'Full-screen conversational assistant with persona and memory context.',
+    name: '执行过程',
+    nameEn: 'Execution View',
+    desc: '看某一次 AI 执行的过程：调了哪些工具、停在哪一步等确认、最后做成了什么；可以确认、追问、终止、接着跑。派活与问答都在「今天」那一框。',
+    descEn: 'Follow one AI run: tools called, where it waits for confirmation, what it finished; confirm, follow up, cancel, or continue. Dispatch and ask from Today.',
   },
   '/settings': {
     name: '运行设置',
@@ -241,6 +241,9 @@ function getPageContext(pathname: string, lang: 'zh' | 'en' = 'zh'): { name: str
 
 export function GlobalAIAssistant({ accountName }: { accountName: string }) {
   const pathname = usePathname();
+  // 首页那一框自己就能「先问问」（2026-09-06）：同一页再浮一个对话球就是第二个问 AI 入口。
+  // 其余页面照旧——这个球的价值是「结合当前这一页」，首页的框没有这层上下文。
+  const onHome = pathname === '/';
   const { lang } = useLanguage();
   const [isOpen, setIsOpen] = useState(false);
 
@@ -649,6 +652,7 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
     '--fap-font-size': `${13.5 * (fontScale / 100)}px`,
   } as React.CSSProperties;
 
+  if (onHome) return null;
   return (
     <>
       <style>{`

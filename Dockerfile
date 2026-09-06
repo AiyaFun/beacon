@@ -37,6 +37,8 @@ COPY --from=builder /app/worker.ts ./
 COPY --from=builder /app/lib ./lib
 COPY --from=builder /app/tsconfig.json ./
 COPY --from=builder /app/prisma ./prisma
+# 「运行设置」页的「最近更新」直接读它（2026-09-06）：standalone 只追踪 import 得到的文件，fs 读的进不来
+COPY --from=builder /app/CHANGELOG.md ./CHANGELOG.md
 # 插件解析器（2026-09-04）。桌面客户端执行器从 /api/ingest/executor 现取这些脚本去驱动
 # 本机 Chrome —— 运行阶段是逐个 COPY 的白名单，extension/ 一直没进来，于是那个端点在生产
 # 恒返回「这个安装包里没有带插件解析器文件」。真机撞到：任务领走了、浏览器起来了，卡在取脚本。

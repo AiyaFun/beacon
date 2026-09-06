@@ -148,14 +148,14 @@ describe('图不进对话历史', () => {
   it('两个对话入口都在发完之后把图清空', () => {
     // 历史每一轮都会整段重发给模型。图带进历史，第三轮的请求体就是几 MB——
     // 而那正是 WAF 回假 200 的量级
-    for (const p of ['app/(app)/assistant/Chat.tsx', 'components/GlobalAIAssistant.tsx']) {
+    for (const p of ['components/ask/useAskStream.ts', 'components/GlobalAIAssistant.tsx']) {
       const src = read(p);
       expect(src, `${p} 没有在发送后清空待发图片`).toMatch(/setPics\(\[\]\)/);
     }
   });
 
   it('客户端压缩复用同一份，不另写第二套', () => {
-    for (const p of ['app/(app)/assistant/Chat.tsx', 'components/GlobalAIAssistant.tsx']) {
+    for (const p of ['components/ask/useAskStream.ts', 'components/GlobalAIAssistant.tsx']) {
       expect(read(p)).toMatch(/prepareReferenceImage/);
     }
   });

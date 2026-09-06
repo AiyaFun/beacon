@@ -11,7 +11,7 @@ const code = (p: string) => read(p).replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\
 
 describe('模型选择：选了必须真的生效', () => {
   it('🔒 请求体带上 modelId，且 send 的依赖里有它', () => {
-    const chat = code('app/(app)/assistant/Chat.tsx');
+    const chat = code('components/ask/useAskStream.ts');
     expect(chat, '请求体没带 modelId').toMatch(/body: JSON\.stringify\(\{[^}]*modelId[^}]*\}\)/);
     // useCallback 闭包捕获旧值 = 「选了别的模型，发出去还是自动档」，且不报任何错
     const deps = /\}, \[([^\]]*)\]\);/g;

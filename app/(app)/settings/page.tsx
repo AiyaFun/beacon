@@ -11,6 +11,7 @@ import { readAutomationConfig, AUTOMATION_ITEMS } from '@/lib/jobs/automation';
 import { HubHeader } from '@/components/HubHeader';
 import { can as canEdition } from '@/lib/edition';
 import { LocalShellCard } from './LocalShellCard';
+import { WhatsNewCard } from '@/components/WhatsNewCard';
 
 import { getServerLang } from '@/lib/i18n/server';
 import { getDictionary } from '@/lib/i18n/dict';
@@ -87,6 +88,9 @@ export default async function SettingsPage() {
           foot={lang === 'en' ? 'Includes fallback routes' : '含降级链路'}
         />
       </div>
+
+      {/* 最近更新（2026-09-06 从首页搬来）：更新说明只有 CHANGELOG.md 一处，这里直接读 */}
+      <WhatsNewCard lang={lang} />
 
       <Card
         title={lang === 'en' ? '🤖 Automated Background Tasks' : '🤖 自动化任务'}

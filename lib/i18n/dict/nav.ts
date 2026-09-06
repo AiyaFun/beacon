@@ -11,8 +11,8 @@ export const navDict = {
       settings: '装一次就不用再动的：接入、插件、推送、团队、账单、帮助',
     },
     items: {
-      '/': { label: '今天', hint: '本周作战报告 · 今天该做什么，每条后面就是起稿入口' },
-      '/assistant': { label: '问 AI', hint: 'AI 助手 · 问问题、看某次执行的过程；要派活去「今天」说一句' },
+      '/': { label: '今天', hint: '说一句话：让它去做，或先问问 · 本周作战报告，每条后面就是起稿入口' },
+      '/assistant': { label: '执行过程', hint: '看某一次 AI 执行：调了什么、停在哪等你、做成了什么' },
       '/skills': { label: '技能 · 连接器', hint: '技能 / 智能体 / 能力 · 能重复用的干活单位，页顶标签互切；定时任务也在这里' },
       '/runs': { label: '任务记录', hint: '运行中心 · 所有跑过和在等你处理的' },
       '/hotlists': { label: '看情报', hint: '看热点 / 看同行 / 我存的资料 · 页顶标签互切' },
@@ -34,6 +34,7 @@ export const navDict = {
     },
     coveredPages: {
       '/battle': '本周作战',
+      '/assistant': '执行过程',
       '/competitors': '看同行',
       '/library': '我存的资料',
       '/workflows': '智能体',
@@ -60,8 +61,8 @@ export const navDict = {
       settings: 'Configure once: API keys, extensions, bots, team, billing, help',
     },
     items: {
-      '/': { label: 'Today', hint: 'Weekly Battle Report · Actionable tasks with instant drafting' },
-      '/assistant': { label: 'Ask AI', hint: 'AI Assistant · ask questions, follow a run; dispatch from Today' },
+      '/': { label: 'Today', hint: 'Say it once: let it do it, or just ask · weekly battle report with a draft entry on every line' },
+      '/assistant': { label: 'Execution View', hint: 'Follow one AI run: what it called, where it waits for you, what it finished' },
       '/skills': { label: 'Skills & Agents', hint: 'Skills / Agents / Abilities · Reusable units and scheduled jobs' },
       '/runs': { label: 'Task Records', hint: 'Execution Center · Active tasks and history' },
       '/hotlists': { label: 'Intelligence', hint: 'Hot Trends / Competitors / Library · Top tab switch' },
@@ -83,6 +84,7 @@ export const navDict = {
     },
     coveredPages: {
       '/battle': 'Weekly Battle',
+      '/assistant': 'Execution View',
       '/competitors': 'Competitors',
       '/library': 'Saved Library',
       '/workflows': 'Agents',

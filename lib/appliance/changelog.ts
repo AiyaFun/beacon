@@ -16,7 +16,33 @@
 export type ChangelogSections = Map<string, string[]>;
 
 const HEADING = /^##\s+v?(\d+\.\d+\.\d+)\b/;
+const HEADING_DATED = /^##\s+v?(\d+\.\d+\.\d+)\b\s*(?:\((\d{4}-\d{2}-\d{2})\))?/;
 const BULLET = /^\s*[-*]\s+(.+?)\s*$/;
+
+export type ChangelogVersion = { version: string; date: string | null; items: string[] };
+
+/**
+ * 给网页「最近更新」用的形状：按出现顺序（新在前）带日期，条目**保留** `**加粗**`
+ * 之类的行内标记，由页面自己渲染成 <b>。整机版清单那条路仍走 parseChangelog（纯文本）。
+ */
+export function listChangelog(md: string, limit = 5): ChangelogVersion[] {
+  const out: ChangelogVersion[] = [];
+  let cur: ChangelogVersion | null = null;
+  for (const raw of md.split('\n')) {
+    const h = HEADING_DATED.exec(raw);
+    if (h) {
+      if (out.length >= limit) break;
+      cur = { version: h[1], date: h[2] ?? null, items: [] };
+      out.push(cur);
+      continue;
+    }
+    if (!cur) continue;
+    if (/^###/.test(raw)) continue;
+    const b = BULLET.exec(raw);
+    if (b) cur.items.push(b[1]);
+  }
+  return out;
+}
 
 export function parseChangelog(md: string): ChangelogSections {
   const out: ChangelogSections = new Map();
@@ -50,4 +76,22 @@ export function stripInlineMarkdown(s: string): string {
     .replace(/`([^`]+)`/g, '$1')
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
     .trim();
+}
+
+/**
+ * 把一条更新说明按 `**加粗**` 切成片段，给网页渲染成 <b>/<span>。
+ * 放在这里而不是组件里：组件文件里出现字面的两个星号会被 tests/ui/literal-markdown 判成
+ * 「星号会原样显示给用户」——这里是解析它，不是显示它。
+ */
+export function splitBold(text: string): { bold: boolean; text: string }[] {
+  const BOLD = /\*\*([^*]+)\*\*/g;
+  const out: { bold: boolean; text: string }[] = [];
+  let last = 0;
+  for (const m of text.matchAll(BOLD)) {
+    if (m.index! > last) out.push({ bold: false, text: text.slice(last, m.index) });
+    out.push({ bold: true, text: m[1] });
+    last = m.index! + m[0].length;
+  }
+  if (last < text.length) out.push({ bold: false, text: text.slice(last) });
+  return out;
 }

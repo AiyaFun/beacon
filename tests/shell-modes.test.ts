@@ -95,10 +95,30 @@ describe('导航自洽（原对等守卫的单表版本）', () => {
     }
   });
 
-  it('必须收着「问 AI」「任务记录」——少了任一条，这个模式就不成立', () => {
+  it('必须收着「今天」「任务记录」；「问 AI」不再单列——它就在首页那一框里（2026-09-06）', () => {
     const hrefs = items.map((i) => i.href);
-    expect(hrefs).toContain('/assistant');
+    expect(hrefs).toContain('/');
     expect(hrefs).toContain('/runs');
+    // 侧栏再出现 /assistant 就等于又有了第二个「问 AI」入口
+    expect(hrefs, '/assistant 又回到侧栏了').not.toContain('/assistant');
+    // 但执行过程页不能变孤儿：由「今天」covers（首页派完的横幅、任务记录、通知都带 ?run= 到达）
+    const today = items.find((i) => i.href === '/');
+    expect(today?.covers ?? []).toContain('/assistant');
+  });
+
+  it('🔒 「问 AI」就在首页那一框里：同一个 textarea 既能派活也能先问（不许再有第二个输入框）', () => {
+    const home = code('components/TaskDeckHome.tsx');
+    expect(home, '首页没接上问答内核').toMatch(/useAskStream\(/);
+    expect(home, '问出来的答案不在首页渲染').toMatch(/<AskMessages/);
+    expect(home, '「先问问」按钮不见了').toMatch(/dict\.today\.askBtn/);
+    // 先答后做：答完像是任务的才给按钮，按钮走的是与「开始执行」同一个 dispatch（带授权卡）
+    expect(home).toMatch(/dispatch\(ask\.handoffGoal!\)/);
+    // /assistant 只剩执行过程：不许再挂对话或第二个输入框
+    const assistant = code('app/(app)/assistant/page.tsx');
+    expect(assistant).not.toMatch(/<Chat\b|AssistantTabs|useAskStream|<textarea/);
+    expect(fs.existsSync(path.join(ROOT, 'app/(app)/assistant/Chat.tsx')), '旧的 Chat.tsx 还在——那就是第二个问 AI').toBe(false);
+    // 首页自己能问了，浮标在首页就得让位（其余页保留：它带「当前这一页」的上下文）
+    expect(code('components/GlobalAIAssistant.tsx')).toMatch(/if \(onHome\) return null;/);
   });
 
   it('能力闸（requires）过滤真的发生：TaskSidebar 收 nav 参数，不自己 import', () => {

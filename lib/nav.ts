@@ -85,8 +85,9 @@ export const NAV: NavGroup[] = [
     icon: 'chat',
     purpose: '每天就这四件事：看今天做什么、说一句话派活、管好班底、回看跑过的',
     items: [
-      { href: '/', label: '今天', icon: 'home', hint: '本周作战报告 · 今天该做什么，每条后面就是起稿入口', covers: ['/battle', '/onboarding'] },
-      { href: '/assistant', label: '问 AI', icon: 'chat', hint: 'AI 助手 · 问问题、看某次执行的过程；要派活去「今天」说一句' },
+      // 2026-09-06 「问 AI」并进首页那一框（开始执行 / 先问问）；/assistant 只剩「执行过程」，
+      // 从首页派完的横幅、任务记录、🔔 通知带着 ?run= 到达，所以由这一条 covers。
+      { href: '/', label: '今天', icon: 'home', hint: '说一句话：让它去做，或先问问 · 本周作战报告，每条后面就是起稿入口', covers: ['/battle', '/onboarding', '/assistant'] },
       // 「班底」→「技能 · 连接器」（用户指定）：与 Doubao「技能·连接器·伙伴」同一说法。
       // 页顶 RoleTabs 切技能/智能体/能力，所以它 covers 掉 /workflows。
       { href: '/skills', label: '技能 · 连接器', icon: 'sparkles', hint: `${AGENT_ROLES.skill.name} / ${AGENT_ROLES.agent.name} / ${AGENT_ROLES.ability.name} · 能重复用的干活单位，页顶标签互切；定时任务也在这里`, covers: ['/workflows'] },
@@ -217,6 +218,8 @@ export const COVERED_PAGE_NAMES: Record<string, string> = {
   '/battle': '本周作战',
   // 冷启动向导（2026-09-05）：首页人设空白时的醒目引导卡直通它，跑完回首页
   '/onboarding': '十分钟开场',
+  // 执行过程（2026-09-06）：问答与派活都在首页那一框，这页只看某一次执行
+  '/assistant': '执行过程',
   '/competitors': '看同行',
   '/library': '我存的资料',
   '/workflows': '智能体',
@@ -237,7 +240,8 @@ export const HELP_ROUTES: HelpRoute[] = [
   { what: '让一串步骤自己跑完（智能体 / 工作流模板）', href: '/skills' },
   { what: '让智能体每天定时自己跑', href: '/skills' },
   { what: '管 AI 能替我动哪些能力（关掉某项）', href: '/extension' },
-  { what: '让 AI 直接替我做事（问一句 → 让它去做）', href: '/assistant' },
+  { what: '让 AI 直接替我做事 / 先问一句再决定', href: '/' },
+  { what: '看某一次 AI 执行的过程、确认它停下来问的那一步', href: '/runs' },
   { what: '找回一次停在「等你确认」的 AI 执行', href: '/runs' },
   { what: '让 AI 自己挑技能来改稿（不用手动进工坊）', href: '/skills' },
   { what: '看今天该做什么选题', href: '/topics' },
