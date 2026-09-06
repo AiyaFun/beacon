@@ -68,6 +68,9 @@ export const COLLECT_FN = `async ({ deep }) => {
     if (payload && payload.handle && payload.posts && payload.posts.length > 0) break;
     await sleep(600);
   }
+  // 解析器自己报的错（如 parser_stale：站点改版把锚点拆了）要原样透出，
+  // 否则会被下面那句当成「没认出主页」，用户看到的原因与事实不符。
+  if (payload && payload.error) return { error: payload.error };
   if (!payload || !payload.handle) return { error: 'no_handle' };
   if (deep && payload.posts && payload.posts.length > 0 && typeof globalThis.__beaconCollectDeep === 'function') {
     const deeper = await globalThis.__beaconCollectDeep(parse);
@@ -191,10 +194,13 @@ export async function collectPlatformPageLocal(
       if ('error' in r) {
         const why = r.error === 'no_handle'
           ? '解析器没在这一页认出账号主页（可能没加载完、或站点改版了）'
-          : r.error === 'parser_missing' ? '解析器没装载上' : r.error;
+          : r.error === 'parser_missing' ? '解析器没装载上'
+          : r.error === 'parser_stale'
+            ? '解析器取不到内容：页面上能看到作品，但读不出正文与数据。最常见的原因是**采集浏览器还没登录这个平台**（X 未登录时给的是精简页面，没有可读的结构）——请在「烽火台采集浏览器」窗口里登录一次再派；已经登录仍这样的话，就是站点改版了，等解析器更新（服务端修好当天生效，客户端不用重装）。'
+            : r.error;
         return { ok: false, error: why };
       }
-      if (!r.payload.posts?.length) return { ok: false, error: '主页上没读到作品（可能没加载完，或这个号还没发过内容）' };
+      if (!r.payload.posts?.length) return { ok: false, error: '主页上一条作品都没读到。最常见的原因是**采集浏览器还没登录这个平台**（很多站点未登录时只给一个登录弹层）——去「烽火台采集浏览器」窗口里登录一次再派；也可能是页面没加载完，或这个号确实没发过内容。' };
       return { ok: true, title, payload: r.payload };
     } finally {
       await page.close().catch(() => { /* 关不掉不影响结论 */ });

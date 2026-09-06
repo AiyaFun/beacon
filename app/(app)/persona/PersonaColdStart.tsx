@@ -6,6 +6,7 @@ import { PLATFORM_LIST, platformName } from '@/lib/constants';
 import {
   PERSONA_FIELD_KEYS,
   PERSONA_FIELD_LABEL,
+  PERSONA_FIELD_LABEL_EN,
   isLowConfidence,
   type PersonaCard,
   type PersonaDraft,
@@ -15,6 +16,7 @@ import {
   type PersonaFieldState,
 } from '@/lib/persona';
 import { actAskPersonaQuestions, actExpandPersona, actSavePersona, actColdStartSeed } from './actions';
+import { useI18n } from '@/lib/i18n';
 
 // F3-1 冷启动：一句话 → AI 追问 3–5 问（可跳过）→ AI 扩写 → 逐项确认 → 保存。
 // 三条不可让步的规矩：
@@ -25,6 +27,7 @@ import { actAskPersonaQuestions, actExpandPersona, actSavePersona, actColdStartS
 type Step = 'intro' | 'ask' | 'confirm';
 
 export function PersonaColdStart({ onManual }: { onManual: () => void }) {
+  const { lang } = useI18n();
   const [step, setStep] = useState<Step>('intro');
   const [sentence, setSentence] = useState('');
   const [questions, setQuestions] = useState<PersonaQuestion[]>([]);
@@ -59,7 +62,7 @@ export function PersonaColdStart({ onManual }: { onManual: () => void }) {
         setSeedComp(lines(seedComp).filter((u) => badComp.has(u)).join('\n'));
         router.refresh();
       } catch (e) {
-        setErr((e as Error).message || '处理失败，请稍后重试');
+        setErr((e as Error).message || (lang === 'en' ? 'Processing failed, please retry later' : '处理失败，请稍后重试'));
       }
     });
   }
@@ -108,7 +111,7 @@ export function PersonaColdStart({ onManual }: { onManual: () => void }) {
         setSaved(true);
         router.refresh();
       } else {
-        setErr(r.error ?? '保存失败');
+        setErr(r.error ?? (lang === 'en' ? 'Save failed' : '保存失败'));
       }
     });
   }
@@ -121,54 +124,63 @@ export function PersonaColdStart({ onManual }: { onManual: () => void }) {
     return (
       <div className="stack" style={{ gap: 12 }}>
         <div className="alert-gradient-brand" style={{ padding: '16px 20px' }}>
-          <b style={{ color: 'var(--brand)', fontSize: 15 }}>人设已保存</b>
+          <b style={{ color: 'var(--brand)', fontSize: 15 }}>{lang === 'en' ? 'Persona Saved' : '人设已保存'}</b>
           <p className="small" style={{ marginTop: 4, opacity: 0.9 }}>
-            再花 1 分钟贴几个链接，今天的推荐就能用上你自己的数据和对标账号——跳过也可以，之后随时能补。
+            {lang === 'en'
+              ? 'Take 1 more minute to paste links so today’s recommendations leverage your own data and benchmarks — or skip and add anytime later.'
+              : '再花 1 分钟贴几个链接，今天的推荐就能用上你自己的数据和对标账号——跳过也可以，之后随时能补。'}
           </p>
         </div>
 
         <div className="card" style={{ padding: 14, boxShadow: 'none', background: 'var(--surface-2)' }}>
           <div className="field">
             <label className="field-label" style={{ fontWeight: 650 }}>
-              你已发布的作品链接（1–3 条，选填）
+              {lang === 'en' ? 'Published Post Links (1–3, optional)' : '你已发布的作品链接（1–3 条，选填）'}
             </label>
             <p className="small muted" style={{ margin: '2px 0 6px' }}>
-              贴作品详情页链接。系统只建一条<b>空指标</b>的记录用来打通自动回流——不会编造任何数字，
-              真实数据由后续回流或你手填补上。
+              {lang === 'en'
+                ? 'Paste post detail URLs. The system creates a baseline entry for backfill — no numbers are fabricated; actual stats come from later sync or manual entry.'
+                : '贴作品详情页链接。系统只建一条空指标的记录用来打通自动回流——不会编造任何数字，真实数据由后续回流或你手填补上。'}
             </p>
             <textarea
               className="textarea"
               rows={3}
               value={seedOwn}
               onChange={(e) => setSeedOwn(e.target.value)}
-              placeholder={'每行一条，如：\nhttps://www.douyin.com/video/7123456789012345678\nhttps://mp.weixin.qq.com/s/AbCdEf...'}
+              placeholder={lang === 'en' ? 'One per line, e.g.:\nhttps://www.douyin.com/video/7123456789012345678\nhttps://mp.weixin.qq.com/s/AbCdEf...' : '每行一条，如：\nhttps://www.douyin.com/video/7123456789012345678\nhttps://mp.weixin.qq.com/s/AbCdEf...'}
             />
           </div>
 
           <div className="field" style={{ marginTop: 10 }}>
             <label className="field-label" style={{ fontWeight: 650 }}>
-              对标账号主页链接（1–3 条，选填）
+              {lang === 'en' ? 'Benchmark Profile Links (1–3, optional)' : '对标账号主页链接（1–3 条，选填）'}
             </label>
             <p className="small muted" style={{ margin: '2px 0 6px' }}>
-              贴同赛道博主的<b>主页</b>链接，用于对标监控。只采公开可见数据。
+              {lang === 'en'
+                ? 'Paste profile URLs of creators in your niche for benchmark monitoring. Only public data is collected.'
+                : '贴同赛道博主的主页链接，用于对标监控。只采公开可见数据。'}
             </p>
             <textarea
               className="textarea"
               rows={3}
               value={seedComp}
               onChange={(e) => setSeedComp(e.target.value)}
-              placeholder={'每行一条，如：\nhttps://space.bilibili.com/123456\nhttps://www.xiaohongshu.com/user/profile/...'}
+              placeholder={lang === 'en' ? 'One per line, e.g.:\nhttps://space.bilibili.com/123456\nhttps://www.xiaohongshu.com/user/profile/...' : '每行一条，如：\nhttps://space.bilibili.com/123456\nhttps://www.xiaohongshu.com/user/profile/...'}
             />
           </div>
 
           {seedResult && (
             <div className="small" style={{ marginTop: 10, lineHeight: 1.7 }}>
               <div style={{ color: 'var(--green)' }}>
-                ✓ 已收下：{seedResult.own.ok} 条自有作品 · {seedResult.competitors.ok} 个对标账号
+                {lang === 'en'
+                  ? `✓ Saved: ${seedResult.own.ok} own posts · ${seedResult.competitors.ok} benchmark accounts`
+                  : `✓ 已收下：${seedResult.own.ok} 条自有作品 · ${seedResult.competitors.ok} 个对标账号`}
               </div>
               {[...seedResult.own.failed, ...seedResult.competitors.failed].map((f, i) => (
                 <div key={i} style={{ color: 'var(--amber)' }}>
-                  ⚠ 没认出「{f.url.slice(0, 48)}{f.url.length > 48 ? '…' : ''}」：{f.reason}
+                  {lang === 'en'
+                    ? `⚠ Unrecognized "${f.url.slice(0, 48)}${f.url.length > 48 ? '…' : ''}": ${f.reason}`
+                    : `⚠ 没认出「${f.url.slice(0, 48)}${f.url.length > 48 ? '…' : ''}」：${f.reason}`}
                 </div>
               ))}
             </div>
@@ -181,10 +193,10 @@ export function PersonaColdStart({ onManual }: { onManual: () => void }) {
               onClick={seed}
               disabled={pending || (!seedOwn.trim() && !seedComp.trim())}
             >
-              {pending ? '处理中…' : '收下这些链接'}
+              {pending ? (lang === 'en' ? 'Processing…' : '处理中…') : (lang === 'en' ? 'Save These Links' : '收下这些链接')}
             </button>
             <a href="/topics" className="btn btn-sm btn-ghost">
-              {seedResult ? '去选题引擎 · 生成第一批推荐 →' : '跳过，直接去选题引擎 →'}
+              {seedResult ? (lang === 'en' ? 'Go to Topic Engine · Generate First Recommendations →' : '去选题引擎 · 生成第一批推荐 →') : (lang === 'en' ? 'Skip to Topic Engine →' : '跳过，直接去选题引擎 →')}
             </a>
           </div>
         </div>
@@ -197,10 +209,11 @@ export function PersonaColdStart({ onManual }: { onManual: () => void }) {
     return (
       <div className="stack" style={{ gap: 12 }}>
         <div>
-          <b>一句话建人设</b>
+          <b>{lang === 'en' ? 'One-Sentence Persona Setup' : '一句话建人设'}</b>
           <p className="small muted" style={{ marginTop: 4 }}>
-            说一句你是谁、做什么，AI 追问几个问题后帮你把人设卡写好——你只需要打勾和改错。
-            人设是选题推荐、改写、智囊团的共同输入，填完它，下游功能才认识你。
+            {lang === 'en'
+              ? 'Describe who you are and what you do. AI will ask a few clarifying questions and generate your persona card — you simply review and confirm.'
+              : '说一句你是谁、做什么，AI 追问几个问题后帮你把人设卡写好——你只需要打勾和改错。人设是选题推荐、改写、智囊团的共同输入，填完它，下游功能才认识你。'}
           </p>
         </div>
         <textarea
@@ -209,15 +222,15 @@ export function PersonaColdStart({ onManual }: { onManual: () => void }) {
           maxLength={200}
           value={sentence}
           onChange={(e) => setSentence(e.target.value)}
-          placeholder="如：我是一个教普通人用 AI 工具接单做副业的博主"
+          placeholder={lang === 'en' ? 'e.g., I am a creator teaching beginners how to use AI tools for freelance income' : '如：我是一个教普通人用 AI 工具接单做副业的博主'}
         />
         {err && <span className="small" style={{ color: 'var(--red)' }}>{err}</span>}
         <div className="row" style={{ gap: 8 }}>
           <button className="btn btn-sm btn-primary" onClick={ask} disabled={pending || sentence.trim().length < 4}>
-            {pending ? 'AI 思考中…' : '开始 · AI 追问几个问题'}
+            {pending ? (lang === 'en' ? 'AI is thinking…' : 'AI 思考中…') : (lang === 'en' ? 'Start · AI Questions' : '开始 · AI 追问几个问题')}
           </button>
           <button className="btn btn-sm btn-ghost" onClick={onManual} disabled={pending}>
-            我自己手填
+            {lang === 'en' ? 'Fill Manually' : '我自己手填'}
           </button>
         </div>
       </div>
@@ -229,12 +242,14 @@ export function PersonaColdStart({ onManual }: { onManual: () => void }) {
     return (
       <div className="stack" style={{ gap: 14 }}>
         <div className="row-between">
-          <b>AI 追问 · {questions.length} 个问题</b>
-          <span className="small muted">每题都可跳过，跳过的由 AI 填默认值并标「待确认」</span>
+          <b>{lang === 'en' ? `AI Follow-up · ${questions.length} Questions` : `AI 追问 · ${questions.length} 个问题`}</b>
+          <span className="small muted">{lang === 'en' ? 'Each question is optional; skipped ones are filled with AI defaults marked "To Confirm"' : '每题都可跳过，跳过的由 AI 填默认值并标「待确认」'}</span>
         </div>
         {qFallback && (
           <Notice tone="amber">
-            模型未返回可用的追问，已改用标准三问（卖什么 / 给谁 / 凭什么）。这些问题不是 AI 针对你那句话生成的。
+            {lang === 'en'
+              ? 'Model returned no usable follow-up questions; using standard three questions (what to sell / for whom / why you). These are generic fallback questions.'
+              : '模型未返回可用的追问，已改用标准三问（卖什么 / 给谁 / 凭什么）。这些问题不是 AI 针对你那句话生成的。'}
           </Notice>
         )}
         <div className="stack" style={{ gap: 12 }}>
@@ -250,7 +265,7 @@ export function PersonaColdStart({ onManual }: { onManual: () => void }) {
                     style={{ cursor: 'pointer', border: 'none' }}
                     onClick={() => setSkipped((p) => ({ ...p, [q.key]: !p[q.key] }))}
                   >
-                    {isSkip ? '✓ 已跳过' : '跳过这问'}
+                    {isSkip ? (lang === 'en' ? '✓ Skipped' : '✓ 已跳过') : (lang === 'en' ? 'Skip Question' : '跳过这问')}
                   </button>
                 </div>
                 {q.hint && <div className="small muted" style={{ marginBottom: 6 }}>{q.hint}</div>}
@@ -259,7 +274,7 @@ export function PersonaColdStart({ onManual }: { onManual: () => void }) {
                   disabled={isSkip}
                   value={answers[q.key] ?? ''}
                   onChange={(e) => setAnswers((p) => ({ ...p, [q.key]: e.target.value }))}
-                  placeholder={isSkip ? '已跳过——AI 会用低置信度默认值填充' : '你的回答'}
+                  placeholder={isSkip ? (lang === 'en' ? 'Skipped — AI will fill with low-confidence default' : '已跳过——AI 会用低置信度默认值填充') : (lang === 'en' ? 'Your answer' : '你的回答')}
                 />
               </div>
             );
@@ -268,9 +283,11 @@ export function PersonaColdStart({ onManual }: { onManual: () => void }) {
         {err && <span className="small" style={{ color: 'var(--red)' }}>{err}</span>}
         <div className="row" style={{ gap: 8 }}>
           <button className="btn btn-sm btn-primary" onClick={expand} disabled={pending}>
-            {pending ? 'AI 扩写中…' : '生成人设卡'}
+            {pending ? (lang === 'en' ? 'AI Expanding…' : 'AI 扩写中…') : (lang === 'en' ? 'Generate Persona Card' : '生成人设卡')}
           </button>
-          <button className="btn btn-sm btn-ghost" onClick={() => setStep('intro')} disabled={pending}>上一步</button>
+          <button className="btn btn-sm btn-ghost" onClick={() => setStep('intro')} disabled={pending}>
+            {lang === 'en' ? 'Previous' : '上一步'}
+          </button>
         </div>
       </div>
     );
@@ -285,33 +302,37 @@ export function PersonaColdStart({ onManual }: { onManual: () => void }) {
   return (
     <div className="stack" style={{ gap: 14 }}>
       <div className="row-between">
-        <b>逐项确认</b>
+        <b>{lang === 'en' ? 'Item-by-Item Review' : '逐项确认'}</b>
         <span className="small muted">
-          已确认 {filledKeys.filter((k) => confirmed[k]).length}/{filledKeys.length}
+          {lang === 'en'
+            ? `Confirmed ${filledKeys.filter((k) => confirmed[k]).length}/${filledKeys.length}`
+            : `已确认 ${filledKeys.filter((k) => confirmed[k]).length}/${filledKeys.length}`}
         </span>
       </div>
 
       {/* 来源标注：Mock / 降级草稿绝不冒充「AI 生成的人设」 */}
       {draft.degraded ? (
         <Notice tone="amber">
-          <b>这不是 AI 生成的人设，是本地草稿。</b>
+          <b>{lang === 'en' ? 'This is a local fallback draft, not AI-generated.' : '这不是 AI 生成的人设，是本地草稿。'}</b>
           {draft.mocked
-            ? '当前未配置任何模型 API Key，走的是 dev Mock 通道，Mock 不会产出真实人设卡。'
-            : '模型返回的内容没通过人设卡校验，已降级。'}
-          下面各字段只是把你自己填的话原样搬了过来，请逐项补齐后再保存。
+            ? (lang === 'en' ? 'No model API key configured; using dev Mock channel which does not produce real personas.' : '当前未配置任何模型 API Key，走的是 dev Mock 通道，Mock 不会产出真实人设卡。')
+            : (lang === 'en' ? 'Model output failed persona card schema validation and was degraded.' : '模型返回的内容没通过人设卡校验，已降级。')}
+          {lang === 'en' ? ' Fields below just mirror your input; please complete each before saving.' : ' 下面各字段只是把你自己填的话原样搬了过来，请逐项补齐后再保存。'}
           {draft.issues.length > 0 && (
             <div className="small mono" style={{ marginTop: 6, opacity: 0.75 }}>
-              校验未通过：{draft.issues.join('；')}
+              {lang === 'en' ? `Validation failed: ${draft.issues.join('; ')}` : `校验未通过：${draft.issues.join('；')}`}
             </div>
           )}
         </Notice>
       ) : draft.mocked ? (
         <Notice tone="amber">
-          <b>Mock 数据</b>——未配置模型 API Key，内容由 dev Mock 通道产出，不具备参考价值。
+          <b>{lang === 'en' ? 'Mock Data' : 'Mock 数据'}</b>——{lang === 'en' ? 'No model API key configured. Content generated via dev Mock channel for testing only.' : '未配置模型 API Key，内容由 dev Mock 通道产出，不具备参考价值。'}
         </Notice>
       ) : (
         <Notice tone="brand">
-          由 {draft.provider} · {draft.model} 扩写。AI 会犯错也会脑补，请逐项核对——尤其是你跳过的那几问。
+          {lang === 'en'
+            ? `Expanded by ${draft.provider} · ${draft.model}. AI may hallucinate or make assumptions — please verify each item, especially skipped questions.`
+            : `由 ${draft.provider} · ${draft.model} 扩写。AI 会犯错也会脑补，请逐项核对——尤其是你跳过的那几问。`}
         </Notice>
       )}
 
@@ -328,6 +349,7 @@ export function PersonaColdStart({ onManual }: { onManual: () => void }) {
               setCard(next);
               setConfirmed((p) => ({ ...p, [k]: true })); // 亲手改过 = 已确认
             }}
+            lang={lang}
           />
         ))}
       </div>
@@ -335,17 +357,19 @@ export function PersonaColdStart({ onManual }: { onManual: () => void }) {
       {err && <span className="small" style={{ color: 'var(--red)' }}>{err}</span>}
       <div className="row" style={{ gap: 8, alignItems: 'center' }}>
         <button className="btn btn-sm btn-primary" onClick={save} disabled={pending || !allConfirmed}>
-          {pending ? '保存中…' : '保存人设卡'}
+          {pending ? (lang === 'en' ? 'Saving…' : '保存中…') : (lang === 'en' ? 'Save Persona Card' : '保存人设卡')}
         </button>
         <button
           className="btn btn-sm"
           onClick={() => setConfirmed(Object.fromEntries(filledKeys.map((k) => [k, true])))}
           disabled={pending}
         >
-          全部确认
+          {lang === 'en' ? 'Confirm All' : '全部确认'}
         </button>
-        <button className="btn btn-sm btn-ghost" onClick={() => setStep('ask')} disabled={pending}>返回改答案</button>
-        {!allConfirmed && <span className="small muted">逐项确认后才能保存（空字段可留空）</span>}
+        <button className="btn btn-sm btn-ghost" onClick={() => setStep('ask')} disabled={pending}>
+          {lang === 'en' ? 'Back to Answers' : '返回改答案'}
+        </button>
+        {!allConfirmed && <span className="small muted">{lang === 'en' ? 'Review all items before saving (empty fields can remain empty)' : '逐项确认后才能保存（空字段可留空）'}</span>}
       </div>
     </div>
   );
@@ -359,6 +383,7 @@ function FieldRow({
   confirmed,
   onConfirm,
   onChange,
+  lang,
 }: {
   fieldKey: PersonaFieldKey;
   card: PersonaCard;
@@ -366,6 +391,7 @@ function FieldRow({
   confirmed: boolean;
   onConfirm: (v: boolean) => void;
   onChange: (next: PersonaCard) => void;
+  lang?: string;
 }) {
   const empty = isEmptyField(card, fieldKey);
   const low = isLowConfidence(state);
@@ -382,18 +408,18 @@ function FieldRow({
     >
       <div className="row-between" style={{ marginBottom: 6, alignItems: 'center' }}>
         <div className="row" style={{ gap: 8, alignItems: 'center' }}>
-          <span className="small muted">{PERSONA_FIELD_LABEL[fieldKey]}</span>
-          {low && <span className="badge badge-amber">待确认</span>}
-          {state.source === 'ai-guess' && <span className="badge badge-gray">你跳过了这问</span>}
-          {state.source === 'local' && <span className="badge badge-gray">本地草稿</span>}
+          <span className="small muted">{lang === 'en' ? PERSONA_FIELD_LABEL_EN[fieldKey] : PERSONA_FIELD_LABEL[fieldKey]}</span>
+          {low && <span className="badge badge-amber">{lang === 'en' ? 'To Confirm' : '待确认'}</span>}
+          {state.source === 'ai-guess' && <span className="badge badge-gray">{lang === 'en' ? 'Question Skipped' : '你跳过了这问'}</span>}
+          {state.source === 'local' && <span className="badge badge-gray">{lang === 'en' ? 'Local Draft' : '本地草稿'}</span>}
         </div>
         <label className="row small" style={{ gap: 6, cursor: empty ? 'not-allowed' : 'pointer', opacity: empty ? 0.5 : 1 }}>
           <input type="checkbox" checked={confirmed} disabled={empty} onChange={(e) => onConfirm(e.target.checked)} />
-          确认
+          {lang === 'en' ? 'Confirm' : '确认'}
         </label>
       </div>
       {state.note && <div className="small muted" style={{ marginBottom: 6 }}>{state.note}</div>}
-      <FieldInput fieldKey={fieldKey} card={card} onChange={onChange} />
+      <FieldInput fieldKey={fieldKey} card={card} onChange={onChange} lang={lang} />
     </div>
   );
 }
@@ -402,10 +428,12 @@ function FieldInput({
   fieldKey,
   card,
   onChange,
+  lang,
 }: {
   fieldKey: PersonaFieldKey;
   card: PersonaCard;
   onChange: (next: PersonaCard) => void;
+  lang?: string;
 }) {
   if (fieldKey === 'platforms') {
     return (
@@ -438,7 +466,7 @@ function FieldInput({
         className="textarea"
         rows={3}
         value={card[fieldKey].join('\n')}
-        placeholder="每行一条"
+        placeholder={lang === 'en' ? 'One per line' : '每行一条'}
         onChange={(e) =>
           onChange({ ...card, [fieldKey]: e.target.value.split('\n').map((x) => x.trim()).filter(Boolean) })
         }
@@ -449,7 +477,7 @@ function FieldInput({
     <input
       className="input"
       value={card[fieldKey] ?? ''}
-      placeholder="（空）请补充"
+      placeholder={lang === 'en' ? '(Empty) please complete' : '（空）请补充'}
       onChange={(e) => onChange({ ...card, [fieldKey]: e.target.value })}
     />
   );

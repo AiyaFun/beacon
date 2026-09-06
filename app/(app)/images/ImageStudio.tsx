@@ -18,6 +18,7 @@ import {
   type GalleryItem,
 } from './actions';
 import { actSaveLibraryAsset, actDeleteAsset } from '../studio/cover-actions';
+import { useI18n } from '@/lib/i18n';
 
 export type LibraryAsset = { id: string; url: string; kind: string; label: string | null };
 export type Option = { key: string; label: string; hint?: string };
@@ -46,6 +47,8 @@ export function ImageStudio({
   retentionDays: number;
   canWrite: boolean;
 }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const [pending, start] = useTransition();
   const [scenes, setScenes] = useState('');
   const [styleKey, setStyleKey] = useState(styles[0]?.key ?? '');
@@ -80,11 +83,11 @@ export function ImageStudio({
         referenceAssetIds: refs,
       });
       if (!r.ok) {
-        setErr(r.error ?? '出图失败');
+        setErr(r.error ?? (isEn ? 'Image generation failed' : '出图失败'));
         return;
       }
       setImages(r.images ?? []);
-      setMsg(`出了 ${r.images?.length ?? 0} 张。都已存进「最近生成」。`);
+      setMsg(isEn ? `Generated ${r.images?.length ?? 0} images. Saved to "Recent Generations".` : `出了 ${r.images?.length ?? 0} 张。都已存进「最近生成」。`);
       // 新图要出现在下面的画廊里；不重取的话用户以为没存下来
       setItems(await actListGenerated());
     });
@@ -102,7 +105,7 @@ export function ImageStudio({
           return;
         }
         setAssets(r.assets.map((a) => ({ id: a.id, url: a.url, kind: a.kind, label: a.label })));
-        setMsg('已存进「我的形象与素材」。');
+        setMsg(isEn ? 'Saved to "My Likeness & Assets".' : '已存进「我的形象与素材」。');
       });
     } catch (e) {
       setErr((e as Error).message);
@@ -112,20 +115,23 @@ export function ImageStudio({
   return (
     <>
       <Card
-        title="出图"
-        sub={`一行一句画面，一次最多 ${MAX_ILLUSTRATIONS} 张 · 这里出的图一律不上字（要上字用创作工坊的「标题与封面」）`}
+        title={isEn ? 'Generate Images' : '出图'}
+        sub={isEn ? `One scene per line, max ${MAX_ILLUSTRATIONS} per batch · No overlaid text here (use "Title & Cover" in Studio for text)` : `一行一句画面，一次最多 ${MAX_ILLUSTRATIONS} 张 · 这里出的图一律不上字（要上字用创作工坊的「标题与封面」）`}
       >
         {!quota.configured ? (
           <div className="alert-gradient-amber small" style={{ padding: '12px 16px', borderRadius: 8, lineHeight: 1.7 }}>
-            还没有可用的生图渠道。到 <Link href="/settings/keys">接入与密钥</Link> 加一个「火山引擎 豆包」渠道。
-            <b>生图只认火山方舟</b>：显式水印靠即梦的 watermark 参数，别家没有这个开关。
+            {isEn ? 'No image generation channel configured yet. Go to ' : '还没有可用的生图渠道。到 '}
+            <Link href="/settings/keys">{isEn ? 'Integrations & Keys' : '接入与密钥'}</Link>
+            {isEn ? ' to add a "Volcengine Doubao" channel. ' : ' 加一个「火山引擎 豆包」渠道。'}
+            <b>{isEn ? 'Image generation only supports Volcengine Ark' : '生图只认火山方舟'}</b>：
+            {isEn ? 'Visible watermarks rely on Jimeng’s watermark parameter.' : '显式水印靠即梦的 watermark 参数，别家没有这个开关。'}
           </div>
         ) : (
           <>
             <textarea
               className="input"
               rows={4}
-              placeholder={'一行一张，例如：\n清晨的书桌，一杯冒热气的咖啡，侧逆光\n城市天台俯瞰车流，蓝调时刻'}
+              placeholder={isEn ? 'One scene per line, for example:\nMorning wooden desk, steaming cup of coffee, side backlight\nCity rooftop overlooking traffic flow, blue hour' : '一行一张，例如：\n清晨的书桌，一杯冒热气的咖啡，侧逆光\n城市天台俯瞰车流，蓝调时刻'}
               value={scenes}
               onChange={(e) => setScenes(e.target.value)}
               style={{ width: '100%', lineHeight: 1.7 }}
@@ -133,7 +139,7 @@ export function ImageStudio({
             />
             <div className="row wrap" style={{ gap: 10, marginTop: 10, alignItems: 'center' }}>
               <label className="small muted">
-                风格
+                {isEn ? 'Style' : '风格'}
                 <select
                   className="input"
                   value={styleKey}
@@ -148,7 +154,7 @@ export function ImageStudio({
                 </select>
               </label>
               <label className="small muted">
-                比例
+                {isEn ? 'Ratio' : '比例'}
                 <select
                   className="input"
                   value={specKey}
@@ -164,7 +170,7 @@ export function ImageStudio({
               </label>
               <input
                 className="input"
-                placeholder="补充要求（可选）"
+                placeholder={isEn ? 'Additional requirements (optional)' : '补充要求（可选）'}
                 value={extra}
                 onChange={(e) => setExtra(e.target.value)}
                 style={{ flex: 1, minWidth: 180 }}
@@ -174,7 +180,7 @@ export function ImageStudio({
             {assets.length > 0 && (
               <div style={{ marginTop: 12 }}>
                 <div className="small muted" style={{ marginBottom: 6 }}>
-                  参考图（保持人物 / 产品跨图一致，最多 {MAX_SUBJECT_IMAGES} 张进提示词）
+                  {isEn ? `Reference images (maintain character / product consistency, max ${MAX_SUBJECT_IMAGES} in prompt)` : `参考图（保持人物 / 产品跨图一致，最多 ${MAX_SUBJECT_IMAGES} 张进提示词）`}
                 </div>
                 <div className="row wrap" style={{ gap: 8 }}>
                   {assets.map((a) => {
@@ -202,13 +208,13 @@ export function ImageStudio({
                 disabled={pending || lines.length === 0 || tooMany || !canWrite}
                 onClick={generate}
               >
-                {pending ? '出图中…' : `出 ${Math.min(lines.length, MAX_ILLUSTRATIONS) || ''} 张图`}
+                {pending ? (isEn ? 'Generating…' : '出图中…') : (isEn ? `Generate ${Math.min(lines.length, MAX_ILLUSTRATIONS) || ''} Images` : `出 ${Math.min(lines.length, MAX_ILLUSTRATIONS) || ''} 张图`)}
               </button>
               <span className="small muted">
-                今日还能出 {quota.remaining}/{quota.cap} 张
-                {quota.source === 'byok' ? '（走你自己的 Key）' : quota.source === 'platform' ? '（走平台额度）' : ''}
+                {isEn ? `Remaining today: ${quota.remaining}/${quota.cap} images` : `今日还能出 ${quota.remaining}/${quota.cap} 张`}
+                {quota.source === 'byok' ? (isEn ? ' (using your custom Key)' : '（走你自己的 Key）') : quota.source === 'platform' ? (isEn ? ' (using platform quota)' : '（走平台额度）') : ''}
               </span>
-              {tooMany && <span className="small" style={{ color: 'var(--red)' }}>一次最多 {MAX_ILLUSTRATIONS} 行</span>}
+              {tooMany && <span className="small" style={{ color: 'var(--red)' }}>{isEn ? `Max ${MAX_ILLUSTRATIONS} lines per batch` : `一次最多 ${MAX_ILLUSTRATIONS} 行`}</span>}
             </div>
           </>
         )}
@@ -231,13 +237,13 @@ export function ImageStudio({
                 <div className="row" style={{ gap: 6, marginTop: 6 }}>
                   <button
                     className="btn btn-sm"
-                    onClick={() => void downloadImage(im.url, `烽火台配图-${i + 1}.png`)}
+                    onClick={() => void downloadImage(im.url, `beacon-img-${i + 1}.png`)}
                   >
-                    下载
+                    {isEn ? 'Download' : '下载'}
                   </button>
                   {!im.aigcEmbedded && (
-                    <span className="badge badge-amber" title="这张图没能写进 AI 生成标识，请勿用于需要标识的场合">
-                      未写入标识
+                    <span className="badge badge-amber" title={isEn ? 'AI generation mark could not be embedded in this image. Do not use where disclosure is required.' : '这张图没能写进 AI 生成标识，请勿用于需要标识的场合'}>
+                      {isEn ? 'Unmarked' : '未写入标识'}
                     </span>
                   )}
                 </div>
@@ -248,22 +254,22 @@ export function ImageStudio({
       </Card>
 
       <Card
-        title="我的形象与素材"
-        sub="存一次，之后每次出图直接勾 · 人像加密保存，随时可删"
+        title={isEn ? 'My Likeness & Assets' : '我的形象与素材'}
+        sub={isEn ? 'Save once, select directly for future generations · Likeness encrypted, deletable anytime' : '存一次，之后每次出图直接勾 · 人像加密保存，随时可删'}
         style={{ marginTop: 16 }}
       >
         <div className="row wrap" style={{ gap: 10, alignItems: 'center' }}>
           <label className="small muted">
-            类型
+            {isEn ? 'Type' : '类型'}
             <select
               className="input"
               value={uploadKind}
               onChange={(e) => setUploadKind(e.target.value as 'portrait' | 'background' | 'brand')}
               style={{ marginLeft: 6 }}
             >
-              <option value="background">背景 / 空镜</option>
-              <option value="portrait">人像 / 主体</option>
-              <option value="brand">品牌元素</option>
+              <option value="background">{isEn ? 'Background / Scenery' : '背景 / 空镜'}</option>
+              <option value="portrait">{isEn ? 'Likeness / Subject' : '人像 / 主体'}</option>
+              <option value="brand">{isEn ? 'Brand Elements' : '品牌元素'}</option>
             </select>
           </label>
           <input
@@ -281,9 +287,9 @@ export function ImageStudio({
             className="btn btn-sm"
             onClick={() => fileRef.current?.click()}
             disabled={pending || !canWrite || (uploadKind === 'portrait' && !consent)}
-            title={uploadKind === 'portrait' && !consent ? '上传人像前请先勾选下面的同意确认' : undefined}
+            title={uploadKind === 'portrait' && !consent ? (isEn ? 'Please check the consent box below before uploading likeness' : '上传人像前请先勾选下面的同意确认') : undefined}
           >
-            <Icon.upload size={13} /> 上传
+            <Icon.upload size={13} /> {isEn ? 'Upload' : '上传'}
           </button>
         </div>
 
@@ -299,7 +305,7 @@ export function ImageStudio({
         )}
 
         {assets.length === 0 ? (
-          <p className="small muted" style={{ marginTop: 10 }}>还没有素材。</p>
+          <p className="small muted" style={{ marginTop: 10 }}>{isEn ? 'No assets yet.' : '还没有素材。'}</p>
         ) : (
           <div className="row wrap" style={{ gap: 10, marginTop: 12 }}>
             {assets.map((a) => (
@@ -316,7 +322,7 @@ export function ImageStudio({
                       if (r.ok) setAssets(r.assets.map((x) => ({ id: x.id, url: x.url, kind: x.kind, label: x.label })));
                     })
                   }
-                  title="删除"
+                  title={isEn ? 'Delete' : '删除'}
                 >
                   ×
                 </button>
@@ -327,12 +333,12 @@ export function ImageStudio({
       </Card>
 
       <Card
-        title="最近生成"
-        sub={`封面与配图都在这里 · 未钉住的 ${retentionDays} 天后自动清理（钉住的不清）`}
+        title={isEn ? 'Recent Generations' : '最近生成'}
+        sub={isEn ? `Covers and illustrations both appear here · Unpinned items auto-purged after ${retentionDays} days (pinned items kept)` : `封面与配图都在这里 · 未钉住的 ${retentionDays} 天后自动清理（钉住的不清）`}
         style={{ marginTop: 16 }}
       >
         {items.length === 0 ? (
-          <p className="small muted">还没有生成过图。</p>
+          <p className="small muted">{isEn ? 'No images generated yet.' : '还没有生成过图。'}</p>
         ) : (
           <div className="row wrap" style={{ gap: 12 }}>
             {items.map((g) => (
@@ -340,8 +346,8 @@ export function ImageStudio({
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={g.url} alt={g.scene} style={{ width: '100%', borderRadius: 6, display: 'block' }} />
                 <div className="row" style={{ gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
-                  <span className="badge badge-gray">{g.kind === 'cover' ? '封面' : '配图'}</span>
-                  {g.pinned && <span className="badge badge-green">已钉住</span>}
+                  <span className="badge badge-gray">{g.kind === 'cover' ? (isEn ? 'Cover' : '封面') : (isEn ? 'Illustration' : '配图')}</span>
+                  {g.pinned && <span className="badge badge-green">{isEn ? 'Pinned' : '已钉住'}</span>}
                 </div>
                 <div className="row" style={{ gap: 6, marginTop: 6 }}>
                   <button
@@ -355,10 +361,10 @@ export function ImageStudio({
                       })
                     }
                   >
-                    {g.pinned ? '取消钉住' : '钉住'}
+                    {g.pinned ? (isEn ? 'Unpin' : '取消钉住') : (isEn ? 'Pin' : '钉住')}
                   </button>
-                  <button className="btn btn-sm" onClick={() => void downloadImage(g.url, `烽火台-${g.id}.png`)}>
-                    下载
+                  <button className="btn btn-sm" onClick={() => void downloadImage(g.url, `beacon-${g.id}.png`)}>
+                    {isEn ? 'Download' : '下载'}
                   </button>
                   <button
                     className="btn btn-sm btn-ghost"
@@ -371,7 +377,7 @@ export function ImageStudio({
                       })
                     }
                   >
-                    删除
+                    {isEn ? 'Delete' : '删除'}
                   </button>
                 </div>
               </div>

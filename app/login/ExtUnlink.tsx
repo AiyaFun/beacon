@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
+import { useI18n } from '@/lib/i18n';
 
 // 账号注销后通知浏览器插件解绑（对称于 app/(app)/extension/ExtAutoConfig.tsx 的 config-token：
 // 一个把令牌下发进插件，一个在注销时把它连同缓存一起收回来）。
@@ -18,11 +19,18 @@ import { useEffect } from 'react';
 // 【为什么普通「退出」不做这件事】退出是日常动作，每天可能好几次；每次都把插件设置清空
 // 是敌意设计。这里只对注销生效——注销之后那枚令牌在服务端本来就已经不存在了。
 export function ExtUnlink({ scope }: { scope: 'tenant' | 'member' }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
+
   useEffect(() => {
     const reason =
       scope === 'tenant'
-        ? '账号已注销，采集令牌随工作区一并作废。插件已停止全部自动采集，并清除了本机缓存的工作区数据。'
-        : '你已退出该工作区。插件的采集令牌与本机缓存已清除，不会再向该工作区回传数据。';
+        ? (isEn
+            ? 'Account deleted. The ingestion token is revoked. The extension has stopped automated collection and cleared cached workspace data.'
+            : '账号已注销，采集令牌随工作区一并作废。插件已停止全部自动采集，并清除了本机缓存的工作区数据。')
+        : (isEn
+            ? 'You have left the workspace. Ingestion token and local cache have been cleared; no further data will be sent to this workspace.'
+            : '你已退出该工作区。插件的采集令牌与本机缓存已清除，不会再向该工作区回传数据。');
 
     let sent = false;
     const fire = () => {

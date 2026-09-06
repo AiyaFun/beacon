@@ -4,6 +4,7 @@ import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Icon } from '@/components/icons';
 import { parseWechatExport, type WechatExportParseResult } from '@/lib/ingest/wechat-export';
+import { useI18n } from '@/lib/i18n';
 import { actImportWechatArticles } from './actions';
 
 // 公众号文章导入 · 读 wechat-article-exporter 的导出文件（JSON）。
@@ -19,6 +20,7 @@ const BATCH = 50;
 type Account = { id: string; name: string; handle: string };
 
 export function ImportWechatArticles({ accounts }: { accounts: Account[] }) {
+  const { lang } = useI18n();
   const [target, setTarget] = useState(accounts[0]?.id ?? '');
   const [fileName, setFileName] = useState('');
   const [parsed, setParsed] = useState<WechatExportParseResult | null>(null);
@@ -37,15 +39,19 @@ export function ImportWechatArticles({ accounts }: { accounts: Account[] }) {
     try {
       r = parseWechatExport(await f.text());
     } catch {
-      setMsg({ ok: false, text: '文件读不出来——请选 exporter 导出的 JSON 文件' });
+      setMsg({ ok: false, text: lang === 'en' ? 'Could not read file — please select a JSON file exported by the exporter' : '文件读不出来——请选 exporter 导出的 JSON 文件' });
       return;
     }
     if (r.posts.length === 0) {
       setMsg({
         ok: false,
         text: r.total > 0
-          ? `文件里 ${r.total} 条都缺标题或定位不到文章 ID，没有可导入的内容`
-          : '没解析出文章——本导入只认 JSON 格式（exporter 导出时选 json，不是 html/excel）',
+          ? (lang === 'en'
+              ? `All ${r.total} items in file lack title or article ID; nothing to import`
+              : `文件里 ${r.total} 条都缺标题或定位不到文章 ID，没有可导入的内容`)
+          : (lang === 'en'
+              ? 'No articles parsed — only JSON format accepted (select json, not html/excel in exporter)'
+              : '没解析出文章——本导入只认 JSON 格式（exporter 导出时选 json，不是 html/excel）'),
       });
       return;
     }
@@ -71,18 +77,23 @@ export function ImportWechatArticles({ accounts }: { accounts: Account[] }) {
       try {
         r = await actImportWechatArticles(target, all.slice(i, i + BATCH));
       } catch (e) {
-        r = { ok: false, error: (e as Error).message || '导入失败，请稍后重试' };
+        r = { ok: false, error: (e as Error).message || (lang === 'en' ? 'Import failed, please try again later' : '导入失败，请稍后重试') };
       }
       if (!r.ok) {
         setProgress(null);
-        setMsg({ ok: false, text: `${r.error}${imported > 0 ? `（已导入 ${imported} 篇）` : ''}` });
+        setMsg({ ok: false, text: `${r.error}${imported > 0 ? (lang === 'en' ? ` (${imported} imported)` : `（已导入 ${imported} 篇）`) : ''}` });
         return;
       }
       imported += r.imported ?? 0;
       setProgress({ done: Math.min(i + BATCH, all.length), total: all.length });
     }
     setProgress(null);
-    setMsg({ ok: true, text: `已导入 ${imported} 篇到「${accounts.find((a) => a.id === target)?.name}」，可在右侧作品榜查看` });
+    setMsg({
+      ok: true,
+      text: lang === 'en'
+        ? `Imported ${imported} articles to "${accounts.find((a) => a.id === target)?.name}", viewable in top posts leaderboard on the right`
+        : `已导入 ${imported} 篇到「${accounts.find((a) => a.id === target)?.name}」，可在右侧作品榜查看`,
+    });
     reset();
     router.refresh();
   }
@@ -114,31 +125,36 @@ export function ImportWechatArticles({ accounts }: { accounts: Account[] }) {
           disabled={Boolean(progress)}
         />
         <button className="btn btn-sm btn-primary" onClick={run} disabled={!parsed || !target || Boolean(progress)}>
-          <Icon.upload size={14} /> {progress ? `导入中 ${progress.done}/${progress.total}` : '导入文章'}
+          <Icon.upload size={14} /> {progress ? (lang === 'en' ? `Importing ${progress.done}/${progress.total}` : `导入中 ${progress.done}/${progress.total}`) : (lang === 'en' ? 'Import Articles' : '导入文章')}
         </button>
       </div>
 
       {parsed && (
         <div className="small" style={{ color: 'var(--green)' }}>
-          <Icon.check size={13} /> {fileName}：解析到 {parsed.posts.length} 篇
+          <Icon.check size={13} /> {fileName}：{lang === 'en' ? `Parsed ${parsed.posts.length} articles` : `解析到 ${parsed.posts.length} 篇`}
           {range.length === 2 ? ` · ${range[0]} ~ ${range[1]}` : ''}
-          {parsed.accountName ? ` · 文件来自「${parsed.accountName}」` : ''}
-          {parsed.skipped > 0 ? ` · 跳过 ${parsed.skipped} 条（缺标题或定位不到文章 ID）` : ''}
+          {parsed.accountName ? (lang === 'en' ? ` · Source: "${parsed.accountName}"` : ` · 文件来自「${parsed.accountName}」`) : ''}
+          {parsed.skipped > 0 ? (lang === 'en' ? ` · Skipped ${parsed.skipped} items (missing title or ID)` : ` · 跳过 ${parsed.skipped} 条（缺标题或定位不到文章 ID）`) : ''}
         </div>
       )}
       {mismatch && (
         <div className="small" style={{ color: 'var(--red)' }}>
-          ⚠️ 文件来自「{parsed?.accountName}」，但要导入到「{targetName}」——导错账号的文章不会显示在该账号名下，请先核对下拉框。
+          {lang === 'en'
+            ? `⚠️ File is from "${parsed?.accountName}", but importing to "${targetName}". Mismatched articles will not appear under the correct account. Please verify dropdown.`
+            : `⚠️ 文件来自「${parsed?.accountName}」，但要导入到「${targetName}」——导错账号的文章不会显示在该账号名下，请先核对下拉框。`}
         </div>
       )}
       {parsed && parsed.droppedMetrics > 0 && (
         <div className="small muted">
-          文件里 {parsed.droppedMetrics} 条带阅读/在看数，<b>不会导入</b>：那些数要抓包截取微信客户端凭证才拿得到，属灰色通道。自有号的阅读/完读率走微信官方接口。
+          {lang === 'en'
+            ? `${parsed.droppedMetrics} items contain view/like counts, which will not be imported (requires packet capture of WeChat client credentials). Own account reads/completion rate uses official WeChat API.`
+            : `文件里 ${parsed.droppedMetrics} 条带阅读/在看数，不会导入：那些数要抓包截取微信客户端凭证才拿得到，属灰色通道。自有号的阅读/完读率走微信官方接口。`}
         </div>
       )}
       <div className="small muted">
-        用开源工具 <a href="https://github.com/wechat-article/wechat-article-exporter" target="_blank" rel="noreferrer noopener" style={{ color: 'var(--brand)' }}>wechat-article-exporter</a>（建议本地/私有部署，别把自己公众号登录态交给在线站点）导出目标公众号的文章，选 JSON 格式，在此导入。
-        只导标题/链接/发布时间进选题库，<b>不含互动指标</b>。
+        {lang === 'en'
+          ? <>Export target WeChat Official Account articles with open-source tool <a href="https://github.com/wechat-article/wechat-article-exporter" target="_blank" rel="noreferrer noopener" style={{ color: 'var(--brand)' }}>wechat-article-exporter</a> (local/private deploy recommended), select JSON format, and import here. Only titles/links/dates are imported into the topic pool, <b>excluding engagement metrics</b>.</>
+          : <>用开源工具 <a href="https://github.com/wechat-article/wechat-article-exporter" target="_blank" rel="noreferrer noopener" style={{ color: 'var(--brand)' }}>wechat-article-exporter</a>（建议本地/私有部署，别把自己公众号登录态交给在线站点）导出目标公众号的文章，选 JSON 格式，在此导入。只导标题/链接/发布时间进选题库，<b>不含互动指标</b>。</>}
       </div>
       {msg && <span className="small" style={{ color: msg.ok ? 'var(--green)' : 'var(--red)' }}>{msg.text}</span>}
     </div>

@@ -61,6 +61,9 @@ globalThis.__beaconParse = function () {
     seen.add(idm[1]);
     const title = (card.querySelector('.title')?.textContent || card.querySelector('a .title span')?.textContent || '').trim();
     const likes = parseCount(card.querySelector('.count')?.textContent);
+    // 【无标题且无指标的整条丢掉】（2026-09-04 审计）选择器兜底到裸 section 时，「推荐笔记」这类别的区块
+    // 也带 /explore/ 链接，会产出「无标题 + 无指标 + 无发布时间」的空记录入库，进基线、进榜单。
+    if (!title && likes == null) continue;
     posts.push({
       platformItemId: idm[1],
       title: title.slice(0, 300),

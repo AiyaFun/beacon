@@ -12,19 +12,23 @@ import {
 } from './actions';
 import { useI18n } from '@/lib/i18n';
 
-const SOURCE_BADGE: Record<string, { name: string; cls: string; title: string }> = {
-  plugin: { name: '采集助手', cls: 'badge-brand', title: '在网页上一键收藏进来的' },
-  manual: { name: '手动记', cls: 'badge-gray', title: '你自己在网页端记的' },
-  comment: { name: '我的读者在问', cls: 'badge-green', title: '从你自己作品的评论区里挖出来的问题——这是你的读者想要什么' },
+const SOURCE_BADGE: Record<string, { name: string; nameEn: string; cls: string; title: string; titleEn: string }> = {
+  plugin: { name: '采集助手', nameEn: 'Clipper', cls: 'badge-brand', title: '在网页上一键收藏进来的', titleEn: 'Collected via web clipper extension' },
+  manual: { name: '手动记', nameEn: 'Manual', cls: 'badge-gray', title: '你自己在网页端记的', titleEn: 'Manually noted on web' },
+  comment: { name: '我的读者在问', nameEn: 'Audience Asking', cls: 'badge-green', title: '从你自己作品的评论区里挖出来的问题——这是你的读者想要什么', titleEn: 'Questions mined from your comments - what your audience wants' },
   'rival-comment': {
     name: '同行读者在问',
+    nameEn: 'Competitor Asking',
     cls: 'badge-amber',
     title: '从同行作品的评论区里挖出来的问题——这是赛道里没被满足的需求，但要先判断他们的读者是不是你的读者',
+    titleEn: 'Questions mined from competitors\' comments - unmet needs in the niche',
   },
   clip: {
     name: '文章剪藏',
+    nameEn: 'Article Clip',
     cls: 'badge-brand',
     title: '在群里发给机器人的链接/正文，已抓下全文并出了摘要与要点。他人作品仅供分析参考，别直接复用其文字',
+    titleEn: 'Article clipped via bot with summary and key takeaways',
   },
 };
 
@@ -57,8 +61,14 @@ const TABS = [
   { key: 'archived', name: '已归档', hint: '不再进候选池，但记录保留' },
 ] as const;
 
-function relDays(iso: string): string {
+function relDays(iso: string, lang?: string): string {
   const n = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
+  if (lang === 'en') {
+    if (n <= 0) return 'Today';
+    if (n < 7) return `${n}d ago`;
+    if (n < 30) return `${Math.round(n / 7)}w ago`;
+    return `${Math.round(n / 30)}mo ago`;
+  }
   if (n <= 0) return '今天';
   if (n < 7) return `${n} 天前`;
   if (n < 30) return `${Math.round(n / 7)} 周前`;
@@ -92,6 +102,13 @@ export function InspirationBoard({ items }: { items: InspirationView[] }) {
     archived: lang === 'en' ? 'Archived' : '已归档',
   };
 
+  const tabHints: Record<string, string> = {
+    open: lang === 'en' ? 'Included in daily topic recommendations' : '会参与每日选题推荐',
+    comments: lang === 'en' ? 'Questions from comments — answering audience needs requires no trend-chasing' : '从评论区挖出的问题——回答自己读者的问题不需要蹭热点',
+    used: lang === 'en' ? 'Automatically dequeued once adopted as topic' : '被采纳成选题后自动出队',
+    archived: lang === 'en' ? 'Excluded from candidate pool, records retained' : '不再进候选池，但记录保留',
+  };
+
   return (
     <div className="stack" style={{ gap: 16 }}>
       <div className="row wrap" style={{ gap: 10, alignItems: 'center' }}>
@@ -104,7 +121,7 @@ export function InspirationBoard({ items }: { items: InspirationView[] }) {
             {tabLabels[t.key] ?? t.name} ({t.key === 'comments' ? items.filter(isComment).length : items.filter((i) => i.state === t.key).length})
           </button>
         ))}
-        <span className="small muted hide-mobile">{active.hint}</span>
+        <span className="small muted hide-mobile">{tabHints[active.key] ?? active.hint}</span>
         <div style={{ flex: 1 }} />
         <button className="btn btn-sm" onClick={() => { setShowMine((v) => !v); setShowForm(false); }}>
           <Icon.chat size={13} /> {lang === 'en' ? 'Mine from Comments' : '从评论里挖问题'}
@@ -138,13 +155,13 @@ export function InspirationBoard({ items }: { items: InspirationView[] }) {
                     <b>{it.title}</b>
                     {it.platform && <span className="badge badge-gray">{platformName(it.platform)}</span>}
                     {SOURCE_BADGE[it.source] && (
-                      <span className={`badge ${SOURCE_BADGE[it.source].cls}`} title={SOURCE_BADGE[it.source].title}>
-                        {SOURCE_BADGE[it.source].name}
+                      <span className={`badge ${SOURCE_BADGE[it.source].cls}`} title={lang === 'en' ? SOURCE_BADGE[it.source].titleEn : SOURCE_BADGE[it.source].title}>
+                        {lang === 'en' ? SOURCE_BADGE[it.source].nameEn : SOURCE_BADGE[it.source].name}
                       </span>
                     )}
                     {it.scopedToAccount && (
-                      <span className="badge badge-gray" title="只在当前账号的推荐里出现">
-                        本账号
+                      <span className="badge badge-gray" title={lang === 'en' ? 'Only appears in recommendations for this account' : '只在当前账号的推荐里出现'}>
+                        {lang === 'en' ? 'This Account' : '本账号'}
                       </span>
                     )}
                   </div>
@@ -161,20 +178,20 @@ export function InspirationBoard({ items }: { items: InspirationView[] }) {
                   )}
                   {it.analysis && (
                     <p className="small" style={{ margin: '4px 0', lineHeight: 1.6 }}>
-                      <b>对你的用处：</b>
+                      <b>{lang === 'en' ? 'Usefulness to you: ' : '对你的用处：'}</b>
                       {it.analysis}
                     </p>
                   )}
                   {isComment(it) && it.askedCount > 0 && (
                     <div className="small row wrap" style={{ gap: 8, marginTop: 2 }}>
                       <span style={{ color: 'var(--green)' }}>
-                        被问 {it.askedCount} 次
+                        {lang === 'en' ? `Asked ${it.askedCount} time${it.askedCount > 1 ? 's' : ''}` : `被问 ${it.askedCount} 次`}
                       </span>
                       {it.askedWorks > 1 && (
-                        <span className="muted">分布在 {it.askedWorks} 条作品下</span>
+                        <span className="muted">{lang === 'en' ? `Across ${it.askedWorks} posts` : `分布在 ${it.askedWorks} 条作品下`}</span>
                       )}
                       {it.lastAskedAt && (
-                        <span className="muted">{relDays(it.lastAskedAt)}最近一次</span>
+                        <span className="muted">{lang === 'en' ? `Latest: ${relDays(it.lastAskedAt, lang)}` : `${relDays(it.lastAskedAt)}最近一次`}</span>
                       )}
                       <span className={`badge ${it.state === 'open' ? 'badge-green' : 'badge-gray'}`} style={{ fontSize: 10 }}>
                         {it.state === 'open' ? (lang === 'en' ? 'Open' : '待用') : it.state === 'used' ? (lang === 'en' ? 'Converted' : '已转选题') : (lang === 'en' ? 'Archived' : '已归档')}
@@ -182,7 +199,7 @@ export function InspirationBoard({ items }: { items: InspirationView[] }) {
                     </div>
                   )}
                   <div className="small muted row wrap" style={{ gap: 8 }}>
-                    <span>{relDays(it.createdAt)}{lang === 'en' ? ' saved' : '收藏'}</span>
+                    <span>{lang === 'en' ? `Saved ${relDays(it.createdAt, lang)}` : `${relDays(it.createdAt)}收藏`}</span>
                     {it.author && <span>· {it.author}</span>}
                     {it.url && (
                       <a href={it.url} target="_blank" rel="noreferrer noopener">
@@ -232,43 +249,50 @@ function MineForm({ onDone }: { onDone: () => void }) {
   const [msg, setMsg] = useState('');
   const [failed, setFailed] = useState(false);
   const [pending, start] = useTransition();
+  const { lang } = useI18n();
 
   return (
     <div style={{ padding: 12, borderRadius: 10, background: 'var(--surface-2)' }}>
       <div className="row wrap" style={{ gap: 8, alignItems: 'center', marginBottom: 8 }}>
-        <span className="small muted">这段评论来自：</span>
+        <span className="small muted">{lang === 'en' ? 'Comments source:' : '这段评论来自：'}</span>
         <button
           className={`btn btn-sm${scope === 'own' ? ' btn-primary' : ''}`}
           onClick={() => setScope('own')}
-          title="你的读者想要什么"
+          title={lang === 'en' ? 'What your audience wants' : '你的读者想要什么'}
         >
-          我自己的作品
+          {lang === 'en' ? 'My Posts' : '我自己的作品'}
         </button>
         <button
           className={`btn btn-sm${scope === 'rival' ? ' btn-primary' : ''}`}
           onClick={() => setScope('rival')}
-          title="赛道里没被满足的需求，但要先判断他们的读者是不是你的读者"
+          title={lang === 'en' ? 'Unmet niche needs; assess if their audience matches yours' : '赛道里没被满足的需求，但要先判断他们的读者是不是你的读者'}
         >
-          同行的作品
+          {lang === 'en' ? 'Competitor Posts' : '同行的作品'}
         </button>
       </div>
       <p className="small" style={{ margin: '0 0 8px', lineHeight: 1.7 }}>
-        {scope === 'own'
-          ? '把你自己作品评论区的文字整段复制粘贴到下面。'
-          : '把同行作品评论区的文字整段复制粘贴到下面——挖出的是「这个赛道里还没人回答的问题」。'}
-        系统只挑出<b>提问句</b>存进来，<b>不保存作者、昵称，也不保存其它评论正文</b>。
-        判定刻意从严——宁可漏掉几条，也不把陈述句当成问题灌进选题池。
+        {lang === 'en'
+          ? (scope === 'own'
+              ? 'Paste comment text from your own posts below.'
+              : 'Paste comment text from competitor posts below — extracts unmet niche questions.')
+          : (scope === 'own'
+              ? '把你自己作品评论区的文字整段复制粘贴到下面。'
+              : '把同行作品评论区的文字整段复制粘贴到下面——挖出的是「这个赛道里还没人回答的问题」。')}
+        {lang === 'en'
+          ? ' Only questions are extracted; usernames and comment text are discarded. Strict question detection ensures high relevance.'
+          : ' 系统只挑出提问句存进来，不保存作者、昵称，也不保存其它评论正文。判定刻意从严——宁可漏掉几条，也不把陈述句当成问题灌进选题池。'}
       </p>
       {scope === 'rival' && (
         <p className="small muted" style={{ margin: '0 0 8px', lineHeight: 1.7 }}>
-          这里是<b>你自己复制、一次一页</b>的手动操作，系统不做任何自动抓取；
-          存下来的只有去掉身份信息的问题短句。
+          {lang === 'en'
+            ? 'This is a manual one-page-at-a-time paste. No automated scraping occurs. Only anonymized question phrases are saved.'
+            : '这里是你自己复制、一次一页的手动操作，系统不做任何自动抓取；存下来的只有去掉身份信息的问题短句。'}
         </p>
       )}
       <textarea
         className="input"
         rows={7}
-        placeholder={'每行一条评论，直接从创作者后台全选复制即可。例如：\n这个工具收费吗？\n新手应该先学哪个\n讲得真好'}
+        placeholder={lang === 'en' ? 'One comment per line, copied from creator backend. E.g.:\nIs this tool paid?\nWhich should beginners learn first?\nGreat explanation!' : '每行一条评论，直接从创作者后台全选复制即可。例如：\n这个工具收费吗？\n新手应该先学哪个\n讲得真好'}
         value={text}
         onChange={(e) => setText(e.target.value)}
         style={{ width: '100%', boxSizing: 'border-box', fontFamily: 'inherit' }}
@@ -288,22 +312,29 @@ function MineForm({ onDone }: { onDone: () => void }) {
               const r = await actMineQuestions(text, scope);
               if (r.ok) {
                 setFailed(false);
-                setMsg(
-                  `挖到 ${r.found} 个问题，新存入 ${r.created} 条` +
-                    (r.found! > r.created! ? `（其余是已经在收集箱里的）` : ''),
-                );
+                if (lang === 'en') {
+                  setMsg(
+                    `Found ${r.found} questions, saved ${r.created} new` +
+                      (r.found! > r.created! ? ` (others already in inbox)` : ''),
+                  );
+                } else {
+                  setMsg(
+                    `挖到 ${r.found} 个问题，新存入 ${r.created} 条` +
+                      (r.found! > r.created! ? `（其余是已经在收集箱里的）` : ''),
+                  );
+                }
                 setText('');
               } else {
                 setFailed(true);
-                setMsg(r.error ?? '没成功，请重试');
+                setMsg(r.error ?? (lang === 'en' ? 'Failed, please retry' : '没成功，请重试'));
               }
             })
           }
         >
-          {pending ? '挖掘中…' : '挖出提问'}
+          {pending ? (lang === 'en' ? 'Mining…' : '挖掘中…') : (lang === 'en' ? 'Mine Questions' : '挖出提问')}
         </button>
         <button className="btn btn-sm" onClick={onDone} disabled={pending}>
-          收起
+          {lang === 'en' ? 'Collapse' : '收起'}
         </button>
       </div>
     </div>
@@ -317,20 +348,21 @@ function AddForm({ onDone }: { onDone: () => void }) {
   const [author, setAuthor] = useState('');
   const [err, setErr] = useState('');
   const [pending, start] = useTransition();
+  const { lang } = useI18n();
 
   return (
     <div style={{ padding: 12, borderRadius: 10, background: 'var(--surface-2)' }}>
       <div className="stack" style={{ gap: 8 }}>
         <input
           className="input"
-          placeholder="刷到了什么？（标题或一句话概括）"
+          placeholder={lang === 'en' ? 'What did you find? (Title or summary)' : '刷到了什么？（标题或一句话概括）'}
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           maxLength={200}
         />
         <input
           className="input"
-          placeholder="为什么想记它？（选填，但这句最有用——推荐时会优先用它当选题）"
+          placeholder={lang === 'en' ? 'Why save it? (Optional, prioritized in topic recommendations)' : '为什么想记它？（选填，但这句最有用——推荐时会优先用它当选题）'}
           value={note}
           onChange={(e) => setNote(e.target.value)}
           maxLength={300}
@@ -339,14 +371,14 @@ function AddForm({ onDone }: { onDone: () => void }) {
           <input
             className="input"
             style={{ flex: 2 }}
-            placeholder="原文链接（选填）"
+            placeholder={lang === 'en' ? 'Original URL (Optional)' : '原文链接（选填）'}
             value={url}
             onChange={(e) => setUrl(e.target.value)}
           />
           <input
             className="input"
             style={{ flex: 1 }}
-            placeholder="作者（选填）"
+            placeholder={lang === 'en' ? 'Author (Optional)' : '作者（选填）'}
             value={author}
             onChange={(e) => setAuthor(e.target.value)}
           />
@@ -361,14 +393,14 @@ function AddForm({ onDone }: { onDone: () => void }) {
                 setErr('');
                 const r = await actAddInspiration({ title, note, url, author });
                 if (r.ok) onDone();
-                else setErr(r.error ?? '没成功，请重试');
+                else setErr(r.error ?? (lang === 'en' ? 'Failed, please retry' : '没成功，请重试'));
               })
             }
           >
-            {pending ? '保存中…' : '存进收集箱'}
+            {pending ? (lang === 'en' ? 'Saving…' : '保存中…') : (lang === 'en' ? 'Save to Inbox' : '存进收集箱')}
           </button>
           <button className="btn btn-sm" onClick={onDone} disabled={pending}>
-            取消
+            {lang === 'en' ? 'Cancel' : '取消'}
           </button>
         </div>
       </div>

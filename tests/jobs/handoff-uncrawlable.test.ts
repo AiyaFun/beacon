@@ -48,11 +48,14 @@ async function watch(platform: string, name = platform) {
 /** 让这个工作区“装了插件”。 */
 async function installCollector() {
   await prisma.ingestToken.create({
-    data: { workspaceId: wsId, token: `bcn_${Date.now()}_${Math.random().toString(36).slice(2)}`, label: '测试设备' },
+    data: { lastUsedAt: new Date(),  workspaceId: wsId, token: `bcn_${Date.now()}_${Math.random().toString(36).slice(2)}`, label: '测试设备' },
   });
 }
 
-const tasks = () => prisma.browserTask.findMany({ select: { kind: true, payload: true, origin: true, status: true } });
+const tasks = () => prisma.browserTask.findMany({
+  where: { status: { in: ['pending', 'claimed'] } },
+  select: { kind: true, payload: true, origin: true, status: true },
+});
 
 describe('服务端够不着的竞对要转派给插件', () => {
   it('服务端采不到但插件采得到（TikTok）→ 派活给插件', async () => {
@@ -140,7 +143,7 @@ describe('服务端够不着的竞对要转派给插件', () => {
     });
     await prisma.watchlistItem.create({ data: { workspaceId: DEMO_WORKSPACE_ID, competitorId: c.id } });
     await prisma.ingestToken.create({
-      data: { workspaceId: DEMO_WORKSPACE_ID, token: `bcn_demo_${Date.now()}`, label: '演示' },
+      data: { lastUsedAt: new Date(),  workspaceId: DEMO_WORKSPACE_ID, token: `bcn_demo_${Date.now()}`, label: '演示' },
     });
 
     await runCrawl();

@@ -2,6 +2,7 @@ import { prisma } from '../db';
 import { toJson } from '../json';
 import { stepsSchema, parseSteps, stepLabel, stepCostly, type WorkflowStep } from './steps';
 import { BUILTIN_WORKFLOWS } from './builtin';
+import { parseAgentConfig, isAutonomous } from '../agent/autonomous';
 import { createLogger } from '../logger';
 
 const log = createLogger({ module: 'workflow-market' });
@@ -63,6 +64,8 @@ export async function ensureBuiltinTemplates(): Promise<void> {
           persona: w.persona,
           requires: w.requires ?? '',
           steps: toJson(w.steps),
+          mode: w.mode ?? 'pipeline',
+          agentConfig: w.agentConfig ? toJson(w.agentConfig) : null,
           isBuiltin: true,
           tenantId: null,
         },
@@ -72,9 +75,12 @@ export async function ensureBuiltinTemplates(): Promise<void> {
         // ——而所有现存部署的内置模板都是在加这个字段之前建的
         // requires 也要进 update：只写 create 的话，**已经存在**的内置模板永远补不上前置条件
         //（与 persona 当初栽的是同一个跟头）
+        // mode/agentConfig 也进 update：职能型 bot（2026-09-05）是后加的，存量部署里没有
         update: {
           name: w.name, description: w.description, emoji: w.emoji,
           persona: w.persona, requires: w.requires ?? '', steps: toJson(w.steps),
+          mode: w.mode ?? 'pipeline',
+          agentConfig: w.agentConfig ? toJson(w.agentConfig) : null,
         },
       });
     } catch (err) {
@@ -83,8 +89,29 @@ export async function ensureBuiltinTemplates(): Promise<void> {
   }
 }
 
+/**
+ * 老租户接入**新加的**内置模板（2026-09-05）。
+ * preinstall 只在租户一条安装记录都没有时跑（新租户）；老租户后来新加的内置（职能型 bot）
+ * 永远不会自动装上——AI 的 list_agents 只列已装的，等于新 bot 对老用户不存在。
+ * 判据：这个租户装过东西（说明走过预装），且这条内置**没有任何**安装记录（有记录且 enabled=false
+ * 是用户主动卸的，不动）→ 补一条 enabled 的。
+ */
+export async function adoptNewBuiltins(tenantId: string): Promise<number> {
+  const [installs, builtins] = await Promise.all([
+    prisma.workflowInstall.findMany({ where: { tenantId }, select: { templateId: true } }),
+    prisma.workflowTemplate.findMany({ where: { isBuiltin: true, enabled: true }, select: { id: true } }),
+  ]);
+  if (installs.length === 0) return 0;
+  const have = new Set(installs.map((i) => i.templateId));
+  const missing = builtins.filter((b) => !have.has(b.id));
+  if (missing.length === 0) return 0;
+  await prisma.workflowInstall.createMany({ data: missing.map((b) => ({ tenantId, templateId: b.id, enabled: true })) });
+  return missing.length;
+}
+
 export async function listTemplates(tenantId: string): Promise<TemplateSummary[]> {
   await ensureBuiltinTemplates();
+  await adoptNewBuiltins(tenantId);
   const [rows, installs] = await Promise.all([
     prisma.workflowTemplate.findMany({
       where: { enabled: true, OR: [{ isBuiltin: true }, { tenantId }] },
@@ -143,6 +170,12 @@ export type CreateTemplateInput = {
   /** 职责说明：什么时候该派它上。写了 AI 才会在对话里主动派它 */
   persona?: string;
   steps: unknown;
+  /** 跑之前得先有什么 */
+  requires?: string;
+  /** pipeline（缺省）| autonomous。自主型没有步骤，配置在 agentConfig 里 */
+  mode?: string;
+  /** 自主型的配置（对象或 JSON 串都收；坏形状按 parseAgentConfig 的口径丢弃） */
+  agentConfig?: unknown;
   /** 内部标记：importTemplate 走进来的豁免职责必填（分享的 JSON 缺职责不拒收） */
   fromImport?: boolean;
 };
@@ -164,11 +197,24 @@ export async function createTemplate(
     return { ok: false, error: '写一句职责说明（什么时候该派它上）——没写的话 AI 不会在对话里主动派它' };
   }
 
-  const parsed = stepsSchema.safeParse(input.steps);
-  if (!parsed.success) {
-    // 把 zod 的第一条错误翻成人话：整段 issues 对用户没有意义
-    const first = parsed.error.issues[0];
-    return { ok: false, error: `步骤配置不对（${first?.path.join('.') || '第一步'}：${first?.message ?? '格式错误'}）` };
+  // 自主型没有步骤：白名单与人设才是它的全部（2026-09-05 起自建/导入也能是自主型——
+  // 此前 createTemplate 从不写 mode/agentConfig，导出一个职能 bot 到别处装上就成了空流水线）
+  const autonomous = isAutonomous(input.mode);
+  const cfg = autonomous
+    ? parseAgentConfig(typeof input.agentConfig === 'string' ? input.agentConfig : input.agentConfig ? JSON.stringify(input.agentConfig) : null)
+    : null;
+  if (autonomous && cfg && cfg.tools.length === 0 && !cfg.systemPrompt) {
+    return { ok: false, error: '自主型智能体至少要有一份工具白名单或一段人设' };
+  }
+  let steps: WorkflowStep[] = [];
+  if (!autonomous) {
+    const parsed = stepsSchema.safeParse(input.steps);
+    if (!parsed.success) {
+      // 把 zod 的第一条错误翻成人话：整段 issues 对用户没有意义
+      const first = parsed.error.issues[0];
+      return { ok: false, error: `步骤配置不对（${first?.path.join('.') || '第一步'}：${first?.message ?? '格式错误'}）` };
+    }
+    steps = parsed.data;
   }
 
   // slug 用租户前缀，避免自建模板与内置模板撞名（slug 是全局唯一键）
@@ -190,7 +236,10 @@ export async function createTemplate(
       persona: (input.persona ?? '').slice(0, 300),
       emoji: (input.emoji ?? '🧩').slice(0, 4),
       category: (input.category ?? 'custom').slice(0, 20),
-      steps: toJson(parsed.data),
+      steps: toJson(steps),
+      requires: (input.requires ?? '').slice(0, 200),
+      mode: autonomous ? 'autonomous' : 'pipeline',
+      agentConfig: cfg ? toJson(cfg) : null,
       isBuiltin: false,
       createdBy: memberId,
     },
@@ -236,17 +285,24 @@ export async function exportTemplate(tenantId: string, templateId: string): Prom
     where: { id: templateId, OR: [{ isBuiltin: true }, { tenantId }] },
   });
   if (!t) return null;
+  const autonomous = isAutonomous(t.mode);
   return JSON.stringify(
     {
-      beaconWorkflow: 1,
+      // 2 = 带 requires / mode / agentConfig（技能「什么时候用」、建议定时都在 agentConfig 里）。
+      // 1 的老文件照收；导出永远写最新版
+      beaconWorkflow: 2,
       name: t.name,
       description: t.description,
       // 职责说明是「AI 什么时候派它」的判据，分享出去不带它 = 对方装到的是个
       // 永远不会被对话派单的哑巴（2026-09-01 查出导出/导入两头都在丢这个字段）
       persona: t.persona,
+      requires: t.requires,
       emoji: t.emoji,
       category: t.category,
-      steps: parseSteps(t.steps),
+      mode: autonomous ? 'autonomous' : 'pipeline',
+      // 自主型：白名单/人设/技能/建议定时整份带走（2026-09-05 之前这里只有 steps，职能 bot 导出即成空流水线）
+      agentConfig: autonomous ? parseAgentConfig(t.agentConfig) : null,
+      steps: autonomous ? [] : parseSteps(t.steps),
     },
     null,
     2,
@@ -258,13 +314,16 @@ export async function importTemplate(
   memberId: string,
   json: string,
 ): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
-  let data: { beaconWorkflow?: number; name?: string; description?: string; persona?: string; emoji?: string; category?: string; steps?: unknown };
+  let data: {
+    beaconWorkflow?: number; name?: string; description?: string; persona?: string; requires?: string;
+    emoji?: string; category?: string; steps?: unknown; mode?: string; agentConfig?: unknown;
+  };
   try {
     data = JSON.parse(json) as typeof data;
   } catch {
     return { ok: false, error: '这不是一段合法的 JSON' };
   }
-  if (data.beaconWorkflow !== 1) return { ok: false, error: '这不是烽火台的工作流模板（缺少版本标记）' };
+  if (data.beaconWorkflow !== 1 && data.beaconWorkflow !== 2) return { ok: false, error: '这不是烽火台的工作流模板（缺少版本标记）' };
   if (!data.name) return { ok: false, error: '模板缺少名字' };
   // 导入的步骤同样要过 schema：别人给的 JSON 与用户自己填的一样不可信
   return createTemplate(tenantId, memberId, {
@@ -274,6 +333,9 @@ export async function importTemplate(
     emoji: data.emoji,
     category: data.category,
     steps: data.steps,
+    requires: typeof data.requires === 'string' ? data.requires : undefined,
+    mode: typeof data.mode === 'string' ? data.mode : undefined,
+    agentConfig: data.agentConfig,
     fromImport: true,
   });
 }

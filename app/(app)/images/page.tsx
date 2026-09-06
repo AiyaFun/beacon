@@ -88,20 +88,34 @@ export default async function ImagesPage() {
         canWrite={can(s.role, 'content.create')}
       />
 
-      <Fold title="这一页出的图是什么" sub="三处出图的分工，别在这儿找上字的封面" note={<span className="small muted">看一次就够</span>}>
+      <Fold
+        title={lang === 'en' ? 'What images are generated here' : '这一页出的图是什么'}
+        sub={lang === 'en' ? 'Division of 3 image generators — covers with overlaid text are elsewhere' : '三处出图的分工，别在这儿找上字的封面'}
+        note={<span className="small muted">{lang === 'en' ? 'Reference' : '看一次就够'}</span>}
+      >
         <ul className="small muted" style={{ margin: 0, paddingLeft: 20, lineHeight: 1.9 }}>
           <li>
-            <b>这一页</b>：自己写画面 → 出图。不绑草稿，图属于工作区素材，删草稿不会带走它们。
+            <b>{lang === 'en' ? 'This Page' : '这一页'}</b>：
+            {lang === 'en'
+              ? 'Write your own scene prompt → Generate images. Unlinked to drafts, images belong to workspace assets (deleting drafts won’t delete them).'
+              : '自己写画面 → 出图。不绑草稿，图属于工作区素材，删草稿不会带走它们。'}
           </li>
           <li>
-            <b>创作工坊 · 标题与封面</b>：给某一篇稿子出封面，会把标题写在图上（中文上字是生图模型最不稳的部分，
-            那条链路带着重出与预览）。
+            <b>{lang === 'en' ? 'Studio · Title & Cover' : '创作工坊 · 标题与封面'}</b>：
+            {lang === 'en'
+              ? 'Generate covers for a specific draft, overlaying titles onto images (rendering text is the least predictable part of image models; that pipeline includes regenerate & preview).'
+              : '给某一篇稿子出封面，会把标题写在图上（中文上字是生图模型最不稳的部分，那条链路带着重出与预览）。'}
           </li>
           <li>
-            <b>创作工坊 · 正文配图</b>：按某一篇的正文自动拆成一组画面，风格保持一致。
+            <b>{lang === 'en' ? 'Studio · Body Illustrations' : '创作工坊 · 正文配图'}</b>：
+            {lang === 'en'
+              ? 'Automatically breaks down a draft into a coherent set of scene images with consistent style.'
+              : '按某一篇的正文自动拆成一组画面，风格保持一致。'}
           </li>
           <li>
-            三处都会写入 AI 生成标识（隐式元数据 + 即梦的显式水印），并共用同一份配额与保留期。
+            {lang === 'en'
+              ? 'All 3 places embed AI generation marks (implicit metadata + Jimeng visible watermark), sharing the same daily quota and retention window.'
+              : '三处都会写入 AI 生成标识（隐式元数据 + 即梦的显式水印），并共用同一份配额与保留期。'}
           </li>
         </ul>
       </Fold>

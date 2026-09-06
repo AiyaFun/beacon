@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { actUpdateMemory } from './actions';
 import { MemoryDeleteButton } from './MemoryDeleteButton';
+import { useI18n } from '@/lib/i18n';
 
 // 单条记忆的「查看 / 就地编辑 / 删除」。
 //
@@ -11,6 +12,8 @@ import { MemoryDeleteButton } from './MemoryDeleteButton';
 // 用户唯一的选择是删掉、然后指望系统重新学对——而系统很可能再学错一次。
 // 改一个字比删掉重学便宜得多，也更贴合「记忆是你的资产」这个叙事。
 export function MemoryEditor({ id, content }: { id: string; content: string }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(content);
   const [err, setErr] = useState('');
@@ -22,7 +25,7 @@ export function MemoryEditor({ id, content }: { id: string; content: string }) {
     start(async () => {
       const r = await actUpdateMemory(id, text);
       if (!r.ok) {
-        setErr(r.error ?? '保存失败');
+        setErr(r.error ?? (isEn ? 'Failed to save' : '保存失败'));
         return;
       }
       setEditing(false);
@@ -44,10 +47,10 @@ export function MemoryEditor({ id, content }: { id: string; content: string }) {
           <button
             className="btn btn-sm btn-ghost"
             onClick={() => setEditing(true)}
-            title="改写这条记忆（改完视为你亲口确认，置信度提到高）"
+            title={isEn ? 'Edit this memory (editing marks it as confirmed by you and raises confidence to high)' : '改写这条记忆（改完视为你亲口确认，置信度提到高）'}
             style={{ padding: '2px 8px' }}
           >
-            编辑
+            {isEn ? 'Edit' : '编辑'}
           </button>
           <MemoryDeleteButton id={id} />
         </div>
@@ -72,10 +75,14 @@ export function MemoryEditor({ id, content }: { id: string; content: string }) {
       />
       <div className="row" style={{ gap: 6, alignItems: 'center' }}>
         <button className="btn btn-sm btn-primary" onClick={save} disabled={pending || !text.trim()}>
-          {pending ? '保存中…' : '保存'}
+          {pending ? (isEn ? 'Saving…' : '保存中…') : (isEn ? 'Save' : '保存')}
         </button>
-        <button className="btn btn-sm btn-ghost" onClick={cancel} disabled={pending}>取消</button>
-        <span className="small muted">改完这条会标为「你确认过」，并立即参与推荐</span>
+        <button className="btn btn-sm btn-ghost" onClick={cancel} disabled={pending}>
+          {isEn ? 'Cancel' : '取消'}
+        </button>
+        <span className="small muted">
+          {isEn ? 'Editing this memory marks it as "Confirmed by you" and takes effect immediately in recommendations' : '改完这条会标为「你确认过」，并立即参与推荐'}
+        </span>
       </div>
       {err && <span className="small" style={{ color: 'var(--red)' }}>{err}</span>}
     </div>

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { actRestoreDraftVersion } from './actions';
 import { Overlay } from '@/components/Overlay';
 import { diffSentences, diffStats } from '@/lib/studio/diff';
+import { useI18n } from '@/lib/i18n';
 
 // 版本对比。
 //
@@ -23,6 +24,7 @@ export type CompareVersion = {
 };
 
 export function VersionCompare({ versions, draftId }: { versions: CompareVersion[]; draftId?: string }) {
+  const { lang } = useI18n();
   const router = useRouter();
   const [pending, start] = useTransition();
   const [err, setErr] = useState('');
@@ -38,52 +40,64 @@ export function VersionCompare({ versions, draftId }: { versions: CompareVersion
 
   if (versions.length < 2) return null;
 
-  const label = (v: CompareVersion) =>
-    `v${v.seq} · ${v.authorType === 'ai' ? 'AI 初稿' : '人工终稿'} · ${v.timeLabel}`;
+  const label = (v: CompareVersion) => {
+    const role = v.authorType === 'ai'
+      ? (lang === 'en' ? 'AI Draft' : 'AI 初稿')
+      : (lang === 'en' ? 'Final Edit' : '人工终稿');
+    return `v${v.seq} · ${role} · ${v.timeLabel}`;
+  };
 
   return (
     <>
-      <button className="btn btn-sm btn-ghost" onClick={() => setOpen(true)} title="逐句看两版之间改了什么">
-        版本对比
+      <button
+        className="btn btn-sm btn-ghost"
+        onClick={() => setOpen(true)}
+        title={lang === 'en' ? 'Inspect sentence-by-sentence changes between versions' : '逐句看两版之间改了什么'}
+      >
+        {lang === 'en' ? 'Version Compare' : '版本对比'}
       </button>
 
       {open && (
-        <Overlay label="版本对比" onClose={() => setOpen(false)}>
+        <Overlay label={lang === 'en' ? 'Version Compare' : '版本对比'} onClose={() => setOpen(false)}>
           <div
             className="card"
             style={{ padding: 20, width: 860, maxWidth: '94vw', maxHeight: '88vh', display: 'flex', flexDirection: 'column' }}
           >
             <div className="row-between wrap" style={{ gap: 10, marginBottom: 12 }}>
-              <b>版本对比</b>
-              <button className="btn btn-sm btn-ghost" onClick={() => setOpen(false)}>关闭</button>
+              <b>{lang === 'en' ? 'Version Comparison' : '版本对比'}</b>
+              <button className="btn btn-sm btn-ghost" onClick={() => setOpen(false)}>
+                {lang === 'en' ? 'Close' : '关闭'}
+              </button>
             </div>
 
             <div className="row wrap" style={{ gap: 8, alignItems: 'center', marginBottom: 12 }}>
               <select className="select" style={{ maxWidth: 260 }} value={left} onChange={(e) => setLeft(Number(e.target.value))}>
                 {versions.map((v) => (
-                  <option key={v.seq} value={v.seq}>旧：{label(v)}</option>
+                  <option key={v.seq} value={v.seq}>{lang === 'en' ? 'Old: ' : '旧：'}{label(v)}</option>
                 ))}
               </select>
               <span className="muted">→</span>
               <select className="select" style={{ maxWidth: 260 }} value={right} onChange={(e) => setRight(Number(e.target.value))}>
                 {versions.map((v) => (
-                  <option key={v.seq} value={v.seq}>新：{label(v)}</option>
+                  <option key={v.seq} value={v.seq}>{lang === 'en' ? 'New: ' : '新：'}{label(v)}</option>
                 ))}
               </select>
             </div>
 
             {left === right ? (
-              <div className="small muted" style={{ padding: '20px 0' }}>选了同一版，没什么可比的。换一个再看。</div>
+              <div className="small muted" style={{ padding: '20px 0' }}>
+                {lang === 'en' ? 'Selected the same version. Pick another to compare.' : '选了同一版，没什么可比的。换一个再看。'}
+              </div>
             ) : (
               <>
                 <div className="row wrap" style={{ gap: 8, alignItems: 'center', marginBottom: 10 }}>
-                  <span className="badge badge-green">+{stats.added} 字</span>
-                  <span className="badge badge-red">−{stats.removed} 字</span>
-                  <span className="badge badge-gray">保留 {stats.kept} 字</span>
-                  <span className="small muted">改动约 {stats.changedRatio}%</span>
+                  <span className="badge badge-green">+{stats.added} {lang === 'en' ? 'chars' : '字'}</span>
+                  <span className="badge badge-red">−{stats.removed} {lang === 'en' ? 'chars' : '字'}</span>
+                  <span className="badge badge-gray">{lang === 'en' ? `Retained ${stats.kept} chars` : `保留 ${stats.kept} 字`}</span>
+                  <span className="small muted">{lang === 'en' ? `~${stats.changedRatio}% changed` : `改动约 ${stats.changedRatio}%`}</span>
                   {a && b && a.authorType === 'ai' && b.authorType === 'human' && (
-                    <span className="badge badge-brand" title="系统正是从这一对差异里学你的口味">
-                      这一对就是系统用来学偏好的差异
+                    <span className="badge badge-brand" title={lang === 'en' ? 'The system learns your personal style from this exact delta' : '系统正是从这一对差异里学你的口味'}>
+                      {lang === 'en' ? 'Style-Learning Delta Pair' : '这一对就是系统用来学偏好的差异'}
                     </span>
                   )}
                 </div>
@@ -100,7 +114,7 @@ export function VersionCompare({ versions, draftId }: { versions: CompareVersion
                   }}
                 >
                   {ops.length === 0 ? (
-                    <span className="muted">两版内容完全一致。</span>
+                    <span className="muted">{lang === 'en' ? 'Both versions are completely identical.' : '两版内容完全一致。'}</span>
                   ) : (
                     ops.map((op, i) =>
                       op.type === 'same' ? (
@@ -115,7 +129,9 @@ export function VersionCompare({ versions, draftId }: { versions: CompareVersion
                 </div>
 
                 <div className="small muted" style={{ marginTop: 10, lineHeight: 1.6 }}>
-                  绿色是新版加的，红色删除线是旧版被去掉的，其余是两版都有的原话。按句比对。
+                  {lang === 'en'
+                    ? 'Green indicates text added in newer version, red strikethrough indicates removed from older version, remaining text is identical. Compared sentence-by-sentence.'
+                    : '绿色是新版加的，红色删除线是旧版被去掉的，其余是两版都有的原话。按句比对。'}
                 </div>
 
                 {/* 【看出旧那版更好之后】此前只能自己把正文复制粘贴回去。
@@ -130,15 +146,15 @@ export function VersionCompare({ versions, draftId }: { versions: CompareVersion
                         setErr('');
                         start(async () => {
                           const r = await actRestoreDraftVersion(draftId, a.seq);
-                          if (!r.ok) { setErr(r.error ?? '没能回滚'); return; }
+                          if (!r.ok) { setErr(r.error ?? (lang === 'en' ? 'Rollback failed' : '没能回滚')); return; }
                           setOpen(false);
                           router.refresh();
                         });
                       }}
                     >
-                      {pending ? '回滚中…' : `回到左边这一版（v${a.seq}）`}
+                      {pending ? (lang === 'en' ? 'Restoring…' : '回滚中…') : (lang === 'en' ? `Revert to left version (v${a.seq})` : `回到左边这一版（v${a.seq}）`)}
                     </button>
-                    <span className="small muted">会存成新版本，历史不会被删掉。</span>
+                    <span className="small muted">{lang === 'en' ? 'Saved as a new version; history will not be deleted.' : '会存成新版本，历史不会被删掉。'}</span>
                     {err && <span className="small" style={{ color: 'var(--red)' }}>{err}</span>}
                   </div>
                 )}

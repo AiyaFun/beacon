@@ -44,4 +44,11 @@ describe('模型选择：选了必须真的生效', () => {
     const sel = code('lib/llm/selectable.ts');
     expect(sel).toMatch(/status:\s*\{\s*not:\s*'failed'\s*\}/);
   });
+
+  it('支持英文国际化（lang === "en" 时显示 Auto 与对应说明）', () => {
+    const sel = code('lib/llm/selectable.ts');
+    expect(sel).toMatch(/isEn \? 'Auto' : '自动'/);
+    const picker = code('app/(app)/assistant/ModelPicker.tsx');
+    expect(picker).toMatch(/Auto/);
+  });
 });

@@ -5,16 +5,22 @@ import type { MetricCountKey } from '@/lib/json';
 import { competitorTrend, growthSummary, observationRecords, type ObservationRow } from '@/lib/insight/competitor-trend';
 import { TrendChart, type TrendPoint } from '@/components/TrendChart';
 import { fmtNum, fmtDate } from '@/lib/format';
+import { useI18n } from '@/lib/i18n';
 
 type RawSnap = { takenAt: string | Date; metrics: string; source?: string | null };
 
-const METRICS: { key: MetricCountKey; label: string }[] = [
-  { key: 'views', label: '播放' },
-  { key: 'likes', label: '点赞' },
-  { key: 'comments', label: '评论' },
-  { key: 'shares', label: '转发' },
-  { key: 'collects', label: '收藏' },
-];
+const METRIC_KEYS: MetricCountKey[] = ['views', 'likes', 'comments', 'shares', 'collects'];
+
+const METRIC_LABELS: Record<MetricCountKey, { zh: string; en: string }> = {
+  views: { zh: '播放', en: 'Views' },
+  likes: { zh: '点赞', en: 'Likes' },
+  comments: { zh: '评论', en: 'Comments' },
+  shares: { zh: '转发', en: 'Shares' },
+  collects: { zh: '收藏', en: 'Collects' },
+  danmaku: { zh: '弹幕', en: 'Danmaku' },
+  coins: { zh: '投币', en: 'Coins' },
+  impressions: { zh: '曝光', en: 'Impressions' },
+};
 
 // 竞对作品趋势的行内展开。快照随页面一起取回，本地算，不额外查库。
 //
@@ -22,6 +28,7 @@ const METRICS: { key: MetricCountKey; label: string }[] = [
 // 且不画日增量柱。原因见 lib/insight/competitor-trend.ts——竞对的采集节奏由用户决定，
 // 把散点按日排出来会把「你多久采一次」冒充成「它涨得多快」。
 export function CompetitorTrendCell({ snapshots }: { snapshots: RawSnap[] }) {
+  const { lang } = useI18n();
   const [open, setOpen] = useState(false);
   const [metric, setMetric] = useState<MetricCountKey>('views');
 
@@ -31,26 +38,32 @@ export function CompetitorTrendCell({ snapshots }: { snapshots: RawSnap[] }) {
   if (trend.sample === 0) return <span className="small muted">—</span>;
   if (trend.sample < 2) {
     return (
-      <span className="small muted" title="再采集一次即可看到变化——趋势需要至少两次观测">
-        仅 1 次观测
+      <span
+        className="small muted"
+        title={lang === 'en' ? 'Crawl once more to see changes — trend requires at least 2 observations' : '再采集一次即可看到变化——趋势需要至少两次观测'}
+      >
+        {lang === 'en' ? '1 observation only' : '仅 1 次观测'}
       </span>
     );
   }
 
-  const summary = growthSummary(trend, 'views');
+  const summary = growthSummary(trend, 'views', lang);
   // 数据记录：每次采集摊成一行（含来源与相对上次的增量）。与图同源，不额外查库。
   const records = observationRecords(
     snapshots.map((x) => ({ takenAt: new Date(x.takenAt), metrics: x.metrics, source: x.source })),
-    METRICS.map((m) => m.key),
+    METRIC_KEYS,
+    lang,
   );
 
   return (
     <div className="stack" style={{ gap: 4 }}>
       <button className="btn btn-sm btn-ghost" onClick={() => setOpen((v) => !v)}>
-        {open ? '收起趋势' : `看趋势 · ${trend.sample}次`}
+        {open
+          ? (lang === 'en' ? 'Hide Trend' : '收起趋势')
+          : (lang === 'en' ? `View Trend · ${trend.sample} obs` : `看趋势 · ${trend.sample}次`)}
       </button>
       {!open && summary && <span className="small" style={{ color: 'var(--green)' }}>{summary}</span>}
-      {open && <TrendBody trend={trend} records={records} metric={metric} setMetric={setMetric} />}
+      {open && <TrendBody trend={trend} records={records} metric={metric} setMetric={setMetric} lang={lang} />}
     </div>
   );
 }
@@ -60,11 +73,13 @@ function TrendBody({
   records,
   metric,
   setMetric,
+  lang,
 }: {
   trend: ReturnType<typeof competitorTrend>;
   records: ObservationRow[];
   metric: MetricCountKey;
   setMetric: (m: MetricCountKey) => void;
+  lang: string;
 }) {
   let prevVal = -1;
   const points: TrendPoint[] = trend.points.map((p) => {
@@ -75,7 +90,7 @@ function TrendBody({
     return { day: p.index, value, delta: 0, tier: 'plugin', suspect };
   });
 
-  const label = METRICS.find((m) => m.key === metric)?.label ?? '';
+  const label = lang === 'en' ? METRIC_LABELS[metric]?.en : METRIC_LABELS[metric]?.zh;
   // 【?? 0 会把「算不出来」印成「没涨」】首末观测有一端没采到这一项时，
   // competitorTrend 刻意不写这个键——那表示「这段时间涨了多少，我们不知道」。
   // 印成 0 就又把缺席说成了一个确定的结论。
@@ -85,33 +100,49 @@ function TrendBody({
   return (
     <div className="card" style={{ padding: 10, boxShadow: 'none', background: 'var(--surface-2)', minWidth: 300 }}>
       <div className="row wrap" style={{ gap: 4, marginBottom: 6 }}>
-        {METRICS.map((m) => (
+        {METRIC_KEYS.map((k) => (
           <button
-            key={m.key}
-            className={`badge ${metric === m.key ? 'badge-brand' : 'badge-gray'}`}
+            key={k}
+            className={`badge ${metric === k ? 'badge-brand' : 'badge-gray'}`}
             style={{ cursor: 'pointer', border: 'none' }}
-            onClick={() => setMetric(m.key)}
+            onClick={() => setMetric(k)}
           >
-            {m.label}
+            {lang === 'en' ? METRIC_LABELS[k]?.en : METRIC_LABELS[k]?.zh}
           </button>
         ))}
       </div>
       {/* 横轴是观测序号、且不画日增量柱：竞对采集节奏不规律，没有可信的「发布后第 N 天」
           与「日增」口径。图上的标注必须和下面那句说明一致，不能一个说 D+N 一个说第几次采集。 */}
-      <TrendChart points={points} label={label} xUnit="observation" showDelta={false} />
+      <TrendChart points={points} label={label ?? ''} xUnit="observation" showDelta={false} />
       <div className="small muted" style={{ marginTop: 4, lineHeight: 1.6 }}>
-        横轴是<b>第几次采集</b>（不是发布后第几天）：{trend.sample} 次观测跨 {trend.spanDays} 天，
-        {growth === null
-          ? <>首末两次观测里有一次没采到{label}，<b>这段时间涨了多少算不出来</b>。</>
-          : <>{label}净增 <b className="mono">{fmtNum(growth)}</b>。</>}
-        {irregular && '采集间隔不均匀，两点之间的落差是这段时间的累计变化，不代表日增。'}
+        {lang === 'en' ? (
+          <>
+            X-axis is <b>observation sequence</b> (not days since publication): {trend.sample} observations across {trend.spanDays} days.{' '}
+            {growth === null ? (
+              <>One of first/last observations lacked {label}, <b>net growth cannot be determined</b>.{' '}</>
+            ) : (
+              <>{label} net growth <b className="mono">{fmtNum(growth)}</b>.{' '}</>
+            )}
+            {irregular && 'Irregular crawl intervals: delta between points reflects cumulative change across days, not daily gain.'}
+          </>
+        ) : (
+          <>
+            横轴是<b>第几次采集</b>（不是发布后第几天）：{trend.sample} 次观测跨 {trend.spanDays} 天，
+            {growth === null
+              ? <>首末两次观测里有一次没采到{label}，<b>这段时间涨了多少算不出来</b>。</>
+              : <>{label}净增 <b className="mono">{fmtNum(growth)}</b>。</>}
+            {irregular && '采集间隔不均匀，两点之间的落差是这段时间的累计变化，不代表日增。'}
+          </>
+        )}
       </div>
       {/* 数据记录：每次采集一行，标明**从哪采的**、这次多少、比上次多多少。
           图回答「大致在涨还是在停」，这张表回答「哪一次采到了什么、这段时间涨了多少」。
           ⚠️ 原来这里是 `p.metrics[metric] ?? 0` —— 把「这次没采到这一项」印成 0，
           于是抖音主页采的那几次评论数全是 0，看起来像「这条作品没人评论」。 */}
       <div className="stack" style={{ gap: 3, marginTop: 8 }}>
-        <div className="small muted" style={{ fontWeight: 600 }}>数据记录 · {label}</div>
+        <div className="small muted" style={{ fontWeight: 600 }}>
+          {lang === 'en' ? `Data Records · ${label}` : `数据记录 · ${label}`}
+        </div>
         {records.map((r, i) => {
           const c = r.cells.find((x) => x.key === metric)!;
           return (
@@ -119,7 +150,11 @@ function TrendBody({
               <span className="muted" style={{ whiteSpace: 'nowrap' }}>
                 {fmtDate(r.takenAt)}
                 <span style={{ opacity: 0.7 }}> · {r.sourceText}</span>
-                {r.gapDays !== null && r.gapDays > 0 && <span style={{ opacity: 0.7 }}>（隔 {r.gapDays} 天）</span>}
+                {r.gapDays !== null && r.gapDays > 0 && (
+                  <span style={{ opacity: 0.7 }}>
+                    {lang === 'en' ? ` (${r.gapDays}d gap)` : `（隔 ${r.gapDays} 天）`}
+                  </span>
+                )}
               </span>
               <span className="row" style={{ gap: 8, whiteSpace: 'nowrap' }}>
                 <b className="mono">{c.value === null ? '—' : fmtNum(c.value)}</b>

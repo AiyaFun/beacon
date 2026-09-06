@@ -3,6 +3,7 @@
 import { useState, useTransition } from 'react';
 import { Card } from '@/components/ui';
 import { Icon } from '@/components/icons';
+import { useI18n } from '@/lib/i18n';
 import { actDeleteAccount, actDeletionPreview, type DeletionPreview } from './account-actions';
 
 // 数据导出与账号注销（F9-8）。刻意做成一张卡两段：**先导出、再注销**——
@@ -20,6 +21,9 @@ export function AccountDataCard({
   /** 全量导出＝把整个工作区打包带走，仅 owner/admin（lib/rbac.ts data.export） */
   canExport: boolean;
 }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
+  const confirmText = isEn ? 'DELETE' : CONFIRM_TEXT;
   const [preview, setPreview] = useState<DeletionPreview | null>(null);
   const [open, setOpen] = useState(false);
   const [acked, setAcked] = useState(false);
@@ -51,37 +55,47 @@ export function AccountDataCard({
 
   const blocked = preview?.blocked ?? null;
   const scopeIsTenant = preview ? preview.scope === 'tenant' : isOwner;
-  const canSubmit = acked && typed.trim() === CONFIRM_TEXT && !blocked && !pending;
+  const canSubmit = acked && (typed.trim() === confirmText || typed.trim() === CONFIRM_TEXT || typed.trim().toUpperCase() === 'DELETE') && !blocked && !pending;
 
   return (
     <Card
-      title="数据与注销"
-      sub="导出你的全部数据 · 注销账号"
+      title={isEn ? 'Data & Account Deletion' : '数据与注销'}
+      sub={isEn ? 'Export all your data · Delete account' : '导出你的全部数据 · 注销账号'}
       action={
         <span className="badge badge-gray" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-          <Icon.download size={13} /> 数据权利
+          <Icon.download size={13} /> {isEn ? 'Data Rights' : '数据权利'}
         </span>
       }
     >
       {/* ── 导出 ── */}
       <div className="stack" style={{ gap: 10 }}>
-        <div style={{ fontWeight: 600 }}>导出全部数据</div>
+        <div style={{ fontWeight: 600 }}>{isEn ? 'Export All Data' : '导出全部数据'}</div>
         <div className="small muted" style={{ lineHeight: 1.7 }}>
-          一个 JSON 文件，包含你工作区的人设卡、素材、选题、草稿与版本、发布记录与表现数据、
-          复盘报告、智囊团会诊、记忆条目、灵感箱、竞对订阅、合规记录与订单流水。
-          <br />
-          出于安全，<b>API Key、机器人密钥、采集令牌、登录凭证不在导出范围内</b>；
-          记忆的向量索引也不导出（正文完整保留）。
+          {isEn ? (
+            <>
+              A single JSON file containing your workspace persona cards, materials, topics, drafts and versions, publication records and metrics, review reports, advisor consults, memories, inspiration box, competitor subscriptions, compliance logs, and transaction receipts.
+              <br />
+              For security, <b>API keys, bot secrets, ingestion tokens, and credentials are excluded</b>; memory vector embeddings are also excluded (text content is fully preserved).
+            </>
+          ) : (
+            <>
+              一个 JSON 文件，包含你工作区的人设卡、素材、选题、草稿与版本、发布记录与表现数据、
+              复盘报告、智囊团会诊、记忆条目、灵感箱、竞对订阅、合规记录与订单流水。
+              <br />
+              出于安全，<b>API Key、机器人密钥、采集令牌、登录凭证不在导出范围内</b>；
+              记忆的向量索引也不导出（正文完整保留）。
+            </>
+          )}
         </div>
         {canExport ? (
           <div>
             <a className="btn btn-sm btn-primary" href="/api/account/export" download>
-              下载数据导出包（JSON）
+              {isEn ? 'Download Data Export Package (JSON)' : '下载数据导出包（JSON）'}
             </a>
           </div>
         ) : (
           <div className="small muted">
-            导出的是整个工作区的数据，仅工作区<b>所有者与管理员</b>可操作。需要留档请联系工作区管理员。
+            {isEn ? 'Exports all workspace data; only workspace owners and administrators can perform this. Contact an admin if you need an archive.' : '导出的是整个工作区的数据，仅工作区所有者与管理员可操作。需要留档请联系工作区管理员。'}
           </div>
         )}
       </div>
@@ -90,25 +104,37 @@ export function AccountDataCard({
 
       {/* ── 注销 ── */}
       <div className="stack" style={{ gap: 10 }}>
-        <div style={{ fontWeight: 600, color: 'var(--red)' }}>注销账号</div>
+        <div style={{ fontWeight: 600, color: 'var(--red)' }}>{isEn ? 'Delete Account' : '注销账号'}</div>
 
         {isDemo ? (
-          <div className="small muted">演示账号无需注销，关闭页面即可。注册自己的账号后可随时在此注销。</div>
+          <div className="small muted">{isEn ? 'Demo accounts do not need to be deleted; simply close the browser tab. You can delete your account anytime after registering.' : '演示账号无需注销，关闭页面即可。注册自己的账号后可随时在此注销。'}</div>
         ) : (
           <>
             <div className="small muted" style={{ lineHeight: 1.7 }}>
               {scopeIsTenant ? (
-                <>
-                  你是本工作区的所有者，注销将<b>删除整个工作区及其全部数据</b>，且<b>无法恢复</b>。
-                  BYOK 密钥、机器人密钥与采集令牌即时销毁；AI 调用日志按法规留存至期限届满，
-                  期间不再关联到你的账号；已完成的交易凭证按《电子商务法》以去标识化形式保留三年
-                  （仅含单号与金额，不含任何个人信息）。
-                </>
+                isEn ? (
+                  <>
+                    You are the owner of this workspace. Deleting your account will <b>permanently delete the entire workspace and all its data</b>. This <b>cannot be undone</b>. BYOK keys, bot secrets, and ingestion tokens will be immediately destroyed; AI generation logs will be retained until the legal requirement period expires and will no longer be linked to your account; completed transaction receipts will be retained in de-identified format for three years according to the E-Commerce Law (only order number and amount, no personal info).
+                  </>
+                ) : (
+                  <>
+                    你是本工作区的所有者，注销将<b>删除整个工作区及其全部数据</b>，且<b>无法恢复</b>。
+                    BYOK 密钥、机器人密钥与采集令牌即时销毁；AI 调用日志按法规留存至期限届满，
+                    期间不再关联到你的账号；已完成的交易凭证按《电子商务法》以去标识化形式保留三年
+                    （仅含单号与金额，不含任何个人信息）。
+                  </>
+                )
               ) : (
-                <>
-                  你是本工作区的成员，注销将<b>删除你的账号与登录方式</b>，并把你从工作区移出。
-                  工作区本身及团队共同的内容数据归工作区所有，会保留给其他成员。
-                </>
+                isEn ? (
+                  <>
+                    You are a member of this workspace. Deleting your account will <b>remove your account and login credentials</b>, and remove you from the workspace. Workspace content and team data belong to the workspace and will be retained for other members.
+                  </>
+                ) : (
+                  <>
+                    你是本工作区的成员，注销将<b>删除你的账号与登录方式</b>，并把你从工作区移出。
+                    工作区本身及团队共同的内容数据归工作区所有，会保留给其他成员。
+                  </>
+                )
               )}
             </div>
 
@@ -119,7 +145,7 @@ export function AccountDataCard({
                   onClick={openConfirm}
                   style={{ color: 'var(--red)', borderColor: 'var(--red)' }}
                 >
-                  我要注销账号
+                  {isEn ? 'I want to delete my account' : '我要注销账号'}
                 </button>
               </div>
             ) : (
@@ -127,7 +153,7 @@ export function AccountDataCard({
                 className="stack"
                 style={{ gap: 12, border: '1px solid var(--red)', borderRadius: 10, padding: 14, background: 'var(--red-soft)' }}
               >
-                {pending && !preview && <div className="small muted">正在统计将被删除的数据…</div>}
+                {pending && !preview && <div className="small muted">{isEn ? 'Calculating data to be deleted…' : '正在统计将被删除的数据…'}</div>}
 
                 {blocked && (
                   <div className="small" style={{ color: 'var(--red)', fontWeight: 600, lineHeight: 1.7 }}>
@@ -139,15 +165,16 @@ export function AccountDataCard({
                   <>
                     {preview.paidUntil && (
                       <div className="small" style={{ color: 'var(--red)' }}>
-                        ⚠️ 当前套餐（{preview.plan}）有效期至 {preview.paidUntil}，注销后剩余权益一并作废且不予退款。
-                        如需退款请先联系客服。
+                        ⚠️ {isEn
+                          ? `Current plan (${preview.plan}) is valid until ${preview.paidUntil}. Deleting your account forfeits remaining benefits without refund. Please contact support first if you need a refund.`
+                          : `当前套餐（${preview.plan}）有效期至 ${preview.paidUntil}，注销后剩余权益一并作废且不予退款。如需退款请先联系客服。`}
                       </div>
                     )}
 
                     {preview.scope === 'tenant' && (
                       <div>
                         <div className="small" style={{ fontWeight: 600, marginBottom: 6 }}>
-                          以下数据将被永久删除：
+                          {isEn ? 'The following data will be permanently deleted:' : '以下数据将被永久删除：'}
                         </div>
                         <div className="grid grid-2" style={{ gap: '2px 16px' }}>
                           {preview.inventory
@@ -160,16 +187,16 @@ export function AccountDataCard({
                             ))}
                         </div>
                         {preview.inventory.every((r) => r.count === 0) && (
-                          <div className="small muted">这个工作区还没有任何数据。</div>
+                          <div className="small muted">{isEn ? 'This workspace has no data yet.' : '这个工作区还没有任何数据。'}</div>
                         )}
                       </div>
                     )}
 
                     {canExport && (
                       <div className="small">
-                        还没备份？
+                        {isEn ? 'Not backed up yet? ' : '还没备份？'}
                         <a href="/api/account/export" download style={{ marginLeft: 4 }}>
-                          先下载数据导出包 →
+                          {isEn ? 'Download export package first →' : '先下载数据导出包 →'}
                         </a>
                       </div>
                     )}
@@ -181,17 +208,17 @@ export function AccountDataCard({
                         onChange={(e) => setAcked(e.target.checked)}
                         style={{ marginTop: 3 }}
                       />
-                      <span>我已导出需要保留的数据，并理解注销不可撤销、数据无法找回。</span>
+                      <span>{isEn ? 'I have exported data I need to keep and understand that deletion is irreversible and cannot be restored.' : '我已导出需要保留的数据，并理解注销不可撤销、数据无法找回。'}</span>
                     </label>
 
                     <div className="stack" style={{ gap: 6 }}>
                       <div className="small">
-                        请逐字输入 <b className="mono">{CONFIRM_TEXT}</b> 以确认：
+                        {isEn ? 'Please type ' : '请逐字输入 '}<b className="mono">{confirmText}</b>{isEn ? ' to confirm:' : ' 以确认：'}
                       </div>
                       <input
                         className="input"
                         value={typed}
-                        placeholder={CONFIRM_TEXT}
+                        placeholder={confirmText}
                         onChange={(e) => setTyped(e.target.value)}
                         style={{ maxWidth: 220 }}
                       />
@@ -212,10 +239,10 @@ export function AccountDataCard({
                     disabled={!canSubmit}
                     style={canSubmit ? { background: 'var(--red)', borderColor: 'var(--red)', color: '#fff' } : undefined}
                   >
-                    {pending ? '注销中…' : '确认注销'}
+                    {pending ? (isEn ? 'Deleting…' : '注销中…') : (isEn ? 'Confirm Deletion' : '确认注销')}
                   </button>
                   <button className="btn btn-sm btn-ghost" onClick={close} disabled={pending}>
-                    取消
+                    {isEn ? 'Cancel' : '取消'}
                   </button>
                 </div>
               </div>

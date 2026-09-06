@@ -61,7 +61,7 @@ beforeEach(async () => {
 
   // 派活给插件的两个前置：工作区得有能干活的浏览器，竞对得在监控列表里
   await prisma.ingestToken.create({
-    data: { workspaceId: ws.id, token: `bcn_test_${Math.random().toString(36).slice(2)}`, label: '测试设备', memberId: member.id },
+    data: { lastUsedAt: new Date(),  workspaceId: ws.id, token: `bcn_test_${Math.random().toString(36).slice(2)}`, label: '测试设备', memberId: member.id },
   });
   // handle 是全局唯一键（platform+handle），且竞对表跨租户共享不在 beforeEach 里清——
   // 写死 'rival' 的话第二个用例就撞唯一约束

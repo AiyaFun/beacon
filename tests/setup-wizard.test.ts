@@ -9,6 +9,7 @@ import {
   resetInitializedCache,
   SetupClosedError,
 } from '@/lib/setup/state';
+import { at, between } from './helpers/anchor';
 
 // 装机向导的状态判定。这一层决定「谁能成为这台机器的管理员」，
 // 每一条分支都要往安全的方向倒：拿不准就不让装。
@@ -113,7 +114,7 @@ describe('路由接线（源码级）', () => {
   it('/setup 在 middleware 白名单里 —— 不然装机与登录互相死锁', async () => {
     const fs = await import('node:fs');
     const src = fs.readFileSync('middleware.ts', 'utf-8');
-    const block = src.slice(src.indexOf('const PUBLIC_PATHS'), src.indexOf('];', src.indexOf('const PUBLIC_PATHS')));
+    const block = between(src, 'const PUBLIC_PATHS', '];');
     expect(block).toContain("'/setup'");
   });
 
@@ -132,7 +133,7 @@ describe('路由接线（源码级）', () => {
     expect(actions.length).toBeGreaterThanOrEqual(2);
     // actEdition 只读、不写，不要求过闸；两个会碰状态的都必须过。
     for (const name of ['actCompleteSetup', 'actCheckSetupToken']) {
-      const body = src.slice(src.indexOf(`export async function ${name}`));
+      const body = src.slice(at(src, `export async function ${name}`));
       expect(body.slice(0, 1200), `${name} 未过闸`).toContain('assertSetupAllowed');
     }
   });

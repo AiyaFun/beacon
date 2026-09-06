@@ -120,12 +120,30 @@ export async function POST(req: Request) {
   });
   if (!r.ok) return NextResponse.json({ ok: false, error: r.error }, { status: 400 });
 
+  // 【冷却命中时不许说「已排队」】2026-09-04 审计：enqueueBrowserTask 在半小时内刚采过时
+  // **一条新任务都不建**，直接返回上次那条 done 的 id。这里原先硬编码 status:'pending' +
+  // 「已排队…48 小时无人执行自动作废」，调用方据此告诉用户「已经派下去采了」，
+  // 再 GET 一次就把 30 分钟前的旧结果当成这次采回来的报出去——回执与事实相反。
+  // superseded（取代了排着的同一个活）同样要说破，否则调用方排的任务被静默取消。
+  if (r.recentlyDone) {
+    return NextResponse.json({
+      ok: true,
+      taskId: r.id,
+      status: 'done',
+      reused: true,
+      note: `${r.recentlyDone.minutesAgo} 分钟前刚采过同一个活，直接复用上次结果，没有重新打开页面（同一页面短时间反复打开会被平台视为异常）。`
+        + `上次结果：${r.recentlyDone.result || '已完成'}`
+        + (r.superseded?.length ? `另外取消了 ${r.superseded.length} 条排着的同样任务。` : ''),
+    });
+  }
   return NextResponse.json({
     ok: true,
     taskId: r.id,
     status: 'pending',
-    // 调用方是个程序：把「接下来会发生什么」说全，它才能如实转告用户
-    note: `已排队（${KIND_LABEL[kind as keyof typeof KIND_LABEL]}）。要有一台装了采集插件、令牌有效的浏览器在线才会被领走；48 小时无人执行自动作废。用 GET /api/v1/browser-tasks/${r.id} 看进度。`,
+    ...(r.superseded?.length ? { superseded: r.superseded } : {}),
+    note: `已排队（${KIND_LABEL[kind as keyof typeof KIND_LABEL]}）。要有一台装了采集插件或登记为执行器的客户端在线才会被领走；48 小时无人执行自动作废。`
+      + (r.superseded?.length ? `已取消 ${r.superseded.length} 条排着的同样任务，以这次为准。` : '')
+      + `用 GET /api/v1/browser-tasks/${r.id} 查结果。`,
   });
 }
 

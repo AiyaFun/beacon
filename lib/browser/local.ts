@@ -264,6 +264,42 @@ export const LOGIN_WALL_FN = `() => {
   return { walled: false, kind: '', why: '' };
 }`;
 
+/**
+ * 「这一页看起来是没登录的样子吗」——**只在解析器一条都没取到时才问**（2026-09-04）。
+ *
+ * 【为什么不能并进 LOGIN_WALL_FN】那个判据是硬信号（密码框、登录页地址、"请先登录"字样），
+ * 误判代价很低。而这里是软信号：页面上有登录入口。**登录状态下的页面也常有这类链接**
+ * （比如页脚的帮助中心），单独用会把好端端的采集判成没登录。
+ * 放在「一条都没取到」之后就安全了：那时页面本来就没有可采的东西，问一句「是不是没登录」
+ * 只会让报错更准，不会误伤任何一次成功的采集。
+ *
+ * 【为什么值得加】2026-09-04 真机：采集浏览器是全新的 profile，没登录过 X。
+ * X 的个人主页在未登录时既没有密码框、地址也不是 /login，于是登录墙判据放行，
+ * 解析器取到 0 条，用户看到的是「可能没加载完，或这个号还没发过内容」——
+ * 一句与事实完全不符的话，而真正该做的事（去采集浏览器里登一次）一个字都没提。
+ */
+export const LOGGED_OUT_FN = `() => {
+  const q = (sel) => document.querySelector(sel);
+  const t = (document.body && document.body.innerText || '').slice(0, 4000);
+  const link = q('a[href*="/login"]') || q('a[href*="/signin"]') || q('a[href*="/sign_in"]')
+    || q('a[href*="/i/flow/login"]') || q('a[href*="/accounts/login"]');
+  // 【弹层式登录墙，2026-09-04 真机补】小红书的登录墙既不是密码框、也不是 /login 地址、
+  // 也没有登录链接——它是盖在内容上的弹层，按钮不是 <a>。只认链接的话整类站点都漏掉，
+  // 于是走到「采到 0 条」那条路，报出「这个号可能还没发过内容」——与事实完全不符。
+  // 下面这些短语只在「劝你登录/注册」的界面上出现，日常页面不会有。
+  const modal = /(扫码登录|扫码注册|手机号登录|验证码登录|新用户注册|立即登录|登录后查看|登录查看更多|登录小红书|登录后可查看|请登录|去登录|注册／登录|登录／注册)/.test(t);
+  let btn = false;
+  for (const b of document.querySelectorAll('button,[role="button"]')) {
+    const s = (b.textContent || '').trim();
+    if (s.length <= 12 && /^(登录|注册|立即登录|去登录|Log ?in|Sign ?in|Sign ?up)$/i.test(s)) { btn = true; break; }
+  }
+  if (modal) return { loggedOut: true, why: '页面弹出了登录/注册界面，内容看不到' };
+  if (!link && !btn) return { loggedOut: false, why: '' };
+  // 只有链接/按钮时再要一个文字信号——避免页脚一个登录链接就误判
+  const asks = /(登录|登入|注册|sign ?in|sign ?up|log ?in|create account)/i.test(t);
+  return asks ? { loggedOut: true, why: '页面上只有登录/注册入口，看不到内容' } : { loggedOut: false, why: '' };
+}`;
+
 /** 抽页面结构骨架的脚本。与插件 tools/recipe-run.js 同一口径：不含正文、昵称、链接、图片。 */
 const SKELETON_FN = `() => {
   const shape = (s) => {

@@ -13,7 +13,7 @@ export function HotFitAnalyzer({ options }: { options: string[] }) {
   const [result, setResult] = useState<HotFitAnalysis | null>(null);
   const [err, setErr] = useState('');
   const [pending, start] = useTransition();
-  const { dict } = useI18n();
+  const { dict, lang } = useI18n();
 
   function run() {
     const hot = custom.trim() || selected;
@@ -64,7 +64,7 @@ export function HotFitAnalyzer({ options }: { options: string[] }) {
             💡 {result.verdict}
           </div>
 
-          <div className="field-label">结合切入角（差异化）</div>
+          <div className="field-label">{lang === 'en' ? 'Angles (Differentiated)' : '结合切入角（差异化）'}</div>
           <div className="stack" style={{ gap: 8, marginBottom: 12 }}>
             {result.angles.map((a, i) => (
               <div key={i} className="card" style={{ padding: 10, boxShadow: 'none', background: 'var(--surface-2)' }}>
@@ -76,7 +76,7 @@ export function HotFitAnalyzer({ options }: { options: string[] }) {
 
           {result.production.length > 0 && (
             <>
-              <div className="field-label">制作建议</div>
+              <div className="field-label">{lang === 'en' ? 'Production Advice' : '制作建议'}</div>
               <ul className="small" style={{ margin: '0 0 12px', paddingLeft: 18, lineHeight: 1.8 }}>
                 {result.production.map((p, i) => <li key={i}>{p}</li>)}
               </ul>

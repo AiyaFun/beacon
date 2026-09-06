@@ -257,10 +257,18 @@ export async function ingestCompetitorData(
 
   for (const post of payload.posts) {
     const metrics = post.metrics && Object.keys(post.metrics).length > 0 ? post.metrics : undefined;
-    const views = metrics?.views ?? 0;
-    const hotScore = Math.round((views / 20000) * 10) / 10;
     const existing = existingByItemId.get(post.platformItemId);
     if (existing) {
+      // 【第一次采成什么样不该永远是什么样】（2026-09-04 审计）站点拆了 time[datetime] 那阵子建档的行
+      // publishedAt 是空的，几天后站点恢复、解析器也修好了，这里却从不回填。空的/占位的才补，有值不覆盖。
+      const cur = await prisma.crawledPost.findUnique({ where: { id: existing.id }, select: { title: true, publishedAt: true, url: true } });
+      const backfill: Record<string, unknown> = {};
+      if (cur) {
+        if ((!cur.title || cur.title === '(无标题)') && post.title) backfill.title = post.title;
+        if (!cur.publishedAt && post.publishedAt) backfill.publishedAt = post.publishedAt;
+        if (!cur.url && post.url) backfill.url = post.url;
+      }
+      if (Object.keys(backfill).length) await prisma.crawledPost.update({ where: { id: existing.id }, data: backfill });
       if (metrics) {
         const prev = parseJson<Record<string, number>>(existing.metrics, {});
         // 每次采集都留一个时点 —— 这条序列就是「增长」页的原料。
@@ -282,10 +290,13 @@ export async function ingestCompetitorData(
         // 抹回只剩点赞——「补齐详情」这件事等于白做。
         // 规则：新包里有的键以新值为准（数字会涨），新包里没有的键保留旧值。
         const merged = { ...prev, ...metrics };
+        // hotScore 按**合并后**的 views 算：这次没读到播放量不等于播放量归零（2026-09-04 审计）
+        const hotScore = Math.round((((merged as Record<string, number>).views ?? 0) / 20000) * 10) / 10;
         await prisma.crawledPost.update({ where: { id: existing.id }, data: { metrics: toJson(merged), hotScore } });
       }
       updated++;
     } else {
+      const hotScore = Math.round(((metrics?.views ?? 0) / 20000) * 10) / 10;
       const createdPost = await prisma.crawledPost.create({
         data: {
           competitorId: competitor.id,

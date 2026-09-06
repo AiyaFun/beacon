@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from 'react';
 import { COVER_SPEC_OPTIONS } from '@/lib/cover/specs';
+import { useI18n } from '@/lib/i18n';
 import { actPlanIllustrationScenes, actRunIllustration } from './illustration-actions';
 
 type Scene = { scene: string; anchor?: string };
@@ -23,6 +24,7 @@ export function IllustrationPanel({
   styles: { key: string; name: string; hint: string }[];
   existing: Img[];
 }) {
+  const { lang } = useI18n();
   const [pending, start] = useTransition();
   const [count, setCount] = useState(3);
   const [scenes, setScenes] = useState<Scene[]>([]);
@@ -34,7 +36,7 @@ export function IllustrationPanel({
   const [err, setErr] = useState('');
 
   if (!draftId) {
-    return <p className="small muted">先在左边选一篇草稿。</p>;
+    return <p className="small muted">{lang === 'en' ? 'Select a draft on the left first.' : '先在左边选一篇草稿。'}</p>;
   }
 
   function plan() {
@@ -43,11 +45,11 @@ export function IllustrationPanel({
     start(async () => {
       const r = await actPlanIllustrationScenes(draftId!, count);
       if (!r.ok || !r.scenes) {
-        setErr(r.error ?? '拆画面失败');
+        setErr(r.error ?? (lang === 'en' ? 'Failed to extract scenes' : '拆画面失败'));
         return;
       }
       setScenes(r.scenes);
-      setMsg(`拆出 ${r.scenes.length} 张画面，检查/修改后再出图`);
+      setMsg(lang === 'en' ? `Extracted ${r.scenes.length} scenes, review/edit before generating` : `拆出 ${r.scenes.length} 张画面，检查/修改后再出图`);
     });
   }
 
@@ -63,11 +65,11 @@ export function IllustrationPanel({
         extra,
       });
       if (!r.ok || !r.images) {
-        setErr(r.error ?? '出图失败');
+        setErr(r.error ?? (lang === 'en' ? 'Generation failed' : '出图失败'));
         return;
       }
       setImages([...r.images, ...images]);
-      setMsg(`出了 ${r.images.length} 张`);
+      setMsg(lang === 'en' ? `Generated ${r.images.length} images` : `出了 ${r.images.length} 张`);
     });
   }
 
@@ -75,7 +77,7 @@ export function IllustrationPanel({
     <div style={{ display: 'grid', gap: 14 }}>
       <div className="row wrap" style={{ gap: 8, alignItems: 'flex-end' }}>
         <label className="small" style={{ display: 'grid', gap: 4 }}>
-          张数
+          {lang === 'en' ? 'Count' : '张数'}
           <input
             className="input"
             type="number"
@@ -87,14 +89,14 @@ export function IllustrationPanel({
           />
         </label>
         <button className="btn btn-sm" disabled={pending} onClick={plan}>
-          从正文拆画面
+          {lang === 'en' ? 'Extract Scenes from Text' : '从正文拆画面'}
         </button>
         <button
           className="btn btn-sm btn-ghost"
           disabled={pending}
           onClick={() => setScenes([...scenes, { scene: '' }])}
         >
-          + 自己加一张
+          {lang === 'en' ? '+ Add Custom Scene' : '+ 自己加一张'}
         </button>
       </div>
 
@@ -107,7 +109,7 @@ export function IllustrationPanel({
                 className="textarea"
                 rows={2}
                 value={s.scene}
-                placeholder="这张图画什么（只描述看得见的东西：主体、动作、环境、光线）"
+                placeholder={lang === 'en' ? 'Visual description: subject, action, environment, lighting' : '这张图画什么（只描述看得见的东西：主体、动作、环境、光线）'}
                 onChange={(e) => {
                   const next = [...scenes];
                   next[i] = { ...next[i], scene: e.target.value };
@@ -118,7 +120,7 @@ export function IllustrationPanel({
               <button
                 className="btn btn-sm btn-ghost"
                 onClick={() => setScenes(scenes.filter((_, idx) => idx !== i))}
-                title="删掉这张"
+                title={lang === 'en' ? 'Delete this scene' : '删掉这张'}
               >
                 ×
               </button>
@@ -127,7 +129,7 @@ export function IllustrationPanel({
 
           <div className="row wrap" style={{ gap: 8, alignItems: 'flex-end' }}>
             <label className="small" style={{ display: 'grid', gap: 4 }}>
-              风格
+              {lang === 'en' ? 'Style' : '风格'}
               <select className="select" value={styleKey} onChange={(e) => setStyleKey(e.target.value)} style={{ maxWidth: 190 }}>
                 {styles.map((s) => (
                   <option key={s.key} value={s.key} title={s.hint}>{s.name}</option>
@@ -135,9 +137,9 @@ export function IllustrationPanel({
               </select>
             </label>
             <label className="small" style={{ display: 'grid', gap: 4 }}>
-              比例
+              {lang === 'en' ? 'Ratio' : '比例'}
               <select className="select" value={specKey} onChange={(e) => setSpecKey(e.target.value)} style={{ maxWidth: 190 }}>
-                <option value="">按平台自动（{platform ?? '未知'}）</option>
+                <option value="">{lang === 'en' ? `Platform Default (${platform ?? 'Unknown'})` : `按平台自动（${platform ?? '未知'}）`}</option>
                 {COVER_SPEC_OPTIONS.map((o) => (
                   <option key={o.key} value={o.key}>{o.label}</option>
                 ))}
@@ -145,7 +147,7 @@ export function IllustrationPanel({
             </label>
             <input
               className="input"
-              placeholder="补充要求（可选）"
+              placeholder={lang === 'en' ? 'Additional requirements (optional)' : '补充要求（可选）'}
               value={extra}
               onChange={(e) => setExtra(e.target.value)}
               style={{ maxWidth: 220 }}
@@ -155,15 +157,16 @@ export function IllustrationPanel({
               disabled={pending || scenes.every((s) => !s.scene.trim())}
               onClick={generate}
             >
-              {pending ? '出图中…' : `生成 ${scenes.filter((s) => s.scene.trim()).length} 张`}
+              {pending ? (lang === 'en' ? 'Generating…' : '出图中…') : (lang === 'en' ? `Generate ${scenes.filter((s) => s.scene.trim()).length} Images` : `生成 ${scenes.filter((s) => s.scene.trim()).length} 张`)}
             </button>
           </div>
         </div>
       )}
 
       <p className="small muted" style={{ margin: 0 }}>
-        配图一律<strong>不上字</strong>（中文上字是生图模型最不稳的部分，正文配图画错字整张就废了）——
-        要文字排版请用「标题与封面」。每张出图都会写入 AI 生成标识。
+        {lang === 'en'
+          ? 'Illustrations contain no embedded text (text rendering in image models is prone to spelling errors). For text layouts, please use "Title & Cover". Each generated image has embedded AI metadata.'
+          : '配图一律不上字（中文上字是生图模型最不稳的部分，正文配图画错字整张就废了）——要文字排版请用「标题与封面」。每张出图都会写入 AI 生成标识。'}
       </p>
 
       {images.length > 0 && (
@@ -174,7 +177,11 @@ export function IllustrationPanel({
               <img src={img.url} alt={img.scene.slice(0, 30)} style={{ width: '100%', borderRadius: 8, display: 'block' }} />
               <figcaption className="small muted" style={{ marginTop: 4 }}>
                 {img.anchor || img.scene.slice(0, 40)}
-                {!img.aigcEmbedded && <span className="badge badge-amber" style={{ marginLeft: 6 }}>标识未写入</span>}
+                {!img.aigcEmbedded && (
+                  <span className="badge badge-amber" style={{ marginLeft: 6 }}>
+                    {lang === 'en' ? 'Metadata Not Embedded' : '标识未写入'}
+                  </span>
+                )}
               </figcaption>
             </figure>
           ))}

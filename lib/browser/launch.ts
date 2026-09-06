@@ -1,3 +1,5 @@
+import path from 'node:path';
+import os from 'node:os';
 // 服务端自己把本机 Chrome 带调试端口拉起来（2026-09-03）。
 //
 // 【为什么服务端能做这件事】整机版/桌面端的服务就是一个裸 Node 进程跑在用户自己的电脑上
@@ -77,6 +79,12 @@ export async function chromeRunning(): Promise<boolean> {
   }
 }
 
+
+/** 整机版采集专用浏览器的数据目录（与桌面客户端同一思路：独立、长期留、不碰日常 Chrome）。 */
+export function collectProfileDir(): string {
+  return path.join(os.homedir(), '.beacon', 'collect-profile');
+}
+
 export type EnsureResult =
   | { ok: true; url: string; started: boolean; browser?: string }
   | { ok: false; error: string; reason: 'no_chrome' | 'running_without_port' | 'spawn_failed' | 'not_up' };
@@ -93,31 +101,27 @@ export async function ensureLocalBrowser(opts: { url?: string; waitMs?: number }
   const chrome = findChrome();
   if (!chrome) return { ok: false, reason: 'no_chrome', error: '这台电脑上没找到 Google Chrome。先装上 Chrome 再开这个开关。' };
 
-  if (await chromeRunning()) {
-    return {
-      ok: false,
-      reason: 'running_without_port',
-      error: 'Chrome 正开着，但它没开调试端口，运行中的 Chrome 没法再打开（这是 Chrome 的限制）。'
-        + '请先完全退出 Chrome（macOS 按 ⌘Q，不是关窗口），再点一次「开启」——重开后标签页和登录态都还在。'
-        + '我们不会替你关掉它。',
-    };
-  }
-
+  // 【独立 profile，不碰日常 Chrome】（2026-09-04 审计 #24）原先用默认 profile + 要求用户 ⌘Q：
+  // Chrome ≥136 拒绝在默认 user-data-dir 上开调试端口，这条指引照做也永远不会成功。
+  // 与桌面客户端同一套做法（desktop/src-tauri/src/collect_browser.rs）：独立目录、每平台各登一次、登录态长期留。
+  const dir = collectProfileDir();
   try {
-    // 不传 --user-data-dir：用他的默认 profile，登录态全在。detached + unref：服务重启不带走浏览器。
-    const child = spawn(chrome, ['--remote-debugging-port=9222', '--no-default-browser-check'], {
-      detached: true, stdio: 'ignore',
-    });
+    fs.mkdirSync(dir, { recursive: true });
+    // detached + unref：服务重启不带走浏览器。
+    const child = spawn(chrome, [
+      `--user-data-dir=${dir}`, '--remote-debugging-port=9222', '--remote-debugging-address=127.0.0.1',
+      '--no-default-browser-check', '--no-first-run', 'about:blank',
+    ], { detached: true, stdio: 'ignore' });
     child.unref();
   } catch (e) {
     return { ok: false, reason: 'spawn_failed', error: `启动不了 Chrome：${e instanceof Error ? e.message : String(e)}` };
   }
 
-  const deadline = Date.now() + (opts.waitMs ?? 8000);
+  const deadline = Date.now() + (opts.waitMs ?? 24000); // 冷启动建 profile 要 5 秒以上（真机实测），别按 8 秒判死
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 400));
     const now = await cdpLive(url);
     if (now.live) return { ok: true, url, started: true, browser: now.browser };
   }
-  return { ok: false, reason: 'not_up', error: 'Chrome 起了，但调试端口一直没通。再点一次「开启」试试；还不行就用客户端托盘的「启动采集浏览器」。' };
+  return { ok: false, reason: 'not_up', error: 'Chrome 起了，但调试端口一直没通（冷启动第一次可能要十几秒）。再点一次「开启」试试；还不行就用客户端托盘的「打开采集浏览器（登录用）」。' };
 }

@@ -67,7 +67,7 @@ export function SkillCenter({ skills, readOnly }: { skills: SkillSummary[]; read
   function done(r: { ok: boolean; error?: string }) {
     setBusyId(null);
     if (!r.ok) {
-      setErr(r.error ?? '操作失败，请重试');
+      setErr(r.error ?? (lang === 'en' ? 'Operation failed, please retry' : '操作失败，请重试'));
       return;
     }
     setErr('');
@@ -93,10 +93,15 @@ export function SkillCenter({ skills, readOnly }: { skills: SkillSummary[]; read
       const r = await actImportSkillFromUrl(url);
       if (r.ok) {
         setImportUrl('');
-        setImportMsg({ ok: true, text: `已导入并安装「${r.skillName}」（${r.via === 'generated' ? 'AI 解析内容生成' : '技能定义导入'}）` });
+        setImportMsg({
+          ok: true,
+          text: lang === 'en'
+            ? `Imported and installed "${r.skillName}" (${r.via === 'generated' ? 'Generated from content analysis' : 'Imported definition'})`
+            : `已导入并安装「${r.skillName}」（${r.via === 'generated' ? 'AI 解析内容生成' : '技能定义导入'}）`,
+        });
         router.refresh();
       } else {
-        setImportMsg({ ok: false, text: r.error ?? '导入失败' });
+        setImportMsg({ ok: false, text: r.error ?? (lang === 'en' ? 'Import failed' : '导入失败') });
       }
     });
   }

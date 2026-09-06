@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { AUTH_COOKIE, AUTH_COOKIE_MAX_AGE_S, authCookieSecure } from '@/lib/auth-constants';
+import { AUTH_COOKIE, AUTH_COOKIE_MAX_AGE_S, PATHNAME_HEADER, authCookieSecure } from '@/lib/auth-constants';
 
 // 边缘中间件：仅做 cookie 存在性快速拦截（真正校验在 getSession）。
 // 未登录访问受保护页面 → 跳 /login。
@@ -21,6 +21,19 @@ import { AUTH_COOKIE, AUTH_COOKIE_MAX_AGE_S, authCookieSecure } from '@/lib/auth
 //    不带登录 cookie。路由内部用工作区采集令牌（Workspace.ingestToken）自守卫，无令牌 401。
 // ⚠️ /api/ingest/self：插件回传**自有作品**表现数据（同上 authorized 通道，同一采集令牌自守卫）。
 const PUBLIC_PATHS = [
+  // ⚠️ 公开首页与两个下载页（2026-09-05 增长缺口整改）：陌生人看下载按钮不该先填手机号。
+  //    `/` 只放行**精确根路径**（判据是 `pathname === p`，`startsWith('//')` 匹配不到任何正常路径），
+  //    (app)/layout 对这三页放行未登录请求（靠 PATHNAME_HEADER 识别），页面自己渲染游客分支。
+  //    其余 (app) 页照旧一律跳登录——公开首页不等于全站敞开。
+  '/',
+  '/desktop',
+  '/extension',
+  // 公开定价页 / 今日选题榜（app/(public)）：纯读价目常量与全局表，不碰 LLM、不写库。
+  '/pricing',
+  '/topics-today',
+  // ⚠️ /api/track：漏斗事件上报（匿名访客也要报「看到了首页」）。路由内部按 IP 限流 +
+  //    事件名白名单 + 体积上限自守卫，不记 IP/UA。见 lib/growth/funnel.ts。
+  '/api/track',
   '/login',
   // ⚠️ /setup 是企业版（appliance/private）的装机向导 —— 那一刻库里还没有任何账号，
   //    拦它就是把用户 307 到 /login，而登录页在企业版里也需要一个还不存在的管理员，
@@ -127,7 +140,10 @@ export function middleware(req: NextRequest) {
     url.pathname = '/login';
     return NextResponse.redirect(url);
   }
-  const res = NextResponse.next();
+  // 把路径带给服务端布局（见 lib/auth-constants.ts PATHNAME_HEADER）。用 set 覆盖，客户端带的同名头作废。
+  const reqHeaders = new Headers(req.headers);
+  reqHeaders.set(PATHNAME_HEADER, pathname);
+  const res = NextResponse.next({ request: { headers: reqHeaders } });
   // cookie 滑动续期：每次访问都把 maxAge 重置回满额，与 DB 会话的滑动续期
   //（getMemberByToken）配对——日常活跃用户永不掉线。这里不查库：cookie 只是载体，
   // 会话真伪与寿命仍由 DB 侧裁决（游客 cookie 也会被续，但其 1 天 DB 会话到期即失效，无害）。

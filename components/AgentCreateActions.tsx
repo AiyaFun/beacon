@@ -7,7 +7,10 @@
 // 在 WorkflowMarket.tsx，定时的在 Schedules.tsx（后者有 scheduled-agent 源码守卫钉着
 // 文件里的委托与文案，搬家会打红一片）。表单留在原地弹 Overlay，这里只发一个信号——
 // 十行胶水，换来两处逻辑零搬动。
+import { useI18n } from '@/lib/i18n/context';
+
 export function AgentCreateActions() {
+  const { lang } = useI18n();
   return (
     <span className="row" style={{ gap: 8 }}>
       <button
@@ -15,14 +18,14 @@ export function AgentCreateActions() {
         className="btn btn-sm"
         onClick={() => window.dispatchEvent(new CustomEvent('beacon:new-schedule'))}
       >
-        ＋ 定时任务
+        {lang === 'en' ? '＋ Scheduled Task' : '＋ 定时任务'}
       </button>
       <button
         type="button"
         className="btn btn-sm btn-primary"
         onClick={() => window.dispatchEvent(new CustomEvent('beacon:new-agent'))}
       >
-        ＋ 新建智能体
+        {lang === 'en' ? '＋ New Agent' : '＋ 新建智能体'}
       </button>
     </span>
   );

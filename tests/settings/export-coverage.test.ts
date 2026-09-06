@@ -62,6 +62,7 @@ const EXEMPT: Record<string, string> = {
   ComplianceCheck: '合规检测记录，是过程不是资产',
   BotConversation: '群机器人对话上下文，滚动窗口',
   AccountDeletion: '注销存根（电商法三年留存），不是用户资产',
+  FunnelEvent: '增长漏斗埋点事件，过程数据',
 
   // ③ 凭证与会话：meta.excluded 里明说了不导
   AuthSession: '登录会话 token，导出即交钥匙',

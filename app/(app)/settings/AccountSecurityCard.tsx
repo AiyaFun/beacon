@@ -4,6 +4,7 @@ import { useEffect, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Card } from '@/components/ui';
 import { Icon } from '@/components/icons';
+import { useI18n } from '@/lib/i18n';
 import { actRequestBindPhoneCode, actBindPhone, actUnbindPhone, actUnbindWechat } from './actions';
 
 type Props = {
@@ -24,6 +25,8 @@ export function AccountSecurityCard({
   wxBindOk,
   wxBindError,
 }: Props) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const [phone, setPhone] = useState('');
   const [code, setCode] = useState('');
   const [codeSent, setCodeSent] = useState(false);
@@ -62,7 +65,7 @@ export function AccountSecurityCard({
           setCode(dev);
         }
       } else {
-        setMsg(r.message ?? '发送失败');
+        setMsg(r.message ?? (isEn ? 'Failed to send' : '发送失败'));
       }
     });
   }
@@ -75,28 +78,28 @@ export function AccountSecurityCard({
         resetPhoneForm();
         router.refresh(); // 服务端重新渲染，显示新的已绑定状态
       } else {
-        setMsg(r.message ?? '绑定失败');
+        setMsg(r.message ?? (isEn ? 'Binding failed' : '绑定失败'));
       }
     });
   }
 
   function unbindPhone() {
-    if (!window.confirm('确定解绑手机号吗？解绑后将只能通过微信登录本账号。')) return;
+    if (!window.confirm(isEn ? 'Unbind phone number? After unbinding, you will only be able to log in via WeChat.' : '确定解绑手机号吗？解绑后将只能通过微信登录本账号。')) return;
     setMsg('');
     start(async () => {
       const r = await actUnbindPhone();
       if (r.ok) router.refresh();
-      else setMsg(r.message ?? '解绑失败');
+      else setMsg(r.message ?? (isEn ? 'Unbinding failed' : '解绑失败'));
     });
   }
 
   function unbindWechat() {
-    if (!window.confirm('确定解绑微信吗？解绑后将只能通过手机号验证码登录本账号。')) return;
+    if (!window.confirm(isEn ? 'Unbind WeChat? After unbinding, you will only be able to log in via phone SMS verification code.' : '确定解绑微信吗？解绑后将只能通过手机号验证码登录本账号。')) return;
     setMsg('');
     start(async () => {
       const r = await actUnbindWechat();
       if (r.ok) router.refresh();
-      else setMsg(r.message ?? '解绑失败');
+      else setMsg(r.message ?? (isEn ? 'Unbinding failed' : '解绑失败'));
     });
   }
 
@@ -108,7 +111,7 @@ export function AccountSecurityCard({
         <input
           className="input"
           inputMode="numeric"
-          placeholder={changingPhone ? '请输入新手机号' : '请输入手机号'}
+          placeholder={changingPhone ? (isEn ? 'Enter new phone number' : '请输入新手机号') : (isEn ? 'Enter phone number' : '请输入手机号')}
           value={phone}
           maxLength={11}
           onChange={(e) => setPhone(e.target.value.replace(/\D/g, ''))}
@@ -119,7 +122,7 @@ export function AccountSecurityCard({
           disabled={pending || cooldown > 0 || phone.length !== 11}
           style={{ whiteSpace: 'nowrap' }}
         >
-          {cooldown > 0 ? `${cooldown}s` : codeSent ? '重新发送' : '获取验证码'}
+          {cooldown > 0 ? `${cooldown}s` : codeSent ? (isEn ? 'Resend' : '重新发送') : (isEn ? 'Get Code' : '获取验证码')}
         </button>
       </div>
       {codeSent && (
@@ -127,25 +130,25 @@ export function AccountSecurityCard({
           <input
             className="input"
             inputMode="numeric"
-            placeholder="6 位验证码"
+            placeholder={isEn ? '6-digit verification code' : '6 位验证码'}
             value={code}
             maxLength={6}
             onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
           />
           <button className="btn btn-primary btn-sm" onClick={bindPhone} disabled={pending || code.length !== 6} style={{ whiteSpace: 'nowrap' }}>
-            {pending ? '提交中…' : changingPhone ? '确认换绑' : '绑定'}
+            {pending ? (isEn ? 'Submitting…' : '提交中…') : changingPhone ? (isEn ? 'Confirm Change' : '确认换绑') : (isEn ? 'Bind' : '绑定')}
           </button>
         </div>
       )}
       {devCode && (
         <div className="small muted">
-          开发模式验证码：<b className="mono">{devCode}</b>（已自动填入）
+          {isEn ? 'Dev mode code: ' : '开发模式验证码：'}<b className="mono">{devCode}</b>{isEn ? ' (auto-filled)' : '（已自动填入）'}
         </div>
       )}
       {changingPhone && (
         <div>
           <button className="btn btn-sm" onClick={resetPhoneForm} disabled={pending}>
-            取消换绑
+            {isEn ? 'Cancel Change' : '取消换绑'}
           </button>
         </div>
       )}
@@ -154,18 +157,18 @@ export function AccountSecurityCard({
 
   return (
     <Card
-      title="账号与安全"
-      sub="绑定手机号与微信后，两种方式都能登录同一账号 · 支持换绑与解绑（至少保留一种登录方式）"
+      title={isEn ? 'Account & Security' : '账号与安全'}
+      sub={isEn ? 'Bind phone number & WeChat to log in using either method · Supports re-binding & unbinding (keep at least one)' : '绑定手机号与微信后，两种方式都能登录同一账号 · 支持换绑与解绑（至少保留一种登录方式）'}
       style={{ marginBottom: 16 }}
       action={
         <span className="badge badge-brand" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-          <Icon.shield size={13} /> 登录方式
+          <Icon.shield size={13} /> {isEn ? 'Login Methods' : '登录方式'}
         </span>
       }
     >
       {wxBindOk && (
         <div className="small" style={{ color: 'var(--green)', marginBottom: 10 }}>
-          ✓ 微信绑定成功，现在可以用微信扫码登录本账号了
+          {isEn ? '✓ WeChat bound successfully. You can now log in by scanning QR code with WeChat.' : '✓ 微信绑定成功，现在可以用微信扫码登录本账号了'}
         </div>
       )}
       {wxBindError && (
@@ -177,79 +180,79 @@ export function AccountSecurityCard({
       <div className="grid grid-2" style={{ gap: 20, alignItems: 'start' }}>
         {/* 手机号 */}
         <div className="stack" style={{ gap: 10 }}>
-          <div style={{ fontWeight: 600 }}>手机号</div>
+          <div style={{ fontWeight: 600 }}>{isEn ? 'Phone Number' : '手机号'}</div>
           {isDemo ? (
-            <div className="small muted">演示账号不支持绑定，注册后即可使用</div>
+            <div className="small muted">{isEn ? 'Demo accounts do not support binding; available after registration' : '演示账号不支持绑定，注册后即可使用'}</div>
           ) : phoneBound ? (
             <>
               <div className="small">
-                已绑定 <b className="mono">{maskedPhone}</b>
+                {isEn ? 'Bound: ' : '已绑定 '}<b className="mono">{maskedPhone}</b>
               </div>
               {!changingPhone && (
                 <div className="row" style={{ gap: 8 }}>
                   <button className="btn btn-sm" onClick={() => { setMsg(''); setChangingPhone(true); }} disabled={pending}>
-                    换绑手机号
+                    {isEn ? 'Change Phone' : '换绑手机号'}
                   </button>
                   <button
                     className="btn btn-sm"
                     onClick={unbindPhone}
                     disabled={pending || !wechatBound}
-                    title={wechatBound ? undefined : '请先绑定微信，账号至少要保留一种登录方式'}
+                    title={wechatBound ? undefined : (isEn ? 'Please bind WeChat first; the account must retain at least one login method' : '请先绑定微信，账号至少要保留一种登录方式')}
                   >
-                    解绑
+                    {isEn ? 'Unbind' : '解绑'}
                   </button>
                 </div>
               )}
               {!changingPhone && !wechatBound && (
-                <div className="small muted">绑定微信后才可解绑手机号（至少保留一种登录方式）</div>
+                <div className="small muted">{isEn ? 'WeChat must be bound before unbinding phone (at least one login method required)' : '绑定微信后才可解绑手机号（至少保留一种登录方式）'}</div>
               )}
               {changingPhone && phoneForm}
             </>
           ) : (
             <>
               {phoneForm}
-              <div className="small muted">绑定后可用手机号验证码登录本账号</div>
+              <div className="small muted">{isEn ? 'After binding, you can log in with your phone number and verification code' : '绑定后可用手机号验证码登录本账号'}</div>
             </>
           )}
         </div>
 
         {/* 微信 */}
         <div className="stack" style={{ gap: 10 }}>
-          <div style={{ fontWeight: 600 }}>微信</div>
+          <div style={{ fontWeight: 600 }}>{isEn ? 'WeChat' : '微信'}</div>
           {isDemo ? (
-            <div className="small muted">演示账号不支持绑定，注册后即可使用</div>
+            <div className="small muted">{isEn ? 'Demo accounts do not support binding; available after registration' : '演示账号不支持绑定，注册后即可使用'}</div>
           ) : !wechatEnabled ? (
-            <div className="small muted">微信登录未启用（服务端未配置微信开放平台应用）</div>
+            <div className="small muted">{isEn ? 'WeChat login not enabled (WeChat Open Platform app not configured)' : '微信登录未启用（服务端未配置微信开放平台应用）'}</div>
           ) : wechatBound ? (
             <>
               <div className="small">
-                已绑定 <span className="muted">（可微信扫码登录）</span>
+                {isEn ? 'Bound ' : '已绑定 '}<span className="muted">{isEn ? '(can log in via WeChat QR scan)' : '（可微信扫码登录）'}</span>
               </div>
               <div className="row" style={{ gap: 8 }}>
-                <a className="btn btn-sm" href="/api/auth/wechat/redirect?mode=bind" title="扫新微信的码即可完成换绑">
-                  换绑微信
+                <a className="btn btn-sm" href="/api/auth/wechat/redirect?mode=bind" title={isEn ? 'Scan with new WeChat to re-bind' : '扫新微信的码即可完成换绑'}>
+                  {isEn ? 'Change WeChat' : '换绑微信'}
                 </a>
                 <button
                   className="btn btn-sm"
                   onClick={unbindWechat}
                   disabled={pending || !phoneBound}
-                  title={phoneBound ? undefined : '请先绑定手机号，账号至少要保留一种登录方式'}
+                  title={phoneBound ? undefined : (isEn ? 'Please bind phone first; the account must retain at least one login method' : '请先绑定手机号，账号至少要保留一种登录方式')}
                 >
-                  解绑
+                  {isEn ? 'Unbind' : '解绑'}
                 </button>
               </div>
               {!phoneBound && (
-                <div className="small muted">绑定手机号后才可解绑微信（至少保留一种登录方式）</div>
+                <div className="small muted">{isEn ? 'Phone must be bound before unbinding WeChat (at least one login method required)' : '绑定手机号后才可解绑微信（至少保留一种登录方式）'}</div>
               )}
             </>
           ) : (
             <>
               <div>
                 <a className="btn btn-sm" href="/api/auth/wechat/redirect?mode=bind">
-                  一键绑定微信
+                  {isEn ? 'One-Click Bind WeChat' : '一键绑定微信'}
                 </a>
               </div>
-              <div className="small muted">电脑上会打开微信扫码页，扫码确认后自动绑定到当前账号</div>
+              <div className="small muted">{isEn ? 'Opens WeChat QR scan page on computer; confirms and binds to current account automatically' : '电脑上会打开微信扫码页，扫码确认后自动绑定到当前账号'}</div>
             </>
           )}
         </div>
@@ -259,11 +262,14 @@ export function AccountSecurityCard({
           三条腿都在产品内或用户已有的群里，不需要用户再绑一个新地址。 */}
       <div className="stack" style={{ gap: 6, marginTop: 20, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
         <div style={{ fontWeight: 600 }}>
-          到期与账单提醒 <span className="small muted" style={{ fontWeight: 400 }}>· 怎么找到你</span>
+          {isEn ? 'Billing & Expiration Reminders ' : '到期与账单提醒 '}<span className="small muted" style={{ fontWeight: 400 }}>{isEn ? '· How we notify you' : '· 怎么找到你'}</span>
         </div>
         <div className="small muted">
-          ① 顶部横幅（到期前 7 天起常驻）· ② 通知中心小铃铛 · ③ 机器人推送到你的飞书/钉钉/企微群
-          （在「设置 → 机器人集成」配一次即可）。<b>我们不发邮件</b>，也不需要你绑邮箱。
+          {isEn ? (
+            <>① Top banner (starting 7 days before expiry) · ② Notification center bell · ③ Bot push to your Feishu/DingTalk/WeCom group (configure once in Settings → Bot Integrations). <b>We never send emails</b>, nor do you need to bind an email address.</>
+          ) : (
+            <>① 顶部横幅（到期前 7 天起常驻）· ② 通知中心小铃铛 · ③ 机器人推送到你的飞书/钉钉/企微群（在「设置 → 机器人集成」配一次即可）。<b>我们不发邮件</b>，也不需要你绑邮箱。</>
+          )}
         </div>
       </div>
 

@@ -133,10 +133,19 @@ export function ConfidenceBadge({ level }: { level: string }) {
   return <span className="badge" style={{ background: 'var(--surface-2)', color: c.color }}>{c.name}</span>;
 }
 
-export function TierBadge({ tier }: { tier: string }) {
+const COMPLIANCE_TIER_NAME_EN: Record<string, string> = {
+  legal: 'Legal',
+  platform: 'Platform',
+  industry: 'Industry',
+  custom: 'Custom',
+  semantic: 'Semantic',
+};
+
+export function TierBadge({ tier, lang }: { tier: string; lang?: string }) {
+  const isEn = lang === 'en';
   const t = (COMPLIANCE_TIERS as Record<string, { name: string; color: string }>)[tier];
   if (!t) return <span className="badge badge-gray">{tier}</span>;
-  return <span className="badge" style={{ background: 'var(--surface-2)', color: t.color }}>{t.name}</span>;
+  return <span className="badge" style={{ background: 'var(--surface-2)', color: t.color }}>{isEn ? (COMPLIANCE_TIER_NAME_EN[tier] ?? t.name) : t.name}</span>;
 }
 
 export function Empty({ icon = '📭', text, action }: { icon?: string; text: string; action?: React.ReactNode }) {

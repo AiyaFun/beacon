@@ -4,6 +4,8 @@ import { Card, Fold } from '@/components/ui';
 import { can } from '@/lib/rbac';
 import { backgroundSchedulerRuns } from '@/lib/jobs/queue';
 import { listTemplates, preinstallBuiltinTemplates } from '@/lib/workflow/market';
+import { enabledRoutines } from '@/lib/workflow/routines';
+import { ledgersByBot } from '@/lib/agent/ledger';
 import { fmtDateTime } from '@/lib/format';
 import { PresetManager } from './PresetManager';
 import { availableTools } from '@/lib/agent/run';
@@ -19,6 +21,8 @@ import { MAX_RUNS_PER_DAY, AUTO_PAUSE_FAILS, parseWeekdays } from '@/lib/workflo
 import { TRIGGER_LABEL } from '@/lib/runs';
 import type { StepLog } from '@/lib/workflow/run';
 import { HubHeader } from '@/components/HubHeader';
+import { getServerLang } from '@/lib/i18n/server';
+import { getDictionary } from '@/lib/i18n/dict';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,6 +30,9 @@ export const dynamic = 'force-dynamic';
 // 与技能中心的分工写在页面上，别让用户猜：技能是一步，模板是一串。
 export default async function WorkflowsPage() {
   const s = await getSession();
+  const lang = await getServerLang();
+  const dict = getDictionary(lang);
+  const isEn = lang === 'en';
   // 【为什么这里也预装一次】预装本来只挂在「保存人设」那处，于是**存量用户装不上**：
   // 他早就建过人设了，不会再触发一次；不建人设的用户更是永远碰不到。
   // 真机上看到的就是「可用模板 0 / 市场里共 3 条」——三条自带模板对他一条都用不了。
@@ -66,56 +73,53 @@ export default async function WorkflowsPage() {
     prisma.workspace.findUnique({ where: { id: s.workspaceId }, select: { agentToolConfig: true } }),
   ]);
 
+  // 哪些 bot 的建议定时已经在跑（市场卡上画「已定时」/「开启」）；没后台调度的部署不问
+  const routineState = await enabledRoutines(s.workspaceId, templates).catch(() => ({}));
+  // 每个已装职能 bot 的台账（盯单/进度/已见条数）：让用户看得见它在盯什么、能改能清
+  const ledgerState = await ledgersByBot(s.workspaceId, templates.filter((t) => t.installed && t.mode === 'autonomous').map((t) => t.slug)).catch(() => ({}));
+  const canSchedule = backgroundSchedulerRuns();
   const installed = templates.filter((t) => t.installed);
   const canEdit = can(s.role, 'content.create');
 
   return (
     <>
       <HubHeader
-        title="技能 · 连接器"
-        hint={`${AGENT_ROLES.agent.oneLine} · 怎么做由${AGENT_ROLES.agent.decidedBy}`}
+        title={isEn ? 'Agents & Workflows' : '智能体 · 工作流'}
+        hint={isEn ? 'Workflows & scheduled tasks · Steps and actions execute deterministically' : `${AGENT_ROLES.agent.oneLine} · 怎么做由${AGENT_ROLES.agent.decidedBy}`}
         tabs={<RoleTabs active="agent" inline />}
-        meta={<span className="small muted hide-mobile">已装 {installed.length} / 市场 {templates.length}</span>}
+        meta={<span className="small muted hide-mobile">{isEn ? `Installed ${installed.length} / Market ${templates.length}` : `已装 ${installed.length} / 市场 ${templates.length}`}</span>}
         action={canEdit ? <AgentCreateActions /> : undefined}
       />
 
-      {/* 「智能体」这个名字最容易被误解成「它会自己想」。分工梯就摆在页顶，
-          让用户当场看清：会思考的是助手，这里的每一条步骤都是写死的 */}
-
-      {/* 两列（2026-08-26 用户「分成两列，这样就不会不知道在哪里」）：
-          左=班底（有哪些智能体），右=反复要做的事（怎么复用它们）。
-          窄屏回落单列（.workflows-cols 的媒体查询）。 */}
       <div className="workflows-cols">
       <div style={{ minWidth: 0 }}>
       <WorkflowMarket
         templates={templates}
         readOnly={!can(s.role, 'content.create')}
         activeRun={activeRun ? { runId: activeRun.id, templateId: activeRun.templateId } : null}
+        lang={lang}
+        routineState={routineState}
+        canSchedule={canSchedule}
+        ledgerState={ledgerState}
       />
       </div>
       <div style={{ minWidth: 0 }}>
 
-      {/* 2026-08-26 三合一（用户「一键任务、定时任务、最近运行……能融合就融合」）：
-          它们是「反复要做的事」一件事的三个面——存一张卡手动点 / 挂上时间自动跑 / 跑过的记录。
-          此前三张卡摞着，像三个不同的功能，区别只写在各自 sub 里没人对照着读。
-          合成一张卡、三个小节，每节第一句就是它与上一节的区别。 */}
       <Card
-        title="反复要做的事"
-        sub="存成卡点一下就派 · 挂上时间自动跑 · 都留痕"
+        title={isEn ? 'Recurring Routines' : '反复要做的事'}
+        sub={isEn ? 'One-click launch cards · Scheduled triggers · Full audit logs' : '存成卡点一下就派 · 挂上时间自动跑 · 都留痕'}
         action={
-          // 「通过 AI 一键优化」：把整理工作交给执行器——它有 list_ 系工具能翻运行记录，
-          // draft_schedule 能起草定时（落库前会停下来要确认，合约不能它一个人签）
           <a
             className="btn btn-sm"
-            href={`/assistant?goal=${encodeURIComponent('看看我最近的运行记录和常做的事，把反复出现的活整理成一键任务卡的方案，并建议哪几件值得挂成定时（先列方案给我确认，不要直接建）')}`}
+            href={`/assistant?goal=${encodeURIComponent(isEn ? 'Review my recent runs and recurring tasks, draft one-click preset cards and suggest what to schedule (list for confirmation first, do not create directly)' : '看看我最近的运行记录和常做的事，把反复出现的活整理成一键任务卡的方案，并建议哪几件值得挂成定时（先列方案给我确认，不要直接建）')}`}
           >
-            ✨ 让 AI 帮我配
+            {isEn ? '✨ Let AI Configure' : '✨ 让 AI 帮我配'}
           </a>
         }
       >
         <div className="row wrap" style={{ gap: 8, alignItems: 'baseline', marginBottom: 4 }}>
-          <b className="small">一键任务</b>
-          <span className="small muted">手动的那一半：存成卡，想跑的时候点一下就派</span>
+          <b className="small">{isEn ? 'One-Click Presets' : '一键任务'}</b>
+          <span className="small muted">{isEn ? 'Manual execution: Saved as cards, click once to dispatch anytime' : '手动的那一半：存成卡，想跑的时候点一下就派'}</span>
         </div>
         <PresetManager
           presets={presets.map((p) => ({
@@ -137,8 +141,8 @@ export default async function WorkflowsPage() {
         {/* id=schedules 留在这个小节上：产物落点 lib/agent/artifacts.ts 与历史通知还指着它 */}
         <div id="schedules" style={{ scrollMarginTop: 80 }}>
           <div className="row wrap" style={{ gap: 8, alignItems: 'baseline', marginBottom: 4 }}>
-            <b className="small">定时任务</b>
-            <span className="small muted">自动的那一半：挂上时间到点自己跑（北京时间 · 有上限与失败自停）· 新建在页头右上</span>
+            <b className="small">{isEn ? 'Scheduled Tasks' : '定时任务'}</b>
+            <span className="small muted">{isEn ? 'Automated execution: Runs on schedule (Beijing Time · Rate-limited with auto-pause on failure)' : '自动的那一半：挂上时间到点自己跑（北京时间 · 有上限与失败自停）· 新建在页头右上'}</span>
           </div>
         <Schedules
           scheduleWorks={backgroundSchedulerRuns()}
@@ -164,9 +168,13 @@ export default async function WorkflowsPage() {
 
         <div className="divider" />
         {/* 第三面：跑过的记录。折叠——回看才翻（运行中心有全量） */}
-        <Fold title="最近运行" sub="每一步的结果都留痕：失败时能看出停在哪一步、为什么" note={<span className="small muted">回看才翻</span>}>
+        <Fold
+          title={isEn ? 'Recent Runs' : '最近运行'}
+          sub={isEn ? 'Step-by-step logs: clearly see where and why tasks stopped' : '每一步的结果都留痕：失败时能看出停在哪一步、为什么'}
+          note={<span className="small muted">{isEn ? 'Audit history' : '回看才翻'}</span>}
+        >
         {recentRuns.length === 0 ? (
-          <p className="small muted">还没有跑过模板。</p>
+          <p className="small muted">{isEn ? 'No template runs yet.' : '还没有跑过模板。'}</p>
         ) : (
           <div style={{ display: 'grid', gap: 10 }}>
             {recentRuns.map((r) => {
@@ -177,7 +185,7 @@ export default async function WorkflowsPage() {
                     <span className="muted">{fmtDateTime(r.createdAt)}</span>
                     <strong>{scheduleTargetLabel(r)}</strong>
                     <span className={`badge ${r.status === 'done' ? 'badge-green' : r.status === 'failed' ? 'badge-red' : 'badge-gray'}`}>
-                      {r.status === 'done' ? '跑完了' : r.status === 'failed' ? '中途停下' : r.status}
+                      {r.status === 'done' ? (isEn ? 'Completed' : '跑完了') : r.status === 'failed' ? (isEn ? 'Failed' : '中途停下') : r.status}
                     </span>
                     {/* 来源与运行中心同一套说法：定时/AI 派的标出来，手点的不标。
                         定时那条中途停下意味着「这条计划可能正在连续失败」，跟手点失败不是一回事 */}

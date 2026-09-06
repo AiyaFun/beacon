@@ -33,7 +33,73 @@ export type AgentConfig = {
   callBudget?: number;
   /** 缺省授权档。**仍然要过 startAgentRun 的那几道闸**（对外 API 强制逐步确认；子运行不得宽于父）。 */
   defaultAuthMode?: AuthMode;
+  /**
+   * 这个 bot 能跑的技能，每条带一句「什么时候用」（2026-09-05，学 Grok Bot 的 Skills 页签）。
+   * 只是**路由提示**：真正能不能跑仍看 run_skill 在不在白名单里、技能有没有装。
+   * 未安装的技能会在提示里标「未装」，让 bot 告诉用户去技能中心装，而不是假装跑了。
+   */
+  skills?: BotSkillRef[];
+  /**
+   * 建议的定时（Grok Bot 的 Routines）。**默认关**——装 bot 时问一次要不要开，
+   * 开了才建 TaskPreset + ScheduledAgent；这里只是建议，不是已经生效的定时。
+   */
+  routines?: BotRoutine[];
 };
+
+export type BotSkillRef = {
+  /** ContentSkill.slug */
+  slug: string;
+  /** 什么时候用它（用户会怎么开口） */
+  when: string;
+};
+
+export type BotRoutine = {
+  /** 一键任务卡的标题 */
+  title: string;
+  /** 到点派出去的那句话 */
+  goal: string;
+  /** 北京时间几点（整点） */
+  atHour: number;
+  /** 0=周日…6=周六；空/缺省 = 每天 */
+  weekdays?: number[];
+};
+
+export const BOT_SKILLS_MAX = 12;
+export const BOT_ROUTINES_MAX = 3;
+
+function parseSkills(raw: unknown): BotSkillRef[] {
+  if (!Array.isArray(raw)) return [];
+  const out: BotSkillRef[] = [];
+  for (const it of raw) {
+    if (!it || typeof it !== 'object') continue;
+    const o = it as Record<string, unknown>;
+    const slug = typeof o.slug === 'string' ? o.slug.trim().slice(0, 60) : '';
+    const when = typeof o.when === 'string' ? o.when.trim().slice(0, 160) : '';
+    if (!slug || !when) continue; // 没写「什么时候用」的不收：那正是这个字段存在的理由
+    out.push({ slug, when });
+    if (out.length >= BOT_SKILLS_MAX) break;
+  }
+  return out;
+}
+
+function parseRoutines(raw: unknown): BotRoutine[] {
+  if (!Array.isArray(raw)) return [];
+  const out: BotRoutine[] = [];
+  for (const it of raw) {
+    if (!it || typeof it !== 'object') continue;
+    const o = it as Record<string, unknown>;
+    const title = typeof o.title === 'string' ? o.title.trim().slice(0, 60) : '';
+    const goal = typeof o.goal === 'string' ? o.goal.trim().slice(0, 2000) : '';
+    const atHour = typeof o.atHour === 'number' && Number.isInteger(o.atHour) && o.atHour >= 0 && o.atHour <= 23 ? o.atHour : -1;
+    if (!title || !goal || atHour < 0) continue;
+    const weekdays = Array.isArray(o.weekdays)
+      ? [...new Set(o.weekdays.filter((n): n is number => Number.isInteger(n) && (n as number) >= 0 && (n as number) <= 6))]
+      : [];
+    out.push({ title, goal, atHour, ...(weekdays.length ? { weekdays } : {}) });
+    if (out.length >= BOT_ROUTINES_MAX) break;
+  }
+  return out;
+}
 
 const EMPTY: AgentConfig = { systemPrompt: '', tools: [] };
 
@@ -49,6 +115,9 @@ export function parseAgentConfig(raw: string | null | undefined): AgentConfig {
       o.defaultAuthMode === 'preauthorized' || o.defaultAuthMode === 'unattended' || o.defaultAuthMode === 'confirm_each'
         ? o.defaultAuthMode
         : undefined,
+    // 两个可选块：坏形状整段丢，不让一条写坏的技能引用拖垮整个配置
+    ...(parseSkills(o.skills).length ? { skills: parseSkills(o.skills) } : {}),
+    ...(parseRoutines(o.routines).length ? { routines: parseRoutines(o.routines) } : {}),
   };
 }
 

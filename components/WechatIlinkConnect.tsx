@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { actWechatIlinkQr, actWechatIlinkStatus } from '@/app/(app)/settings/bot-actions';
+import { useI18n } from '@/lib/i18n';
 
 // 微信（官方 iLink 机器人接口）的扫码绑定（2026-09-02）。
 // 没有任何要填的：拿码 → 用户在微信里扫 → 微信那头回 bot_token → 服务端落库 → 完成。
@@ -19,6 +20,8 @@ type Props = {
 };
 
 export function WechatIlinkConnect({ existing, autoStart = false, onDone }: Props) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const [phase, setPhase] = useState<'idle' | 'loading' | 'qr' | 'confirmed'>('idle');
   const [qrSvg, setQrSvg] = useState('');
   const [scanned, setScanned] = useState(false);
@@ -40,7 +43,11 @@ export function WechatIlinkConnect({ existing, autoStart = false, onDone }: Prop
     setPhase('loading');
     const q = await actWechatIlinkQr();
     if (!aliveRef.current || run !== runRef.current) return;
-    if (!q.ok || !q.qrcode || !q.qrSvg) { setErr(q.error ?? '拿二维码失败'); setPhase('idle'); return; }
+    if (!q.ok || !q.qrcode || !q.qrSvg) {
+      setErr(q.error ?? (isEn ? 'Failed to fetch QR code' : '拿二维码失败'));
+      setPhase('idle');
+      return;
+    }
     setQrSvg(q.qrSvg);
     setPhase('qr');
     const startedAt = Date.now();
@@ -48,11 +55,27 @@ export function WechatIlinkConnect({ existing, autoStart = false, onDone }: Prop
     while (aliveRef.current && run === runRef.current) {
       const st = await actWechatIlinkStatus(q.qrcode, { existingId: existing?.id });
       if (!aliveRef.current || run !== runRef.current) return;
-      if (!st.ok) { setErr(st.error ?? '查扫码状态失败'); setPhase('idle'); return; }
-      if (st.status === 'confirmed' && st.id) { setPhase('confirmed'); onDone(st.id); return; }
-      if (st.status === 'expired') { setErr('二维码已过期，请重新生成'); setPhase('idle'); return; }
+      if (!st.ok) {
+        setErr(st.error ?? (isEn ? 'Failed to check scan status' : '查扫码状态失败'));
+        setPhase('idle');
+        return;
+      }
+      if (st.status === 'confirmed' && st.id) {
+        setPhase('confirmed');
+        onDone(st.id);
+        return;
+      }
+      if (st.status === 'expired') {
+        setErr(isEn ? 'QR code expired, please regenerate' : '二维码已过期，请重新生成');
+        setPhase('idle');
+        return;
+      }
       setScanned(st.status === 'scaned');
-      if (Date.now() - startedAt > MAX_WAIT_MS) { setErr('等待扫码超时（3 分钟），请重新生成'); setPhase('idle'); return; }
+      if (Date.now() - startedAt > MAX_WAIT_MS) {
+        setErr(isEn ? 'Waiting for scan timed out (3 minutes), please regenerate' : '等待扫码超时（3 分钟），请重新生成');
+        setPhase('idle');
+        return;
+      }
       // 服务端若立刻返回（网络抖动/代理截断），别打成热循环
       await new Promise((r) => setTimeout(r, 800));
     }
@@ -60,9 +83,19 @@ export function WechatIlinkConnect({ existing, autoStart = false, onDone }: Prop
 
   const note = (
     <div className="small muted" style={{ lineHeight: 1.75, textAlign: 'left' }}>
-      这是<b>微信官方的 iLink 机器人接口</b>（微信 ClawBot 同一套），不经企业微信、不用装任何东西。
-      扫码后机器人会出现在你微信的联系人里，<b>只有扫码的这个微信号</b>能和它对话；它只回复你发来的消息，不会主动发。
-      微信登录态过期时回来重新扫一次即可。接入范围与频率由微信方决定，微信方保留审核与阻断的权利。
+      {isEn ? (
+        <>
+          This uses <b>WeChat official iLink Bot API</b> (same protocol as WeChat ClawBot), requiring no WeCom and no software installation.
+          After scanning, the bot will appear in your WeChat contacts. <b>Only this scanned WeChat account</b> can talk to it; it only replies to incoming messages and never sends unsolicited messages.
+          Re-scan here whenever the login session expires. Supported features and frequency limits are subject to WeChat policies.
+        </>
+      ) : (
+        <>
+          这是<b>微信官方的 iLink 机器人接口</b>（微信 ClawBot 同一套），不经企业微信、不用装任何东西。
+          扫码后机器人会出现在你微信的联系人里，<b>只有扫码的这个微信号</b>能和它对话；它只回复你发来的消息，不会主动发。
+          微信登录态过期时回来重新扫一次即可。接入范围与频率由微信方决定，微信方保留审核与阻断的权利。
+        </>
+      )}
     </div>
   );
 
@@ -70,8 +103,12 @@ export function WechatIlinkConnect({ existing, autoStart = false, onDone }: Prop
     return (
       <div className="stack" style={{ gap: 10, textAlign: 'center', padding: 12 }}>
         <div style={{ fontSize: 34 }}>✅</div>
-        <b>已绑定微信</b>
-        <div className="small muted">打开微信，给刚出现的机器人联系人发一句话试试——发问题、文章链接或一句选题都行，/帮助 看它能做什么。</div>
+        <b>{isEn ? 'WeChat Connected' : '已绑定微信'}</b>
+        <div className="small muted">
+          {isEn
+            ? 'Open WeChat and send a message to the new bot contact — ask questions, share article links, or propose topic ideas. Type /help to see what it can do.'
+            : '打开微信，给刚出现的机器人联系人发一句话试试——发问题、文章链接或一句选题都行，/帮助 看它能做什么。'}
+        </div>
         {note}
       </div>
     );
@@ -80,18 +117,24 @@ export function WechatIlinkConnect({ existing, autoStart = false, onDone }: Prop
   if (phase === 'qr' || phase === 'loading') {
     return (
       <div className="stack" style={{ gap: 10, textAlign: 'center', padding: 12 }}>
-        <b>{scanned ? '已扫码，请在手机上确认' : '打开微信 → 扫一扫'}</b>
+        <b>{scanned ? (isEn ? 'Scanned, please confirm on your phone' : '已扫码，请在手机上确认') : (isEn ? 'Open WeChat → Scan' : '打开微信 → 扫一扫')}</b>
         {phase === 'loading' ? (
-          <div className="small muted" style={{ padding: 40 }}>正在向微信申请二维码…</div>
+          <div className="small muted" style={{ padding: 40 }}>
+            {isEn ? 'Requesting QR code from WeChat…' : '正在向微信申请二维码…'}
+          </div>
         ) : (
           <div
-            aria-label="微信绑定二维码"
+            aria-label={isEn ? 'WeChat binding QR code' : '微信绑定二维码'}
             style={{ width: 220, height: 220, alignSelf: 'center', border: '1px solid var(--border)', borderRadius: 8, background: '#fff', padding: 6 }}
             // renderQrSvg 是我们自己零依赖编码出来的 SVG 字符串（lib/pay/qr，付款码同一套）
             dangerouslySetInnerHTML={{ __html: qrSvg }}
           />
         )}
-        <div className="small muted">{scanned ? '等待手机确认…' : '等待扫码…（二维码约 3 分钟内有效）'}</div>
+        <div className="small muted">
+          {scanned
+            ? (isEn ? 'Waiting for phone confirmation…' : '等待手机确认…')
+            : (isEn ? 'Waiting for scan… (valid for ~3 minutes)' : '等待扫码…（二维码约 3 分钟内有效）')}
+        </div>
         {note}
         {err && <div className="small" style={{ color: 'var(--red)' }}>{err}</div>}
       </div>
@@ -105,14 +148,14 @@ export function WechatIlinkConnect({ existing, autoStart = false, onDone }: Prop
       {bound && (
         <div className="small" style={{ color: existing!.ilinkExpired ? 'var(--red)' : 'var(--green)' }}>
           {existing!.ilinkExpired
-            ? '⚠ 微信登录态已过期，机器人暂时收不到消息——重新扫码即可恢复'
-            : `✅ 已绑定微信${existing!.ilinkUserId ? `（${existing!.ilinkUserId}）` : ''}`}
+            ? (isEn ? '⚠ WeChat login session expired, bot cannot receive messages temporarily — re-scan to restore' : '⚠ 微信登录态已过期，机器人暂时收不到消息——重新扫码即可恢复')
+            : (isEn ? `✅ WeChat Connected${existing!.ilinkUserId ? ` (${existing!.ilinkUserId})` : ''}` : `✅ 已绑定微信${existing!.ilinkUserId ? `（${existing!.ilinkUserId}）` : ''}`)}
         </div>
       )}
       {note}
       {err && <div className="small" style={{ color: 'var(--red)' }}>{err}</div>}
       <button className="btn btn-sm btn-primary" style={{ alignSelf: 'flex-start' }} onClick={() => void start()}>
-        {bound ? '重新扫码' : err ? '重新生成二维码' : '生成二维码'}
+        {bound ? (isEn ? 'Re-scan' : '重新扫码') : err ? (isEn ? 'Regenerate QR Code' : '重新生成二维码') : (isEn ? 'Generate QR Code' : '生成二维码')}
       </button>
     </div>
   );

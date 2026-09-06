@@ -14,25 +14,28 @@ export default function GlobalError({
 }) {
   // 根 layout 的 chunk 没拉到就会走到这里，是分片失败最常见的落点之一
   const reloading = useChunkErrorAutoReload(error);
+  const isEn = typeof document !== 'undefined' && document.cookie.includes('beacon_lang=en');
 
   if (reloading) {
     return (
-      <html lang="zh-CN">
+      <html lang={isEn ? 'en' : 'zh-CN'}>
         <body><ChunkReloadingNotice /></body>
       </html>
     );
   }
 
   return (
-    <html lang="zh-CN">
+    <html lang={isEn ? 'en' : 'zh-CN'}>
       <body>
         <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24 }}>
           <ErrorCard
             error={error}
-            blurb="页面刚才没能正常加载，已保存的内容不受影响。重试一下，不行就回首页。"
+            blurb={isEn
+              ? 'The page failed to load, but your saved content is safe. Please retry or return to the home page.'
+              : '页面刚才没能正常加载，已保存的内容不受影响。重试一下，不行就回首页。'}
             onRetry={() => reset()}
             // 根 layout 已崩，router 上下文不可靠，用原生跳转
-            homeButton={<a href="/" className="btn">回首页</a>}
+            homeButton={<a href="/" className="btn">{isEn ? 'Back to Home' : '回首页'}</a>}
           />
         </div>
       </body>

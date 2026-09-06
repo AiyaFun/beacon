@@ -1,6 +1,7 @@
 'use client';
 
 import type { CSSProperties, ReactNode } from 'react';
+import { useI18n } from '@/lib/i18n/context';
 
 // 三处错误边界（(app)/error、根 error、global-error）共用的错误卡片主体。
 // 各处差异通过 props 保留：卡片外框样式、消息空缺时的兜底文案、回首页按钮（Link vs 原生 a）、重试行为。
@@ -20,11 +21,15 @@ export function ErrorCard({
   onRetry: () => void;
   homeButton: ReactNode;
 }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const msg = error?.message || emptyFallback;
   return (
     <div className="card" style={{ maxWidth: 520, width: '100%', textAlign: 'center', padding: 28, ...cardStyle }}>
       <div style={{ fontSize: 34, marginBottom: 10 }}>🧯</div>
-      <h1 style={{ fontSize: 18, fontWeight: 700, marginBottom: 6 }}>出错了，你的内容还在</h1>
+      <h1 style={{ fontSize: 18, fontWeight: 700, marginBottom: 6 }}>
+        {isEn ? 'Something went wrong, your data is safe' : '出错了，你的内容还在'}
+      </h1>
       <p className="small muted" style={{ marginBottom: 14 }}>{blurb}</p>
       {msg && (
         <p
@@ -44,11 +49,13 @@ export function ErrorCard({
         </p>
       )}
       <div className="row" style={{ justifyContent: 'center', gap: 10 }}>
-        <button className="btn btn-primary" onClick={onRetry}>重试</button>
+        <button className="btn btn-primary" onClick={onRetry}>{isEn ? 'Retry' : '重试'}</button>
         {homeButton}
       </div>
       {error?.digest && (
-        <p className="small muted" style={{ marginTop: 12 }}>错误编号：{error.digest}</p>
+        <p className="small muted" style={{ marginTop: 12 }}>
+          {isEn ? `Error Digest: ${error.digest}` : `错误编号：${error.digest}`}
+        </p>
       )}
     </div>
   );

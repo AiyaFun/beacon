@@ -115,21 +115,29 @@ export default async function SettingsPage() {
           而 sourceHealthBoard() 返回的 competitor 那一半此前**一处都没渲染过**——
           那句承诺零代码兑现。用户看到的是「加了竞对、点进去空白」，界面上不说为什么。
           这比没有这个功能更伤：没有功能他不会失望，有入口点了没数据他会认为产品坏了。 */}
-      <Card title="竞对数据源" sub="每个平台现在到底取不取得到数据 · 服务端 / 要插件 / 没有">
+      {/* ── 竞对数据源（2026-08-29 补）──
+          隐私政策里写着「未配置时…**界面上会显示为数据源未启用**」，
+          而 sourceHealthBoard() 返回的 competitor 那一半此前**一处都没渲染过**——
+          那句承诺零代码兑现。用户看到的是「加了竞对、点进去空白」，界面上不说为什么。
+          这比没有这个功能更伤：没有功能他不会失望，有入口点了没数据他会认为产品坏了。 */}
+      <Card
+        title={lang === 'en' ? 'Competitor Data Sources' : '竞对数据源'}
+        sub={lang === 'en' ? 'Data retrieval readiness across platforms · Server / Extension / None' : '每个平台现在到底取不取得到数据 · 服务端 / 要插件 / 没有'}
+      >
         <div className="stack" style={{ gap: 8 }}>
           {board.competitor.map((c) => {
             // 三态分开说：「要装插件」他能自己解决，「真的没有」他做什么都没用。
             // 合并成「未启用」等于把能解决的问题说成解决不了的。
             const label = c.status === 'server'
-              ? { text: '服务端可取', cls: 'badge-green', foot: c.name }
+              ? { text: lang === 'en' ? 'Server Scraped' : '服务端可取', cls: 'badge-green', foot: c.name }
               : c.status === 'plugin'
-                ? { text: '要装采集助手', cls: 'badge-amber', foot: '这个平台服务端拿不到，装上浏览器插件后由它采' }
-                : { text: '暂无数据源', cls: 'badge-gray', foot: '服务端没有通道，插件也采不了——加了竞对也不会有数据' };
+                ? { text: lang === 'en' ? 'Extension Needed' : '要装采集助手', cls: 'badge-amber', foot: lang === 'en' ? 'Unavailable via server; scraped via browser extension' : '这个平台服务端拿不到，装上浏览器插件后由它采' }
+                : { text: lang === 'en' ? 'No Data Source' : '暂无数据源', cls: 'badge-gray', foot: lang === 'en' ? 'No server channel or extension support available' : '服务端没有通道，插件也采不了——加了竞对也不会有数据' };
             return (
               <div key={c.platform} className="row-between wrap" style={{ gap: 8, padding: '6px 0' }}>
                 <span className="row" style={{ gap: 8, alignItems: 'center' }}>
                   <span className={`dot ${c.status === 'server' ? 'dot-green' : 'dot-amber'}`} />
-                  <span className="small">{platformName(c.platform)}</span>
+                  <span className="small">{platformName(c.platform, lang)}</span>
                   <span className={`badge ${label.cls}`}>{label.text}</span>
                 </span>
                 <span className="small muted">{label.foot}</span>
@@ -138,37 +146,42 @@ export default async function SettingsPage() {
           })}
         </div>
         <p className="small muted" style={{ margin: '10px 0 0', lineHeight: 1.85 }}>
-          标着<b>暂无数据源</b>的平台，现在加了竞对也不会有数据——这不是故障，是这条通道还不存在。
+          {lang === 'en' ? (
+            <>Platforms marked <b>No Data Source</b> will not produce data even if competitors are added—this is not an outage, this channel is not supported yet.</>
+          ) : (
+            <>标着<b>暂无数据源</b>的平台，现在加了竞对也不会有数据——这不是故障，是这条通道还不存在。</>
+          )}
         </p>
 
-        {/* ── 自建 RSSHub（2026-08-31 补）──
-            它是竞对链上唯一一条「你自己部署、可能已经死掉」的通道，而且是**一个共享实例**，
-            逐平台各显示一次没有意义。不把它单独摆出来的话，「这个容器该留还是该停」
-            只能靠人去服务器上 docker ps —— 而它的 health() 此前还是个无条件返回 ok 的桩，
-            即便被调用也永远说「好」。 */}
+        {/* ── 自建 RSSHub（2026-08-31 补）── */}
         <div
           className="row-between wrap"
           style={{ gap: 8, marginTop: 10, paddingTop: 10, borderTop: '1px dashed var(--border)' }}
         >
           <span className="row" style={{ gap: 8, alignItems: 'center' }}>
             <span className={`dot ${board.rsshub.ok ? 'dot-green' : board.rsshub.configured ? 'dot-red' : 'dot-amber'}`} />
-            <span className="small">自建 RSSHub（备用通道）</span>
+            <span className="small">{lang === 'en' ? 'Self-hosted RSSHub (Backup Channel)' : '自建 RSSHub（备用通道）'}</span>
             <span className={`badge ${board.rsshub.ok ? 'badge-green' : board.rsshub.configured ? 'badge-red' : 'badge-gray'}`}>
-              {board.rsshub.ok ? '在跑' : board.rsshub.configured ? '连不上' : '未配置'}
+              {board.rsshub.ok ? (lang === 'en' ? 'Running' : '在跑') : board.rsshub.configured ? (lang === 'en' ? 'Unreachable' : '连不上') : (lang === 'en' ? 'Not Configured' : '未配置')}
             </span>
           </span>
           <span className="small muted">{board.rsshub.detail}</span>
         </div>
         {board.rsshub.configured && !board.rsshub.ok && (
           <p className="small" style={{ margin: '6px 0 0', color: 'var(--danger)', lineHeight: 1.85 }}>
-            配了地址但连不上——上面标着 <code>rsshub</code> 的那几条链现在实际走的是主源，
-            主源没配的话就是取不到。要么把容器起回来，要么把 <code>BEACON_RSSHUB_BASE_URL</code> 拿掉，
-            <b>别让它挂在链上当摆设</b>。
+            {lang === 'en' ? (
+              <>Configured URL but unreachable—channels marked <code>rsshub</code> fall back to primary sources. Please fix the container or remove <code>BEACON_RSSHUB_BASE_URL</code>.</>
+            ) : (
+              <>配了地址但连不上——上面标着 <code>rsshub</code> 的那几条链现在实际走的是主源，主源没配的话就是取不到。要么把容器起回来，要么把 <code>BEACON_RSSHUB_BASE_URL</code> 拿掉，<b>别让它挂在链上当摆设</b>。</>
+            )}
           </p>
         )}
       </Card>
 
-      <Card title="热榜数据源" sub="开源自建为主，商业 API 兜底，双源冗余">
+      <Card
+        title={lang === 'en' ? 'Hotlist Data Sources' : '热榜数据源'}
+        sub={lang === 'en' ? 'Open-source self-hosted primary, commercial API fallback, redundant channels' : '开源自建为主，商业 API 兜底，双源冗余'}
+      >
         <div className="stack" style={{ gap: 8 }}>
           {board.hot.map((h) => (
             <div key={h.name} className="row-between wrap" style={{ gap: 8, padding: '6px 0' }}>
@@ -177,7 +190,7 @@ export default async function SettingsPage() {
                 <span className="small">{h.name}</span>
                 <span className="badge badge-gray">{h.kind}</span>
               </span>
-              <span className="small muted">{h.detail ?? (h.ok ? '正常' : '降级中')}</span>
+              <span className="small muted">{h.detail ?? (h.ok ? (lang === 'en' ? 'Normal' : '正常') : (lang === 'en' ? 'Degraded' : '降级中'))}</span>
             </div>
           ))}
         </div>
@@ -186,19 +199,28 @@ export default async function SettingsPage() {
         <div className="row-between wrap" style={{ gap: 8 }}>
           <span className="row" style={{ gap: 8, alignItems: 'center' }}>
             <span className={`dot ${embed.mocked ? 'dot-amber' : 'dot-green'}`} />
-            <span className="small">语义向量（记忆召回 / 话题聚类 / 选题粗排）</span>
-            <span className="badge badge-gray">{embed.mocked ? '哈希近似' : embed.model}</span>
+            <span className="small">{lang === 'en' ? 'Semantic Vectors (Memory Recall / Topic Clustering / Screening)' : '语义向量（记忆召回 / 话题聚类 / 选题粗排）'}</span>
+            <span className="badge badge-gray">{embed.mocked ? (lang === 'en' ? 'Hash Approx' : '哈希近似') : embed.model}</span>
           </span>
           <span className="small muted">
-            {embed.mocked ? '未配嵌入模型，按字面相似度近似' : '真实嵌入模型'}
+            {embed.mocked ? (lang === 'en' ? 'No embedding model configured, approx via literal similarity' : '未配嵌入模型，按字面相似度近似') : (lang === 'en' ? 'Live embedding model' : '真实嵌入模型')}
           </span>
         </div>
 
         <div className="divider" style={{ margin: '14px 0' }} />
         <p className="small muted" style={{ lineHeight: 1.7 }}>
-          <b>数据来源透明披露：</b>竞对监控仅采集各平台已公开发布的账号与作品信息，不获取任何非公开数据、不托管平台凭证。
-          若你是被监控账号主体，可
-          <a href="/legal/data-request" target="_blank" style={{ color: 'var(--brand)', fontWeight: 600 }}>申请移除监控 →</a>
+          {lang === 'en' ? (
+            <>
+              <b>Data Source Transparency Disclosure: </b>Competitor tracking only collects publicly available account and post info across platforms; no private data or platform credentials are ever retrieved or stored. If you are the owner of a tracked account, you can{' '}
+              <a href="/legal/data-request" target="_blank" style={{ color: 'var(--brand)', fontWeight: 600 }}>request removal from tracking →</a>
+            </>
+          ) : (
+            <>
+              <b>数据来源透明披露：</b>竞对监控仅采集各平台已公开发布的账号与作品信息，不获取任何非公开数据、不托管平台凭证。
+              若你是被监控账号主体，可
+              <a href="/legal/data-request" target="_blank" style={{ color: 'var(--brand)', fontWeight: 600 }}>申请移除监控 →</a>
+            </>
+          )}
         </p>
       </Card>
     </>

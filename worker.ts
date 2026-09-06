@@ -68,10 +68,14 @@ async function main() {
   // 整机版没有本进程，由 instrumentation.node.ts 在 web 进程里起——两处互斥，判据都是 BEACON_QUEUE）
   const { startIlinkSupervisor, stopIlinkSupervisor } = await import('./lib/bot/wechat-ilink-poller');
   startIlinkSupervisor();
+  // 企微智能机器人长连接：同理只在这一个进程里连（协议每个机器人只许一条活连接，两处连会互踢）
+  const { startAibotSupervisor, stopAibotSupervisor } = await import('./lib/bot/wecom-aibot-poller');
+  startAibotSupervisor();
 
   const shutdown = async (signal: string) => {
     log.info('收到退出信号，关闭 worker…', { signal });
     stopIlinkSupervisor();
+    stopAibotSupervisor();
     await Promise.all(workers.map(({ w }) => w.close()));
     await q.close();
     await flushReports();

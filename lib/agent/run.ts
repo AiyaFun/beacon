@@ -1,4 +1,5 @@
 import { prisma } from '../db';
+import { loadBotIdentity, botContextBlocks } from './bot-context';
 import { parseJson, toJson } from '../json';
 import { llmComplete } from '../llm/gateway';
 import { readPersona, personaPromptBlock } from '../persona';
@@ -325,11 +326,14 @@ function systemPrompt(personaBlock: string, memoryBlock: string, toolNames: stri
     '',
     // 不教这一段的话，模型遇到「服务端没有的数据」只会干说「我拿不到」——
     // 而插件恰恰能拿到，只是要排队等它醒来
-    '关于浏览器插件（有些数据服务端拿不到）：',
+    '关于采集执行器（有些数据服务端拿不到）：',
     '- 完播率、粉丝画像这类**只有创作后台才有**的指标，以及竞对主页要翻很多页才够的作品，',
-    '  服务端都拿不到。别编，也别只说「拿不到」——用 dispatch_browser_task 把这件事排给用户的插件。',
-    '- 它是**排队**：插件要等用户下次打开浏览器才会跑。所以排完要如实说「已排给插件，还没有数据」，',
-    '  绝不能说成「已经采好了」。用户问进度时用 list_browser_tasks 看。',
+    '  服务端都拿不到。别编，也别只说「拿不到」——用 dispatch_browser_task 把这件事派下去。',
+    '- **谁来领、等多久，看下面「你的账号与插件」那一段的真实状态**，别自己假设：',
+    '  桌面客户端几秒内领走（通常一两分钟内跑完）；浏览器插件才需要等用户下次打开浏览器；',
+    '  本机浏览器就绪时当场跑完直接返回结果。**用户没有插件时绝不要提插件、也不要让他去开浏览器**。',
+    '- 工具回执里怎么说，你就怎么转告；排队时如实说「还没有数据」，绝不能说成「已经采好了」。',
+    '  想让用户看进度就用中文说明，**不要把工具名（如 list_browser_tasks）当命令写给他看**——那是给你调的，不是给他敲的。',
     '- 手上的数据够回答问题时就直接回答，不要每次都派活——那只会让用户等一个他不需要的采集。',
     '',
     personaBlock,
@@ -415,7 +419,7 @@ function waitingText(
     // 等智能体跑完的人会跑去开浏览器，而那件事跟浏览器毫无关系。
     if (waitingOn?.startsWith('workflow:')) return '派出去的智能体正在跑，它跑完就自动接着做';
     if (waitingOn?.startsWith('run:')) return '派出去的子任务正在跑，它跑完就自动接着做';
-    return '已把活排给你的采集执行器（桌面客户端每分钟领一次；浏览器插件等它下次醒来），跑完就自动接着做';
+    return '已把活排给你的采集执行器（桌面客户端几秒内领走；浏览器插件等它下次醒来），跑完就自动接着做';
   }
   if (status === 'waiting_quota') {
     const at = quotaResumeAt ? beijingClock(quotaResumeAt) : '北京时间 0 点';
@@ -540,6 +544,9 @@ export async function startAgentRun(ctx: ToolContext, goal: string, opts: StartR
   const auth = resolveAuth(opts);
 
   const { persona, memory, accounts } = await loadContext(ctx);
+  // 职能 bot 专属的两段（技能「什么时候用」+ 自己的台账）：只看模板，四个派发入口都不用改
+  const bot = await loadBotIdentity(opts.agentTemplateId);
+  const botBlocks = await botContextBlocks(ctx.tenantId, ctx.workspaceId, bot);
   const messages: ChatMessage[] = [
     {
       role: 'system',
@@ -547,7 +554,8 @@ export async function startAgentRun(ctx: ToolContext, goal: string, opts: StartR
         systemPrompt(persona, memory, tools.map((t) => `${t.name}(${t.label})`), auth.authMode, accounts)
         // 智能体的人设拼在最后：它是对通用助手的**补充**，不是替换——
         // 替换掉的话那几条硬规矩（不许编数据、Mock 不许假装执行）就随人设一起丢了
-        + (opts.agentSystemPrompt ? `\n\n【你这次的角色】\n${opts.agentSystemPrompt}` : ''),
+        + (opts.agentSystemPrompt ? `\n\n【你这次的角色】\n${opts.agentSystemPrompt}` : '')
+        + botBlocks,
     },
     { role: 'user', content: trimmed },
   ];
@@ -1102,14 +1110,18 @@ export async function runAgentLoop(runId: string): Promise<void> {
 async function contextForRun(runId: string): Promise<ToolContext | null> {
   const run = await prisma.agentRun.findUnique({
     where: { id: runId },
-    select: { id: true, status: true, workspaceId: true, accountId: true, memberId: true },
+    select: { id: true, status: true, workspaceId: true, accountId: true, memberId: true, agentTemplateId: true },
   });
   if (!run) return null;
   if (!LIVE_STATUSES.includes(run.status as AgentRunStatus)) return null;
 
-  const [ws, member] = await Promise.all([
+  const [ws, member, tpl] = await Promise.all([
     prisma.workspace.findUnique({ where: { id: run.workspaceId }, select: { tenantId: true } }),
     prisma.member.findUnique({ where: { id: run.memberId }, select: { role: true } }),
+    // 台账按 bot 隔离，工具得知道自己是谁在跑（模板删了就退回通用助手的格子）
+    run.agentTemplateId
+      ? prisma.workflowTemplate.findUnique({ where: { id: run.agentTemplateId }, select: { slug: true } })
+      : Promise.resolve(null),
   ]);
 
   // 工作区没了 / 发起人不在了：这次运行永远不可能再跑，如实判死而不是留一个僵尸
@@ -1131,6 +1143,7 @@ async function contextForRun(runId: string): Promise<ToolContext | null> {
     role: member.role,
     // 带上自己的 id：工具报出来的产物要挂到这次执行头上
     runId: run.id,
+    ...(tpl?.slug ? { botSlug: tpl.slug } : {}),
   };
 }
 
@@ -1424,7 +1437,7 @@ async function loop(ctx: ToolContext, runId: string): Promise<void> {
           messages.push({
             role: 'tool',
             toolCallId: skipped.id,
-            content: toJson({ ok: false, error: '这一步先没执行：同一轮里前面有一步在等浏览器插件的结果' }),
+            content: toJson({ ok: false, error: '这一步先没执行：同一轮里前面有一步在等采集执行器的结果' }),
           });
         }
         await park(runId, 'running', call, executed, messages, seq);

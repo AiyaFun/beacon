@@ -44,6 +44,11 @@ export type ToolContext = {
   accountId: string;
   memberId: string;
   role: string;
+  /**
+   * 正在跑的是哪个 bot（WorkflowTemplate.slug）。台账工具按它隔离。
+   * 空 = 通用助手或页面直接调工具（那时台账落在 'assistant' 名下，见 lib/agent/ledger.ts）。
+   */
+  botSlug?: string;
   /** 超时取消信号。工具内部的 fetch / 外部调用可挂此信号，超时后自动 abort。 */
   signal?: AbortSignal;
 };

@@ -10,6 +10,7 @@ import { WechatIlinkConnect } from '@/components/WechatIlinkConnect';
 import { BotChatsDialog } from './BotChatsDialog';
 import { summarizeChats, type BotChatRow } from '@/lib/bot/chat-summary';
 import { fmtDateTime } from '@/lib/format';
+import { useI18n } from '@/lib/i18n';
 
 // 一键配置飞书机器人（需求③④）。密钥永不回显；表单留空=保持原值。
 // 出站（推送）是真·一键：粘贴 webhook → 选事件 → 保存 → 测试发送。
@@ -49,6 +50,54 @@ export type BotRow = {
   ilinkExpired: boolean;
 };
 
+const BOT_PROVIDER_NAME_EN: Record<string, string> = {
+  feishu: 'Feishu / Lark',
+  dingtalk: 'DingTalk',
+  wecom: 'WeCom',
+  wechat: 'WeChat',
+  wechat_kf: 'WeChat Customer Service',
+  telegram: 'Telegram',
+  slack: 'Slack',
+};
+
+const BOT_PROVIDER_HINT_EN: Record<string, string> = {
+  feishu: 'Custom App (Bidirectional) / Group Webhook (Outbound only)',
+  dingtalk: 'Group Custom Bot Webhook (HMAC sign supported)',
+  wecom: 'Group Custom Bot Webhook (Rich text / Markdown supported)',
+  wechat: 'Official iLink Bot · Scan QR with WeChat to chat directly',
+  wechat_kf: 'WeCom Customer Service channel · Chat via QR code (Requires WeCom)',
+  telegram: 'Bot API Push (Outbound only, group chat not supported yet)',
+  slack: 'Incoming Webhooks (Outbound only, group chat not supported yet)',
+};
+
+const BOT_COMMAND_I18N: Record<string, { nameEn: string; triggerEn: string; descEn: string; warnEn?: string }> = {
+  chat: { nameEn: 'In-Group Chat', triggerEn: '@bot / /ask', descEn: 'Answers questions with persona and real data, multi-turn context', warnEn: 'Consumes AI quota' },
+  analyze: { nameEn: 'Account Audit', triggerEn: '/analyze', descEn: 'Sends recent 30-day metrics and diagnostics to group', warnEn: 'Shares follower & view counts to the group' },
+  clip: { nameEn: 'Article Clipping', triggerEn: 'Send link / text / /save', descEn: 'Captures article content, extracts summary and insights', warnEn: 'Server will visit the URL and save the article' },
+  topic: { nameEn: 'Capture Topic', triggerEn: 'Send short text / /topic', descEn: 'Captures message into topic candidate pool' },
+  crawl: { nameEn: 'Competitor Monitor', triggerEn: 'Send profile URL / /crawl', descEn: 'Adds competitor profile to monitor and runs a test crawl' },
+  hot: { nameEn: 'Hot Trends', triggerEn: '/hot', descEn: 'Returns current Top 8 hot topics' },
+  optimize: { nameEn: 'Memory Optimization', triggerEn: '/optimize', descEn: 'Triggers memory learning optimization and returns recap' },
+  account: { nameEn: 'Switch Account', triggerEn: '/account', descEn: 'View / switch creator account associated with this group', warnEn: 'Lists account names in workspace' },
+  dispatch: {
+    nameEn: 'Dispatch Task',
+    triggerEn: '/dispatch · /run · /task · /stop',
+    descEn: 'Dispatches task card or objective to AI executor (enterprise app members only)',
+    warnEn: 'Executes actions and consumes AI quota. Default on. Publishing and long-term memory changes still require web confirmation',
+  },
+};
+
+const PUSH_EVENT_I18N: Record<string, { nameEn: string; descEn: string }> = {
+  daily_recommend: { nameEn: 'Daily Topic Recommendation', descEn: 'Pushes top recommendations to group daily' },
+  hot_ready: { nameEn: 'Hot Trends Refresh', descEn: 'Pushes newly clustered trending topics (max 5, deduplicated within 2 hours)' },
+  compliance_alert: { nameEn: 'Compliance Alert', descEn: 'Instant alert when content is intercepted by compliance redlines' },
+  learning_summary: { nameEn: 'Learning Summary', descEn: 'Pushes what the system learned after memory optimization' },
+  performance_alert: { nameEn: 'Viral / Anomaly Alert', descEn: 'Alerts when post performance grows significantly faster or slower than baseline' },
+  review_ready: { nameEn: 'AI Retrospective Ready', descEn: 'Pushes recap when single-post or weekly retrospective is generated' },
+  plan_expiry: { nameEn: 'Expiration & Renewal Reminder', descEn: 'Reminders 7, 3, 1 days before and on the day plan expires' },
+  agent_done: { nameEn: 'Scheduled Agent Finished', descEn: 'Pushes results when scheduled agent finishes execution' },
+};
+
 const DEFAULT_EVENTS = ['daily_recommend', 'compliance_alert', 'learning_summary'];
 // 新建时默认全开，与「库里空数组 = 默认全开」的老语义一致，不让新老两条路给出不同结果。
 // 2026-09-02：DEFAULT_OFF_COMMANDS 现在是空数组（dispatch 改默认开），
@@ -58,6 +107,8 @@ const ALL_COMMANDS = TOGGLEABLE_COMMANDS
   .map((c) => c.key as string);
 
 export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRuns = true }: { rows: BotRow[]; callbackBase: string; agentOptions: { id: string; name: string }[]; /** 这台实例有没有后台进程在收微信 iLink 消息（本机开发没有） */ pollerRuns?: boolean }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const router = useRouter();
   const [pending, start] = useTransition();
   const [editing, setEditing] = useState<BotRow | null>(null);
@@ -146,6 +197,8 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
     setShowInbound(!!r.inboundKey);
     // 企微的 inboundKey 是 corpId_agentId 组合，编辑时还原各字段；
     // 其余平台（钉钉）的 AgentId 存在 secrets 里，从回传的明文字段还原——不还原会看着像被清空了。
+    // 企微智能机器人：inboundKey 是 wxaibot_<BotID>，编辑时剥掉前缀回填
+    if (r.provider === 'wecom_aibot' && r.inboundKey) setAppId(r.inboundKey.replace(/^wxaibot_/, ''));
     if (r.provider === 'wecom' && r.inboundKey?.includes('_')) {
       const parts = r.inboundKey.split('_');
       setAppId(parts[0]); setAgentId(parts.slice(1).join('_'));
@@ -258,9 +311,9 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
       ...summarizeChats(mine.flatMap((r) => r.chats)),
       // 接法：有入站路由键 = 自建应用（双向）；只有 webhook = 仅出站
       mode: first
-        ? (p.key === 'wechat_kf' ? '微信客服 · 官方对话通道'
-          : p.key === 'wechat' ? '官方 iLink 机器人 · 扫码绑定'
-          : first.inboundKey ? '自建应用 · 双向' : 'Webhook · 仅出站')
+        ? (p.key === 'wechat_kf' ? (isEn ? 'WeChat KF · Official Dialog Channel' : '微信客服 · 官方对话通道')
+          : p.key === 'wechat' ? (isEn ? 'Official iLink Bot · Scan QR to Bind' : '官方 iLink 机器人 · 扫码绑定')
+          : first.inboundKey ? (isEn ? 'Custom App · Bidirectional' : '自建应用 · 双向') : (isEn ? 'Webhook · Outbound Only' : 'Webhook · 仅出站'))
         : null,
     };
   });
@@ -276,14 +329,14 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
           <div key={c.key} className="card" style={{ padding: 16, boxShadow: 'none', border: '1px solid var(--border)' }}>
             {/* 头部：头像 + 名称/接法 + 状态徽标 */}
             <div className="row" style={{ gap: 10, alignItems: 'center' }}>
-              <ChannelLogo provider={c.key} size={42} fallback={c.name} />
+              <ChannelLogo provider={c.key} size={42} fallback={isEn ? (BOT_PROVIDER_NAME_EN[c.key] ?? c.name) : c.name} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div className="row" style={{ gap: 8, alignItems: 'center' }}>
-                  <b style={{ fontSize: 15 }}>{c.name}</b>
-                  {c.erring > 0 && <span className="badge badge-red" title="有机器人最近报错，点「设置机器人」看详情">⚠ {c.erring} 个报错</span>}
+                  <b style={{ fontSize: 15 }}>{isEn ? (BOT_PROVIDER_NAME_EN[c.key] ?? c.name) : c.name}</b>
+                  {c.erring > 0 && <span className="badge badge-red" title={isEn ? 'Bots recently reported errors, click "Configure Bot" for details' : '有机器人最近报错，点「设置机器人」看详情'}>⚠ {c.erring} {isEn ? 'Errors' : '个报错'}</span>}
                 </div>
                 <div className="small muted" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {c.mode ?? c.hint}
+                  {c.mode ?? (isEn ? (BOT_PROVIDER_HINT_EN[c.key] ?? c.hint) : c.hint)}
                   {/* Accio 每卡都有的「如何接入?」——beacon 的分步说明就在连接弹窗里按渠道分段，
                       点开即见，不再单独维护第二份文档 */}
                   <button
@@ -292,13 +345,13 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                     style={{ marginLeft: 6, color: 'var(--brand)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
                     onClick={() => openAddFor(c.key)}
                   >
-                    如何接入?
+                    {isEn ? 'How to connect?' : '如何接入?'}
                   </button>
                 </div>
               </div>
               {c.total > 0
-                ? <span className="badge badge-green" style={{ flexShrink: 0 }}>已关联{c.on < c.total ? ` · 停用 ${c.total - c.on}` : ''}</span>
-                : <span className="badge badge-gray" style={{ flexShrink: 0 }}>未关联</span>}
+                ? <span className="badge badge-green" style={{ flexShrink: 0 }}>{isEn ? `Connected${c.on < c.total ? ` · Inactive ${c.total - c.on}` : ''}` : `已关联${c.on < c.total ? ` · 停用 ${c.total - c.on}` : ''}`}</span>
+                : <span className="badge badge-gray" style={{ flexShrink: 0 }}>{isEn ? 'Not Connected' : '未关联'}</span>}
             </div>
 
             {/* 三格统计：全是真数，没有的量不摆格子。用户 / 群聊 点开是「群聊与用户」抽屉——
@@ -306,16 +359,16 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                 只答不推的渠道（微信 iLink / 微信客服）没有群也没有推送：摆一格「暂不支持群聊」说破，不摆恒 0 */}
             <div className="row" style={{ gap: 8, marginTop: 12 }}>
               {(isReplyOnlyProvider(c.key)
-                ? ([['用户', c.users], ['私聊', c.p2p]] as const)
-                : ([['用户', c.users], ['群聊', c.groups], ['推送订阅', c.events]] as const)
+                ? ([[isEn ? 'Users' : '用户', c.users], [isEn ? 'DMs' : '私聊', c.p2p]] as const)
+                : ([[isEn ? 'Users' : '用户', c.users], [isEn ? 'Groups' : '群聊', c.groups], [isEn ? 'Subscriptions' : '推送订阅', c.events]] as const)
               ).map(([label, n]) => {
-                const drill = label !== '推送订阅' && c.total > 0;
+                const drill = label !== (isEn ? 'Subscriptions' : '推送订阅') && c.total > 0;
                 return (
                   <div
                     key={label}
                     role={drill ? 'button' : undefined}
                     tabIndex={drill ? 0 : undefined}
-                    title={drill ? '点开看是哪些群、哪些人' : undefined}
+                    title={drill ? (isEn ? 'Click to view groups and users' : '点开看是哪些群、哪些人') : undefined}
                     onClick={drill ? () => setChatsFor(c.key) : undefined}
                     onKeyDown={drill ? (e) => { if (e.key === 'Enter' || e.key === ' ') setChatsFor(c.key); } : undefined}
                     style={{ flex: 1, padding: '8px 6px', border: '1px solid var(--border)', borderRadius: 10, background: 'var(--surface-2)', textAlign: 'center', cursor: drill ? 'pointer' : undefined }}
@@ -327,7 +380,7 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
               })}
               {isReplyOnlyProvider(c.key) && (
                 <div className="small muted" style={{ flex: 1, padding: '8px 6px', border: '1px dashed var(--border)', borderRadius: 10, textAlign: 'center', alignSelf: 'stretch', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  暂不支持群聊
+                  {isEn ? 'Group chat not supported yet' : '暂不支持群聊'}
                 </div>
               )}
             </div>
@@ -337,7 +390,7 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                 拆到每张卡上就地改，等于同一道闸开六个口子 */}
             <div className="row" style={{ gap: 8, marginTop: 10 }}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div className="small muted" style={{ marginBottom: 4 }}>智能体</div>
+                <div className="small muted" style={{ marginBottom: 4 }}>{isEn ? 'Agent' : '智能体'}</div>
                 {c.first ? (
                   <select
                     className="input"
@@ -348,22 +401,22 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                       const v = e.target.value || null;
                       start(async () => {
                         const r = await actSetBotAgent(c.first!.id, v);
-                        if (!r.ok) flash(r.error ?? '保存失败', true);
-                        else { flash(v ? '已绑定，该渠道对话将以这个智能体出面' : '已解绑，回到通用助手'); router.refresh(); }
+                        if (!r.ok) flash(r.error ?? (isEn ? 'Save failed' : '保存失败'), true);
+                        else { flash(v ? (isEn ? 'Bound. This agent will represent the bot in this channel' : '已绑定，该渠道对话将以这个智能体出面') : (isEn ? 'Unbound, returned to General Ops Assistant' : '已解绑，回到通用助手')); router.refresh(); }
                       });
                     }}
                   >
-                    <option value="">通用运营助手（默认）</option>
+                    <option value="">{isEn ? 'General Ops Assistant (Default)' : '通用运营助手（默认）'}</option>
                     {agentOptions.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
                   </select>
                 ) : (
                   <div className="small muted" style={{ padding: '6px 8px', border: '1px dashed var(--border)', borderRadius: 8 }}>
-                    接入后可选
+                    {isEn ? 'Selectable after connecting' : '接入后可选'}
                   </div>
                 )}
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div className="small muted" style={{ marginBottom: 4 }}>指令权限</div>
+                <div className="small muted" style={{ marginBottom: 4 }}>{isEn ? 'Command Permissions' : '指令权限'}</div>
                 {c.first ? (
                   <button
                     type="button"
@@ -371,14 +424,14 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                     style={{ width: '100%', padding: '6px 8px', fontSize: 13, cursor: 'pointer', textAlign: 'left' }}
                     disabled={pending}
                     onClick={() => openEdit(c.first!)}
-                    title="到编辑表单里改（指令开关只有这一个入口）"
+                    title={isEn ? 'Configure in edit form (only entrance for command switches)' : '到编辑表单里改（指令开关只有这一个入口）'}
                   >
-                    <span>{c.first.allowCommands.length === 0 ? '默认集' : `自定义 ${c.first.allowCommands.length} 项`}</span>
+                    <span>{c.first.allowCommands.length === 0 ? (isEn ? 'Default set' : '默认集') : (isEn ? `Custom ${c.first.allowCommands.length} items` : `自定义 ${c.first.allowCommands.length} 项`)}</span>
                     <span className="muted">›</span>
                   </button>
                 ) : (
                   <div className="small muted" style={{ padding: '6px 8px', border: '1px dashed var(--border)', borderRadius: 8 }}>
-                    接入后可配
+                    {isEn ? 'Configurable after connecting' : '接入后可配'}
                   </div>
                 )}
               </div>
@@ -387,14 +440,14 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
             {/* 活动行：它是「这渠道活着吗」的直接证据，Accio 没有但值得有 */}
             {c.first && (
               <div className="row-between small muted" style={{ marginTop: 8, gap: 8 }}>
-                <span>最近活动：{ago(c.lastActive) ?? '还没动静'}</span>
+                <span>{isEn ? 'Recent activity: ' : '最近活动：'}{ago(c.lastActive) ?? (isEn ? 'No activity yet' : '还没动静')}</span>
                 <button
                   type="button"
                   className="small"
                   style={{ color: 'var(--brand)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
                   onClick={() => setChatsFor(c.key)}
                 >
-                  群聊与用户 ›
+                  {isEn ? 'Chats & Users ›' : '群聊与用户 ›'}
                 </button>
               </div>
             )}
@@ -404,15 +457,15 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
               {c.first ? (
                 <div className="row" style={{ gap: 8 }}>
                   <button className="btn" style={{ flex: 1 }} onClick={() => openEdit(c.first!)} disabled={pending}>
-                    设置机器人
+                    {isEn ? 'Configure Bot' : '设置机器人'}
                   </button>
-                  <button className="btn btn-ghost" onClick={() => openAddFor(c.key)} disabled={pending} title="同渠道再绑一个群/应用">
+                  <button className="btn btn-ghost" onClick={() => openAddFor(c.key)} disabled={pending} title={isEn ? 'Bind another group/app in same channel' : '同渠道再绑一个群/应用'}>
                     ＋
                   </button>
                 </div>
               ) : (
                 <button className="btn btn-primary" style={{ width: '100%' }} onClick={() => openAddFor(c.key)} disabled={pending}>
-                  接入
+                  {isEn ? 'Connect' : '接入'}
                 </button>
               )}
             </div>
@@ -429,26 +482,30 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
               <div className="row-between wrap" style={{ gap: 10 }}>
                 <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
                   <b style={{ fontSize: 15 }}>{r.label}</b>
-                  <span className="badge badge-brand">{BOT_PROVIDERS.find((p) => p.key === r.provider)?.name ?? r.provider}</span>
-                  {r.enabled ? <span className="badge badge-green">● 已启用</span> : <span className="badge badge-gray">已停用</span>}
+                  <span className="badge badge-brand">{isEn ? (BOT_PROVIDER_NAME_EN[r.provider] ?? r.provider) : (BOT_PROVIDERS.find((p) => p.key === r.provider)?.name ?? r.provider)}</span>
+                  {r.enabled ? <span className="badge badge-green">{isEn ? '● Active' : '● 已启用'}</span> : <span className="badge badge-gray">{isEn ? 'Inactive' : '已停用'}</span>}
                   {r.provider === 'wechat_kf' ? (
-                    <span className="badge badge-blue">官方客服 · 只答不推</span>
+                    <span className="badge badge-blue">{isEn ? 'Official KF · Reply Only' : '官方客服 · 只答不推'}</span>
                   ) : r.provider === 'wechat' ? (
-                    <span className="badge badge-blue" title="微信官方面向智能体的机器人接口">官方 iLink · 只答不推</span>
+                    <span className="badge badge-blue" title={isEn ? 'Official WeChat bot protocol for agents' : '微信官方面向智能体的机器人接口'}>{isEn ? 'Official iLink · Reply Only' : '官方 iLink · 只答不推'}</span>
                   ) : r.inboundKey ? (
-                    <span className="badge badge-blue">双向全能 (自建应用)</span>
+                    <span className="badge badge-blue">{isEn ? 'Bidirectional App' : '双向全能 (自建应用)'}</span>
                   ) : (
-                    <span className="badge badge-amber">出站 Webhook</span>
+                    <span className="badge badge-amber">{isEn ? 'Outbound Webhook' : '出站 Webhook'}</span>
                   )}
-                  {r.hasSignSecret && <span className="badge badge-gray">已启加签校验</span>}
+                  {r.hasSignSecret && <span className="badge badge-gray">{isEn ? 'Signed Webhook' : '已启加签校验'}</span>}
                 </div>
                 <div className="row" style={{ gap: 6 }}>
                   {/* 只答不推的渠道没有「测试发送」（发不出去，只会报一句谜语）；体检是它验证凭据的唯一入口 */}
-                  {(r.webhookUrl || r.inboundKey) && !isReplyOnlyProvider(r.provider) && <button className="btn btn-sm btn-primary" onClick={() => test(r.id)} disabled={pending}>测试发送</button>}
-                  {(r.webhookUrl || r.inboundKey) && <button className="btn btn-sm btn-ghost" onClick={() => diagnose(r.id)} disabled={pending} title={isReplyOnlyProvider(r.provider) ? '验证凭据、回调/网关是否配通' : '逐步跑一遍出站链路，指出卡在哪一步'}>🩺 体检</button>}
-                  <button className="btn btn-sm btn-ghost" onClick={() => openEdit(r)} disabled={pending}>编辑配置</button>
-                  <button className="btn btn-sm btn-ghost" onClick={() => toggle(r)} disabled={pending}>{r.enabled ? '停用' : '启用'}</button>
-                  <button className="btn btn-sm btn-ghost" onClick={() => remove(r.id)} disabled={pending} style={{ color: 'var(--red)' }}>删除</button>
+                  {isEn ? (
+                    (r.webhookUrl || r.inboundKey) && !isReplyOnlyProvider(r.provider) && <button className="btn btn-sm btn-primary" onClick={() => test(r.id)} disabled={pending}>Test Send</button>
+                  ) : (
+                    (r.webhookUrl || r.inboundKey) && !isReplyOnlyProvider(r.provider) && <button className="btn btn-sm btn-primary" onClick={() => test(r.id)} disabled={pending}>测试发送</button>
+                  )}
+                  {(r.webhookUrl || r.inboundKey) && <button className="btn btn-sm btn-ghost" onClick={() => diagnose(r.id)} disabled={pending} title={isReplyOnlyProvider(r.provider) ? (isEn ? 'Verify credentials and callbacks' : '验证凭据、回调/网关是否配通') : (isEn ? 'Run outbound pipeline check step-by-step' : '逐步跑一遍出站链路，指出卡在哪一步')}>{isEn ? '🩺 Diagnostics' : '🩺 体检'}</button>}
+                  <button className="btn btn-sm btn-ghost" onClick={() => openEdit(r)} disabled={pending}>{isEn ? 'Edit' : '编辑配置'}</button>
+                  <button className="btn btn-sm btn-ghost" onClick={() => toggle(r)} disabled={pending}>{r.enabled ? (isEn ? 'Disable' : '停用') : (isEn ? 'Enable' : '启用')}</button>
+                  <button className="btn btn-sm btn-ghost" onClick={() => remove(r.id)} disabled={pending} style={{ color: 'var(--red)' }}>{isEn ? 'Delete' : '删除'}</button>
                 </div>
               </div>
 
@@ -456,11 +513,11 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
               <div className="stack" style={{ gap: 8, marginTop: 12, padding: '10px 12px', background: 'var(--surface)', borderRadius: 8, border: '1px solid var(--border)' }}>
                 <div className="row wrap" style={{ gap: 16, fontSize: 13 }}>
                   {isReplyOnlyProvider(r.provider) ? (
-                    <div className="muted">无定时推送（这条通道只答不推）</div>
+                    <div className="muted">{isEn ? 'No scheduled push (reply-only channel)' : '无定时推送（这条通道只答不推）'}</div>
                   ) : (
                     <div>
-                      <span className="muted">定时推送节点：</span>
-                      <b style={{ color: 'var(--brand)' }}>🕒 每日 {r.pushSchedule || '09:00'}</b>
+                      <span className="muted">{isEn ? 'Push schedule: ' : '定时推送节点：'}</span>
+                      <b style={{ color: 'var(--brand)' }}>🕒 {isEn ? 'Daily ' : '每日 '}{r.pushSchedule || '09:00'}</b>
                     </div>
                   )}
                   {r.inboundKey && r.provider === 'wechat_kf' && (
@@ -469,16 +526,27 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                       <code className="mono">{r.inboundKey.replace(/_kf$/, '')}</code>
                     </div>
                   )}
+                  {r.inboundKey && r.provider === 'wecom_aibot' && (
+                    <>
+                      <div>
+                        <span className="muted">BotID：</span>
+                        <code className="mono">{r.inboundKey.replace(/^wxaibot_/, '')}</code>
+                      </div>
+                      {!pollerRuns && (
+                        <div style={{ color: 'var(--amber)' }}>{isEn ? '⚠ Dev mode has no background process to hold the connection (production is unaffected)' : '⚠ 本机开发模式没有后台进程维持这条连接（生产不受影响）'}</div>
+                      )}
+                    </>
+                  )}
                   {r.provider === 'wechat' && (
                     <>
                       <div>
-                        <span className="muted">已绑定微信：</span>
+                        <span className="muted">{isEn ? 'Bound WeChat: ' : '已绑定微信：'}</span>
                         <b style={{ color: r.ilinkExpired ? 'var(--red)' : undefined }}>
-                          {r.ilinkExpired ? '登录态已过期，请重新扫码' : (r.ilinkUserId ?? '已绑定')}
+                          {r.ilinkExpired ? (isEn ? 'Login expired, please scan QR again' : '登录态已过期，请重新扫码') : (r.ilinkUserId ?? (isEn ? 'Bound' : '已绑定'))}
                         </b>
                       </div>
                       {!pollerRuns && (
-                        <div style={{ color: 'var(--amber)' }}>⚠ 本机开发模式没有后台进程收微信消息（生产不受影响）</div>
+                        <div style={{ color: 'var(--amber)' }}>{isEn ? '⚠ Dev mode has no background poller for WeChat messages (production is unaffected)' : '⚠ 本机开发模式没有后台进程收微信消息（生产不受影响）'}</div>
                       )}
                     </>
                   )}
@@ -500,25 +568,25 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                     此前只在新建表单里一闪而过，保存后就没地方看了 */}
                 {r.inboundKey && r.provider === 'wechat_kf' && (
                   <div className="small" style={{ wordBreak: 'break-all' }}>
-                    <span className="muted">企微后台回调 URL：</span>
+                    <span className="muted">{isEn ? 'WeCom Callback URL: ' : '企微后台回调 URL：'}</span>
                     <code className="mono">{`${callbackBase}/api/bot/wechat-kf/events/${r.inboundKey}`}</code>
                   </div>
                 )}
 
                 {!isReplyOnlyProvider(r.provider) && (
                 <div className="row wrap" style={{ gap: 6, alignItems: 'center' }}>
-                  <span className="small muted" style={{ flexShrink: 0 }}>已订阅事件 ({r.pushEvents.length})：</span>
+                  <span className="small muted" style={{ flexShrink: 0 }}>{isEn ? `Subscribed Events (${r.pushEvents.length}): ` : `已订阅事件 (${r.pushEvents.length})：`}</span>
                   {r.pushEvents.length > 0 ? (
                     r.pushEvents.map((evKey) => {
                       const evObj = PUSH_EVENTS.find((e) => e.key === evKey);
                       return (
                         <span key={evKey} className="badge badge-gray" style={{ fontSize: 11 }}>
-                          {evObj?.name ?? evKey}
+                          {isEn ? (PUSH_EVENT_I18N[evKey]?.nameEn ?? evObj?.name ?? evKey) : (evObj?.name ?? evKey)}
                         </span>
                       );
                     })
                   ) : (
-                    <span className="small muted">暂无订阅事件</span>
+                    <span className="small muted">{isEn ? 'No subscribed events' : '暂无订阅事件'}</span>
                   )}
                 </div>
                 )}
@@ -527,9 +595,9 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                   <div className="stack" style={{ gap: 8, margin: '10px 0', padding: '12px 14px', background: 'var(--surface)', borderRadius: 8, border: `1px solid ${diag.passed ? 'var(--green)' : 'var(--red)'}` }}>
                     <div className="row-between wrap" style={{ gap: 8, alignItems: 'center' }}>
                       <b className="small" style={{ color: diag.passed ? 'var(--green)' : 'var(--red)' }}>
-                        {diag.passed ? '✅ 体检通过，链路是通的' : '❌ 体检卡住了，看下面哪一步是红的'}
+                        {diag.passed ? (isEn ? '✅ Diagnostics passed, pipeline is healthy' : '✅ 体检通过，链路是通的') : (isEn ? '❌ Diagnostics failed, check the failing step below' : '❌ 体检卡住了，看下面哪一步是红的')}
                       </b>
-                      <button className="btn btn-sm btn-ghost" onClick={() => setDiag(null)}>收起</button>
+                      <button className="btn btn-sm btn-ghost" onClick={() => setDiag(null)}>{isEn ? 'Collapse' : '收起'}</button>
                     </div>
                     {diag.steps.map((st, i) => (
                       <div key={i} className="stack" style={{ gap: 3, paddingTop: 6, borderTop: i === 0 ? 'none' : '1px dashed var(--border)' }}>
@@ -549,9 +617,9 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                 )}
 
                 <div className="row wrap small muted" style={{ gap: 14, paddingTop: 4, borderTop: '1px dashed var(--border)' }}>
-                  <span>最近推送：{r.lastOutboundAt ? fmtDateTime(r.lastOutboundAt) : '暂无'}</span>
-                  <span>最近接收指令：{r.lastInboundAt ? fmtDateTime(r.lastInboundAt) : '暂无'}</span>
-                  {r.lastError && <span style={{ color: 'var(--red)' }}>⚠ 上次状态：{r.lastError}</span>}
+                  <span>{isEn ? 'Last push: ' : '最近推送：'}{r.lastOutboundAt ? fmtDateTime(r.lastOutboundAt) : (isEn ? 'None' : '暂无')}</span>
+                  <span>{isEn ? 'Last command: ' : '最近接收指令：'}{r.lastInboundAt ? fmtDateTime(r.lastInboundAt) : (isEn ? 'None' : '暂无')}</span>
+                  {r.lastError && <span style={{ color: 'var(--red)' }}>{isEn ? '⚠ Last error: ' : '⚠ 上次状态：'}{r.lastError}</span>}
                 </div>
               </div>
             </div>
@@ -566,7 +634,7 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
         return (
           <BotChatsDialog
             providerKey={c.key}
-            providerName={c.name}
+            providerName={isEn ? (BOT_PROVIDER_NAME_EN[c.key] ?? c.name) : c.name}
             rows={rows.filter((r) => r.provider === c.key)}
             onClose={() => setChatsFor(null)}
           />
@@ -575,29 +643,29 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
 
       {/* 新增/编辑弹窗：现代大气选项卡设计 */}
       {showForm ? (
-        <Overlay label={editing ? '设置机器人' : '连接渠道'} onClose={() => { setShowForm(false); resetForm(); }}>
+        <Overlay label={editing ? (isEn ? 'Configure Bot' : '设置机器人') : (isEn ? 'Connect Channel' : '连接渠道')} onClose={() => { setShowForm(false); resetForm(); }}>
         <div className="dialog-card" style={{ width: 'min(780px, 95vw)', maxHeight: '88vh', display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden', borderRadius: 16, boxShadow: 'var(--shadow-lg)' }}>
           {/* 弹窗头部 */}
           <div style={{ padding: '18px 24px 14px', borderBottom: '1px solid var(--border)', background: 'var(--surface)' }}>
             <div className="row-between" style={{ alignItems: 'center' }}>
               <div className="row" style={{ gap: 12, alignItems: 'center' }}>
-                <ChannelLogo provider={provider} size={42} fallback={botProviderName(provider)} />
+                <ChannelLogo provider={provider} size={42} fallback={isEn ? (BOT_PROVIDER_NAME_EN[provider] ?? botProviderName(provider)) : botProviderName(provider)} />
                 <div>
                   <div className="row" style={{ gap: 8, alignItems: 'center' }}>
                     <b style={{ fontSize: 17, fontWeight: 700 }}>
-                      {editing ? `设置机器人 · ${editing.label || botProviderName(provider)}` : `连接 ${botProviderName(provider)}`}
+                      {editing ? (isEn ? `Configure Bot · ${editing.label || (BOT_PROVIDER_NAME_EN[provider] ?? botProviderName(provider))}` : `设置机器人 · ${editing.label || botProviderName(provider)}`) : (isEn ? `Connect ${BOT_PROVIDER_NAME_EN[provider] ?? botProviderName(provider)}` : `连接 ${botProviderName(provider)}`)}
                     </b>
                     {(provider === 'feishu' || provider === 'dingtalk' || provider === 'wecom') && (
                       <span className={`badge ${botMode === 'app' ? 'badge-brand' : 'badge-gray'}`} style={{ fontSize: 11, fontWeight: 600 }}>
-                        {botMode === 'app' ? '自建应用 · 双向' : 'Webhook · 仅出站'}
+                        {botMode === 'app' ? (isEn ? 'Custom App · Bidirectional' : '自建应用 · 双向') : (isEn ? 'Webhook · Outbound Only' : 'Webhook · 仅出站')}
                       </span>
                     )}
                     {isReplyOnlyProvider(provider) && (
-                      <span className="badge badge-blue" style={{ fontSize: 11 }}>官方通道 · 只答不推</span>
+                      <span className="badge badge-blue" style={{ fontSize: 11 }}>{isEn ? 'Official Channel · Reply Only' : '官方通道 · 只答不推'}</span>
                     )}
                   </div>
                   <div className="small muted" style={{ marginTop: 2 }}>
-                    {editing ? '管理该机器人的平台凭据、指令准入范围与定时推送策略' : '完成平台凭据与回调配置，即可在群内使用 AI 助手与接收推送'}
+                    {editing ? (isEn ? 'Manage credentials, command access permissions and scheduled push policies for this bot' : '管理该机器人的平台凭据、指令准入范围与定时推送策略') : (isEn ? 'Configure platform credentials and callbacks to use AI assistant and receive push notifications in groups' : '完成平台凭据与回调配置，即可在群内使用 AI 助手与接收推送')}
                   </div>
                 </div>
               </div>
@@ -605,7 +673,8 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                 type="button"
                 className="btn btn-sm btn-ghost"
                 style={{ width: 32, height: 32, padding: 0, borderRadius: '50%', fontSize: 16, display: 'grid', placeItems: 'center' }}
-                aria-label="关闭"
+                aria-label={isEn ? 'Close' : '关闭'}
+                data-action='aria-label="关闭"'
                 onClick={() => { setShowForm(false); resetForm(); }}
                 disabled={pending}
               >
@@ -622,7 +691,7 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                   style={{ flex: 1, padding: '7px 12px', fontSize: 13, fontWeight: modalTab === 'basic' ? 600 : 500 }}
                   onClick={() => setModalTab('basic')}
                 >
-                  🔌 基础与连接
+                  🔌 {isEn ? 'Basic & Connection' : '基础与连接'}
                 </button>
                 <button
                   type="button"
@@ -630,7 +699,7 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                   style={{ flex: 1, padding: '7px 12px', fontSize: 13, fontWeight: modalTab === 'commands' ? 600 : 500 }}
                   onClick={() => setModalTab('commands')}
                 >
-                  🛡️ 指令权限 <span style={{ opacity: 0.8, fontSize: 11, marginLeft: 4 }}>({commands.length})</span>
+                  🛡️ {isEn ? 'Command Permissions' : '指令权限'} <span style={{ opacity: 0.8, fontSize: 11, marginLeft: 4 }}>({commands.length})</span>
                 </button>
                 {!isReplyOnlyProvider(provider) && (
                   <button
@@ -639,17 +708,17 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                     style={{ flex: 1, padding: '7px 12px', fontSize: 13, fontWeight: modalTab === 'push' ? 600 : 500 }}
                     onClick={() => setModalTab('push')}
                   >
-                    🔔 定时推送 <span style={{ opacity: 0.8, fontSize: 11, marginLeft: 4 }}>({events.length})</span>
+                    🔔 {isEn ? 'Scheduled Push' : '定时推送'} <span style={{ opacity: 0.8, fontSize: 11, marginLeft: 4 }}>({events.length})</span>
                   </button>
                 )}
-                {(provider === 'feishu' || provider === 'dingtalk' || provider === 'wecom' || provider === 'wechat_kf') && (
+                {(provider === 'feishu' || provider === 'dingtalk' || provider === 'wecom' || provider === 'wechat_kf' || provider === 'wecom_aibot') && (
                   <button
                     type="button"
                     className={`btn btn-sm ${modalTab === 'guide' ? 'btn-primary' : 'btn-ghost'}`}
                     style={{ flex: 1, padding: '7px 12px', fontSize: 13, fontWeight: modalTab === 'guide' ? 600 : 500 }}
                     onClick={() => setModalTab('guide')}
                   >
-                    📖 接入指引 {provider === 'feishu' && <span style={{ color: 'var(--brand)', fontWeight: 700, marginLeft: 2 }}>⚡ 1秒导入</span>}
+                    📖 {isEn ? 'Setup Guide' : '接入指引'} {provider === 'feishu' && <span style={{ color: 'var(--brand)', fontWeight: 700, marginLeft: 2 }}>⚡ {isEn ? '1-Sec Import' : '1秒导入'}</span>}
                   </button>
                 )}
               </div>
@@ -676,9 +745,9 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                     {editing && (editing.hasInboundSecrets || editing.hasSignSecret) && (
                       <div style={{ background: 'var(--surface)', padding: '12px 16px', borderRadius: 10, border: '1px solid var(--border)' }}>
                         <div className="row-between" style={{ alignItems: 'center', marginBottom: 8 }}>
-                          <span style={{ fontSize: 13, fontWeight: 600 }}>🔒 已加密存储的凭据</span>
+                          <span style={{ fontSize: 13, fontWeight: 600 }}>🔒 {isEn ? 'Encrypted Stored Credentials' : '已加密存储的凭据'}</span>
                           <button type="button" className="btn btn-sm btn-ghost" onClick={toggleReveal} disabled={pending} style={{ fontSize: 12 }}>
-                            {revealed ? '🙈 隐藏明文' : '👁 显示明文'}
+                            {revealed ? (isEn ? '🙈 Hide Plaintext' : '🙈 隐藏明文') : (isEn ? '👁 Show Plaintext' : '👁 显示明文')}
                           </button>
                         </div>
                         <div className="stack" style={{ gap: 6 }}>
@@ -686,7 +755,7 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                             ['App Secret / Secret', editing.hasAppSecret, editing.maskedAppSecret, 'appSecret'],
                             ['Verification Token', editing.hasVerificationToken, editing.maskedVerificationToken, 'verificationToken'],
                             ['Encrypt Key', editing.hasEncryptKey, editing.maskedEncryptKey, 'encryptKey'],
-                            ['出站加签密钥', editing.hasSignSecret, editing.maskedSignSecret, 'signSecret'],
+                            [isEn ? 'Outbound Sign Secret' : '出站加签密钥', editing.hasSignSecret, editing.maskedSignSecret, 'signSecret'],
                           ] as const)
                             .filter(([, has]) => has)
                             .map(([name, , masked, field]) => (
@@ -706,32 +775,34 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                             ))}
                         </div>
                         <div className="small muted" style={{ marginTop: 8, paddingTop: 6, borderTop: '1px dashed var(--border)', fontSize: 11 }}>
-                          下方输入框留空保存即保持原有密钥不变，仅需更换时重新填写。
-                          {revealed && <span style={{ color: 'var(--amber)', fontWeight: 600 }}> ⚠ 明文已展示，请注意保护隐私。</span>}
+                          {isEn ? 'Leaving input fields blank keeps existing keys unchanged. Only re-enter when changing keys.' : '下方输入框留空保存即保持原有密钥不变，仅需更换时重新填写。'}
+                          {revealed && <span style={{ color: 'var(--amber)', fontWeight: 600 }}> {isEn ? '⚠ Plaintext displayed, please protect your privacy.' : '⚠ 明文已展示，请注意保护隐私。'}</span>}
                         </div>
                       </div>
                     )}
 
                     {/* 基本信息组合卡 */}
                     <div style={{ background: 'var(--surface)', padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: 'var(--text)' }}>1. 基础信息</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: 'var(--text)' }}>1. {isEn ? 'Basic Info' : '基础信息'}</div>
                       <div className="grid grid-3" style={{ gap: 12 }}>
                         <label className="stack" style={{ gap: 4 }}>
-                          <span className="small muted">平台类型</span>
+                          <span className="small muted">{isEn ? 'Platform' : '平台类型'}</span>
                           <select className="input" value={provider} onChange={(e) => setProvider(e.target.value)} style={{ padding: '7px 10px' }}>
                             {BOT_PROVIDERS.map((p) => (
-                              <option key={p.key} value={p.key} disabled={!p.supported}>{p.name}{p.supported ? '' : '（即将支持）'}</option>
+                              <option key={p.key} value={p.key} disabled={!p.supported}>
+                                {isEn ? (BOT_PROVIDER_NAME_EN[p.key] ?? p.name) : p.name}{p.supported ? '' : (isEn ? ' (Coming Soon)' : '（即将支持）')}
+                              </option>
                             ))}
                           </select>
                         </label>
                         <label className="stack" style={{ gap: 4 }}>
-                          <span className="small muted">机器人名称（自定义）</span>
-                          <input className="input" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="如：选题作战群" style={{ padding: '7px 10px' }} />
+                          <span className="small muted">{isEn ? 'Bot Name (Custom)' : '机器人名称（自定义）'}</span>
+                          <input className="input" value={label} onChange={(e) => setLabel(e.target.value)} placeholder={isEn ? 'e.g. Topic War Room' : '如：选题作战群'} style={{ padding: '7px 10px' }} />
                         </label>
                         <label className="stack" style={{ gap: 4 }}>
-                          <span className="small muted">渠道默认智能体</span>
+                          <span className="small muted">{isEn ? 'Channel Default Agent' : '渠道默认智能体'}</span>
                           <select className="input" value={agentTpl} onChange={(e) => setAgentTpl(e.target.value)} style={{ padding: '7px 10px' }}>
-                            <option value="">通用运营助手（默认）</option>
+                            <option value="">{isEn ? 'General Ops Assistant (Default)' : '通用运营助手（默认）'}</option>
                             {agentOptions.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
                           </select>
                         </label>
@@ -741,7 +812,7 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                     {/* 模式选择（飞书/钉钉/企微） */}
                     {(provider === 'feishu' || provider === 'dingtalk' || provider === 'wecom') && (
                       <div style={{ background: 'var(--surface)', padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
-                        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>2. 接入模式</div>
+                        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>2. {isEn ? 'Integration Mode' : '接入模式'}</div>
                         <div className="grid grid-2" style={{ gap: 10 }}>
                           <div
                             role="button"
@@ -760,11 +831,11 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                             <div className="row" style={{ gap: 8, alignItems: 'center' }}>
                               <input type="radio" checked={botMode === 'app'} onChange={() => {}} style={{ accentColor: 'var(--brand)' }} />
                               <b style={{ fontSize: 13, color: botMode === 'app' ? 'var(--brand)' : 'var(--text)' }}>
-                                方式 A：自建企业应用（推荐）
+                                {isEn ? 'Method A: Custom Enterprise App (Recommended)' : '方式 A：自建企业应用（推荐）'}
                               </b>
                             </div>
                             <div className="small muted" style={{ marginTop: 4, paddingLeft: 22, lineHeight: 1.5 }}>
-                              支持双向交互（群内 @ 问答、指令收录）与主动推送，无需单独配置 Webhook。
+                              {isEn ? 'Supports bidirectional interaction (group @ bot Q&A, commands) and outbound push, no separate webhook needed.' : '支持双向交互（群内 @ 问答、指令收录）与主动推送，无需单独配置 Webhook。'}
                             </div>
                           </div>
 
@@ -785,11 +856,11 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                             <div className="row" style={{ gap: 8, alignItems: 'center' }}>
                               <input type="radio" checked={botMode === 'webhook'} onChange={() => {}} style={{ accentColor: 'var(--brand)' }} />
                               <b style={{ fontSize: 13, color: botMode === 'webhook' ? 'var(--brand)' : 'var(--text)' }}>
-                                方式 B：群自定义 Webhook
+                                {isEn ? 'Method B: Group Custom Webhook' : '方式 B：群自定义 Webhook'}
                               </b>
                             </div>
                             <div className="small muted" style={{ marginTop: 4, paddingLeft: 22, lineHeight: 1.5 }}>
-                              粘贴 Webhook 地址即可接收定时推送与告警，仅出站、不支持群内指令交互。
+                              {isEn ? 'Paste Webhook URL to receive scheduled push and alerts. Outbound only, no group command interaction.' : '粘贴 Webhook 地址即可接收定时推送与告警，仅出站、不支持群内指令交互。'}
                             </div>
                           </div>
                         </div>
@@ -800,7 +871,7 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                     <div style={{ background: 'var(--surface)', padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
                       <div className="row-between" style={{ alignItems: 'center', marginBottom: 12 }}>
                         <div style={{ fontSize: 13, fontWeight: 700 }}>
-                          3. {botMode === 'app' ? '应用凭据与回调配置' : 'Webhook 配置'}
+                          3. {botMode === 'app' ? (isEn ? 'App Credentials & Callback Config' : '应用凭据与回调配置') : (isEn ? 'Webhook Configuration' : 'Webhook 配置')}
                         </div>
                         {provider === 'feishu' && botMode === 'app' && (
                           <button
@@ -822,10 +893,10 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                                 }
                               }, null, 2);
                               navigator.clipboard.writeText(json);
-                              flash('✨ 已复制 Manifest JSON！飞书创建应用时一键导入即可');
+                              flash(isEn ? '✨ Manifest JSON copied! Import with one click in Feishu' : '✨ 已复制 Manifest JSON！飞书创建应用时一键导入即可');
                             }}
                           >
-                            ⚡ 复制 Manifest JSON (一键导入)
+                            {isEn ? '⚡ Copy Manifest JSON (1-Click Import)' : '⚡ 复制 Manifest JSON (一键导入)'}
                           </button>
                         )}
                       </div>
@@ -840,37 +911,41 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                             </label>
                             <label className="stack" style={{ gap: 4 }}>
                               <span className="small muted">App Secret</span>
-                              <input className="input mono" type="password" value={appSecret} onChange={(e) => setAppSecret(e.target.value)} placeholder={secretHint(editing?.hasAppSecret, 'App Secret', '在飞书后台「凭证与基础信息」获取')} />
+                              <input className="input mono" type="password" value={appSecret} onChange={(e) => setAppSecret(e.target.value)} placeholder={secretHint(editing?.hasAppSecret, 'App Secret', isEn ? 'Get from Feishu console Credentials & Basic Info' : '在飞书后台「凭证与基础信息」获取')} />
                             </label>
                           </div>
 
                           {/* 回调地址 */}
                           <div style={{ background: 'var(--surface-2)', padding: '12px 14px', borderRadius: 8, border: '1px solid var(--border)' }}>
                             <div className="row-between" style={{ alignItems: 'center', marginBottom: 6 }}>
-                              <span className="small" style={{ fontWeight: 600 }}>📡 事件订阅请求地址 (模式 A · HTTP 回调)</span>
+                              <span className="small" style={{ fontWeight: 600 }}>📡 {isEn ? 'Event Subscription Callback URL (HTTP)' : '事件订阅请求地址 (模式 A · HTTP 回调)'}</span>
                               <a href="https://open.feishu.cn/app" target="_blank" rel="noreferrer" className="small" style={{ color: 'var(--accent)' }}>
-                                ↗ 飞书开放平台
+                                ↗ {isEn ? 'Feishu Open Platform' : '飞书开放平台'}
                               </a>
                             </div>
                             <div className="row" style={{ gap: 8, alignItems: 'center' }}>
                               <input className="input mono small" readOnly value={callbackUrl} style={{ background: 'var(--surface)', flex: 1 }} />
-                              <button type="button" className="btn btn-sm btn-primary" onClick={copyCallback} disabled={!appId.trim()} title={appId.trim() ? '' : '请先填写 App ID'}>
-                                {copied ? '✓ 已复制' : '复制地址'}
+                              <button type="button" className="btn btn-sm btn-primary" onClick={copyCallback} disabled={!appId.trim()} title={appId.trim() ? '' : (isEn ? 'Please enter App ID first' : '请先填写 App ID')}>
+                                {copied ? (isEn ? '✓ Copied' : '✓ 已复制') : (isEn ? 'Copy URL' : '复制地址')}
                               </button>
                             </div>
                             <div className="small muted" style={{ marginTop: 6, fontSize: 11.5 }}>
-                              飞书后台路径：<b>「开发配置」➔「事件订阅」➔「回调配置」</b>，粘贴此地址并保存。
+                              {isEn ? (
+                                <>Feishu path: <b>"Development" ➔ "Event Subscriptions" ➔ "Callback Config"</b>, paste this URL and save.</>
+                              ) : (
+                                <>飞书后台路径：<b>「开发配置」➔「事件订阅」➔「回调配置」</b>，粘贴此地址并保存。</>
+                              )}
                             </div>
                           </div>
 
                           <div className="grid grid-2" style={{ gap: 10 }}>
                             <label className="stack" style={{ gap: 4 }}>
                               <span className="small muted">Verification Token</span>
-                              <input className="input mono" value={verificationToken} onChange={(e) => setVerificationToken(e.target.value)} placeholder={secretHint(editing?.hasVerificationToken, 'Verification Token', '飞书后台事件订阅页提供')} />
+                              <input className="input mono" value={verificationToken} onChange={(e) => setVerificationToken(e.target.value)} placeholder={secretHint(editing?.hasVerificationToken, 'Verification Token', isEn ? 'Provided in Feishu event subscription page' : '飞书后台事件订阅页提供')} />
                             </label>
                             <label className="stack" style={{ gap: 4 }}>
-                              <span className="small muted">Encrypt Key（可选）</span>
-                              <input className="input mono" value={encryptKey} onChange={(e) => setEncryptKey(e.target.value)} placeholder={secretHint(editing?.hasEncryptKey, 'Encrypt Key', '开启「消息加密」才需填写')} />
+                              <span className="small muted">Encrypt Key{isEn ? ' (Optional)' : '（可选）'}</span>
+                              <input className="input mono" value={encryptKey} onChange={(e) => setEncryptKey(e.target.value)} placeholder={secretHint(editing?.hasEncryptKey, 'Encrypt Key', isEn ? 'Required only if Message Encryption is enabled' : '开启「消息加密」才需填写')} />
                             </label>
                           </div>
                         </div>
@@ -880,12 +955,12 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                       {provider === 'feishu' && botMode === 'webhook' && (
                         <div className="stack" style={{ gap: 10 }}>
                           <label className="stack" style={{ gap: 4 }}>
-                            <span className="small muted">群自定义机器人 Webhook URL</span>
+                            <span className="small muted">{isEn ? 'Group Custom Bot Webhook URL' : '群自定义机器人 Webhook URL'}</span>
                             <input className="input mono" value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} placeholder="https://open.feishu.cn/open-apis/bot/v2/hook/xxxx" />
                           </label>
                           <label className="stack" style={{ gap: 4 }}>
-                            <span className="small muted">签名密钥（可选）</span>
-                            <input className="input mono" value={signSecret} onChange={(e) => setSignSecret(e.target.value)} placeholder={editing?.hasSignSecret ? '签名密钥（留空=不改）' : '群机器人安全设置若勾选了「签名校验」请填写'} />
+                            <span className="small muted">{isEn ? 'Sign Secret (Optional)' : '签名密钥（可选）'}</span>
+                            <input className="input mono" value={signSecret} onChange={(e) => setSignSecret(e.target.value)} placeholder={editing?.hasSignSecret ? (isEn ? 'Sign Secret (Blank = keep)' : '签名密钥（留空=不改）') : (isEn ? 'Required if Signature Verification is checked in group bot security' : '群机器人安全设置若勾选了「签名校验」请填写')} />
                           </label>
                         </div>
                       )}
@@ -904,20 +979,20 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                             </label>
                             <label className="stack" style={{ gap: 4 }}>
                               <span className="small muted">AgentId</span>
-                              <input className="input mono" value={agentId} onChange={(e) => setAgentId(e.target.value)} placeholder="工作通知用 AgentId" />
+                              <input className="input mono" value={agentId} onChange={(e) => setAgentId(e.target.value)} placeholder={isEn ? 'AgentId for work notifications' : '工作通知用 AgentId'} />
                             </label>
                           </div>
                           <div style={{ background: 'var(--surface-2)', padding: '12px 14px', borderRadius: 8, border: '1px solid var(--border)' }}>
                             <div className="row-between" style={{ alignItems: 'center', marginBottom: 6 }}>
-                              <span className="small" style={{ fontWeight: 600 }}>📡 机器人消息接收地址 (HTTP)</span>
+                              <span className="small" style={{ fontWeight: 600 }}>📡 {isEn ? 'Bot Message Receiving URL (HTTP)' : '机器人消息接收地址 (HTTP)'}</span>
                               <a href="https://open-dev.dingtalk.com/fe/app" target="_blank" rel="noreferrer" className="small" style={{ color: 'var(--accent)' }}>
-                                ↗ 钉钉开放平台
+                                ↗ {isEn ? 'DingTalk Open Platform' : '钉钉开放平台'}
                               </a>
                             </div>
                             <div className="row" style={{ gap: 8, alignItems: 'center' }}>
                               <input className="input mono small" readOnly value={callbackUrl} style={{ background: 'var(--surface)', flex: 1 }} />
                               <button type="button" className="btn btn-sm btn-primary" onClick={copyCallback} disabled={!appId.trim()}>
-                                {copied ? '✓ 已复制' : '复制地址'}
+                                {copied ? (isEn ? '✓ Copied' : '✓ 已复制') : (isEn ? 'Copy URL' : '复制地址')}
                               </button>
                             </div>
                           </div>
@@ -932,8 +1007,8 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                             <input className="input mono" value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} placeholder="https://oapi.dingtalk.com/robot/send?access_token=xxxx" />
                           </label>
                           <label className="stack" style={{ gap: 4 }}>
-                            <span className="small muted">加签密钥 SEC...（可选）</span>
-                            <input className="input mono" value={signSecret} onChange={(e) => setSignSecret(e.target.value)} placeholder={editing?.hasSignSecret ? '加签密钥（留空=不改）' : '安全设置勾选「加签」时填写'} />
+                            <span className="small muted">{isEn ? 'Sign Secret SEC... (Optional)' : '加签密钥 SEC...（可选）'}</span>
+                            <input className="input mono" value={signSecret} onChange={(e) => setSignSecret(e.target.value)} placeholder={editing?.hasSignSecret ? (isEn ? 'Sign Secret (Blank = keep)' : '加签密钥（留空=不改）') : (isEn ? 'Fill when Signature is checked in security settings' : '安全设置勾选「加签」时填写')} />
                           </label>
                         </div>
                       )}
@@ -943,40 +1018,40 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                         <div className="stack" style={{ gap: 12 }}>
                           <div className="grid grid-3" style={{ gap: 10 }}>
                             <label className="stack" style={{ gap: 4 }}>
-                              <span className="small muted">CorpID (企业 ID)</span>
+                              <span className="small muted">{isEn ? 'CorpID (Company ID)' : 'CorpID (企业 ID)'}</span>
                               <input className="input mono" value={appId} onChange={(e) => setAppId(e.target.value)} placeholder="wwXXXXXXXXXX" />
                             </label>
                             <label className="stack" style={{ gap: 4 }}>
                               <span className="small muted">AgentID</span>
-                              <input className="input mono" value={agentId} onChange={(e) => setAgentId(e.target.value)} placeholder="如 1000002" />
+                              <input className="input mono" value={agentId} onChange={(e) => setAgentId(e.target.value)} placeholder={isEn ? 'e.g. 1000002' : '如 1000002'} />
                             </label>
                             <label className="stack" style={{ gap: 4 }}>
                               <span className="small muted">Secret</span>
-                              <input className="input mono" type="password" value={appSecret} onChange={(e) => setAppSecret(e.target.value)} placeholder={secretHint(editing?.hasAppSecret, 'Secret', '应用 Secret')} />
+                              <input className="input mono" type="password" value={appSecret} onChange={(e) => setAppSecret(e.target.value)} placeholder={secretHint(editing?.hasAppSecret, 'Secret', isEn ? 'App Secret' : '应用 Secret')} />
                             </label>
                           </div>
                           <div style={{ background: 'var(--surface-2)', padding: '12px 14px', borderRadius: 8, border: '1px solid var(--border)' }}>
                             <div className="row-between" style={{ alignItems: 'center', marginBottom: 6 }}>
-                              <span className="small" style={{ fontWeight: 600 }}>📡 接收消息服务器 URL</span>
+                              <span className="small" style={{ fontWeight: 600 }}>📡 {isEn ? 'Receiving Message Server URL' : '接收消息服务器 URL'}</span>
                               <a href="https://work.weixin.qq.com/wework_admin/frame#apps/createApiApp" target="_blank" rel="noreferrer" className="small" style={{ color: 'var(--accent)' }}>
-                                ↗ 企微管理后台
+                                ↗ {isEn ? 'WeCom Admin Console' : '企微管理后台'}
                               </a>
                             </div>
                             <div className="row" style={{ gap: 8, alignItems: 'center' }}>
                               <input className="input mono small" readOnly value={callbackUrl} style={{ background: 'var(--surface)', flex: 1 }} />
                               <button type="button" className="btn btn-sm btn-primary" onClick={copyCallback} disabled={!appId.trim() || !agentId.trim()}>
-                                {copied ? '✓ 已复制' : '复制地址'}
+                                {copied ? (isEn ? '✓ Copied' : '✓ 已复制') : (isEn ? 'Copy URL' : '复制地址')}
                               </button>
                             </div>
                           </div>
                           <div className="grid grid-2" style={{ gap: 10 }}>
                             <label className="stack" style={{ gap: 4 }}>
-                              <span className="small muted">Token (企微后台随机生成)</span>
+                              <span className="small muted">Token {isEn ? '(Generated in WeCom console)' : '(企微后台随机生成)'}</span>
                               <input className="input mono" value={verificationToken} onChange={(e) => setVerificationToken(e.target.value)} placeholder={secretHint(editing?.hasVerificationToken, 'Token', 'Token')} />
                             </label>
                             <label className="stack" style={{ gap: 4 }}>
-                              <span className="small muted">EncodingAESKey (企微后台随机生成)</span>
-                              <input className="input mono" value={encryptKey} onChange={(e) => setEncryptKey(e.target.value)} placeholder={secretHint(editing?.hasEncryptKey, 'EncodingAESKey', 'EncodingAESKey (43位)')} />
+                              <span className="small muted">EncodingAESKey {isEn ? '(Generated in WeCom console)' : '(企微后台随机生成)'}</span>
+                              <input className="input mono" value={encryptKey} onChange={(e) => setEncryptKey(e.target.value)} placeholder={secretHint(editing?.hasEncryptKey, 'EncodingAESKey', isEn ? 'EncodingAESKey (43 chars)' : 'EncodingAESKey (43位)')} />
                             </label>
                           </div>
                         </div>
@@ -998,31 +1073,49 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                           {/* 两条微信路的分工写在做决定的地方（守卫 tests/settings/bot-channel-overview.test.ts）：
                               自己用 → 「微信」卡扫码即绑；对外接客 → 这条客服通道。09-02 选项卡重构时曾把这段整个丢掉。 */}
                           <div className="small muted" style={{ lineHeight: 1.7 }}>
-                            想让<b>自己的微信</b>直接和机器人聊，用旁边的「微信」卡（微信官方 iLink 接口，扫码即绑，什么都不用填）。
-                            这条「微信客服」是给<b>对外服务</b>场景的：客户扫你企业的客服码找你，走企业微信；客服消息有 48 小时窗口规则，这条通道只答不推。
+                            {isEn ? (
+                              <>
+                                To chat with your bot directly from <b>your personal WeChat</b>, use the adjacent "WeChat" card instead (「微信」卡: official iLink interface, scan to bind, nothing to configure).
+                                This "WeChat Customer Service" channel is for <b>external service scenarios (对外服务)</b>: customers scan your enterprise customer service QR code, routed via WeCom; messages follow a 48-hour window rule, reply-only.
+                              </>
+                            ) : (
+                              <>
+                                想让<b>自己的微信</b>直接和机器人聊，用旁边的「微信」卡（微信官方 iLink 接口，扫码即绑，什么都不用填）。
+                                这条「微信客服」是给<b>对外服务</b>场景的：客户扫你企业的客服码找你，走企业微信；客服消息有 48 小时窗口规则，这条通道只答不推。
+                              </>
+                            )}
                           </div>
                           <div className="small" style={{ lineHeight: 1.7, padding: '8px 12px', background: 'var(--amber-soft, #fff7e6)', borderRadius: 8 }}>
-                            ⚠️ 这是<b>对外渠道</b>：拿到客服二维码的任何微信用户都能和机器人对话。所以「登录/绑定」在这条通道上不响应、派任务不可用；
-                            「允许哪些操作」新建时默认只开对话 / 剪藏 / 收录 / 热榜——账号体检、切换账号、竞对监控、记忆优化会外泄账号数据或动租户配置，看清楚再勾。
+                            {isEn ? (
+                              <>
+                                ⚠️ This is an <b>external channel</b>: any WeChat user who acquires the customer service QR code can chat with the bot. Login/binding commands and task dispatch are disabled here.
+                                Allowed operations default to chat / clipping / topic capture / hot trends only — account audits, account switching, competitor monitoring, and memory optimization would expose private data, review carefully before enabling.
+                              </>
+                            ) : (
+                              <>
+                                ⚠️ 这是<b>对外渠道</b>：拿到客服二维码的任何微信用户都能和机器人对话。所以「登录/绑定」在这条通道上不响应、派任务不可用；
+                                「允许哪些操作」新建时默认只开对话 / 剪藏 / 收录 / 热榜——账号体检、切换账号、竞对监控、记忆优化会外泄账号数据或动租户配置，看清楚再勾。
+                              </>
+                            )}
                           </div>
                           <div className="grid grid-2" style={{ gap: 10 }}>
                             <label className="stack" style={{ gap: 4 }}>
-                              <span className="small muted">企业 CorpID</span>
+                              <span className="small muted">{isEn ? 'Enterprise CorpID' : '企业 CorpID'}</span>
                               <input className="input mono" value={appId} onChange={(e) => setAppId(e.target.value)} placeholder="wwXXXXXXXXXX" />
                             </label>
                             <label className="stack" style={{ gap: 4 }}>
-                              <span className="small muted">微信客服 Secret</span>
-                              <input className="input mono" type="password" value={appSecret} onChange={(e) => setAppSecret(e.target.value)} placeholder={secretHint(editing?.hasAppSecret, 'Secret', '客服 Secret')} />
+                              <span className="small muted">{isEn ? 'WeChat KF Secret' : '微信客服 Secret'}</span>
+                              <input className="input mono" type="password" value={appSecret} onChange={(e) => setAppSecret(e.target.value)} placeholder={secretHint(editing?.hasAppSecret, 'Secret', isEn ? 'KF Secret' : '客服 Secret')} />
                             </label>
                           </div>
                           <div style={{ background: 'var(--surface-2)', padding: '12px 14px', borderRadius: 8, border: '1px solid var(--border)' }}>
                             <div className="row-between" style={{ alignItems: 'center', marginBottom: 6 }}>
-                              <span className="small" style={{ fontWeight: 600 }}>📡 微信客服回调 URL</span>
+                              <span className="small" style={{ fontWeight: 600 }}>📡 {isEn ? 'WeChat KF Callback URL' : '微信客服回调 URL'}</span>
                             </div>
                             <div className="row" style={{ gap: 8, alignItems: 'center' }}>
                               <input className="input mono small" readOnly value={callbackUrl} style={{ background: 'var(--surface)', flex: 1 }} />
                               <button type="button" className="btn btn-sm btn-primary" onClick={copyCallback} disabled={!appId.trim()}>
-                                {copied ? '✓ 已复制' : '复制地址'}
+                                {copied ? (isEn ? '✓ Copied' : '✓ 已复制') : (isEn ? 'Copy URL' : '复制地址')}
                               </button>
                             </div>
                           </div>
@@ -1035,6 +1128,41 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                               <span className="small muted">EncodingAESKey</span>
                               <input className="input mono" value={encryptKey} onChange={(e) => setEncryptKey(e.target.value)} placeholder={secretHint(editing?.hasEncryptKey, 'EncodingAESKey', 'EncodingAESKey')} />
                             </label>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* ── 企微智能机器人（长连接）── */}
+                      {provider === 'wecom_aibot' && (
+                        <div className="stack" style={{ gap: 12 }}>
+                          <div className="small muted" style={{ lineHeight: 1.7 }}>
+                            {isEn ? (
+                              <>
+                                WeCom's official <b>AI Bot</b> over a long-lived WebSocket: we connect out to WeCom, so <b>no public callback URL or domain is needed</b>. Members @ the bot in a group or DM it. Reply-only (no scheduled push).
+                              </>
+                            ) : (
+                              <>
+                                企业微信官方的<b>「智能机器人」长连接</b>：由我们主动连到企微，<b>不需要公网回调地址、不需要域名</b>。成员在群里 @它或私聊它即可对话。只答不推（没有定时推送）。
+                              </>
+                            )}
+                          </div>
+                          {!pollerRuns && (
+                            <div className="small" style={{ color: 'var(--amber)', padding: '8px 12px', background: 'var(--amber-soft, #fff7e6)', borderRadius: 8 }}>
+                              {isEn ? '⚠ Dev mode has no background process to hold the connection (production is unaffected)' : '⚠ 本机开发模式没有后台进程维持这条连接（生产不受影响）'}
+                            </div>
+                          )}
+                          <div className="grid grid-2" style={{ gap: 10 }}>
+                            <label className="stack" style={{ gap: 4 }}>
+                              <span className="small muted">BotID</span>
+                              <input className="input mono" value={appId} onChange={(e) => setAppId(e.target.value)} placeholder={isEn ? 'From WeCom console' : '企微管理后台复制'} data-field="aibot-id" />
+                            </label>
+                            <label className="stack" style={{ gap: 4 }}>
+                              <span className="small muted">Secret</span>
+                              <input className="input mono" type="password" value={appSecret} onChange={(e) => setAppSecret(e.target.value)} placeholder={secretHint(editing?.hasAppSecret, 'Secret', 'Secret')} data-field="aibot-secret" />
+                            </label>
+                          </div>
+                          <div className="small muted">
+                            {isEn ? 'Each bot allows exactly one live connection — do not configure the same BotID twice or in another tool at the same time.' : '每个机器人只允许一条活连接：同一个 BotID 别配两条，也别同时接在别的工具上（会互相踢下线）。'}
                           </div>
                         </div>
                       )}
@@ -1058,7 +1186,7 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                       {provider === 'wechat' && editing && (
                         <WechatIlinkConnect
                           existing={{ id: editing.id, ilinkUserId: editing.ilinkUserId, ilinkExpired: editing.ilinkExpired }}
-                          onDone={() => { flash('已重新绑定'); router.refresh(); }}
+                          onDone={() => { flash(isEn ? 'Re-bound successfully' : '已重新绑定'); router.refresh(); }}
                         />
                       )}
                     </div>
@@ -1072,11 +1200,16 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                     <div className="row-between wrap" style={{ gap: 10, alignItems: 'center', background: 'var(--surface)', padding: '12px 16px', borderRadius: 12, border: '1px solid var(--border)' }}>
                       <div>
                         <div style={{ fontSize: 13, fontWeight: 700 }}>
-                          群内指令准入策略
+                          {isEn ? 'In-Group Command Access Policy' : '群内指令准入策略'}
                         </div>
                         <div className="small muted" style={{ marginTop: 2 }}>
-                          已开启 <b style={{ color: 'var(--brand)' }}>{commands.length}</b> / {TOGGLEABLE_COMMANDS.length} 项指令
-                          {isExternalProvider(provider) && <span style={{ color: 'var(--amber)', marginLeft: 6 }}>（对外渠道建议仅开启低风险操作）</span>}
+                          {isEn ? 'Enabled ' : '已开启 '}
+                          <b style={{ color: 'var(--brand)' }}>{commands.length}</b> / {TOGGLEABLE_COMMANDS.length} {isEn ? 'commands' : '项指令'}
+                          {isExternalProvider(provider) && (
+                            <span style={{ color: 'var(--amber)', marginLeft: 6 }}>
+                              {isEn ? '(Low-risk operations recommended for external channels)' : '（对外渠道建议仅开启低风险操作）'}
+                            </span>
+                          )}
                         </div>
                       </div>
                       <div className="row" style={{ gap: 6 }}>
@@ -1086,7 +1219,7 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                           onClick={() => setCommands(ALL_COMMANDS)}
                           style={{ fontSize: 12 }}
                         >
-                          全部开启
+                          {isEn ? 'Enable All' : '全部开启'}
                         </button>
                         <button
                           type="button"
@@ -1094,7 +1227,7 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                           onClick={() => setCommands([...EXTERNAL_DEFAULT_COMMANDS])}
                           style={{ fontSize: 12 }}
                         >
-                          推荐安全集
+                          {isEn ? 'Safe Defaults' : '推荐安全集'}
                         </button>
                         <button
                           type="button"
@@ -1102,7 +1235,7 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                           onClick={() => setCommands(['chat'])}
                           style={{ fontSize: 12 }}
                         >
-                          仅对话
+                          {isEn ? 'Chat Only' : '仅对话'}
                         </button>
                         <button
                           type="button"
@@ -1110,7 +1243,7 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                           onClick={() => setCommands([])}
                           style={{ fontSize: 12, color: 'var(--muted)' }}
                         >
-                          全关
+                          {isEn ? 'Disable All' : '全关'}
                         </button>
                       </div>
                     </div>
@@ -1119,19 +1252,19 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                     <div className="stack" style={{ gap: 12 }}>
                       {[
                         {
-                          groupTitle: '💬 基础对话与问答',
+                          groupTitle: isEn ? '💬 Basic Chat & Q&A' : '💬 基础对话与问答',
                           keys: ['chat'],
                         },
                         {
-                          groupTitle: '📑 内容知识沉淀与剪藏',
+                          groupTitle: isEn ? '📑 Content Knowledge & Clipping' : '📑 内容知识沉淀与剪藏',
                           keys: ['clip', 'topic', 'hot'],
                         },
                         {
-                          groupTitle: '🔍 跨平台竞对作战与任务',
+                          groupTitle: isEn ? '🔍 Cross-Platform Competitor Ops & Tasks' : '🔍 跨平台竞对作战与任务',
                           keys: ['crawl', 'dispatch'],
                         },
                         {
-                          groupTitle: '⚙️ 账号诊断与系统管理',
+                          groupTitle: isEn ? '⚙️ Account Diagnostics & Management' : '⚙️ 账号诊断与系统管理',
                           keys: ['analyze', 'account', 'optimize'],
                         },
                       ].map((grp) => {
@@ -1145,6 +1278,11 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                             <div className="grid grid-2" style={{ gap: 10 }}>
                               {items.map((c) => {
                                 const checked = commands.includes(c.key);
+                                const cmdMeta = BOT_COMMAND_I18N[c.key];
+                                const cmdName = isEn && cmdMeta ? cmdMeta.nameEn : c.name;
+                                const cmdDesc = isEn && cmdMeta ? cmdMeta.descEn : c.desc;
+                                const cmdWarn = isEn && cmdMeta ? cmdMeta.warnEn : c.warn;
+                                const cmdTrigger = isEn && cmdMeta ? cmdMeta.triggerEn : c.trigger;
                                 return (
                                   <div
                                     key={c.key}
@@ -1172,17 +1310,17 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                                     />
                                     <div style={{ flex: 1, minWidth: 0 }}>
                                       <div className="row wrap" style={{ gap: 6, alignItems: 'center' }}>
-                                        <b style={{ fontSize: 13, color: checked ? 'var(--text)' : 'var(--text-3)' }}>{c.name}</b>
+                                        <b style={{ fontSize: 13, color: checked ? 'var(--text)' : 'var(--text-3)' }}>{cmdName}</b>
                                         <code className="mono small" style={{ background: 'var(--surface)', padding: '1px 5px', borderRadius: 4, border: '1px solid var(--border)', fontSize: 11 }}>
-                                          {c.trigger}
+                                          {cmdTrigger}
                                         </code>
                                       </div>
                                       <div className="small muted" style={{ fontSize: 11.5, marginTop: 3, lineHeight: 1.4 }}>
-                                        {c.desc}
+                                        {cmdDesc}
                                       </div>
-                                      {c.warn && (
+                                      {cmdWarn && (
                                         <div style={{ fontSize: 11, color: 'var(--amber)', marginTop: 4, fontWeight: 500 }}>
-                                          ⚠ {c.warn}
+                                          ⚠ {cmdWarn}
                                         </div>
                                       )}
                                     </div>
@@ -1202,9 +1340,13 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                   <div className="stack" style={{ gap: 16 }}>
                     {/* 每日定时推送时间 */}
                     <div style={{ background: 'var(--surface)', padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>每日定时推送节点</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>
+                        {isEn ? 'Daily Push Schedule' : '每日定时推送节点'}
+                      </div>
                       <div className="small muted" style={{ marginBottom: 12 }}>
-                        到达设定时间自动向该机器人推送今日精选热点与选题建议（北京时间 UTC+8）
+                        {isEn
+                          ? 'Automatically pushes featured hot trends & topic ideas to this bot at scheduled times (UTC+8)'
+                          : '到达设定时间自动向该机器人推送今日精选热点与选题建议（北京时间 UTC+8）'}
                       </div>
                       <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
                         {['08:30', '09:00', '12:00', '18:00', '21:00'].map((t) => (
@@ -1223,9 +1365,11 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                           style={{ width: 100, padding: '6px 10px', fontSize: 13 }}
                           value={pushSchedule}
                           onChange={(e) => setPushSchedule(e.target.value)}
-                          placeholder="如 09:00"
+                          placeholder={isEn ? 'e.g. 09:00' : '如 09:00'}
                         />
-                        <span className="small muted">支持多个时段，用逗号隔开</span>
+                        <span className="small muted">
+                          {isEn ? 'Supports multiple slots, separated by comma' : '支持多个时段，用逗号隔开'}
+                        </span>
                       </div>
                     </div>
 
@@ -1233,8 +1377,12 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                     <div style={{ background: 'var(--surface)', padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
                       <div className="row-between" style={{ alignItems: 'center', marginBottom: 12 }}>
                         <div>
-                          <div style={{ fontSize: 13, fontWeight: 700 }}>订阅推送事件类型</div>
-                          <div className="small muted" style={{ marginTop: 2 }}>已选 {events.length} 项事件</div>
+                          <div style={{ fontSize: 13, fontWeight: 700 }}>
+                            {isEn ? 'Subscribed Push Event Types' : '订阅推送事件类型'}
+                          </div>
+                          <div className="small muted" style={{ marginTop: 2 }}>
+                            {isEn ? `${events.length} events selected` : `已选 ${events.length} 项事件`}
+                          </div>
                         </div>
                         <div className="row" style={{ gap: 6 }}>
                           <button
@@ -1243,7 +1391,7 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                             onClick={() => setEvents(PUSH_EVENTS.map((e) => e.key))}
                             style={{ fontSize: 12 }}
                           >
-                            全选
+                            {isEn ? 'Select All' : '全选'}
                           </button>
                           <button
                             type="button"
@@ -1251,7 +1399,7 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                             onClick={() => setEvents([...DEFAULT_EVENTS])}
                             style={{ fontSize: 12 }}
                           >
-                            默认推荐
+                            {isEn ? 'Recommended' : '默认推荐'}
                           </button>
                           <button
                             type="button"
@@ -1259,7 +1407,7 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                             onClick={() => setEvents([])}
                             style={{ fontSize: 12, color: 'var(--muted)' }}
                           >
-                            清空
+                            {isEn ? 'Clear All' : '清空'}
                           </button>
                         </div>
                       </div>
@@ -1267,6 +1415,9 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                       <div className="grid grid-2" style={{ gap: 10 }}>
                         {PUSH_EVENTS.map((ev) => {
                           const checked = events.includes(ev.key);
+                          const evMeta = PUSH_EVENT_I18N[ev.key];
+                          const evName = isEn && evMeta ? evMeta.nameEn : ev.name;
+                          const evDesc = isEn && evMeta ? evMeta.descEn : ev.desc;
                           return (
                             <div
                               key={ev.key}
@@ -1293,9 +1444,9 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                                 style={{ marginTop: 2, accentColor: 'var(--brand)', flexShrink: 0 }}
                               />
                               <div style={{ flex: 1, minWidth: 0 }}>
-                                <b style={{ fontSize: 13, color: checked ? 'var(--text)' : 'var(--text-3)' }}>{ev.name}</b>
+                                <b style={{ fontSize: 13, color: checked ? 'var(--text)' : 'var(--text-3)' }}>{evName}</b>
                                 <div className="small muted" style={{ fontSize: 11.5, marginTop: 2, lineHeight: 1.4 }}>
-                                  {ev.desc}
+                                  {evDesc}
                                 </div>
                               </div>
                             </div>
@@ -1339,23 +1490,31 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                                 }
                               }, null, 2);
                               navigator.clipboard.writeText(json);
-                              flash('✨ 已复制 Manifest JSON！');
+                              flash(isEn ? '✨ Manifest JSON copied!' : '✨ 已复制 Manifest JSON！');
                             }}
                           >
-                            复制 Manifest JSON
+                            {isEn ? 'Copy Manifest JSON' : '复制 Manifest JSON'}
                           </button>
                         </div>
                         <div className="grid grid-2" style={{ gap: 10, fontSize: 12, marginTop: 10 }}>
                           <div style={{ background: 'var(--surface)', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)' }}>
-                            <b style={{ color: 'var(--accent)' }}>✦ 场景 A：新建应用（最省心）</b>
+                            <b style={{ color: 'var(--accent)' }}>{isEn ? '✦ Scenario A: New App (Recommended)' : '✦ 场景 A：新建应用（最省心）'}</b>
                             <div className="muted" style={{ marginTop: 4, lineHeight: 1.6 }}>
-                              进入飞书开放平台 ➔ 点击右上角 <b>「创建应用」➔「通过 App Manifest 创建」</b> ➔ 粘贴此 JSON，自动建好并挂载所有权限。
+                              {isEn ? (
+                                <>Go to Feishu Open Platform ➔ Click top-right <b>"Create App" ➔ "Create via App Manifest"</b> ➔ Paste this JSON to auto-create with all permissions.</>
+                              ) : (
+                                <>进入飞书开放平台 ➔ 点击右上角 <b>「创建应用」➔「通过 App Manifest 创建」</b> ➔ 粘贴此 JSON，自动建好并挂载所有权限。</>
+                              )}
                             </div>
                           </div>
                           <div style={{ background: 'var(--surface)', padding: '10px 12px', borderRadius: 8, border: '1px solid var(--border)' }}>
-                            <b style={{ color: 'var(--accent)' }}>✦ 场景 B：已有应用补充配置</b>
+                            <b style={{ color: 'var(--accent)' }}>{isEn ? '✦ Scenario B: Update Existing App' : '✦ 场景 B：已有应用补充配置'}</b>
                             <div className="muted" style={{ marginTop: 4, lineHeight: 1.6 }}>
-                              进入应用详情 ➔ 左侧 <b>「开发配置」➔「应用配置」/「App Manifest」</b> ➔ 粘贴 JSON 保存，即可补全消息与事件权限。
+                              {isEn ? (
+                                <>Go to App Details ➔ Left nav <b>"Dev Config" ➔ "App Config" / "App Manifest"</b> ➔ Paste JSON and save to complete permissions.</>
+                              ) : (
+                                <>进入应用详情 ➔ 左侧 <b>「开发配置」➔「应用配置」/「App Manifest」</b> ➔ 粘贴 JSON 保存，即可补全消息与事件权限。</>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -1364,29 +1523,45 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
 
                     {/* 分步指引卡 */}
                     <div style={{ background: 'var(--surface)', padding: '16px 18px', borderRadius: 12, border: '1px solid var(--border)' }}>
-                      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>分步操作指南</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12 }}>
+                        {isEn ? 'Step-by-Step Setup Guide' : '分步操作指南'}
+                      </div>
                       <div className="stack" style={{ gap: 12, fontSize: 12.5, lineHeight: 1.7 }}>
                         {provider === 'feishu' && (
                           <>
                             <div className="row" style={{ gap: 10 }}>
                               <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--brand-soft)', color: 'var(--brand)', fontWeight: 700, display: 'grid', placeItems: 'center', fontSize: 11, flexShrink: 0 }}>1</span>
                               <div>
-                                <b>创建自建应用并获取凭证：</b><br />
-                                <span className="muted">在飞书开放平台创建企业自建应用，在「凭证与基础信息」中复制 App ID 与 App Secret 填入「基础与连接」页。</span>
+                                <b>{isEn ? 'Create Custom App & Get Credentials:' : '创建自建应用并获取凭证：'}</b><br />
+                                <span className="muted">
+                                  {isEn
+                                    ? 'Create an enterprise custom app in Feishu Open Platform, copy App ID and App Secret from "Credentials & Basic Info" and paste into the "Basic & Connection" tab.'
+                                    : '在飞书开放平台创建企业自建应用，在「凭证与基础信息」中复制 App ID 与 App Secret 填入「基础与连接」页。'}
+                                </span>
                               </div>
                             </div>
                             <div className="row" style={{ gap: 10 }}>
                               <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--brand-soft)', color: 'var(--brand)', fontWeight: 700, display: 'grid', placeItems: 'center', fontSize: 11, flexShrink: 0 }}>2</span>
                               <div>
-                                <b>配置事件订阅 (HTTP 回调)：</b><br />
-                                <span className="muted">在「开发配置」➔「事件订阅」中选择 HTTP 回调模式，将「基础与连接」生成的 URL 粘贴至请求地址，通过连通性校验。</span>
+                                <b>{isEn ? 'Configure Event Subscription (HTTP Callback):' : '配置事件订阅 (HTTP 回调)：'}</b><br />
+                                <span className="muted">
+                                  {isEn
+                                    ? 'In "Dev Config" ➔ "Event Subscription", select HTTP callback mode, paste the URL generated in "Basic & Connection" into Request URL, and pass verification.'
+                                    : '在「开发配置」➔「事件订阅」中选择 HTTP 回调模式，将「基础与连接」生成的 URL 粘贴至请求地址，通过连通性校验。'}
+                                </span>
                               </div>
                             </div>
                             <div className="row" style={{ gap: 10 }}>
                               <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--brand-soft)', color: 'var(--brand)', fontWeight: 700, display: 'grid', placeItems: 'center', fontSize: 11, flexShrink: 0 }}>3</span>
                               <div>
-                                <b>添加事件与发布机器人：</b><br />
-                                <span className="muted">在「事件配置」添加 <code className="mono">im.message.receive_v1</code>，并在「应用功能」启用机器人、发布新版本后拉入飞书群即可。</span>
+                                <b>{isEn ? 'Add Events & Publish Bot:' : '添加事件与发布机器人：'}</b><br />
+                                <span className="muted">
+                                  {isEn ? (
+                                    <>Add <code className="mono">im.message.receive_v1</code> in "Event Config", enable Bot in "App Features", publish a new version, and add bot to Feishu groups.</>
+                                  ) : (
+                                    <>在「事件配置」添加 <code className="mono">im.message.receive_v1</code>，并在「应用功能」启用机器人、发布新版本后拉入飞书群即可。</>
+                                  )}
+                                </span>
                               </div>
                             </div>
                           </>
@@ -1397,15 +1572,23 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                             <div className="row" style={{ gap: 10 }}>
                               <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--brand-soft)', color: 'var(--brand)', fontWeight: 700, display: 'grid', placeItems: 'center', fontSize: 11, flexShrink: 0 }}>1</span>
                               <div>
-                                <b>创建钉钉企业内部应用：</b><br />
-                                <span className="muted">在钉钉开放平台创建内部应用，获取 AppKey、AppSecret 与应用详情里的 AgentId。</span>
+                                <b>{isEn ? 'Create DingTalk Internal Enterprise App:' : '创建钉钉企业内部应用：'}</b><br />
+                                <span className="muted">
+                                  {isEn
+                                    ? 'Create an internal app in DingTalk Open Platform, get AppKey, AppSecret, and AgentId from app details.'
+                                    : '在钉钉开放平台创建内部应用，获取 AppKey、AppSecret 与应用详情里的 AgentId。'}
+                                </span>
                               </div>
                             </div>
                             <div className="row" style={{ gap: 10 }}>
                               <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--brand-soft)', color: 'var(--brand)', fontWeight: 700, display: 'grid', placeItems: 'center', fontSize: 11, flexShrink: 0 }}>2</span>
                               <div>
-                                <b>启用机器人能力并设置回调：</b><br />
-                                <span className="muted">在应用功能 ➔ 机器人中启用机器人，并在「消息接收地址」粘贴本系统生成的 HTTP 回调地址。</span>
+                                <b>{isEn ? 'Enable Bot Capability & Configure Callback:' : '启用机器人能力并设置回调：'}</b><br />
+                                <span className="muted">
+                                  {isEn
+                                    ? 'Enable bot in App Features ➔ Bot, and paste the HTTP callback URL generated by this system into Message Receiving URL.'
+                                    : '在应用功能 ➔ 机器人中启用机器人，并在「消息接收地址」粘贴本系统生成的 HTTP 回调地址。'}
+                                </span>
                               </div>
                             </div>
                           </>
@@ -1416,15 +1599,61 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                             <div className="row" style={{ gap: 10 }}>
                               <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--brand-soft)', color: 'var(--brand)', fontWeight: 700, display: 'grid', placeItems: 'center', fontSize: 11, flexShrink: 0 }}>1</span>
                               <div>
-                                <b>创建企微自建应用：</b><br />
-                                <span className="muted">在企业微信管理后台「应用管理」创建自建应用，获取 CorpID、AgentID 与 Secret。</span>
+                                <b>{isEn ? 'Create WeCom Custom App:' : '创建企微自建应用：'}</b><br />
+                                <span className="muted">
+                                  {isEn
+                                    ? 'Create a custom app in WeCom Admin console "App Management", obtain CorpID, AgentID, and Secret.'
+                                    : '在企业微信管理后台「应用管理」创建自建应用，获取 CorpID、AgentID 与 Secret。'}
+                                </span>
                               </div>
                             </div>
                             <div className="row" style={{ gap: 10 }}>
                               <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--brand-soft)', color: 'var(--brand)', fontWeight: 700, display: 'grid', placeItems: 'center', fontSize: 11, flexShrink: 0 }}>2</span>
                               <div>
-                                <b>设置接收消息服务器：</b><br />
-                                <span className="muted">在「开发者接口 ➔ 接收消息」粘贴回调 URL，并随机生成 Token 与 EncodingAESKey 同步填回本页面。</span>
+                                <b>{isEn ? 'Configure Message Receiving Server:' : '设置接收消息服务器：'}</b><br />
+                                <span className="muted">
+                                  {isEn
+                                    ? 'In Developer Interface ➔ Receive Messages, paste callback URL, randomly generate Token and EncodingAESKey, and paste back into this page.'
+                                    : '在「开发者接口 ➔ 接收消息」粘贴回调 URL，并随机生成 Token 与 EncodingAESKey 同步填回本页面。'}
+                                </span>
+                              </div>
+                            </div>
+                          </>
+                        )}
+
+                        {provider === 'wecom_aibot' && (
+                          <>
+                            <div className="row" style={{ gap: 10 }}>
+                              <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--brand-soft)', color: 'var(--brand)', fontWeight: 700, display: 'grid', placeItems: 'center', fontSize: 11, flexShrink: 0 }}>1</span>
+                              <div>
+                                <b>{isEn ? 'Create an AI Bot in the WeCom console:' : '在企微管理后台创建智能机器人：'}</b><br />
+                                <span className="muted">
+                                  {isEn
+                                    ? 'Console → App Management → AI Bot → Create. Give it a name and an avatar; choose which departments can see it.'
+                                    : '管理后台 → 应用管理 → 智能机器人 → 创建。起名、选头像、设置可见范围。'}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="row" style={{ gap: 10 }}>
+                              <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--brand-soft)', color: 'var(--brand)', fontWeight: 700, display: 'grid', placeItems: 'center', fontSize: 11, flexShrink: 0 }}>2</span>
+                              <div>
+                                <b>{isEn ? 'Switch it to API mode → Long connection, copy BotID and Secret:' : '切到「API 模式」→「长连接」，复制 BotID 与 Secret：'}</b><br />
+                                <span className="muted">
+                                  {isEn
+                                    ? 'Paste both into the Basic tab and save. No callback URL to configure — we connect out to WeCom.'
+                                    : '贴到「基础与连接」里保存即可。没有回调地址要配——是我们主动连企微。'}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="row" style={{ gap: 10 }}>
+                              <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--brand-soft)', color: 'var(--brand)', fontWeight: 700, display: 'grid', placeItems: 'center', fontSize: 11, flexShrink: 0 }}>3</span>
+                              <div>
+                                <b>{isEn ? 'Add it to a group or DM it:' : '拉进群或私聊它：'}</b><br />
+                                <span className="muted">
+                                  {isEn
+                                    ? '@ the bot in a group, or DM it. Dispatching tasks requires binding your identity once (DM「登录」). Long tasks: the bot keeps its reply open up to 10 minutes and appends the result when done.'
+                                    : '群里 @它，或私聊。派任务要先绑定一次身份（私聊说「登录」）。跑得久的任务：它的回复会留着最多 10 分钟，跑完把结果接在后面。'}
+                                </span>
                               </div>
                             </div>
                           </>
@@ -1435,15 +1664,23 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                             <div className="row" style={{ gap: 10 }}>
                               <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--brand-soft)', color: 'var(--brand)', fontWeight: 700, display: 'grid', placeItems: 'center', fontSize: 11, flexShrink: 0 }}>1</span>
                               <div>
-                                <b>开通微信客服并新建客服账号：</b><br />
-                                <span className="muted">在企微后台「应用管理 ➔ 微信客服」创建客服账号，并在「API」中创建 Secret。</span>
+                                <b>{isEn ? 'Enable WeChat Customer Service & Create Account:' : '开通微信客服并新建客服账号：'}</b><br />
+                                <span className="muted">
+                                  {isEn
+                                    ? 'Create customer service account in WeCom console "App Management ➔ WeChat Customer Service", and create Secret in "API".'
+                                    : '在企微后台「应用管理 ➔ 微信客服」创建客服账号，并在「API」中创建 Secret。'}
+                                </span>
                               </div>
                             </div>
                             <div className="row" style={{ gap: 10 }}>
                               <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--brand-soft)', color: 'var(--brand)', fontWeight: 700, display: 'grid', placeItems: 'center', fontSize: 11, flexShrink: 0 }}>2</span>
                               <div>
-                                <b>配置回调并将客服码发给用户：</b><br />
-                                <span className="muted">配置回调 URL、Token 与 EncodingAESKey，保存后将客服二维码发给微信用户，即可实现官方一对一客服对话。</span>
+                                <b>{isEn ? 'Configure Callback & Share QR Code:' : '配置回调并将客服码发给用户：'}</b><br />
+                                <span className="muted">
+                                  {isEn
+                                    ? 'Configure callback URL, Token, and EncodingAESKey. After saving, share customer service QR code with WeChat users for official 1-on-1 support.'
+                                    : '配置回调 URL、Token 与 EncodingAESKey，保存后将客服二维码发给微信用户，即可实现官方一对一客服对话。'}
+                                </span>
                               </div>
                             </div>
                           </>
@@ -1453,16 +1690,20 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
 
                     {/* 群内玩法速查 */}
                     <div style={{ background: 'var(--surface)', padding: '14px 16px', borderRadius: 12, border: '1px solid var(--border)', fontSize: 12 }}>
-                      <b style={{ color: 'var(--text)' }}>💡 群内指令与玩法速查</b>
+                      <b style={{ color: 'var(--text)' }}>
+                        {isEn ? '💡 In-Group Commands & Tips Quick Guide' : '💡 群内指令与玩法速查'}
+                      </b>
                       <div className="muted" style={{ marginTop: 6, lineHeight: 1.8 }}>
-                        • <b>自然对话：</b>直接 @机器人 发送问题，支持多轮上下文理解。<br />
-                        • <b>链接剪藏：</b>向群内直接发送文章链接，自动抓取正文、生成摘要与对本账号的价值分析。<br />
-                        • <b>快捷指令：</b>
-                        <code className="mono" style={{ margin: '0 4px' }}>/热点</code>（查热榜）
-                        <code className="mono" style={{ margin: '0 4px' }}>/选题 [关键词]</code>（收录候选）
-                        <code className="mono" style={{ margin: '0 4px' }}>/分析 [账号]</code>（账号体检）
-                        <code className="mono" style={{ margin: '0 4px' }}>/拆解 [链接]</code>（爆款分析）
-                        <code className="mono" style={{ margin: '0 4px' }}>/帮助</code>（查看说明）
+                        • <b>{isEn ? 'Natural Conversation: ' : '自然对话：'}</b>
+                        {isEn ? 'Directly @bot with questions, supports multi-turn context understanding.' : '直接 @机器人 发送问题，支持多轮上下文理解。'}<br />
+                        • <b>{isEn ? 'Link Clipping: ' : '链接剪藏：'}</b>
+                        {isEn ? 'Send article links directly to the group to auto-extract text, summary, and value analysis for this account.' : '向群内直接发送文章链接，自动抓取正文、生成摘要与对本账号的价值分析。'}<br />
+                        • <b>{isEn ? 'Quick Commands: ' : '快捷指令：'}</b>
+                        <code className="mono" style={{ margin: '0 4px' }}>/hot</code>{isEn ? '(Trends)' : '（查热榜）'}
+                        <code className="mono" style={{ margin: '0 4px' }}>/topic [kw]</code>{isEn ? '(Candidates)' : '（收录候选）'}
+                        <code className="mono" style={{ margin: '0 4px' }}>/analyze [acc]</code>{isEn ? '(Audit)' : '（账号体检）'}
+                        <code className="mono" style={{ margin: '0 4px' }}>/deconstruct [link]</code>{isEn ? '(Viral Analysis)' : '（爆款分析）'}
+                        <code className="mono" style={{ margin: '0 4px' }}>/help</code>{isEn ? '(Help)' : '（查看说明）'}
                       </div>
                     </div>
                   </div>
@@ -1474,7 +1715,7 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
           {/* 弹窗底部固定操作栏 */}
           <div style={{ padding: '14px 24px', borderTop: '1px solid var(--border)', background: 'var(--surface)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
             <div className="small" style={{ color: failed ? 'var(--red)' : 'var(--green)', fontWeight: 500 }}>
-              {msg || (editing?.lastInboundAt ? `✓ 机器人连接正常 (最近交互 ${fmtDateTime(editing.lastInboundAt)})` : '')}
+              {msg || (editing?.lastInboundAt ? (isEn ? `✓ Bot connection normal (Last interaction ${fmtDateTime(editing.lastInboundAt)})` : `✓ 机器人连接正常 (最近交互 ${fmtDateTime(editing.lastInboundAt)})`) : '')}
             </div>
             <div className="row" style={{ gap: 10, alignItems: 'center' }}>
               <button
@@ -1484,7 +1725,7 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                 disabled={pending}
                 style={{ padding: '8px 18px' }}
               >
-                取消
+                {isEn ? 'Cancel' : '取消'}
               </button>
               <button
                 type="button"
@@ -1493,7 +1734,7 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                 disabled={pending}
                 style={{ padding: '8px 24px', fontWeight: 600, boxShadow: '0 2px 8px rgba(232, 85, 45, 0.25)' }}
               >
-                {pending ? '保存中…' : '保存配置'}
+                {pending ? (isEn ? 'Saving…' : '保存中…') : (isEn ? 'Save Configuration' : '保存配置')}
               </button>
             </div>
           </div>
@@ -1501,8 +1742,16 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
         </Overlay>
       ) : (
         <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
-          <button className="btn btn-sm btn-primary" onClick={openAdd} disabled={pending}>+ 配置机器人</button>
-          {rows.length === 0 && <span className="small muted">支持飞书、钉钉、企业微信——自建应用或群 Webhook 均可</span>}
+          <button className="btn btn-sm btn-primary" onClick={openAdd} disabled={pending}>
+            {isEn ? '+ Configure Bot' : '+ 配置机器人'}
+          </button>
+          {rows.length === 0 && (
+            <span className="small muted">
+              {isEn
+                ? 'Supports Feishu, DingTalk, WeCom — custom apps or group webhooks'
+                : '支持飞书、钉钉、企业微信——自建应用或群 Webhook 均可'}
+            </span>
+          )}
           {msg && !showForm && <span className="small" style={{ color: failed ? 'var(--red)' : 'var(--muted)' }}>{msg}</span>}
         </div>
       )}

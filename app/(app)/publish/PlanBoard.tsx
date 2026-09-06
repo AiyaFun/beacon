@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { fmtDateTime } from '@/lib/format';
 import { PlanCreator, PlanTasks, type PlanView } from './PlanTasks';
+import { useI18n } from '@/lib/i18n';
 
 // 发布中心页面上的两块交互：进行中的计划、给某篇稿子新建计划。
 //
@@ -16,10 +17,18 @@ export function OpenPlans({
 }: {
   plans: (PlanView & { draftTitle: string; createdAt: string })[];
 }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const [live, setLive] = useState<Record<string, PlanView>>({});
 
   if (plans.length === 0) {
-    return <p className="small muted">没有进行中的发布计划。在下面挑一篇稿子开一条，或者在创作工坊里点「一键发布」。</p>;
+    return (
+      <p className="small muted">
+        {isEn
+          ? 'No publishing plans in progress. Pick a draft below to start one, or click "One-click Publish" in Studio.'
+          : '没有进行中的发布计划。在下面挑一篇稿子开一条，或者在创作工坊里点「一键发布」。'}
+      </p>
+    );
   }
 
   return (
@@ -33,7 +42,7 @@ export function OpenPlans({
               <span className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
                 <strong>{p.draftTitle}</strong>
                 <span className="badge badge-gray">
-                  {done}/{plan.tasks.length} 已发布
+                  {done}/{plan.tasks.length} {isEn ? 'Published' : '已发布'}
                 </span>
               </span>
               <span className="small muted">{fmtDateTime(new Date(p.createdAt))}</span>
@@ -47,11 +56,17 @@ export function OpenPlans({
 }
 
 export function NewPlan({ drafts }: { drafts: { id: string; title: string; platform: string; updatedAt: string }[] }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const [draftId, setDraftId] = useState('');
   const [plan, setPlan] = useState<PlanView | null>(null);
 
   if (drafts.length === 0) {
-    return <p className="small muted">还没有写好正文、又没发出去的稿子。先去创作工坊写一篇。</p>;
+    return (
+      <p className="small muted">
+        {isEn ? 'No drafts ready for publishing yet. Head to Studio to create one.' : '还没有写好正文、又没发出去的稿子。先去创作工坊写一篇。'}
+      </p>
+    );
   }
 
   return (
@@ -66,7 +81,7 @@ export function NewPlan({ drafts }: { drafts: { id: string; title: string; platf
               setPlan(null);
             }}
           >
-            {d.title || '（无标题）'}
+            {d.title || (isEn ? '(Untitled)' : '（无标题）')}
           </button>
         ))}
       </div>

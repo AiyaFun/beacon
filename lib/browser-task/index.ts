@@ -4,6 +4,7 @@ import { createLogger } from '../logger';
 import { notify } from '../notify';
 import {
   browserTaskPayloadSchema, retriable, MAX_ATTEMPTS, TASK_TTL_HOURS, LEASE_MINUTES, KIND_LABEL,
+  RECOLLECT_COOLDOWN_MINUTES, RETRY_BACKOFF_MINUTES, EXECUTOR_ALIVE_MINUTES,
   type BrowserTaskKind, type BrowserTaskPayload,
 } from './kinds';
 
@@ -39,9 +40,14 @@ export type ClaimedTask = {
  * 而 AI 那时已经跟用户说过「已排给插件」了——用户等了两天，什么都没发生，也没人告诉他为什么。
  * 与其排一个注定没人领的活，不如当场说清「你还没装插件」，并把他指到安装页。
  */
+/** 「活着」的令牌条件：没吊销，且最近 EXECUTOR_ALIVE_MINUTES 内来领过活。旧式工作区级令牌没有时间戳，照旧算在。 */
+function aliveTokenWhere(workspaceId: string) {
+  return { workspaceId, revokedAt: null, lastUsedAt: { gt: new Date(Date.now() - EXECUTOR_ALIVE_MINUTES * 60_000) } };
+}
+
 export async function hasCollector(workspaceId: string): Promise<boolean> {
   const [byDevice, legacy] = await Promise.all([
-    prisma.ingestToken.count({ where: { workspaceId, revokedAt: null } }),
+    prisma.ingestToken.count({ where: aliveTokenWhere(workspaceId) }),
     prisma.workspace.count({ where: { id: workspaceId, ingestToken: { not: null } } }),
   ]);
   return byDevice > 0 || legacy > 0;
@@ -54,7 +60,7 @@ export async function hasCollector(workspaceId: string): Promise<boolean> {
 export const LEGACY_PLUGIN_KINDS: readonly BrowserTaskKind[] = ['collect_competitor', 'open_and_read'];
 export async function collectorKinds(workspaceId: string): Promise<Set<string>> {
   const [rows, legacy] = await Promise.all([
-    prisma.ingestToken.findMany({ where: { workspaceId, revokedAt: null }, select: { kinds: true } }),
+    prisma.ingestToken.findMany({ where: aliveTokenWhere(workspaceId), select: { kinds: true } }),
     prisma.workspace.count({ where: { id: workspaceId, ingestToken: { not: null } } }),
   ]);
   const out = new Set<string>();
@@ -73,7 +79,7 @@ export async function collectorKinds(workspaceId: string): Promise<Set<string>> 
 export async function collectorAgents(workspaceId: string): Promise<Set<'plugin' | 'desktop'>> {
   const { isDesktopExecutorLabel } = await import('@/lib/ingest/token');
   const [rows, legacy] = await Promise.all([
-    prisma.ingestToken.findMany({ where: { workspaceId, revokedAt: null }, select: { label: true } }),
+    prisma.ingestToken.findMany({ where: aliveTokenWhere(workspaceId), select: { label: true } }),
     prisma.workspace.count({ where: { id: workspaceId, ingestToken: { not: null } } }),
   ]);
   const out = new Set<'plugin' | 'desktop'>();
@@ -83,13 +89,34 @@ export async function collectorAgents(workspaceId: string): Promise<Set<'plugin'
 }
 
 /** 排一个活。payload 先过 zod——白名单之外的 kind 与形状一律拒收。 */
+/**
+ * 取消被取代的同一个活，并把正在等它们的 AI 运行改指到 `keepId`（2026-09-04）。
+ *
+ * 【为什么必须重指 waitingOn】运行停在 `browser:<旧 id>` 上，而叫醒只发生在那条任务有结局时。
+ * 把旧任务标 cancelled 却不改 waitingOn，那次运行就永远醒不来——用户看到的是一个卡死的执行。
+ * 两处调用（新建取代、冷却早退）都必须走这里，别再各写一遍。
+ */
+async function cancelSupersededTasks(ids: string[], keepId: string): Promise<void> {
+  if (ids.length === 0) return;
+  await prisma.browserTask.updateMany({
+    where: { id: { in: ids }, status: { in: ['pending', 'claimed'] } },
+    data: { status: 'cancelled', error: `被同一个活取代（${keepId}）`, claimedBy: null, claimedAt: null, leaseUntil: null },
+  });
+  for (const id of ids) {
+    await prisma.agentRun.updateMany({
+      where: { status: 'waiting_browser', waitingOn: `browser:${id}` },
+      data: { waitingOn: `browser:${keepId}` },
+    });
+  }
+}
+
 export async function enqueueBrowserTask(input: {
   workspaceId: string;
   accountId?: string | null;
   payload: unknown;
   origin?: 'agent' | 'user' | 'schedule' | 'api';
   createdBy: string;
-}): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
+}): Promise<{ ok: true; id: string; recentlyDone?: { minutesAgo: number; result: string }; superseded?: string[] } | { ok: false; error: string }> {
   const parsed = browserTaskPayloadSchema.safeParse(input.payload);
   if (!parsed.success) {
     const first = parsed.error.issues[0];
@@ -98,17 +125,47 @@ export async function enqueueBrowserTask(input: {
 
   // 同一个活别排两遍：pending 里已经有一模一样的就复用。
   // 不去重的话，AI 一轮里问两次「采一下这个竞对」就会排两个，插件跑两遍、数据也算两次
-  const same = await prisma.browserTask.findFirst({
-    where: {
-      workspaceId: input.workspaceId,
-      status: 'pending',
-      kind: parsed.data.kind,
-      payload: toJson(parsed.data),
-      expiresAt: { gt: new Date() },
-    },
+  // 【重复任务：取消旧的、用新的】（用户 2026-09-04 拍板：「如果是重复任务的时候就关闭之前的任务，用新的任务」）
+  // 原先是复用旧的那条。改成以新为准的理由：用户再派一次，多半是因为旧的那条卡住了/等太久了——
+  // 让他等在旧任务上等于把他刚才的意图丢掉。旧任务标 cancelled（错误里写清被谁取代），
+  // 正在等它的 AI 运行改等新任务（waitingOn 重新指向），不会醒来告诉用户「任务被取消了」。
+  // 执行器若正拿着旧任务在跑，交回时会被 completeTask 拒掉（状态不是 claimed）——那次结果作废，
+  // 页面再采一次；这一分钟的重复是「以新为准」的代价，比让用户对着一条卡住的任务干等要好。
+  // 「同一个活」的判据不能只靠 payload 字符串逐字相等（键顺序/空格一变就失配，2026-09-04 真机验证时
+  // 手工插入的任务就没被认出来）。回填自己主页的活按 accountId 列判——同一账号同一 kind 就是同一个活。
+  const sameWork = {
+    workspaceId: input.workspaceId,
+    kind: parsed.data.kind,
+    expiresAt: { gt: new Date() },
+    OR: [
+      { payload: toJson(parsed.data) },
+      ...(input.accountId && parsed.data.kind === 'collect_self_profile' ? [{ accountId: input.accountId }] : []),
+    ],
+  };
+  const stale = await prisma.browserTask.findMany({
+    where: { ...sameWork, status: { in: ['pending', 'claimed'] } },
     select: { id: true },
   });
-  if (same) return { ok: true, id: same.id };
+  // 【刚采完的不再采】半小时内同一个活已经 done，直接把那次结果给调用方，不排新的。
+  // 对目标平台来说，同一主页几分钟内被反复打开就是可疑流量；对用户来说数据也不会有变化。
+  const recent = await prisma.browserTask.findFirst({
+    where: {
+      ...sameWork,
+      status: 'done',
+      updatedAt: { gt: new Date(Date.now() - RECOLLECT_COOLDOWN_MINUTES * 60_000) },
+    },
+    orderBy: { updatedAt: 'desc' },
+    select: { id: true, result: true, updatedAt: true },
+  });
+  if (recent) {
+    // 【冷却早退时也要清掉排着的旧任务】2026-09-04 验证时发现：早退发生在取消之前，于是
+    // 「队列里卡着一条旧任务 + 刚刚采完过」的情况下，那条旧任务原样留着，晚点被执行器领走
+    // 又采一遍——正是这一轮要消除的重复采集。冷却的语义是「这个活近期不用再跑」，
+    // 那么排着的同一个活当然也不该再跑。
+    if (stale.length > 0) await cancelSupersededTasks(stale.map((x) => x.id), recent.id);
+    const minutesAgo = Math.max(1, Math.round((Date.now() - recent.updatedAt.getTime()) / 60_000));
+    return { ok: true, id: recent.id, recentlyDone: { minutesAgo, result: recent.result ?? '' }, ...(stale.length ? { superseded: stale.map((x) => x.id) } : {}) };
+  }
 
   const t = await prisma.browserTask.create({
     data: {
@@ -121,6 +178,11 @@ export async function enqueueBrowserTask(input: {
       createdBy: input.createdBy,
     },
   });
+  if (stale.length > 0) {
+    const ids = stale.map((x) => x.id);
+    await cancelSupersededTasks(ids, t.id);
+    return { ok: true, id: t.id, superseded: ids };
+  }
   return { ok: true, id: t.id };
 }
 
@@ -139,7 +201,11 @@ export async function claimNextTask(workspaceId: string, claimerId: string, allo
 
   const candidates = await prisma.browserTask.findMany({
     // 只给领活的这个执行器会做的 kind：旧插件不该领到新 kind 然后反复「不认识」；没自报的按老三种
-    where: { workspaceId, status: 'pending', expiresAt: { gt: now }, kind: { in: [...(allowedKinds ?? LEGACY_PLUGIN_KINDS)] } },
+    // pending 行上的 leaseUntil 复用为「失败退避到期时间」（见 completeTask）：没到期的不领
+    where: {
+      workspaceId, status: 'pending', expiresAt: { gt: now }, kind: { in: [...(allowedKinds ?? LEGACY_PLUGIN_KINDS)] },
+      OR: [{ leaseUntil: null }, { leaseUntil: { lt: now } }],
+    },
     orderBy: { createdAt: 'asc' }, // 先排的先做
     take: 5, // 抢失败就试下一个，不用把整池子拉出来
     select: { id: true, kind: true, payload: true, accountId: true },
@@ -176,14 +242,39 @@ export async function claimNextTask(workspaceId: string, claimerId: string, allo
 }
 
 /** 插件交活。ok=false 时按可重试性决定是放回池子还是判死。 */
+/**
+ * 执行器交回来的**内部错误码**翻成人话（2026-09-04）。
+ *
+ * 【为什么放在服务端而不是客户端】客户端要用户重装才更新，而解析器与站点改版是随时发生的事。
+ * 真机踩到：客户端 1.2.8 交回一句原样的 `parser_stale`，用户在界面上看到的就是这个词。
+ * 放在这里，**旧版客户端也立刻受益**——这与「解析器从服务端现取」是同一条设计原则。
+ *
+ * 认不出的错误原样保留：编一句更好听的话去盖住一个我们没预料到的错误，
+ * 只会让排查变难（用户复述的是我们编的话，不是真相）。
+ */
+const EXECUTOR_ERROR_TEXT: Record<string, string> = {
+  parser_stale: '解析器取不到内容：页面上能看到作品，但读不出正文与数据。最常见的原因是**采集浏览器还没登录这个平台**（X 未登录时给的是精简页面，没有可读的结构）——请在「烽火台采集浏览器」窗口里登录一次再派；已经登录仍这样的话，就是站点改版了，等解析器更新（服务端修好当天生效，客户端不用重装）。',
+  parser_missing: '解析器没装载上（页面可能拦截了脚本注入）。稍后再试；一直这样的话把这条告诉我们。',
+  no_handle: '解析器没在这一页认出账号主页（可能没加载完，或站点改版了）。',
+};
+export function humanizeExecutorError(raw: string | undefined | null): string | undefined {
+  if (!raw) return raw ?? undefined;
+  const key = raw.trim();
+  return EXECUTOR_ERROR_TEXT[key] ?? raw;
+}
+
 export async function completeTask(
   workspaceId: string,
   taskId: string,
   outcome: { ok: boolean; result?: string; error?: string },
+  /** 交活的是谁（领活时的 claimerId）。给了就必须与 claimedBy 一致：租约过期被别人重领后，前一个持有者的迟到结果不收。 */
+  claimerId?: string,
 ): Promise<{ ok: boolean; status?: string; error?: string }> {
+  // 内部错误码不许原样落库/露给用户（见 humanizeExecutorError）
+  outcome = { ...outcome, error: humanizeExecutorError(outcome.error) };
   const t = await prisma.browserTask.findFirst({
     where: { id: taskId, workspaceId },
-    select: { id: true, kind: true, attempts: true, status: true },
+    select: { id: true, kind: true, attempts: true, status: true, claimedBy: true },
   });
   // 带 workspaceId 查：不带的话拿到别人的任务 id 就能改别人的状态
   if (!t) return { ok: false, error: '任务不存在' };
@@ -191,12 +282,21 @@ export async function completeTask(
     // 租约过期被放回、或用户中途取消了。如实回，别假装成功
     return { ok: false, error: `任务当前状态是 ${t.status}，不能交付` };
   }
+  if (claimerId && t.claimedBy && t.claimedBy !== claimerId) {
+    return { ok: false, error: '这条活已经被另一台执行器重新领走，这份迟到的结果不收' };
+  }
+  // 【写回必须带状态条件】（2026-09-04 审计）上面是 check-then-act：读到 claimed 之后、写回之前，
+  // 另一路（用户再派一次 → 取代；或取消）可能已把它标成 cancelled。不带条件的 update 会把它
+  // 复活成 done/pending 再跑一遍。updateMany 带 status:'claimed'，count=0 就是被人抢先了。
+  const guard = { id: t.id, status: 'claimed' as const, ...(claimerId ? { claimedBy: claimerId } : {}) };
 
   if (outcome.ok) {
-    const row = await prisma.browserTask.update({
-      where: { id: t.id },
+    const n = await prisma.browserTask.updateMany({
+      where: guard,
       data: { status: 'done', result: (outcome.result ?? '').slice(0, 500), error: null, leaseUntil: null },
     });
+    if (n.count === 0) return { ok: false, error: '这条活刚被取代或取消了，这次结果不收' };
+    const row = await prisma.browserTask.findUniqueOrThrow({ where: { id: t.id } });
     // 派活到干完中间可能隔了几小时（要等用户打开浏览器）。不通知的话，
     // 发起的人得自己想起来回去看——而他多半已经在做别的事了。
     // 同定时智能体那条：**用户不在场时完成的事，必须主动说一声**。
@@ -205,7 +305,7 @@ export async function completeTask(
       accountId: row.accountId,
       kind: 'system',
       refId: row.id,
-      title: `插件跑完了：${KIND_LABEL[row.kind as BrowserTaskKind] ?? row.kind}`,
+      title: `采集执行器跑完了：${KIND_LABEL[row.kind as BrowserTaskKind] ?? row.kind}`,
       body: outcome.result?.slice(0, 200) || '已完成',
       link: '/runs',
     });
@@ -218,17 +318,27 @@ export async function completeTask(
   // 「这个版本不认识」不是偶发失败，再试三次也是同一句话——直接判死，别让 AI 执行多挂两轮
   const unknownKind = /不认识/.test(outcome.error ?? '');
   const canRetry = !unknownKind && retriable(t.kind as BrowserTaskKind) && t.attempts < MAX_ATTEMPTS;
-  const failed = await prisma.browserTask.update({
-    where: { id: t.id },
+  const changed = await prisma.browserTask.updateMany({
+    where: guard,
     data: {
       // 还能重试就放回池子等下一个浏览器（或同一个下一轮）
       status: canRetry ? 'pending' : 'failed',
       error: (outcome.error ?? '未说明原因').slice(0, 300),
       claimedBy: null,
       claimedAt: null,
-      leaseUntil: null,
+      // 【失败后退避，不是下一分钟就再领】（2026-09-04）pending 行的 leaseUntil 借用为「这个时间之前别领」
+      // （claimNextTask 只领 leaseUntil 为空或已过期的）。第 1 次失败等 10 分钟、第 2 次等 30 分钟。
+      // 原先失败即刻放回，三次失败挤在三分钟里，用户看到采集浏览器反复开关、同一页反复被打开。
+      leaseUntil: canRetry
+        ? new Date(Date.now() + (RETRY_BACKOFF_MINUTES[Math.min(t.attempts, RETRY_BACKOFF_MINUTES.length) - 1] ?? 10) * 60_000)
+        : null,
     },
   });
+  if (changed.count === 0) return { ok: false, error: '这条活刚被取代或取消了，这次结果不收' };
+  const failed = await prisma.browserTask.findUniqueOrThrow({ where: { id: t.id } });
+  // 【「常见原因是没登录」只在错误确实与登录有关时加】（2026-09-04 审计）：「竞对不存在」「格式不合法」
+  // 「超过几分钟没跑完」后面都跟一句没登录，等于教用户去做一件无关的事。
+  const loginHint = /登录/.test(outcome.error ?? '') ? '' : '';
   // 还能重试就先不吵：下一轮多半就成了，每次失败都推一条只会让人把通知关掉。
   // 判死了才说——那时候用户是真的要去处理（多半是某个平台没登录）。
   if (!canRetry) {
@@ -237,15 +347,15 @@ export async function completeTask(
       accountId: failed.accountId,
       kind: 'system',
       refId: failed.id,
-      title: `插件没跑成：${KIND_LABEL[failed.kind as BrowserTaskKind] ?? failed.kind}`,
-      body: `${(outcome.error ?? '未说明原因').slice(0, 160)}（已试 ${failed.attempts} 次）常见原因是目标平台没登录。`,
+      title: `采集没跑成：${KIND_LABEL[failed.kind as BrowserTaskKind] ?? failed.kind}`,
+      body: `${(outcome.error ?? '未说明原因').slice(0, 160)}（已试 ${failed.attempts} 次）${loginHint}`,
       link: '/runs',
     });
   }
   // 还能重试就别叫醒：下一轮多半就成了，这次叫醒等于让 AI 拿着「失败」去回答用户，
   // 而十分钟后数据其实就到了。判死了才叫——那时候才是真的没有结果。
   if (!canRetry) {
-    await wake(t.id, { ok: false, summary: `插件没跑成：${(outcome.error ?? '未说明原因').slice(0, 200)}` });
+    await wake(t.id, { ok: false, summary: `采集没跑成：${(outcome.error ?? '未说明原因').slice(0, 200)}` });
   }
   return { ok: true, status: canRetry ? 'pending' : 'failed' };
 }
@@ -320,6 +430,20 @@ export async function listBrowserTasksForUi(workspaceId: string, take = 12) {
 
 /** 租约到期的放回池子。每次领活前顺手做，不用单开定时任务。 */
 export async function releaseExpiredLeases(now = new Date()): Promise<number> {
+  // 【租约静默过期也要计次】（2026-09-04 审计）领活时 attempts 已 +1，但只有「交回失败」那条路会判上限；
+  // 执行器领了不还（网络抖动、机器睡了）的活会每 15 分钟被重领一次直到 48 小时——同一页被反复打开。
+  // 试满 MAX_ATTEMPTS 的直接判死并叫醒等它的运行。
+  const dead = await prisma.browserTask.findMany({
+    where: { status: 'claimed', leaseUntil: { lt: now }, attempts: { gte: MAX_ATTEMPTS } },
+    select: { id: true },
+  });
+  if (dead.length) {
+    await prisma.browserTask.updateMany({
+      where: { id: { in: dead.map((d) => d.id) }, status: 'claimed' },
+      data: { status: 'failed', error: `执行器领走后一直没交回结果，已试 ${MAX_ATTEMPTS} 次，不再重试（多半是执行器所在的电脑睡了或网络断了）`, claimedBy: null, claimedAt: null, leaseUntil: null },
+    });
+    for (const d of dead) await wake(d.id, { ok: false, summary: '采集没跑成：执行器领走后一直没交回结果' });
+  }
   const r = await prisma.browserTask.updateMany({
     where: { status: 'claimed', leaseUntil: { lt: now } },
     data: { status: 'pending', claimedBy: null, claimedAt: null, leaseUntil: null },

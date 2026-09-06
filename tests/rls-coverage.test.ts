@@ -39,6 +39,9 @@ const EXEMPT: Record<string, string> = {
   LlmCallLog: '成本账本，worker 与用户路径都写',
   JobRun: '任务运行记账，worker 写入',
   VerificationCode: '登录前的短信验证码，此时还没有租户上下文',
+  FunnelEvent:
+    '站点级漏斗计数（看首页/点体验/发码/注册/建人设/首次推荐/下载/首次回流）：' +
+    '写入方多半是还没注册的匿名访客，tenantId 只在登录后的服务端事件里补上；只供运维台读，不经用户路径读。',
   // 顶层与跨租户
   Tenant: '租户表自身即隔离边界的定义处',
   DataRemovalRequest: '数据删除请求，可能由未登录用户发起',

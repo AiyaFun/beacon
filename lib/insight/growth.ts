@@ -165,6 +165,16 @@ export const WINDOW_LABEL: Record<WindowKey, string> = {
   '30d': '30 天',
 };
 
+export function windowLabel(key: WindowKey, lang?: string): string {
+  if (lang === 'en') {
+    if (key === '24h') return '24 Hours';
+    if (key === '7d') return '7 Days';
+    if (key === '30d') return '30 Days';
+    return key;
+  }
+  return WINDOW_LABEL[key] ?? key;
+}
+
 export function windowRange(key: WindowKey, now: Date): { from: Date; to: Date } {
   const preset = WINDOW_PRESETS.find((w) => w.key === key) ?? WINDOW_PRESETS[1];
   return { from: new Date(now.getTime() - preset.hours * 3_600_000), to: now };

@@ -19,7 +19,15 @@
 # 前置：scripts/deploy-gate.sh 必须已放行。
 set -u
 
-PORT_A="${BEACON_WEB_PORT:-8100}"        # 主实例（web），nginx upstream 的主上游
+# 【必须 export，不能只是赋值】2026-09-04 生产事故：这里原本写的是
+#   PORT_A="${BEACON_WEB_PORT:-8100}"
+# ——只给了本脚本一个 shell 变量，**没进环境**。于是重建主实例那步 `docker compose up -d web`
+# 里，compose 读不到 BEACON_WEB_PORT，按 docker-compose.yml 的默认值回退到 3000，
+# 而生产 3000 被别的项目（echo-server）占着 → 主实例起不来。此时旧容器已被移除，
+# 站点 502 约两分钟。web_b 那行一直是 export 的，所以临时实例每次都好好的——
+# 一个变量 export、另一个没 export，正是这类事故最容易藏身的地方。
+export BEACON_WEB_PORT="${BEACON_WEB_PORT:-8100}"   # 主实例（web），nginx upstream 的主上游
+PORT_A="$BEACON_WEB_PORT"
 export BEACON_WEB_PORT_B="${BEACON_WEB_PORT_B:-8101}"   # 临时实例（web_b），nginx 的 backup 上游
 PORT_B="$BEACON_WEB_PORT_B"
 READY_TIMEOUT="${BEACON_READY_TIMEOUT:-90}"

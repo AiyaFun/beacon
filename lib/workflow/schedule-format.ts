@@ -12,12 +12,16 @@
 
 /** 周几的字。勾选框那一排也用它——两处各写一份的话，改了顺序只会改到一边 */
 export const DOW = ['日', '一', '二', '三', '四', '五', '六'];
+export const DOW_EN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 export const hhmm = (h: number, m: number) => `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 
 /** 「每天 09:00」/「每周一、三 09:00」。时刻一律北京时间（容器跑 UTC，直说数字会差 8 小时）。 */
-export function scheduleWhen(weekdays: number[], atHour: number, atMinute: number): string {
+export function scheduleWhen(weekdays: number[], atHour: number, atMinute: number, lang: string = 'zh'): string {
   const t = hhmm(atHour, atMinute);
+  if (lang === 'en') {
+    return weekdays.length === 0 ? `Daily at ${t}` : `Every ${weekdays.map((d) => DOW_EN[d]).join(', ')} at ${t}`;
+  }
   return weekdays.length === 0 ? `每天 ${t}` : `每周${weekdays.map((d) => DOW[d]).join('、')} ${t}`;
 }
 
@@ -33,9 +37,11 @@ export function scheduleTargetLabel(row: {
   targetKind?: string | null;
   template?: { emoji: string; name: string } | null;
   preset?: { title: string } | null;
-}): string {
+}, lang: string = 'zh'): string {
+  const isEn = lang === 'en';
   if (row.targetKind === 'task') {
-    return row.preset ? `⚡ ${row.preset.title}` : '（这条一键任务已经被删了）';
+    return row.preset ? `⚡ ${row.preset.title}` : (isEn ? '(Preset task was deleted)' : '（这条一键任务已经被删了）');
   }
-  return row.template ? `${row.template.emoji} ${row.template.name}` : '（这个智能体已经被删了）';
+  return row.template ? `${row.template.emoji} ${row.template.name}` : (isEn ? '(Agent was deleted)' : '（这个智能体已经被删了）');
 }
+

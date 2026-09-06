@@ -1,6 +1,5 @@
-import Link from 'next/link';
-import Image from 'next/image';
 import { TenantShell } from '@/components/TenantShell';
+import { PublicShell } from '@/components/PublicShell';
 import { getSessionOrNull } from '@/lib/session';
 
 // 公开区外壳。登录用户 → 完整 app 外壳（走 TenantShell，与 (app) 是同一份实现）；
@@ -20,23 +19,6 @@ export default async function PublicLayout({ children }: { children: React.React
 
   if (session) return <TenantShell session={session}>{children}</TenantShell>;
 
-  // 游客：轻量落地外壳
-  return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <header
-        className="row-between"
-        style={{ padding: '12px 20px', borderBottom: '1px solid var(--surface-2)', position: 'sticky', top: 0, background: 'var(--bg)', zIndex: 10 }}
-      >
-        <Link href="/hotlists" className="brand" style={{ textDecoration: 'none' }}>
-          <Image src="/logo.png" alt="烽火台" width={36} height={36} className="brand-logo-img" />
-          <div>
-            <div className="brand-name">烽火台</div>
-            <div className="brand-sub">跨平台内容作战室</div>
-          </div>
-        </Link>
-        <Link href="/login" className="btn btn-primary btn-sm">登录 / 注册</Link>
-      </header>
-      <div className="content" style={{ flex: 1, maxWidth: 1680, width: '100%', margin: '0 auto' }}>{children}</div>
-    </div>
-  );
+  // 游客：轻量落地外壳（与 (app)/layout 放行的三页共用同一份 PublicShell）
+  return <PublicShell>{children}</PublicShell>;
 }

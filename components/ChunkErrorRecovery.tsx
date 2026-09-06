@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { isChunkLoadError, recoverFromChunkError } from '@/lib/chunk-error';
+import { useI18n } from '@/lib/i18n/context';
 
 /**
  * 挂在根 layout：兜住**没有**冒泡到 React 错误边界的分片加载失败。
@@ -53,9 +54,12 @@ export function useChunkErrorAutoReload(error: unknown): boolean {
  * 放个加载动画反而会闪一下，不如一句安静的说明。
  */
 export function ChunkReloadingNotice() {
+  const { lang } = useI18n();
   return (
     <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24 }}>
-      <p className="small muted">页面正在更新到最新版本，马上就好…</p>
+      <p className="small muted">
+        {lang === 'en' ? 'Updating page to the latest version, just a moment…' : '页面正在更新到最新版本，马上就好…'}
+      </p>
     </div>
   );
 }

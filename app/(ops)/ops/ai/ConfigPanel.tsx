@@ -3,6 +3,7 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Card } from '@/components/ui';
+import { useI18n } from '@/lib/i18n';
 import type { PlatformAiConfig } from '@/lib/ops/platform-config';
 import { actSavePlatformAiConfig } from './actions';
 
@@ -15,6 +16,8 @@ export function ConfigPanel({
   config: PlatformAiConfig;
   functions: { key: string; label: string }[];
 }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const router = useRouter();
   const [pending, start] = useTransition();
   const [draft, setDraft] = useState<PlatformAiConfig>(config);
@@ -42,10 +45,10 @@ export function ConfigPanel({
     start(async () => {
       const r = await actSavePlatformAiConfig(draft);
       if (!r.ok) {
-        setErr(r.error ?? '保存失败');
+        setErr(r.error ?? (isEn ? 'Save failed' : '保存失败'));
         return;
       }
-      setMsg('已保存并立即生效（缓存同时失效）');
+      setMsg(isEn ? 'Saved and active immediately (cache invalidated)' : '已保存并立即生效（缓存同时失效）');
       router.refresh();
     });
   }
@@ -54,11 +57,11 @@ export function ConfigPanel({
 
   return (
     <Card
-      title="全域参数与预算"
-      sub="留空 = 不覆盖调用点的值 · 预算只约束平台垫付部分"
+      title={isEn ? 'Global Parameters & Budget' : '全域参数与预算'}
+      sub={isEn ? 'Leave empty to not override callsite values · Budget applies to platform-covered quota only' : '留空 = 不覆盖调用点的值 · 预算只约束平台垫付部分'}
       action={
         <button className="btn btn-sm btn-primary" disabled={pending} onClick={save}>
-          保存
+          {isEn ? 'Save' : '保存'}
         </button>
       }
     >
@@ -66,9 +69,9 @@ export function ConfigPanel({
         <table className="table">
           <thead>
             <tr>
-              <th>功能</th>
-              <th style={{ width: 160 }}>温度（0–2）</th>
-              <th style={{ width: 200 }}>超时（毫秒，1000–600000）</th>
+              <th>{isEn ? 'Function' : '功能'}</th>
+              <th style={{ width: 160 }}>{isEn ? 'Temperature (0–2)' : '温度（0–2）'}</th>
+              <th style={{ width: 200 }}>{isEn ? 'Timeout (ms, 1000–600000)' : '超时（毫秒，1000–600000）'}</th>
             </tr>
           </thead>
           <tbody>
@@ -84,7 +87,7 @@ export function ConfigPanel({
                       step="0.1"
                       min={0}
                       max={2}
-                      placeholder="不覆盖"
+                      placeholder={isEn ? 'Do not override' : '不覆盖'}
                       value={val(p?.temperature)}
                       onChange={(e) => setFn(f.key, { temperature: e.target.value })}
                       style={{ maxWidth: 120, fontSize: 12.5 }}
@@ -95,7 +98,7 @@ export function ConfigPanel({
                       className="input"
                       type="number"
                       step="1000"
-                      placeholder="不覆盖（默认 30000）"
+                      placeholder={isEn ? 'Default (30000)' : '不覆盖（默认 30000）'}
                       value={val(p?.timeoutMs)}
                       onChange={(e) => setFn(f.key, { timeoutMs: e.target.value })}
                       style={{ maxWidth: 170, fontSize: 12.5 }}
@@ -110,13 +113,13 @@ export function ConfigPanel({
 
       <div className="row wrap" style={{ gap: 12, marginTop: 14, alignItems: 'flex-end' }}>
         <label className="small" style={{ display: 'grid', gap: 4 }}>
-          每日预算上限（美元）
+          {isEn ? 'Daily Budget Cap (USD)' : '每日预算上限（美元）'}
           <input
             className="input"
             type="number"
             step="1"
             min={0}
-            placeholder="留空 = 不设闸"
+            placeholder={isEn ? 'Leave empty for no cap' : '留空 = 不设闸'}
             value={val(draft.budget.dailyUsdCap)}
             onChange={(e) =>
               setDraft({ ...draft, budget: { ...draft.budget, dailyUsdCap: e.target.value === '' ? null : Number(e.target.value) } })
@@ -125,13 +128,13 @@ export function ConfigPanel({
           />
         </label>
         <label className="small" style={{ display: 'grid', gap: 4 }}>
-          每月预算上限（美元）
+          {isEn ? 'Monthly Budget Cap (USD)' : '每月预算上限（美元）'}
           <input
             className="input"
             type="number"
             step="1"
             min={0}
-            placeholder="留空 = 不设闸"
+            placeholder={isEn ? 'Leave empty for no cap' : '留空 = 不设闸'}
             value={val(draft.budget.monthlyUsdCap)}
             onChange={(e) =>
               setDraft({ ...draft, budget: { ...draft.budget, monthlyUsdCap: e.target.value === '' ? null : Number(e.target.value) } })
@@ -140,8 +143,9 @@ export function ConfigPanel({
           />
         </label>
         <span className="small muted" style={{ maxWidth: 460 }}>
-          预算用尽后，平台垫付的调用会被拒绝并提示用户「配自己的 Key 即可继续」——不是静默降级成示例内容。
-          自带 Key 的租户不受影响。
+          {isEn
+            ? 'When the budget is exhausted, platform-covered calls are rejected prompting users to configure their own BYOK Key. Tenants with their own Key are unaffected.'
+            : '预算用尽后，平台垫付的调用会被拒绝并提示用户「配自己的 Key 即可继续」——不是静默降级成示例内容。自带 Key 的租户不受影响。'}
         </span>
       </div>
 

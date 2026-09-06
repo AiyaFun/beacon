@@ -39,7 +39,19 @@ export async function deriveCoverMeta(
   tenantId: string | null,
   instruction: string,
   fallbackTitle: string,
+  /**
+   * 出的是哪个版式的封面。**给了才写得对**——文案的规矩是跟着版式和读者走的，
+   * 见 specs.ts 里每条规格的 `copy`。不传就按默认（小红书 3:4），保持老调用的行为不变。
+   *
+   * 此前这里写死「你是小红书封面文案策划」：给 X（推特）出 16:9 横版封面时，
+   * 模型照样按小红书的口语＋悬念来写，而那种文案缩到时间线上的小图里根本读不完。
+   * 不报错，只是每一张非小红书封面的文案都不对味。
+   */
+  spec?: CoverSpec | string,
 ): Promise<{ meta: CoverMeta; mocked: boolean }> {
+  const s = typeof spec === 'string' || spec === undefined ? coverSpec(spec) : spec;
+  const c = s.copy;
+  const wantsSub = c.subTitleMax > 0;
   const res = await llmComplete(
     tenantId,
     'generation',
@@ -47,11 +59,14 @@ export async function deriveCoverMeta(
       {
         role: 'system',
         content:
-          '你是小红书封面文案策划。只输出一个 JSON 对象，字段：' +
-          'mainTitle（封面主标题，≤14字，抓眼、口语、有信息量或悬念），' +
-          'subTitle（副标题或点缀短语，≤12字，可为空字符串），' +
-          'palette（配色倾向的一句话，可为空字符串）。' +
-          '不要解释、不要 markdown 代码块。',
+          `你是${c.persona}。只输出一个 JSON 对象，字段：`
+          + `mainTitle（封面主标题，≤${c.titleMax}字），`
+          + (wantsSub
+            ? `subTitle（副标题或点缀短语，≤${c.subTitleMax}字，可为空字符串），`
+            : 'subTitle（这个版式不要副标题，固定给空字符串），')
+          + 'palette（配色倾向的一句话，可为空字符串）。'
+          + c.note
+          + '不要解释、不要 markdown 代码块。',
       },
       { role: 'user', content: instruction },
     ],
@@ -61,7 +76,10 @@ export async function deriveCoverMeta(
   const raw = parseJson<Partial<CoverMeta>>(res.text, {});
   const meta: CoverMeta = {
     mainTitle: cleanCoverText(raw.mainTitle, COVER_TITLE_HARD_MAX) || fallbackTitle.trim().slice(0, COVER_TITLE_HARD_MAX),
-    subTitle: cleanCoverText(raw.subTitle, COVER_SUBTITLE_HARD_MAX),
+    // 【出口再兜一道】提示词说了「这个版式不要副标题」，但模型不一定听。
+    // 副标题是会**画到图上、随封面发布**的（见 onImageText），
+    // 在 2.35:1 那种扁版式上多出一行字就是把封面挤坏——不能只靠提示词。
+    subTitle: wantsSub ? cleanCoverText(raw.subTitle, Math.min(c.subTitleMax, COVER_SUBTITLE_HARD_MAX)) : '',
     palette: cleanCoverText(raw.palette, 60),
   };
   return { meta, mocked: res.mocked };

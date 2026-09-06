@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useRef } from 'react';
 import Image from 'next/image';
+import { SLOGAN, SUBLINE, SLOGAN_EN, SUBLINE_EN } from '@/lib/brand';
+import { useI18n } from '@/lib/i18n';
 
 interface Feature {
   icon: string;
@@ -17,22 +19,97 @@ interface SlideData {
   features: Feature[];
 }
 
-const SLIDES: SlideData[] = [
+const SLIDES_EN: SlideData[] = [
   {
-    tag: '🚀 核心定位',
-    line1: '盯着六大平台热点与竞对',
-    line2Highlight: '一站式内容作战闭环',
-    desc: '打通「看热点 -> 盯对手 -> 定选题 -> 写稿子 -> 查合规 -> 发布复盘」全链路，无需频繁切换多个工具。',
+    tag: '🚀 Core Mission',
+    line1: SLOGAN_EN,
+    line2Highlight: 'Daily topics with clear reasons',
+    desc: SUBLINE_EN,
     features: [
       {
-        icon: '📡',
-        title: '全网热点雷达',
-        desc: '实时监控抖音、小红书、公众号、B站、X、YouTube 六大平台爆款趋势。',
+        icon: '🧭',
+        title: '8 Topic Sources, only 2 look at trending lists',
+        desc: 'Window seizing, content recycling, cross-platform adaptation, editorial calendar, evergreen topics, inspiration box: topic ideas even without trends.',
       },
       {
         icon: '🎯',
-        title: '对标账号追踪',
-        desc: '毫秒级感知竞对爆款更新与内容结构，捕捉最新的流量风向包。',
+        title: 'Every recommendation answers "Why you, why now"',
+        desc: 'Evidence is backed by indexed historical facts: which past article, what time on which platform. Stay silent if unobservable, never guess.',
+      },
+    ],
+  },
+  {
+    tag: '🧠 Intelligent Memory',
+    line1: 'Deep learning of personal & brand style',
+    line2Highlight: 'Understands you better over time',
+    desc: 'Farewell to generic AI tone. Built-in account-level long-term memory system automatically retains voice habits, persona traits, and taboo preferences.',
+    features: [
+      {
+        icon: '👤',
+        title: 'Dedicated Persona Profile',
+        desc: 'Automatically identifies account personality and industry positioning to match brand DNA.',
+      },
+      {
+        icon: '✍️',
+        title: 'Tone Calibration',
+        desc: 'Learns from your edit history to eliminate excessive exclamation points and empty slogans.',
+      },
+    ],
+  },
+  {
+    tag: '💡 Topic Brain Trust',
+    line1: 'Consultation with 12 expert perspectives',
+    line2Highlight: 'Differentiated 6-dimension scoring',
+    desc: 'Beyond single perspectives. Trend analysts, competitor deconstructors, and narrative designers collaborate for high-converting topic angles.',
+    features: [
+      {
+        icon: '📊',
+        title: '6-Dimension Topic Scoring',
+        desc: 'Precise assessment across hook power, audience fit, compliance risk, conversion potential, and more.',
+      },
+      {
+        icon: '🔀',
+        title: 'Differentiated Angles',
+        desc: 'Avoid red-ocean competition, discovering unique hooks and high-engagement angles your peers missed.',
+      },
+    ],
+  },
+  {
+    tag: '🛡️ Safety & Compliance',
+    line1: 'Platform algorithm coach protection',
+    line2Highlight: 'Safe publishing for every draft',
+    desc: 'Real-time sync with latest prohibited word libraries and rules, predicting risks before generation and safely rewriting sensitive phrases.',
+    features: [
+      {
+        icon: '⚡',
+        title: 'Multi-Platform Risk Detection',
+        desc: 'Targeted identification and risk levels for Xiaohongshu medical terms, Douyin restrictions, and more.',
+      },
+      {
+        icon: '🪄',
+        title: 'One-Click Compliant Rewriting',
+        desc: 'Refactor sensitive terms while preserving core viewpoints and personal voice.',
+      },
+    ],
+  },
+];
+
+const SLIDES: SlideData[] = [
+  {
+    tag: '🚀 核心定位',
+    line1: SLOGAN,
+    line2Highlight: '每天一份带理由的选题',
+    desc: SUBLINE,
+    features: [
+      {
+        icon: '🧭',
+        title: '八条选题来源，只有两条看热榜',
+        desc: '抢跑窗口、旧文翻新、跨平台补发、节点日历、常青题、灵感箱：没热点的日子也有题可做。',
+      },
+      {
+        icon: '🎯',
+        title: '每条推荐都带「为什么是你、为什么是现在」',
+        desc: '证据是查库查出来的事实：哪条旧作、哪个平台几点上榜。观测不到就沉默，不猜。',
       },
     ],
   },
@@ -86,22 +163,25 @@ const SLIDES: SlideData[] = [
       {
         icon: '🪄',
         title: '智能一键合规改写',
-        desc: '在保持核心观点与人设表达的前提下，毫秒级优雅替换敏感词。',
+        desc: '在保持核心观点与人设表达的前提下，替换掉会触发平台限流的词，改动处逐条标出来给你看。',
       },
     ],
   },
 ];
 
 export function PromoCarousel() {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
+  const slides = isEn ? SLIDES_EN : SLIDES;
   const [currentIndex, setCurrentIndex] = useState(0);
   const touchStartX = useRef(0);
 
   useEffect(() => {
     const timer = setInterval(() => {
-      setCurrentIndex((prev) => (prev + 1) % SLIDES.length);
+      setCurrentIndex((prev) => (prev + 1) % slides.length);
     }, 5000);
     return () => clearInterval(timer);
-  }, []);
+  }, [slides.length]);
 
   const handleTouchStart = (e: React.TouchEvent) => {
     touchStartX.current = e.touches[0].clientX;
@@ -110,19 +190,19 @@ export function PromoCarousel() {
   const handleTouchEnd = (e: React.TouchEvent) => {
     const diff = touchStartX.current - e.changedTouches[0].clientX;
     if (diff > 40) {
-      setCurrentIndex((prev) => (prev + 1) % SLIDES.length);
+      setCurrentIndex((prev) => (prev + 1) % slides.length);
     } else if (diff < -40) {
-      setCurrentIndex((prev) => (prev - 1 + SLIDES.length) % SLIDES.length);
+      setCurrentIndex((prev) => (prev - 1 + slides.length) % slides.length);
     }
   };
 
   return (
     <div className="login-left-panel">
       <div className="promo-brand-row">
-        <Image src="/logo.png" alt="烽火台" width={44} height={44} style={{ borderRadius: 10 }} />
+        <Image src="/logo.png" alt={isEn ? 'Beacon' : '烽火台'} width={44} height={44} style={{ borderRadius: 10 }} />
         <div>
-          <div className="promo-brand-title">烽火台</div>
-          <div className="promo-brand-sub">跨平台内容作战室</div>
+          <div className="promo-brand-title">{isEn ? 'Beacon' : '烽火台'}</div>
+          <div className="promo-brand-sub">{isEn ? 'Cross-Platform Command Center' : '跨平台内容作战室'}</div>
         </div>
       </div>
 
@@ -135,13 +215,13 @@ export function PromoCarousel() {
           className="promo-carousel-track"
           style={{ transform: `translateX(-${currentIndex * 100}%)` }}
         >
-          {SLIDES.map((slide, i) => (
+          {slides.map((slide, i) => (
             <div key={i} className="promo-slide">
               <div className="promo-slide-tag">{slide.tag}</div>
               <h1 className="promo-hero-title">
                 {slide.line1}
                 <br />
-                打造<span style={{ color: '#ea580c' }}>{slide.line2Highlight}</span>
+                {i === 0 ? '' : (isEn ? 'Build ' : '打造')}<span style={{ color: '#ea580c' }}>{slide.line2Highlight}</span>
               </h1>
               <p className="promo-hero-desc">{slide.desc}</p>
               <div className="promo-features-grid">
@@ -162,7 +242,7 @@ export function PromoCarousel() {
 
       <div className="promo-controls">
         <div className="promo-dots-wrapper">
-          {SLIDES.map((_, i) => (
+          {slides.map((_, i) => (
             <button
               key={i}
               type="button"
@@ -175,14 +255,14 @@ export function PromoCarousel() {
         <div style={{ display: 'flex', gap: 8 }}>
           <button
             type="button"
-            onClick={() => setCurrentIndex((prev) => (prev - 1 + SLIDES.length) % SLIDES.length)}
+            onClick={() => setCurrentIndex((prev) => (prev - 1 + slides.length) % slides.length)}
             className="promo-arrow-btn"
           >
             &lsaquo;
           </button>
           <button
             type="button"
-            onClick={() => setCurrentIndex((prev) => (prev + 1) % SLIDES.length)}
+            onClick={() => setCurrentIndex((prev) => (prev + 1) % slides.length)}
             className="promo-arrow-btn"
           >
             &rsaquo;

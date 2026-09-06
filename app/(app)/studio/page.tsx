@@ -193,8 +193,13 @@ export default async function StudioPage({
   const tabs: StudioTab[] = [
     {
       key: 'skill',
-      label: '技能出成品',
-      hint: (
+      label: lang === 'en' ? 'Formatted Output' : '技能出成品',
+      hint: lang === 'en' ? (
+        <>
+          Format the draft text into platform-ready layouts (WeChat articles, Xiaohongshu cards, etc.).
+          Skills always run on the <b>latest version</b>. Expand &quot;Requirements&quot; to customize tone and materials.
+        </>
+      ) : (
         <>
           点技能，把当前草稿正文变成对应平台的排版成品（公众号排版、小红书图文卡…）。
           技能永远基于<b>最新一版</b>正文运行；展开「本次要求」可指定篇幅、语气和这篇要用上的素材。
@@ -211,8 +216,13 @@ export default async function StudioPage({
     },
     {
       key: 'title',
-      label: '标题与封面',
-      hint: (
+      label: lang === 'en' ? 'Title & Cover' : '标题与封面',
+      hint: lang === 'en' ? (
+        <>
+          <b>Cover</b>: Auto aspect ratio by platform. Generates AI-badged covers with consistent subjects.
+          <b> Title Matrix</b>: 6 angles with guardrail checks. Any title can be applied to the cover image.
+        </>
+      ) : (
         <>
           <b>封面</b>：比例按草稿平台自动定，大字默认用你采纳的标题（留空则从正文提炼），可上传自己的照片「主体保真」，出图即带 AI 生成标识。
           <b>标题矩阵</b>：一次给 6 个<b>角度互不相同</b>的标题，每条附诊断，命中红线的直接拦下；任一条可一键作封面大字。
@@ -237,8 +247,13 @@ export default async function StudioPage({
     },
     {
       key: 'illustration',
-      label: '正文配图',
-      hint: (
+      label: lang === 'en' ? 'Illustrations' : '正文配图',
+      hint: lang === 'en' ? (
+        <>
+          Extract a set of visual scenes from the article to generate cohesive illustrations.
+          Review scenes before generating. For standalone images, visit <Link href="/images">AI Images</Link>.
+        </>
+      ) : (
         <>
           从正文拆出一组画面，风格统一地出图——小红书组图、公众号内页插图都用它。
           先拆画面给你改，确认后再出图（出图按张计费）。配图<b>不上字</b>，文字排版走「标题与封面」。
@@ -256,9 +271,11 @@ export default async function StudioPage({
     },
     {
       key: 'derive',
-      label: '一稿多平台',
+      label: lang === 'en' ? 'Multi-Platform' : '一稿多平台',
       badge: family.length > 1 ? family.length : undefined,
-      hint: '同一篇内容派生出各平台版本，各自独立发布与回流，之后就能比较谁跑得好。',
+      hint: lang === 'en'
+        ? 'Derive variants for each platform to publish and compare tracking data independently.'
+        : '同一篇内容派生出各平台版本，各自独立发布与回流，之后就能比较谁跑得好。',
       node: (
         <DeriveCard
           draftId={selected?.id}
@@ -341,21 +358,21 @@ export default async function StudioPage({
           </Card>
 
           <Card
-            title="版本时间线"
+            title={lang === 'en' ? 'Version Timeline' : '版本时间线'}
             sub={selected ? selected.title : undefined}
             action={
               latest ? (
                 <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
-                  <span className="small muted">共 {selected!.versions.length} 版</span>
+                  <span className="small muted">{lang === 'en' ? `${selected!.versions.length} versions total` : `共 ${selected!.versions.length} 版`}</span>
                   <VersionCompare versions={compareVersions} draftId={selected?.id} />
                 </div>
               ) : undefined
             }
           >
             {!selected ? (
-              <Empty icon="🕮" text="选中草稿查看版本演进" />
+              <Empty icon="🕮" text={lang === 'en' ? 'Select a draft to view version history' : '选中草稿查看版本演进'} />
             ) : versionsAsc.length === 0 ? (
-              <Empty icon="🕮" text="还没有版本，点「AI 生成初稿」生成第一版" />
+              <Empty icon="🕮" text={lang === 'en' ? 'No versions yet. Click "AI Draft" to create the first version' : '还没有版本，点「AI 生成初稿」生成第一版'} />
             ) : (
               <div className="stack" style={{ gap: 0 }}>
                 {versionsAsc.map((v, i) => {
@@ -373,7 +390,7 @@ export default async function StudioPage({
                         <div className="row wrap" style={{ gap: 6, alignItems: 'center' }}>
                           <span className="badge badge-gray">v{v.seq}</span>
                           <span className={`badge ${isAi ? 'badge-amber' : 'badge-green'}`}>
-                            {isAi ? 'AI 初稿' : '人工终稿'}
+                            {isAi ? (lang === 'en' ? 'AI Draft' : 'AI 初稿') : (lang === 'en' ? 'Human Edit' : '人工终稿')}
                           </span>
                           <span className="small muted" style={{ fontSize: 11 }}>{relTime(v.createdAt)}</span>
                         </div>
@@ -381,7 +398,9 @@ export default async function StudioPage({
                           <div className="small" style={{ marginTop: 4, fontSize: 11, color: prev && prev.authorType !== v.authorType ? 'var(--brand)' : 'var(--muted)' }}>
                             <Icon.arrow size={11} /> {v.diffFromPrev}
                             {prev && prev.authorType === 'ai' && v.authorType === 'human' && (
-                              <span className="badge badge-brand" style={{ marginLeft: 4, fontSize: 10 }} title="系统对比 AI 初稿与改后终稿学习偏好">已学偏好</span>
+                              <span className="badge badge-brand" style={{ marginLeft: 4, fontSize: 10 }} title={lang === 'en' ? 'Learned preference from human edits over AI draft' : '系统对比 AI 初稿与改后终稿学习偏好'}>
+                                {lang === 'en' ? 'Learned' : '已学偏好'}
+                              </span>
                             )}
                           </div>
                         )}
@@ -390,7 +409,7 @@ export default async function StudioPage({
                             用原生 details 折叠，不引入 JS，也不影响服务端渲染。 */}
                         <details open={isLast} style={{ marginTop: 6 }}>
                           <summary className="small muted ver-toggle" style={{ fontSize: 11 }}>
-                            正文预览
+                            {lang === 'en' ? 'Preview' : '正文预览'}
                           </summary>
                           <div
                             className="small muted"
@@ -433,16 +452,16 @@ export default async function StudioPage({
                 <b style={{ fontSize: 14.5, letterSpacing: '-0.2px' }}>{selected.title}</b>
                 {selectedStatus && <span className={`badge ${selectedStatus.cls}`}>{selectedStatus.text}</span>}
                 <span className="small muted">
-                  共 {selected.versions.length} 版 · 更新 {relTime(selected.updatedAt)}
+                  {lang === 'en' ? `${selected.versions.length} versions · Updated ${relTime(selected.updatedAt)}` : `共 ${selected.versions.length} 版 · 更新 ${relTime(selected.updatedAt)}`}
                 </span>
               </div>
               <div className="divider" style={{ margin: '12px 0 10px' }} />
               <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
-                <span className="small muted" style={{ marginRight: 2 }}>写完之后</span>
+                <span className="small muted" style={{ marginRight: 2 }}>{lang === 'en' ? 'Next Actions' : '写完之后'}</span>
                 {latest?.content && (
                   <>
-                    <CopyText text={`${selected.title}\n\n${latest.content}`} label="复制发布包" />
-                    <CopyText text={latest.content} label="复制正文" />
+                    <CopyText text={`${selected.title}\n\n${latest.content}`} label={lang === 'en' ? 'Copy Package' : '复制发布包'} />
+                    <CopyText text={latest.content} label={lang === 'en' ? 'Copy Body' : '复制正文'} />
                   </>
                 )}
                 <PublishPlanPanel draftId={selected.id} />
@@ -455,18 +474,19 @@ export default async function StudioPage({
           ) : (
             <div className="card" style={{ padding: '14px 18px' }}>
               <div className="small muted">
-                还没有选中草稿。左边点一篇，或用右上角「新建草稿 / AI 生成初稿」开一篇新的
-                ——复制、导出、登记发布都会出现在这里。
+                {lang === 'en'
+                  ? 'No draft selected. Select one from the left or create one using "New Draft / AI Draft" in the top right — copy, export, and publish options will appear here.'
+                  : '还没有选中草稿。左边点一篇，或用右上角「新建草稿 / AI 生成初稿」开一篇新的——复制、导出、登记发布都会出现在这里。'}
               </div>
             </div>
           )}
 
           <Card
-            title="正文编辑 · 算法教练"
-            sub="边写边诊断，按平台算法实时优化"
+            title={lang === 'en' ? 'Editor · Algorithm Coach' : '正文编辑 · 算法教练'}
+            sub={lang === 'en' ? 'Diagnose as you write, optimize for platform algorithms' : '边写边诊断，按平台算法实时优化'}
             action={
               <span className="small muted">
-                实时诊断开头钩子 / 篇幅 / 结构 / 互动引导，结合账号真实回流数据；零 AI 额度
+                {lang === 'en' ? 'Real-time hook, structure, and engagement check with zero AI credits' : '实时诊断开头钩子 / 篇幅 / 结构 / 互动引导，结合账号真实回流数据；零 AI 额度'}
               </span>
             }
           >
@@ -483,7 +503,10 @@ export default async function StudioPage({
             />
           </Card>
 
-          <Card title="出成品 · 打磨" sub="正文定了之后的四件事，一次做一件">
+          <Card
+            title={lang === 'en' ? 'Polish & Finalize' : '出成品 · 打磨'}
+            sub={lang === 'en' ? 'Next steps once draft is locked, one at a time' : '正文定了之后的四件事，一次做一件'}
+          >
             <StudioTabs tabs={tabs} initialTab={sp.tab} />
           </Card>
         </div>

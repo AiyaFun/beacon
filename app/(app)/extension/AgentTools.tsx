@@ -3,6 +3,7 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { actToggleAgentTool } from './actions';
+import { useI18n } from '@/lib/i18n';
 
 // 「AI 能力」清单 + 开关。
 //
@@ -28,6 +29,8 @@ export type ToolRow = {
 };
 
 export function AgentTools({ tools, readOnly }: { tools: ToolRow[]; readOnly: boolean }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const router = useRouter();
   const [, start] = useTransition();
   const [err, setErr] = useState('');
@@ -52,7 +55,7 @@ export function AgentTools({ tools, readOnly }: { tools: ToolRow[]; readOnly: bo
       // 必须在**任何 return 之前**清掉，否则失败那一行会一直卡在禁用态
       setBusy('');
       if (!r.ok) {
-        setErr(r.error ?? '改不动，请重试');
+        setErr(r.error ?? (isEn ? 'Failed to update, please retry' : '改不动，请重试'));
         setLocal((m) => ({ ...m, [name]: !next })); // 失败翻回去，别让界面撒谎
         return;
       }
@@ -66,9 +69,9 @@ export function AgentTools({ tools, readOnly }: { tools: ToolRow[]; readOnly: bo
   return (
     <div>
       <div className="row wrap" style={{ gap: 8, marginBottom: 12 }}>
-        <span className="badge badge-gray">共 {tools.length} 项</span>
-        {offCount > 0 && <span className="badge badge-amber">已关闭 {offCount} 项</span>}
-        <span className="small muted">关掉之后 AI 既看不到它，也调不动它。</span>
+        <span className="badge badge-gray">{isEn ? `Total ${tools.length} ${tools.length === 1 ? 'item' : 'items'}` : `共 ${tools.length} 项`}</span>
+        {offCount > 0 && <span className="badge badge-amber">{isEn ? `${offCount} disabled` : `已关闭 ${offCount} 项`}</span>}
+        <span className="small muted">{isEn ? 'Once disabled, AI cannot see or invoke it.' : '关掉之后 AI 既看不到它，也调不动它。'}</span>
       </div>
 
       {err && <p className="small" style={{ color: 'var(--red)' }}>{err}</p>}
@@ -82,9 +85,9 @@ export function AgentTools({ tools, readOnly }: { tools: ToolRow[]; readOnly: bo
                 <span className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
                   <strong style={{ fontSize: 13 }}>{t.label}</strong>
                   <code className="small muted">{t.name}</code>
-                  {t.write && <span className="badge badge-amber">会改数据</span>}
-                  {t.costly && <span className="badge badge-gray">花配额</span>}
-                  {!t.allowedByRole && <span className="badge badge-gray">你的角色用不了</span>}
+                  {t.write && <span className="badge badge-amber">{isEn ? 'Modifies data' : '会改数据'}</span>}
+                  {t.costly && <span className="badge badge-gray">{isEn ? 'Uses quota' : '花配额'}</span>}
+                  {!t.allowedByRole && <span className="badge badge-gray">{isEn ? 'Unavailable for your role' : '你的角色用不了'}</span>}
                 </span>
                 <span className="small muted">{t.description}</span>
               </span>
@@ -94,9 +97,9 @@ export function AgentTools({ tools, readOnly }: { tools: ToolRow[]; readOnly: bo
                   checked={enabled}
                   disabled={readOnly || busy === t.name}
                   onChange={() => toggle(t.name, !enabled)}
-                  aria-label={`${t.label} 开关`}
+                  aria-label={isEn ? `${t.label} toggle` : `${t.label} 开关`}
                 />
-                <span className={enabled ? undefined : 'muted'}>{enabled ? '开' : '关'}</span>
+                <span className={enabled ? undefined : 'muted'}>{enabled ? (isEn ? 'ON' : '开') : (isEn ? 'OFF' : '关')}</span>
               </label>
             </div>
           );
@@ -105,7 +108,9 @@ export function AgentTools({ tools, readOnly }: { tools: ToolRow[]; readOnly: bo
 
       {readOnly && (
         <p className="small muted" style={{ marginTop: 10 }}>
-          你的角色可以查看这份清单，但改开关需要管理员权限（与模型接入同一档）。
+          {isEn
+            ? 'Your role can view this list, but toggling requires admin permissions (same tier as model integration).'
+            : '你的角色可以查看这份清单，但改开关需要管理员权限（与模型接入同一档）。'}
         </p>
       )}
     </div>

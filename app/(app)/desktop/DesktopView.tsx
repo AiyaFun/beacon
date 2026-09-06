@@ -7,6 +7,7 @@ import { HubHeader } from '@/components/HubHeader';
 import { Icon } from '@/components/icons';
 import type { DesktopBuild, DesktopManifest, ApplianceManifest, DesktopOs } from '@/lib/downloads';
 import { ApplianceUpdateCard } from './ApplianceUpdateCard';
+import { TrackLink } from '@/components/growth/TrackLink';
 
 export type Lang = 'zh' | 'en';
 
@@ -89,7 +90,16 @@ const BrandIcon = {
 const I18N = {
   zh: {
     pageTitle: '桌面客户端与整机版',
-    pageHint: '独立窗口、托盘常驻、开机自启 · 功能一模一样，装不装都不影响使用',
+    // 2026-09-05 重定位：客户端的理由是「数据自己回来」，不是「独立窗口」。网页功能一样不少这句仍然要说，
+    // 但放在第二屏——这一页此前第一句就是「装不装都不影响使用」，等于自己劝人别装。
+    pageHint: '装上它，同行动态与你在 X / TikTok 主页的数据每天自动回流，不用装插件 · 网页功能一样不少',
+    syncTitle: '为什么要装：数据自己回来',
+    syncSub: '登录客户端即接管采集，不用装浏览器插件、不用生成和粘贴令牌',
+    syncPoints: [
+      { t: '不装插件也能采', d: 'AI 派出的采集任务由这台电脑上的客户端领走，用一个独立的采集浏览器只读地打开页面，结果直接交回工作区。' },
+      { t: '登录一次，长期有效', d: '独立采集 profile 与日常 Chrome 分开、互不影响。撞上登录墙会把窗口摆到你面前等你登完，然后自己接着采。' },
+      { t: '派下去几秒就开始', d: '网页上派完活客户端当场领取，执行过程页看得见每一步；抖音 / 小红书 / B 站创作者后台的数字仍需插件（那是登录态数据，客户端刻意不碰）。' },
+    ],
     extensionBtn: '采集插件',
     clientVer: '客户端版本',
     desktopShell: '桌面壳',
@@ -169,7 +179,14 @@ const I18N = {
   },
   en: {
     pageTitle: 'Desktop Client & Appliance',
-    pageHint: 'Dedicated window, system tray resident, auto-start on boot · All features work identically in your browser',
+    pageHint: 'Install it and competitor updates plus your X / TikTok profile metrics flow back daily, no extension needed · Web has every feature too',
+    syncTitle: 'Why install: data syncs itself',
+    syncSub: 'Sign in once and the app takes over collection. No extension, no token pasting.',
+    syncPoints: [
+      { t: 'Collect without the extension', d: 'Tasks dispatched by the AI are picked up by this machine, opened read-only in a dedicated collector browser, and sent straight back to your workspace.' },
+      { t: 'Log in once, stays logged in', d: 'A separate collector profile, isolated from your daily Chrome. On a login wall it brings the window to you, waits, then resumes.' },
+      { t: 'Starts seconds after dispatch', d: 'The app claims work the moment you dispatch it; every step is visible. Creator-backend numbers on Douyin / Xiaohongshu / Bilibili still need the extension (that is logged-in data the app deliberately does not touch).' },
+    ],
     extensionBtn: 'Browser Extension',
     clientVer: 'Client Version',
     desktopShell: 'Desktop Shell',
@@ -202,7 +219,7 @@ const I18N = {
     ],
     
     whichTitle: 'Which Tool for Which Task?',
-    tableHeaders: ['要做的事', '网页版', '桌面客户端', '采集插件'],
+    tableHeaders: ['Task / Scenario', 'Web App', 'Desktop App', 'Scraping Extension'],
     splitMatrix: [
       ['Topic generation, drafting, rewriting, cover image, publishing', '✓', '✓', '—'],
       ['Analytics dashboard, competitor tracking, battle reports', '✓', '✓', '—'],
@@ -214,7 +231,7 @@ const I18N = {
       ['Connect to local Appliance server on this machine', 'Manual URL', '✓ Auto-detect & remember', '—'],
     ],
     extNoticePrefix: 'Note: ',
-    extNoticeBold: '客户端替代不了插件',
+    extNoticeBold: 'Desktop Client Cannot Replace Extension',
     extNoticeMiddle: '. Scraping relies on active login sessions in your daily browser, whereas the desktop client is an isolated WebView. To automatically sync data, install the extension in your Chrome / Edge browser —— ',
     extNoticeLink: 'Install Extension',
     
@@ -223,21 +240,21 @@ const I18N = {
     noManifestDesc: 'Desktop shells must be built on their respective target OS (Tauri does not support cross-compilation): Run `cd desktop && npm run build` on Mac for .dmg, or on Windows for .msi / .exe; then run `npm run pack:desktop` in root. See `desktop/README.md`.',
     
     installGuideTitle: 'Installation & Security Notes',
-    macSecurityTitle: '🍎 macOS · 已签名并公证',
-    macSecurityDesc: '拖进「应用程序」双击即可，没有任何安全提示。签名主体：厦门云磁数字科技有限公司，已通过 Apple 公证。',
-    winSecurityTitle: '🪟 Windows · 会弹提示，按这三步',
-    winStep1: '浏览器提示「不常下载」→ 点 保留',
-    winStep2: '双击后蓝屏「Windows 已保护你的电脑」→ 点左下角 更多信息',
-    winStep3: '展开后点 仍要运行',
-    winSecurityDesc: 'Windows 端没有代码签名，所以会拦——不是软件有问题，可对照下方 sha256 自行校验文件完整性。',
+    macSecurityTitle: '🍎 macOS · Signed & Notarized',
+    macSecurityDesc: 'Drag to Applications and double click to run. No security warnings. Signed by Xiamen Yunci Digital Technology Co., Ltd. and notarized by Apple.',
+    winSecurityTitle: '🪟 Windows · Three Steps for First Launch',
+    winStep1: 'Browser prompt "uncommonly downloaded" → Click "Keep"',
+    winStep2: 'Blue screen "Windows protected your PC" → Click "More info" in bottom-left',
+    winStep3: 'Expand details and click "Run anyway"',
+    winSecurityDesc: 'Windows builds do not carry an EV code-signing certificate, hence the SmartScreen prompt. Verify integrity using sha256 hashes below.',
     
     usageGuideTitle: 'Usage & Updates',
-    afterInstall: '装好之后',
-    afterInstallDesc: '首次打开会问你「连到哪一个烽火台」：连云端账号就是现在这个站点，和浏览器里同一个工作区；连本机整机版要先在这台机器上装过整机版服务。选过一次就记住了，之后直接进。',
-    howToUpdate: '怎么更新',
-    howToUpdateDesc: '客户端不会自动更新。有新版时，侧栏会出现一行「客户端有新版」提醒你；回到这一页重新下载，覆盖安装即可（macOS 拖进「应用程序」选替换，Windows 直接装在原位）。你的登录态和本地缓存都留着，装完还是同一个工作区。客户端只是外壳，网页功能本身一直是最新的，不更新客户端也不会少功能——更新带来的是壳自己的修复。',
+    afterInstall: 'After Installation',
+    afterInstallDesc: 'On first launch, you will be prompted to select connection target: Connect to Cloud Account (same workspace as your browser), or connect to local Appliance service. Your selection will be remembered.',
+    howToUpdate: 'How to Update',
+    howToUpdateDesc: 'The desktop app does not auto-update. When a new version is released, a notification appears in the sidebar. Download the latest build and install over existing app. Logins and local cache are preserved.',
     
-    shaTitle: '校验值（sha256）',
+    shaTitle: 'Checksums (sha256)',
     applianceCardTitle: 'Appliance & Private Self-Hosted',
     applianceCardDesc: 'Deploy full command center on your private server or local workstation with 100% data residency.',
     langZh: '中文',
@@ -354,6 +371,18 @@ export function DesktopView({
       {/* ════════════════════════════════════════════════════════════════════════
           【置顶第一优先级】核心下载区域 + 平台下载卡片 + 随下即看安装指引
          ════════════════════════════════════════════════════════════════════════ */}
+      {/* 【第一屏先说理由】客户端独有的能力是数据回流（1.3.24–1.3.50 做完的那条路），独立窗口/托盘放后面 */}
+      <Card title={t.syncTitle} sub={t.syncSub}>
+        <div className="grid grid-3" style={{ gap: 10 }}>
+          {t.syncPoints.map((p) => (
+            <div key={p.t} className="card" style={{ padding: 12, background: 'var(--surface-2, rgba(127,127,127,0.04))' }}>
+              <b className="small">{p.t}</b>
+              <p className="small muted" style={{ margin: '4px 0 0', lineHeight: 1.6, fontSize: 12 }}>{p.d}</p>
+            </div>
+          ))}
+        </div>
+      </Card>
+
       {!manifest ? (
         <Card title={t.noManifestTitle} sub={t.noManifestSub}>
           <p className="small muted" style={{ lineHeight: 1.9 }}>
@@ -438,12 +467,18 @@ export function DesktopView({
                   </div>
 
                   {list.length === 0 ? (
-                    <p className="small muted" style={{ lineHeight: 1.8 }}>
-                      还没有 {DESKTOP_OS_LABEL[os]} 安装包。
-                      {os === 'win'
-                        ? 'Windows 包必须在 Windows 机器上构建，做好后会出现在这里。'
-                        : 'macOS 包必须在 Mac 上构建，做好后会出现在这里。'}
-                    </p>
+                    lang === 'en' ? (
+                      <p className="small muted" style={{ lineHeight: 1.8 }}>
+                        No {DESKTOP_OS_LABEL[os]} installer package yet. {os === 'win' ? 'Windows builds must be compiled on a Windows machine and will appear here when ready.' : 'macOS builds must be compiled on a Mac and will appear here when ready.'}
+                      </p>
+                    ) : (
+                      <p className="small muted" style={{ lineHeight: 1.8 }}>
+                        还没有 {DESKTOP_OS_LABEL[os]} 安装包。
+                        {os === 'win'
+                          ? 'Windows 包必须在 Windows 机器上构建，做好后会出现在这里。'
+                          : 'macOS 包必须在 Mac 上构建，做好后会出现在这里。'}
+                      </p>
+                    )
                   ) : (
                     <div className="stack" style={{ gap: 8 }}>
                       {list.map((b) => (
@@ -463,9 +498,9 @@ export function DesktopView({
                             <b>{b.os === 'mac' ? archText(b.arch) : b.ext.toUpperCase()}</b>
                             <span className="muted">　{b.sizeMB} MB</span>
                           </span>
-                          <a className="btn btn-sm btn-primary" href={b.file} download>
+                          <TrackLink event="download_click" meta={b.os} className="btn btn-sm btn-primary" href={b.file} download>
                             <Icon.download size={13} /> {t.downloadBtn}
-                          </a>
+                          </TrackLink>
                         </div>
                       ))}
                     </div>

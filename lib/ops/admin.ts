@@ -124,6 +124,19 @@ export const ADMIN_ACTION_LABEL: Record<AdminAction, string> = {
   'parser.rollback': '回滚解析规则',
 };
 
+export const ADMIN_ACTION_LABEL_EN: Record<AdminAction, string> = {
+  'tenant.plan': 'Update tenant plan',
+  'tenant.suspend': 'Suspend tenant',
+  'tenant.resume': 'Resume tenant',
+  'member.platform_admin': 'Update platform admin',
+  'provider.create': 'Add provider',
+  'provider.update': 'Update provider',
+  'provider.delete': 'Delete provider',
+  'setting.update': 'Update setting',
+  'parser.publish': 'Publish parser rule',
+  'parser.rollback': 'Rollback parser rule',
+};
+
 export async function logAdminAction(params: {
   actor: Pick<PlatformAdmin, 'memberId' | 'memberName'>;
   action: AdminAction;

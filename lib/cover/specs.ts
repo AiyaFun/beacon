@@ -49,17 +49,104 @@ export type CoverSpec = {
   fileStem: string;
   /** 一句适用说明（UI 下拉的 title） */
   hint: string;
+  /**
+   * 这个平台的封面文案怎么写。**必填**——`Record` 式的必填字段是刻意的：
+   * 加一个规格却忘了写文案口径，就是编译期报错，而不是悄悄套用小红书那套。
+   *
+   * 【为什么不能一套通吃】封面文案的规矩是跟着**版式和读者**走的：
+   * 小红书 3:4 竖版在信息流里被拇指扫过，靠口语和悬念留人；
+   * X / YouTube 的 16:9 横版是小图，字必须少而重、一眼读完；
+   * 公众号 2.35:1 是文章头图，语气偏正式、信息优先于悬念。
+   * 此前这一段写死成「你是小红书封面文案策划」，于是给 X 出封面时，
+   * 模型仍按小红书的调性写——**没人会报错，只是每一张横版封面的文案都不对味**。
+   */
+  copy: {
+    /** 一句话交代它在给谁写、什么版式 */
+    persona: string;
+    /** 主标题的字数上限（软约束，写进提示词；硬上限见 rules.ts） */
+    titleMax: number;
+    /** 副标题上限；0 = 这个版式不要副标题 */
+    subTitleMax: number;
+    /** 这个版式特有的一句话要求 */
+    note: string;
+  };
 };
 
 export const COVER_SPECS: CoverSpec[] = [
-  { key: 'xhs-3-4', label: '小红书 3:4', ratio: '3:4', aspect: 3 / 4, size: '1728x2304', fileStem: '小红书封面', hint: '小红书笔记竖版封面' },
-  { key: 'shipinhao-6-7', label: '视频号 6:7', ratio: '6:7', aspect: 6 / 7, size: '1920x2240', fileStem: '视频号封面', hint: '微信视频号竖版封面' },
-  { key: 'douyin-9-16', label: '抖音 9:16', ratio: '9:16', aspect: 9 / 16, size: '1440x2560', fileStem: '抖音封面', hint: '抖音 / TikTok 竖版视频封面' },
-  { key: 'bilibili-16-10', label: 'B站 16:10', ratio: '16:10', aspect: 16 / 10, size: '2560x1600', fileStem: 'B站封面', hint: 'B站横版视频封面' },
-  { key: 'wechat-235-1', label: '公众号 2.35:1', ratio: '2.35:1', aspect: 2.35, size: '3008x1280', fileStem: '公众号封面', hint: '公众号头条横版封面' },
-  { key: 'wide-16-9', label: '横版 16:9', ratio: '16:9', aspect: 16 / 9, size: '2560x1440', fileStem: '横版封面', hint: 'YouTube / X 等横版封面' },
-  { key: 'landscape-4-3', label: '通用横版 4:3', ratio: '4:3', aspect: 4 / 3, size: '2304x1728', fileStem: '横版封面', hint: '通用横版' },
-  { key: 'square-1-1', label: '正方形 1:1', ratio: '1:1', aspect: 1, size: '2048x2048', fileStem: '方形封面', hint: '通用正方形 / 公众号次图' },
+  {
+    key: 'xhs-3-4', label: '小红书 3:4', ratio: '3:4', aspect: 3 / 4, size: '1728x2304',
+    fileStem: '小红书封面', hint: '小红书笔记竖版封面',
+    copy: {
+      persona: '小红书封面文案策划（3:4 竖版笔记封面，在信息流里被拇指快速扫过）',
+      titleMax: 14, subTitleMax: 12,
+      note: '口语、有信息量或悬念，像一个真人在跟你说话；别用书面语和标语腔。',
+    },
+  },
+  {
+    key: 'shipinhao-6-7', label: '视频号 6:7', ratio: '6:7', aspect: 6 / 7, size: '1920x2240',
+    fileStem: '视频号封面', hint: '微信视频号竖版封面',
+    copy: {
+      persona: '微信视频号封面文案策划（6:7 竖版，读者多是微信熟人关系链里的人）',
+      titleMax: 14, subTitleMax: 10,
+      note: '比小红书稳一点：可以有情绪但别夸张，熟人看到浮夸标题会划走。',
+    },
+  },
+  {
+    key: 'douyin-9-16', label: '抖音 9:16', ratio: '9:16', aspect: 9 / 16, size: '1440x2560',
+    fileStem: '抖音封面', hint: '抖音 / TikTok 竖版视频封面',
+    copy: {
+      persona: '抖音 / TikTok 视频封面文案策划（9:16 满屏竖版，观众划到就是零点几秒）',
+      titleMax: 12, subTitleMax: 8,
+      note: '第一眼就要有钩子：冲突、反常识、或一个具体到不像话的数字。字越少越好。',
+    },
+  },
+  {
+    key: 'bilibili-16-10', label: 'B站 16:10', ratio: '16:10', aspect: 16 / 10, size: '2560x1600',
+    fileStem: 'B站封面', hint: 'B站横版视频封面',
+    copy: {
+      persona: 'B站视频封面文案策划（16:10 横版，观众吃「内容含量」和梗，反感标题党）',
+      titleMax: 16, subTitleMax: 12,
+      note: '把「这期到底讲了什么」说清楚，可以带梗但不要空喊；虚张声势在这里掉粉。',
+    },
+  },
+  {
+    key: 'wechat-235-1', label: '公众号 2.35:1', ratio: '2.35:1', aspect: 2.35, size: '3008x1280',
+    fileStem: '公众号封面', hint: '公众号头条横版封面',
+    copy: {
+      persona: '微信公众号头条封面文案策划（2.35:1 扁横版，是文章头图不是短视频封面）',
+      titleMax: 16, subTitleMax: 0,
+      note: '语气偏正式，信息优先于悬念；这个版式太扁，副标题会挤成一条线，所以不要副标题。',
+    },
+  },
+  {
+    key: 'wide-16-9', label: '横版 16:9', ratio: '16:9', aspect: 16 / 9, size: '2560x1440',
+    fileStem: '横版封面', hint: 'YouTube / X 等横版封面',
+    copy: {
+      // X（推特）与 YouTube 共用这一档：时间线/推荐位上它就是一张小图，
+      // 字多一个都读不完——这正是套用小红书那套「口语＋悬念」最不对味的地方
+      persona: 'X（推特）/ YouTube 横版封面文案策划（16:9，在时间线和推荐位上只有指甲盖大小）',
+      titleMax: 10, subTitleMax: 0,
+      note: '字要少而重，缩到很小也一眼读得完；用名词和数字，别用长句，也不要副标题。',
+    },
+  },
+  {
+    key: 'landscape-4-3', label: '通用横版 4:3', ratio: '4:3', aspect: 4 / 3, size: '2304x1728',
+    fileStem: '横版封面', hint: '通用横版',
+    copy: {
+      persona: '通用横版封面文案策划（4:3，不确定投放到哪个平台）',
+      titleMax: 14, subTitleMax: 10,
+      note: '写得通用一点：说清楚是什么，别押某个平台特有的梗或调性。',
+    },
+  },
+  {
+    key: 'square-1-1', label: '正方形 1:1', ratio: '1:1', aspect: 1, size: '2048x2048',
+    fileStem: '方形封面', hint: '通用正方形 / 公众号次图',
+    copy: {
+      persona: '正方形封面文案策划（1:1，多用作公众号次图或通用配图）',
+      titleMax: 12, subTitleMax: 8,
+      note: '次图往往和头条并排出现，别和头条抢，把这一条自己的重点说清楚就好。',
+    },
+  },
 ];
 
 /** 平台 → 默认比例。没列到的平台（或没有平台）回落到小红书 3:4。 */

@@ -12,6 +12,7 @@ import { useI18n } from '@/lib/i18n';
 const QUICK_REASONS = ['不感兴趣', '做过了', '不合人设'];
 
 export function TopicActions({ topicId, title }: { topicId: string; title: string }) {
+  const { lang } = useI18n();
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [rejecting, setRejecting] = useState(false); // 拒因面板展开中
@@ -37,7 +38,12 @@ export function TopicActions({ topicId, title }: { topicId: string; title: strin
       try {
         const r = await actAccept(topicId);
         if (!r.ok) {
-          show(false, '没能采纳：这条选题可能已被处理过，刷新页面再看看');
+          show(
+            false,
+            lang === 'en'
+              ? 'Failed to accept: this topic may have already been handled, refresh and check'
+              : '没能采纳：这条选题可能已被处理过，刷新页面再看看',
+          );
           return;
         }
         // 后续入口交给页面级的 AcceptedBar：这张卡片马上就要被重渲染卸载了，
@@ -45,7 +51,10 @@ export function TopicActions({ topicId, title }: { topicId: string; title: strin
         publishAccepted({ id: topicId, title });
         setRejecting(false);
       } catch (e) {
-        show(false, (e as Error).message || '没成功，请稍后重试');
+        show(
+          false,
+          (e as Error).message || (lang === 'en' ? 'Action failed, please try again' : '没成功，请稍后重试'),
+        );
       }
     });
   }
@@ -56,21 +65,30 @@ export function TopicActions({ topicId, title }: { topicId: string; title: strin
       try {
         const r = await actReject(topicId, reasonText);
         if (!r.ok) {
-          show(false, '没能拒绝：这条选题可能已被处理过，刷新页面再看看');
+          show(
+            false,
+            lang === 'en'
+              ? 'Failed to reject: this topic may have already been handled, refresh and check'
+              : '没能拒绝：这条选题可能已被处理过，刷新页面再看看',
+          );
           return;
         }
-        show(true, '已拒绝，理由已记入偏好');
+        show(
+          true,
+          lang === 'en' ? 'Rejected. Reason recorded in preferences.' : '已拒绝，理由已记入偏好',
+        );
         setRejecting(false);
         setCustom(false);
         setReason('');
         router.refresh();
       } catch (e) {
-        show(false, (e as Error).message || '没成功，请稍后重试');
+        show(
+          false,
+          (e as Error).message || (lang === 'en' ? 'Action failed, please try again' : '没成功，请稍后重试'),
+        );
       }
     });
   }
-
-  const { lang } = useI18n();
 
   const quickReasons = lang === 'en'
     ? ['Not interested', 'Already covered', 'Off-brand']

@@ -20,9 +20,14 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
 
   return [
     { url: `${SITE}`, lastModified: now, changeFrequency: 'daily', priority: 1.0 },
+    { url: `${SITE}/topics-today`, lastModified: now, changeFrequency: 'daily', priority: 0.9 },
     { url: `${SITE}/hotlists`, lastModified: now, changeFrequency: 'hourly', priority: 0.9 },
+    { url: `${SITE}/pricing`, lastModified: now, changeFrequency: 'monthly', priority: 0.8 },
+    // 下载入口是**页面**（/desktop、/extension），不是 /downloads 那个静态文件目录——
+    // 此前 sitemap 递交的是一个没有网页的路径，搜索引擎抓到的是目录或 404。
+    { url: `${SITE}/desktop`, lastModified: now, changeFrequency: 'weekly', priority: 0.8 },
+    { url: `${SITE}/extension`, lastModified: now, changeFrequency: 'weekly', priority: 0.7 },
     { url: `${SITE}/login`, lastModified: now, changeFrequency: 'monthly', priority: 0.6 },
-    { url: `${SITE}/downloads`, lastModified: now, changeFrequency: 'weekly', priority: 0.7 },
     { url: `${SITE}/legal/privacy`, lastModified: now, changeFrequency: 'monthly', priority: 0.3 },
     { url: `${SITE}/legal/terms`, lastModified: now, changeFrequency: 'monthly', priority: 0.3 },
     { url: `${SITE}/legal/data-request`, lastModified: now, changeFrequency: 'monthly', priority: 0.3 },

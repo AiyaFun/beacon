@@ -5,6 +5,7 @@ import { beijingDayKey } from '@/lib/beijing';
 import { effectivePlan, isPlanExpired } from '@/lib/pay/plan';
 import { isDemoTenant } from '@/lib/demo/guard';
 import { currentPlatformAdmin } from '@/lib/ops/guard';
+import { getServerLang } from '@/lib/i18n/server';
 import { TenantRow } from './TenantRow';
 
 export const dynamic = 'force-dynamic';
@@ -14,6 +15,8 @@ const PAGE_SIZE = 50;
 // 租户列表：搜名字/ID → 改档位、封禁、授予平台管理员。
 // 只列 50 条并给搜索框，不做花哨分页：运维台的真实用法是「找某一个租户」，不是翻页浏览。
 export default async function OpsTenantsPage(props: { searchParams: Promise<{ q?: string }> }) {
+  const lang = await getServerLang();
+  const isEn = lang === 'en';
   const { q } = await props.searchParams;
   const keyword = (q ?? '').trim();
   const admin = await currentPlatformAdmin();
@@ -40,17 +43,27 @@ export default async function OpsTenantsPage(props: { searchParams: Promise<{ q?
   return (
     <>
       <PageHead
-        title="租户"
-        desc={`共 ${fmtNum(total)} 个工作区${keyword ? ` · 命中「${keyword}」` : ''} · 最多展示 ${PAGE_SIZE} 条`}
+        title={isEn ? 'Tenants' : '租户'}
+        desc={
+          isEn
+            ? `${fmtNum(total)} workspaces in total${keyword ? ` · matching "${keyword}"` : ''} · Up to ${PAGE_SIZE} shown`
+            : `共 ${fmtNum(total)} 个工作区${keyword ? ` · 命中「${keyword}」` : ''} · 最多展示 ${PAGE_SIZE} 条`
+        }
       />
 
       <form method="get" className="row" style={{ gap: 8, marginBottom: 16 }}>
-        <input className="input" name="q" defaultValue={keyword} placeholder="搜工作区名称或租户 ID" style={{ maxWidth: 320 }} />
-        <button className="btn btn-sm" type="submit">搜索</button>
+        <input
+          className="input"
+          name="q"
+          defaultValue={keyword}
+          placeholder={isEn ? 'Search workspace name or tenant ID' : '搜工作区名称或租户 ID'}
+          style={{ maxWidth: 320 }}
+        />
+        <button className="btn btn-sm" type="submit">{isEn ? 'Search' : '搜索'}</button>
       </form>
 
       {tenants.length === 0 ? (
-        <Card><Empty icon="🔍" text="没有匹配的租户。" /></Card>
+        <Card><Empty icon="🔍" text={isEn ? 'No matching tenants.' : '没有匹配的租户。'} /></Card>
       ) : (
         <div style={{ display: 'grid', gap: 12 }}>
           {tenants.map((t) => {

@@ -132,3 +132,22 @@ describe('落库走与插件相同的函数', () => {
     expect(seg).toContain('vetCdpUrl(');
   });
 });
+
+describe('登录墙判据：弹层式（2026-09-04 真机 小红书）', () => {
+  it('LOGGED_OUT_FN 认得出「盖在内容上的登录弹层」，不只认 <a> 链接', async () => {
+    const { LOGGED_OUT_FN } = await import('@/lib/browser/local');
+    const fn = new Function('document', `return (${LOGGED_OUT_FN})()`);
+    const doc = (text: string, buttons: string[] = []) => ({
+      querySelector: () => null,
+      querySelectorAll: () => buttons.map((t) => ({ textContent: t })),
+      body: { innerText: text },
+    });
+    // 小红书真实文案
+    const xhs = fn(doc('登录后推荐更懂你的笔记\n扫码\n手机号登录\n获取验证码\n登录\n新用户可直接登录'));
+    expect(xhs.loggedOut, '弹层式登录墙没认出来').toBe(true);
+    expect(xhs.why).toMatch(/登录/);
+    // 正常内容页不许误判（哪怕页脚有「登录」二字）
+    const normal = fn(doc('这是一篇正文，很长很长的内容……\n关于我们 帮助中心'));
+    expect(normal.loggedOut, '正常页面被误判成没登录').toBe(false);
+  });
+});

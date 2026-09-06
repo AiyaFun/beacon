@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { ensureAigcLabel, aigcHtmlPayload } from '@/lib/compliance/aigc';
+import { useI18n } from '@/lib/i18n';
 
 // 通用「复制到剪贴板」按钮：发布后可随时把定稿正文重新复制回去二次分发。
 //
@@ -10,7 +11,7 @@ import { ensureAigcLabel, aigcHtmlPayload } from '@/lib/compliance/aigc';
 // 非 AI 生成的内容（如用户自己手打的原文）可显式传 aigc={false} 关掉。
 export function CopyText({
   text,
-  label = '复制内容',
+  label,
   className,
   aigc = true,
 }: {
@@ -19,7 +20,12 @@ export function CopyText({
   className?: string;
   aigc?: boolean;
 }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const [done, setDone] = useState(false);
+
+  const defaultLabel = isEn ? 'Copy Content' : '复制内容';
+  const displayLabel = label ?? defaultLabel;
 
   async function copy() {
     const plain = aigc ? ensureAigcLabel(text) : text;
@@ -55,9 +61,13 @@ export function CopyText({
     setTimeout(() => setDone(false), 1800);
   }
 
+  const tooltip = text
+    ? (isEn ? 'Copy content' : '复制正文')
+    : (isEn ? 'No content' : '暂无正文');
+
   return (
-    <button className={className ?? 'btn btn-sm'} onClick={copy} disabled={!text} title={text ? '复制正文' : '暂无正文'}>
-      {done ? '已复制 ✓' : label}
+    <button className={className ?? 'btn btn-sm'} onClick={copy} disabled={!text} title={tooltip}>
+      {done ? (isEn ? 'Copied ✓' : '已复制 ✓') : displayLabel}
     </button>
   );
 }

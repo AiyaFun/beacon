@@ -35,7 +35,7 @@ beforeEach(async () => {
   ctx = { tenantId: tenant.id, workspaceId: ws.id, accountId: account.id, memberId: member.id, role: 'owner' };
   // 派活的前提：这个工作区得有能干活的浏览器
   await prisma.ingestToken.create({
-    data: { workspaceId: ws.id, token: `bcn_${Math.random().toString(36).slice(2)}`, label: '测试设备', memberId: member.id },
+    data: { lastUsedAt: new Date(),  workspaceId: ws.id, token: `bcn_${Math.random().toString(36).slice(2)}`, label: '测试设备', memberId: member.id },
   });
 });
 

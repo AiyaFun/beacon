@@ -11,6 +11,8 @@ import { QuotaExceededError } from '@/lib/quota';
 import { PLATFORM_LIST } from '@/lib/constants';
 import { writeMemory } from '@/lib/memory/core';
 import type { ChatMessage } from '@/lib/llm/types';
+import { isPersonaBlank } from '@/lib/persona';
+import { recordFunnelOnce } from '@/lib/growth/funnel';
 
 // 权限：人设与记忆是创作资产，viewer 只读（persona.edit）。
 // 配额：扩写烧 token，由 gateway 的 assertLlmQuota 自动拦（Mock 不计额度）。
@@ -25,10 +27,15 @@ export async function actSavePersona(cardJson: string) {
   const incoming = parseJson<PersonaCard>(cardJson, emptyPersona());
   const clean: PersonaCard = sanitizePersonaCard(incoming);
 
+  // 漏斗第五步「建好人设」：只在从空白变非空的那一次记（增长，2026-09-05）
+  const before = await prisma.creatorAccount.findUnique({ where: { id: s.accountId }, select: { personaCard: true } });
+  const wasBlank = isPersonaBlank(parseJson<PersonaCard>(before?.personaCard ?? '{}', emptyPersona()));
+
   await prisma.creatorAccount.update({
     where: { id: s.accountId },
     data: { personaCard: toJson(clean) },
   });
+  if (wasBlank && !isPersonaBlank(clean)) void recordFunnelOnce({ name: 'persona_created', tenantId: s.tenantId }).catch(() => undefined);
 
   // 版本号自增：取当前账号最大版本 +1
   const last = await prisma.personaVersion.findFirst({

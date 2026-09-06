@@ -1,4 +1,7 @@
+'use client';
+
 import { fmtNum } from '@/lib/format';
+import { useI18n } from '@/lib/i18n';
 
 // 单篇作品趋势图：零依赖手绘 SVG（项目惯例，无图表库），暗色靠 CSS 变量自适应。
 // 上半累计折线 + 下半日增量柱。x 轴按 day 值定位（缺值会留出空档，诚实暴露数据不连续）。
@@ -46,6 +49,8 @@ export function TrendChart({
   /** 是否画下半的日增量柱。无可信日增口径时传 false，整块不画。 */
   showDelta?: boolean;
 }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   if (points.length < 2) return null;
   const days = points.map((p) => p.day);
   const minDay = Math.min(...days);
@@ -104,7 +109,9 @@ export function TrendChart({
               />
             );
           })}
-          <text x={PAD_L} y={BAR_TOP - 2} fontSize="9" fill="var(--text-3)">日增量</text>
+          <text x={PAD_L} y={BAR_TOP - 2} fontSize="9" fill="var(--text-3)">
+            {isEn ? 'Daily Delta' : '日增量'}
+          </text>
         </>
       )}
 

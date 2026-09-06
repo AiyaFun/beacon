@@ -6,9 +6,10 @@ import { sourceHealthBoard } from '@/lib/adapters/registry';
 import { crawlerSummary, CRAWLER_HIT_RETENTION_DAYS } from '@/lib/geo/crawler-log';
 import { beijingDayKey } from '@/lib/beijing';
 import {
-  AI_AGENTS, AI_ENGINES_WITHOUT_PUBLIC_UA, PURPOSE_LABEL, AI_CRAWLER_VERSION,
+  AI_AGENTS, AI_ENGINES_WITHOUT_PUBLIC_UA, PURPOSE_LABEL, PURPOSE_LABEL_EN, AI_CRAWLER_VERSION,
   AI_CRAWLER_NEXT_REVIEW, findAgent, type AiAgentPurpose,
 } from '@/lib/geo/ai-crawler';
+import { getServerLang } from '@/lib/i18n/server';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,6 +19,8 @@ export const dynamic = 'force-dynamic';
 //（lib/ingest/parser-health.ts 写的降级说明也落在这里）。它变多 = 某个平台大概率改版了。
 // 这一页只做「看见」，自愈闭环是另一件事（见 /ops/parser）。
 export default async function OpsHealthPage() {
+  const lang = await getServerLang();
+  const isEn = lang === 'en';
   const since = new Date(Date.now() - 7 * 86_400_000);
 
   const [board, failedJobs, notedRuns, runCount, crawlers] = await Promise.all([
@@ -47,29 +50,51 @@ export default async function OpsHealthPage() {
 
   return (
     <>
-      <PageHead title="采集健康" desc="近 7 天 · 跨租户视角" />
+      <PageHead
+        title={isEn ? 'Ingest Health' : '采集健康'}
+        desc={isEn ? 'Last 7 days · Cross-tenant perspective' : '近 7 天 · 跨租户视角'}
+      />
 
       {/* ── AI 爬虫来访（2026-08-29）──
           【为什么这一页放得下它】这一页问的是「采集这条链健不健康」，
           而它一直只看**出站**（我们抓别人）。入站（AI 抓我们）是同一条链的另一半，
           且是整个 GEO 判断里**唯一不靠推理、只靠事实**的那个数字。 */}
       <Card
-        title="AI 爬虫来访 · 近 30 天"
-        sub={`本部署自己的站被谁抓过 · 口径 ${AI_CRAWLER_VERSION} · 下次校准 ${AI_CRAWLER_NEXT_REVIEW}`
-          + ` · 留存 ${CRAWLER_HIT_RETENTION_DAYS} 天`}
+        title={isEn ? 'AI Crawler Hits · Last 30 Days' : 'AI 爬虫来访 · 近 30 天'}
+        sub={isEn
+          ? `Inbound crawler visits to this deployment · Spec ${AI_CRAWLER_VERSION} · Next review ${AI_CRAWLER_NEXT_REVIEW} · Retention ${CRAWLER_HIT_RETENTION_DAYS}d`
+          : `本部署自己的站被谁抓过 · 口径 ${AI_CRAWLER_VERSION} · 下次校准 ${AI_CRAWLER_NEXT_REVIEW} · 留存 ${CRAWLER_HIT_RETENTION_DAYS} 天`}
       >
         <p className="small muted" style={{ margin: '0 0 10px', lineHeight: 1.9 }}>
-          这里记的是<b>别人来抓我们</b>，不是我们去抓别人——后者在上面那几张卡里。
-          它回答不了「有没有被 AI 引用」，但能回答<b>「有没有被看见」</b>，而后者是前者的必要条件，
-          也是这条链上第一个不靠推理的数字。只记<b>爬虫名、路径、天</b>，不记 IP、不记完整 UA、不记查询串。
+          {isEn ? (
+            <>
+              Tracks <b>inbound visits to us</b>, not our outbound scraping (shown in cards below). It answers <b>whether we were seen</b>—the prerequisite for citations and the first non-inferred metric. Logs only <b>crawler name, path, and date</b>—no IP, full UA, or query parameters.
+            </>
+          ) : (
+            <>
+              这里记的是<b>别人来抓我们</b>，不是我们去抓别人——后者在上面那几张卡里。
+              它回答不了「有没有被 AI 引用」，但能回答<b>「有没有被看见」</b>，而后者是前者的必要条件，
+              也是这条链上第一个不靠推理的数字。只记<b>爬虫名、路径、天</b>，不记 IP、不记完整 UA、不记查询串。
+            </>
+          )}
         </p>
         {crawlers.length === 0 ? (
-          <Empty text="近 30 天没有识别到任何 AI 爬虫。这本身就是一条结论——不是「还没统计」，是它们确实没来（或没来读 robots.txt）。" />
+          <Empty
+            text={isEn
+              ? 'No AI crawlers detected in the last 30 days. This is a conclusive finding—not "pending statistics", but that none visited (or read robots.txt).'
+              : '近 30 天没有识别到任何 AI 爬虫。这本身就是一条结论——不是「还没统计」，是它们确实没来（或没来读 robots.txt）。'}
+          />
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table className="table">
               <thead>
-                <tr><th>爬虫</th><th>用途</th><th>来访次数</th><th>来过几天</th><th>最近一次</th></tr>
+                <tr>
+                  <th>{isEn ? 'Crawler' : '爬虫'}</th>
+                  <th>{isEn ? 'Purpose' : '用途'}</th>
+                  <th>{isEn ? 'Hits' : '来访次数'}</th>
+                  <th>{isEn ? 'Active Days' : '来过几天'}</th>
+                  <th>{isEn ? 'Last Visit' : '最近一次'}</th>
+                </tr>
               </thead>
               <tbody>
                 {crawlers.map((c) => (
@@ -87,7 +112,11 @@ export default async function OpsHealthPage() {
                     </td>
                     {/* 用途必须显示：拦掉 search 等于从此不可能被引用，
                         与拦掉 training 完全不是一个代价，合并成「AI 爬虫」就必然有人拦错 */}
-                    <td className="small muted">{PURPOSE_LABEL[c.purpose as AiAgentPurpose] ?? c.purpose}</td>
+                    <td className="small muted">
+                      {isEn
+                        ? (PURPOSE_LABEL_EN[c.purpose as AiAgentPurpose] ?? PURPOSE_LABEL[c.purpose as AiAgentPurpose] ?? c.purpose)
+                        : (PURPOSE_LABEL[c.purpose as AiAgentPurpose] ?? c.purpose)}
+                    </td>
                     <td>{fmtNum(c.hits)}</td>
                     {/* 【为什么单列「来过几天」】一天来一千次是一次批量抓取，
                         连着三十天每天来一次才说明它在持续跟进——只看总次数会把这两件事混成一个数 */}
@@ -107,17 +136,33 @@ export default async function OpsHealthPage() {
             本库为此专门立了 lib/beijing.ts，守卫也钉着这条（它当场把我抓了出来）*/}
         {AI_CRAWLER_NEXT_REVIEW < beijingDayKey() && (
           <p className="small" style={{ margin: '10px 0 0', color: 'var(--amber, #b45309)', lineHeight: 1.9 }}>
-            <b>这张表已经过了校准日期（{AI_CRAWLER_NEXT_REVIEW}）。</b>
-            AI 爬虫半年就会变一批（OAI-SearchBot 是 2024 下半年才有的）。
-            过期不改的后果不是「旧」，是拿一份已经不成立的清单去决定拦谁放谁——
-            请重新核对 lib/geo/ai-crawler.ts。
+            {isEn ? (
+              <>
+                <b>Calibration date expired ({AI_CRAWLER_NEXT_REVIEW}).</b> AI crawlers change every six months. An expired list risks outdated blocking decisions—please review lib/geo/ai-crawler.ts.
+              </>
+            ) : (
+              <>
+                <b>这张表已经过了校准日期（{AI_CRAWLER_NEXT_REVIEW}）。</b>
+                AI 爬虫半年就会变一批（OAI-SearchBot 是 2024 下半年才有的）。
+                过期不改的后果不是「旧」，是拿一份已经不成立的清单去决定拦谁放谁——
+                请重新核对 lib/geo/ai-crawler.ts。
+              </>
+            )}
           </p>
         )}
 
         {neverSeen.length > 0 && (
           <p className="small muted" style={{ margin: '10px 0 0', lineHeight: 1.9 }}>
-            <b>认得但没来过：</b>{neverSeen.map((a) => a.token).join('、')}。
-            没来过<b>不等于</b>它不抓中文站——也可能是它没读过我们的 robots.txt。
+            {isEn ? (
+              <>
+                <b>Known but unvisited: </b>{neverSeen.map((a) => a.token).join(', ')}. Unvisited does not mean it ignores your site—it may simply not have read robots.txt.
+              </>
+            ) : (
+              <>
+                <b>认得但没来过：</b>{neverSeen.map((a) => a.token).join('、')}。
+                没来过<b>不等于</b>它不抓中文站——也可能是它没读过我们的 robots.txt。
+              </>
+            )}
           </p>
         )}
 
@@ -125,30 +170,44 @@ export default async function OpsHealthPage() {
             用户会得出「国产引擎不抓我」这个结论，而真相是我们不知道它们用什么名字抓。
             与 ai-source.ts 里那六个 unknown 是同一条纪律：缺席不许当成 0 */}
         <p className="small muted" style={{ margin: '8px 0 0', lineHeight: 1.9 }}>
-          <b>认不出的：</b>
-          {AI_ENGINES_WITHOUT_PUBLIC_UA.map((e) => e.name).join('、')}
-          ——它们<b>没有公开披露独立的爬虫 UA</b>，所以这张表里不可能有它们。
-          这是「我们不知道」，不是「它们没来」。
+          {isEn ? (
+            <>
+              <b>Unrecognized: </b>
+              {AI_ENGINES_WITHOUT_PUBLIC_UA.map((e) => e.name).join(', ')}
+              —they disclose no independent crawler UA, so they cannot be listed here. This means unknown to us, not that they didn't crawl.
+            </>
+          ) : (
+            <>
+              <b>认不出的：</b>
+              {AI_ENGINES_WITHOUT_PUBLIC_UA.map((e) => e.name).join('、')}
+              ——它们<b>没有公开披露独立的爬虫 UA</b>，所以这张表里不可能有它们。
+              这是「我们不知道」，不是「它们没来」。
+            </>
+          )}
         </p>
       </Card>
 
       <div className="grid grid-4" style={{ marginBottom: 16, marginTop: 16 }}>
-        <Stat label="采集批次" value={fmtNum(runCount)} foot="近 7 天全平台" />
-        <Stat label="异常批次" value={fmtNum(notedRuns.length)} foot="降级 / 节流 / 空批" />
-        <Stat label="失败任务" value={fmtNum(failedJobs.length)} foot="定时与后台任务" />
-        <Stat label="热榜数据源" value={board.hot.length} foot="含降级链路" />
+        <Stat label={isEn ? 'Ingest Batches' : '采集批次'} value={fmtNum(runCount)} foot={isEn ? 'Last 7d across platforms' : '近 7 天全平台'} />
+        <Stat label={isEn ? 'Degraded Batches' : '异常批次'} value={fmtNum(notedRuns.length)} foot={isEn ? 'Degraded / Throttled / Empty' : '降级 / 节流 / 空批'} />
+        <Stat label={isEn ? 'Failed Jobs' : '失败任务'} value={fmtNum(failedJobs.length)} foot={isEn ? 'Cron and background jobs' : '定时与后台任务'} />
+        <Stat label={isEn ? 'Hotlist Sources' : '热榜数据源'} value={board.hot.length} foot={isEn ? 'Including fallback routes' : '含降级链路'} />
       </div>
 
-      <Card title="异常批次按平台" sub="某个平台突然变多，多半是它改版了" style={{ marginBottom: 16 }}>
+      <Card
+        title={isEn ? 'Degraded Batches by Platform' : '异常批次按平台'}
+        sub={isEn ? 'A sudden spike on a platform often indicates site layout changes' : '某个平台突然变多，多半是它改版了'}
+        style={{ marginBottom: 16 }}
+      >
         {notedByPlatform.size === 0 ? (
-          <div className="small" style={{ color: 'var(--green)' }}>近 7 天没有异常批次。</div>
+          <div className="small" style={{ color: 'var(--green)' }}>{isEn ? 'No degraded batches in the last 7 days.' : '近 7 天没有异常批次。'}</div>
         ) : (
           <div className="row wrap" style={{ gap: 8 }}>
             {[...notedByPlatform.entries()]
               .sort((a, b) => b[1] - a[1])
               .map(([p, n]) => (
                 <span key={p} className={`badge ${n >= 5 ? 'badge-red' : 'badge-amber'}`}>
-                  {platformName(p) || p} · {n} 次
+                  {platformName(p, lang) || p} · {n} {isEn ? 'times' : '次'}
                 </span>
               ))}
           </div>
@@ -156,16 +215,19 @@ export default async function OpsHealthPage() {
       </Card>
 
       <div className="grid grid-2">
-        <Card title="最近的异常批次" sub="note 是写给人看的降级说明">
+        <Card
+          title={isEn ? 'Recent Degraded Batches' : '最近的异常批次'}
+          sub={isEn ? 'Note provides human-readable degradation explanation' : 'note 是写给人看的降级说明'}
+        >
           {notedRuns.length === 0 ? (
-            <Empty icon="✅" text="没有异常批次。" />
+            <Empty icon="✅" text={isEn ? 'No degraded batches.' : '没有异常批次。'} />
           ) : (
             <div style={{ display: 'grid', gap: 8 }}>
               {notedRuns.slice(0, 20).map((r) => (
                 <div key={r.id} className="small">
                   <span className="muted">{fmtDateTime(r.ranAt)}</span>{' '}
-                  <span className="badge badge-gray">{platformName(r.platform) || r.platform}</span>{' '}
-                  <span className="muted">{r.scope === 'self' ? '自有' : '竞对'} · {r.channel}</span>
+                  <span className="badge badge-gray">{platformName(r.platform, lang) || r.platform}</span>{' '}
+                  <span className="muted">{r.scope === 'self' ? (isEn ? 'Self' : '自有') : (isEn ? 'Competitor' : '竞对')} · {r.channel}</span>
                   <div style={{ color: 'var(--amber)' }}>{r.note}</div>
                 </div>
               ))}
@@ -173,15 +235,18 @@ export default async function OpsHealthPage() {
           )}
         </Card>
 
-        <Card title="失败任务" sub="worker / 定时任务">
+        <Card
+          title={isEn ? 'Failed Jobs' : '失败任务'}
+          sub={isEn ? 'Worker / Scheduled jobs' : 'worker / 定时任务'}
+        >
           {failedJobs.length === 0 ? (
-            <Empty icon="✅" text="近 7 天无失败任务。" />
+            <Empty icon="✅" text={isEn ? 'No failed jobs in the last 7 days.' : '近 7 天无失败任务。'} />
           ) : (
             <div style={{ display: 'grid', gap: 8 }}>
               {failedJobs.map((j) => (
                 <div key={j.id} className="small">
                   <span className="muted">{fmtDateTime(j.startedAt)}</span> <strong>{j.name}</strong>
-                  <div style={{ color: 'var(--red)' }}>{j.detail ?? '（无详情）'}</div>
+                  <div style={{ color: 'var(--red)' }}>{j.detail ?? (isEn ? '(No details)' : '（无详情）')}</div>
                 </div>
               ))}
             </div>
@@ -191,3 +256,4 @@ export default async function OpsHealthPage() {
     </>
   );
 }
+

@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import { platformName, platformColor } from '@/lib/constants';
 import { Empty } from './ui';
+import { useI18n } from '@/lib/i18n';
 
 // 读者原声——把采到的评论逐条摆出来 + 告诉用户「大家反复在提什么」。
 //
@@ -28,8 +29,12 @@ export type VoiceComment = {
 export type VoiceTopic = { term: string; docs: number; samples: string[] };
 export type VoiceKind = { kind: string; count: number; pct: number };
 
-const KIND_LABEL: Record<string, string> = {
-  question: '在问', demand: '想要', praise: '认可', complaint: '不满', other: '其它',
+const KIND_LABEL: Record<string, { zh: string; en: string }> = {
+  question: { zh: '在问', en: 'Questions' },
+  demand: { zh: '想要', en: 'Requests' },
+  praise: { zh: '认可', en: 'Praise' },
+  complaint: { zh: '不满', en: 'Complaints' },
+  other: { zh: '其它', en: 'Other' },
 };
 const KIND_CLASS: Record<string, string> = {
   question: 'badge-brand', demand: 'badge-amber', praise: 'badge-green',
@@ -45,6 +50,8 @@ export function ReaderVoice({
   retentionDays: number;
   emptyHint: string;
 }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const [kindFilter, setKindFilter] = useState<string>('all');
   const [openTopic, setOpenTopic] = useState<string | null>(null);
   const [q, setQ] = useState('');
@@ -71,7 +78,9 @@ export function ReaderVoice({
       {topics.length > 0 && (
         <div style={{ marginBottom: 14 }}>
           <div className="small muted" style={{ marginBottom: 6 }}>
-            反复被提到的词 · 数字是「有多少条评论提到」，点一下筛出这些评论
+            {isEn
+              ? 'Frequently mentioned keywords · Numbers indicate how many comments mention it; click to filter'
+              : '反复被提到的词 · 数字是「有多少条评论提到」，点一下筛出这些评论'}
           </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {topics.map((t) => {
@@ -87,7 +96,7 @@ export function ReaderVoice({
                   className={`badge ${on ? 'badge-brand' : 'badge-gray'}`}
                   onClick={() => setOpenTopic(on ? null : t.term)}
                   style={{ cursor: 'pointer', border: '1px solid var(--border)' }}
-                  title={t.samples.length ? `例：${t.samples[0]}` : undefined}
+                  title={t.samples.length ? (isEn ? `e.g. ${t.samples[0]}` : `例：${t.samples[0]}`) : undefined}
                 >
                   {t.term} <span className="mono">{t.docs}</span>
                 </button>
@@ -104,7 +113,7 @@ export function ReaderVoice({
           className={`btn btn-sm${kindFilter === 'all' ? ' btn-primary' : ''}`}
           onClick={() => setKindFilter('all')}
         >
-          全部 {comments.length}
+          {isEn ? `All ${comments.length}` : `全部 ${comments.length}`}
         </button>
         {kinds.map((k) => (
           <button
@@ -112,15 +121,15 @@ export function ReaderVoice({
             type="button"
             className={`btn btn-sm${kindFilter === k.kind ? ' btn-primary' : ''}`}
             onClick={() => setKindFilter(kindFilter === k.kind ? 'all' : k.kind)}
-            title="按关键词粗分，仅供快速筛选，不是情感分析"
+            title={isEn ? 'Rough category by keyword for quick filtering, not sentiment analysis' : '按关键词粗分，仅供快速筛选，不是情感分析'}
           >
-            {KIND_LABEL[k.kind] ?? k.kind} {k.count}
+            {(isEn ? KIND_LABEL[k.kind]?.en : KIND_LABEL[k.kind]?.zh) ?? k.kind} {k.count}
             <span className="muted"> · {Math.round(k.pct * 100)}%</span>
           </button>
         ))}
         <input
           className="input"
-          placeholder="在评论里搜…"
+          placeholder={isEn ? 'Search comments…' : '在评论里搜…'}
           value={q}
           onChange={(e) => setQ(e.target.value)}
           style={{ maxWidth: 180, marginLeft: 'auto' }}
@@ -129,15 +138,15 @@ export function ReaderVoice({
 
       {(openTopic || q.trim() || kindFilter !== 'all') && (
         <div className="small muted" style={{ marginBottom: 8 }}>
-          筛出 {shown.length} 条
-          {openTopic && <> · 含「{openTopic}」</>}
+          {isEn ? `Filtered ${shown.length} comments` : `筛出 ${shown.length} 条`}
+          {openTopic && (isEn ? <> · with "{openTopic}"</> : <> · 含「{openTopic}」</>)}
           <button
             type="button"
             className="btn btn-sm"
             style={{ marginLeft: 8 }}
             onClick={() => { setOpenTopic(null); setQ(''); setKindFilter('all'); }}
           >
-            清除筛选
+            {isEn ? 'Clear filter' : '清除筛选'}
           </button>
         </div>
       )}
@@ -145,21 +154,25 @@ export function ReaderVoice({
       {/* ── 逐条原文 ── */}
       <div style={{ maxHeight: 460, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>
         {shown.length === 0 ? (
-          <div className="small muted" style={{ padding: 16, textAlign: 'center' }}>没有符合筛选条件的评论</div>
+          <div className="small muted" style={{ padding: 16, textAlign: 'center' }}>
+            {isEn ? 'No comments match the current filters' : '没有符合筛选条件的评论'}
+          </div>
         ) : (
           shown.map((c) => (
             <div key={c.id} style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'baseline' }}>
                 <span className={`badge ${KIND_CLASS[c.kind] ?? 'badge-gray'}`} style={{ flexShrink: 0 }}>
-                  {KIND_LABEL[c.kind] ?? '其它'}
+                  {(isEn ? KIND_LABEL[c.kind]?.en : KIND_LABEL[c.kind]?.zh) ?? (isEn ? 'Other' : '其它')}
                 </span>
                 {c.source === 'danmaku' && (
-                  <span className="badge badge-blue" style={{ flexShrink: 0 }} title="来自 B 站公开弹幕文件，只取文字">弹幕</span>
+                  <span className="badge badge-blue" style={{ flexShrink: 0 }} title={isEn ? 'From Bilibili public danmaku, text only' : '来自 B 站公开弹幕文件，只取文字'}>
+                    {isEn ? 'Danmaku' : '弹幕'}
+                  </span>
                 )}
                 <span style={{ flex: 1, minWidth: 0, wordBreak: 'break-word' }}>{c.text}</span>
               </div>
               <div className="small muted" style={{ marginTop: 3, paddingLeft: 2 }}>
-                <span style={{ color: platformColor(c.platform) }}>{platformName(c.platform)}</span>
+                <span style={{ color: platformColor(c.platform) }}>{platformName(c.platform, lang)}</span>
                 {c.workTitle ? <> · {c.workTitle}</> : null}
               </div>
             </div>
@@ -169,8 +182,9 @@ export function ReaderVoice({
 
       {/* 留存与边界，就摆在数据下面。写在隐私政策里而页面上不说，等于没说。 */}
       <div className="small muted" style={{ marginTop: 8 }}>
-        只有评论正文（B 站另含公开弹幕文字，标「弹幕」），不含昵称、头像、主页链接、用户 ID、IP 属地、评论时间与点赞数——这些插件根本没取。
-        正文保留 {retentionDays} 天后自动删除，不参与任何 AI 生成，也不会被导出。
+        {isEn
+          ? `Only comment text (Bilibili includes public danmaku text, labeled "Danmaku"), without nicknames, avatars, profile links, user IDs, IP locations, timestamps, or like counts. Retained for ${retentionDays} days then auto-deleted. Not used in any AI training and never exported.`
+          : `只有评论正文（B 站另含公开弹幕文字，标「弹幕」），不含昵称、头像、主页链接、用户 ID、IP 属地、评论时间与点赞数——这些插件根本没取。正文保留 ${retentionDays} 天后自动删除，不参与任何 AI 生成，也不会被导出。`}
       </div>
     </div>
   );

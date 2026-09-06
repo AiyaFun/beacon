@@ -1,7 +1,7 @@
 import { INGEST_TOKEN_INVALID, INGEST_TOKEN_HEADER } from '@/lib/ingest/competitor';
 import { resolveIngestToken } from '@/lib/ingest/token';
 import { loadParserSources, COLLECT_FN, READ_TEXT_FN } from '@/lib/browser/local-collect';
-import { LOGIN_WALL_FN } from '@/lib/browser/local';
+import { LOGIN_WALL_FN, LOGGED_OUT_FN } from '@/lib/browser/local';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,7 +23,7 @@ export async function GET(req: Request) {
   const auth = await resolveIngestToken(req.headers.get(INGEST_TOKEN_HEADER));
   if (!auth) return json({ ok: false, error: INGEST_TOKEN_INVALID }, 401);
   const platform = new URL(req.url).searchParams.get('platform') ?? '';
-  const base = { loginWall: LOGIN_WALL_FN, collect: COLLECT_FN, readText: READ_TEXT_FN };
+  const base = { loginWall: LOGIN_WALL_FN, loggedOut: LOGGED_OUT_FN, collect: COLLECT_FN, readText: READ_TEXT_FN };
   if (!platform) return json({ ok: true, ...base, scripts: [] });
   const src = loadParserSources(platform);
   if (!src.ok) return json({ ok: false, error: src.error }, 400);

@@ -1,7 +1,7 @@
 // 机器人集成——共享类型与 provider 注册表（需求③④）。
 // feishu 先落地；其它 provider 标 supported:false，加 adapter 时打开即可，UI/数据层不用改。
 
-export type BotProvider = 'feishu' | 'dingtalk' | 'wecom' | 'telegram' | 'slack' | 'wechat' | 'wechat_kf';
+export type BotProvider = 'feishu' | 'dingtalk' | 'wecom' | 'telegram' | 'slack' | 'wechat' | 'wechat_kf' | 'wecom_aibot';
 
 export const BOT_PROVIDERS: { key: BotProvider; name: string; supported: boolean; hint: string }[] = [
   { key: 'feishu', name: '飞书 / Lark', supported: true, hint: '自建应用（双向全能） / 群 Webhook（仅出站）' },
@@ -17,6 +17,12 @@ export const BOT_PROVIDERS: { key: BotProvider; name: string; supported: boolean
   // ⚠️ 只有对话没有定时推送：客服消息有 48 小时窗口规则，sendVia/sendViaApp 的 default
   //    分支会如实拒绝它——别给它加出站 case，那是把「回复」伪装成「广播」。
   { key: 'wechat_kf', name: '微信客服（企业微信）', supported: true, hint: '企业微信的微信客服通道 · 微信用户扫客服码对话（需企业微信）' },
+  // 企微智能机器人（2026-09-05，官方「智能机器人长连接」）：企业微信里 @它对话的机器人。
+  // **我们主动连 wss://openws.work.weixin.qq.com，不需要公网回调、不需要域名**，凭据只有 BotID + Secret
+  // （管理后台 → 应用管理 → 智能机器人 → API 模式 → 长连接）。只答不推：回复必须挂在入站帧的 req_id 上，
+  // 派出去的任务靠把那条流式回复留到跑完再收口（协议给 10 分钟）。每个机器人只许一条活连接，
+  // 所以只在 worker / 整机版 web 进程里连（lib/bot/wecom-aibot-poller.ts）。
+  { key: 'wecom_aibot', name: '企微智能机器人', supported: true, hint: '企业微信「智能机器人」长连接 · 群里/私聊 @它对话，不用公网回调' },
   // Telegram/Slack 目前只有出站推送，没有入站事件路由（app/api/bot/ 下只有飞书/钉钉/企微三条）——
   // 标成「仅出站」而不是笼统的 supported，免得用户以为能在群里对话。
   { key: 'telegram', name: 'Telegram', supported: true, hint: 'Bot API 推送（仅出站，暂不支持群内对话）' },
@@ -30,7 +36,7 @@ export const BOT_PROVIDERS: { key: BotProvider; name: string; supported: boolean
  * 四处必须同一份名单：出站分发拒绝（lib/bot/index.ts）/ 晨报到点判断跳过（lib/jobs/handlers.ts）/
  * 保存时清空 pushEvents（bot-actions）/ 设置页隐藏推送开关与「测试发送」。少一处就是每天早上一条假报错。
  */
-export const REPLY_ONLY_PROVIDERS: ReadonlySet<string> = new Set(['wechat', 'wechat_kf']);
+export const REPLY_ONLY_PROVIDERS: ReadonlySet<string> = new Set(['wechat', 'wechat_kf', 'wecom_aibot']);
 export function isReplyOnlyProvider(provider: string | null | undefined): boolean {
   return !!provider && REPLY_ONLY_PROVIDERS.has(provider);
 }
@@ -86,6 +92,10 @@ export type BotSecrets = {
    * 微信端是否仍接受取决于它的有效期（未公开），发不出去就如实报错。
    */
   ilinkContextToken?: string;
+  /** 企微智能机器人：BotID（管理后台「智能机器人 → API 模式 → 长连接」） */
+  aibotId?: string;
+  /** 企微智能机器人：Secret（同上；错了订阅帧会被拒） */
+  aibotSecret?: string;
 };
 
 // ── 入站命令白名单（BotIntegration.allowCommands，管理员在设置页勾选）──

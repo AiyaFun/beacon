@@ -99,6 +99,7 @@ export async function buildAccountExport(opts: { tenantId: string; memberId: str
     schedules,
     taskPresets,
     procedureSkills,
+    agentLedgers,
     scrapeRecipes,
     scrapeRecords,
     aiCitations,
@@ -175,6 +176,8 @@ export async function buildAccountExport(opts: { tenantId: string; memberId: str
     prisma.taskPreset.findMany({ where: byWorkspace, orderBy: [{ sort: 'asc' }, { createdAt: 'asc' }] }),
     // 做法技能：名字、说明、步骤都是从他自己跑通的任务里长出来的，搬走了才接得上
     prisma.procedureSkill.findMany({ where: byWorkspace, orderBy: { createdAt: 'asc' } }),
+    // 智能体台账：bot 自己记的盯单与进度（已见清单不导——那是去重用的中间态，且按 90 天滚动）
+    prisma.agentLedger.findMany({ where: { ...byWorkspace, kind: 'kv' }, orderBy: [{ botSlug: 'asc' }, { key: 'asc' }] }),
     // 任意站点采集配方：站点、要抓什么、学到的规则——搬走了才能在别处接着用
     prisma.scrapeRecipe.findMany({ where: byWorkspace, orderBy: { createdAt: 'asc' } }),
     // 配方**抓到的数**。配方是「怎么抓」，这些才是「抓到了什么」——
@@ -384,6 +387,7 @@ export async function buildAccountExport(opts: { tenantId: string; memberId: str
         enabled: p.enabled,
         createdAt: p.createdAt,
       })),
+      agentLedgers: agentLedgers.map((l) => ({ botSlug: l.botSlug, key: l.key, value: l.value, updatedAt: l.updatedAt })),
     },
     complianceFeedback,
     payments: orders.map((o) => ({

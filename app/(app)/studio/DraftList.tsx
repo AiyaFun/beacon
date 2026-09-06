@@ -3,13 +3,9 @@
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { Empty } from '@/components/ui';
+import { useI18n } from '@/lib/i18n';
 
 // 左栏草稿列表：搜索 + 状态筛选 + 定高自滚。
-//
-// 【为什么要拆成客户端组件】原来这里是服务端直接 map 出全部草稿。草稿是只增不减的东西，
-// 写到第 30 篇时这一栏就有两千多像素高，把它下面的「版本时间线」永远顶到屏幕外；
-// 而找一篇旧稿只能靠肉眼从头扫。列表定高自滚 + 搜索筛选，两个问题一起解决，
-// 也让整页高度不再被草稿数量决定。
 
 export type DraftRow = {
   id: string;
@@ -24,6 +20,17 @@ export type DraftRow = {
   lastLabel: string;
 };
 
+const STATUS_LABELS_EN: Record<string, string> = {
+  draft: 'Draft',
+  published: 'Published',
+  shelved: 'Shelved',
+  generating: 'Generating',
+  reviewing: 'Reviewing',
+  approved: 'Approved',
+  rejected: 'Rejected',
+  archived: 'Archived',
+};
+
 // 超过这个条数才启用内部滚动：少量草稿时定高会在卡片底部留一片空白，很难看
 const SCROLL_FROM = 6;
 
@@ -36,6 +43,7 @@ export function DraftList({
   selectedId?: string;
   emptyText: string;
 }) {
+  const { lang } = useI18n();
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('all');
 
@@ -44,11 +52,12 @@ export function DraftList({
     const seen = new Map<string, { text: string; n: number }>();
     for (const d of drafts) {
       const cur = seen.get(d.status);
+      const labelText = lang === 'en' ? (STATUS_LABELS_EN[d.status] ?? d.statusText) : d.statusText;
       if (cur) cur.n += 1;
-      else seen.set(d.status, { text: d.statusText, n: 1 });
+      else seen.set(d.status, { text: labelText, n: 1 });
     }
     return [...seen.entries()].map(([key, v]) => ({ key, ...v }));
-  }, [drafts]);
+  }, [drafts, lang]);
 
   const shown = useMemo(() => {
     const kw = q.trim().toLowerCase();
@@ -63,13 +72,14 @@ export function DraftList({
 
   return (
     <div className="stack" style={{ gap: 10 }}>
-      {/* 搜索与筛选只在草稿多到需要找的时候才出现——3 篇稿子摆一个搜索框是噪音 */}
       {drafts.length > 3 && (
         <>
           <input
             className="input"
             style={{ fontSize: 12.5, padding: '7px 12px' }}
-            placeholder={`搜索这 ${drafts.length} 篇草稿的标题…`}
+            placeholder={
+              lang === 'en' ? `Search ${drafts.length} drafts by title…` : `搜索这 ${drafts.length} 篇草稿的标题…`
+            }
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
@@ -79,7 +89,7 @@ export function DraftList({
                 className={`btn btn-sm ${status === 'all' ? 'btn-accent' : 'btn-ghost'}`}
                 onClick={() => setStatus('all')}
               >
-                全部 {drafts.length}
+                {lang === 'en' ? 'All' : '全部'} {drafts.length}
               </button>
               {statuses.map((s) => (
                 <button
@@ -97,7 +107,9 @@ export function DraftList({
 
       {shown.length === 0 ? (
         <div className="small muted" style={{ padding: '12px 2px' }}>
-          没有匹配的草稿。换个关键词，或点上面「全部」。
+          {lang === 'en'
+            ? 'No matching drafts. Try another keyword or click "All".'
+            : '没有匹配的草稿。换个关键词，或点上面「全部」。'}
         </div>
       ) : (
         <div
@@ -106,6 +118,7 @@ export function DraftList({
         >
           {shown.map((d) => {
             const active = d.id === selectedId;
+            const statusLabel = lang === 'en' ? (STATUS_LABELS_EN[d.status] ?? d.statusText) : d.statusText;
             return (
               <Link
                 key={d.id}
@@ -126,9 +139,13 @@ export function DraftList({
                   </span>
                 </div>
                 <div className="row wrap" style={{ gap: 6, marginTop: 6 }}>
-                  <span className={`badge ${d.statusCls}`}>{d.statusText}</span>
-                  <span className="badge badge-gray">{d.versionCount} 版</span>
-                  <span className="small muted">最新 {d.lastLabel}</span>
+                  <span className={`badge ${d.statusCls}`}>{statusLabel}</span>
+                  <span className="badge badge-gray">
+                    {lang === 'en' ? `v${d.versionCount}` : `${d.versionCount} 版`}
+                  </span>
+                  <span className="small muted">
+                    {lang === 'en' ? `Updated ${d.lastLabel}` : `最新 ${d.lastLabel}`}
+                  </span>
                 </div>
               </Link>
             );

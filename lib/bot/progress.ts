@@ -31,7 +31,7 @@ const TITLE: Record<string, (g: string) => string> = {
   queued: (g) => `🚀 任务已排队：${g}`,
   running: (g) => `⚙️ 正在跑：${g}`,
   awaiting_confirm: (g) => `✋ 等你确认：${g}`,
-  waiting_browser: (g) => `🧩 等浏览器插件：${g}`,
+  waiting_browser: (g) => `🧩 等采集执行器（等浏览器插件）：${g}`,
   waiting_quota: (g) => `⏳ 等额度：${g}`,
   done: (g) => `✅ 跑完了：${g}`,
   failed: (g) => `❌ 没跑成：${g}`,

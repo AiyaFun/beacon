@@ -1,4 +1,5 @@
 import { prisma } from '../db';
+import { recordFunnelOnce } from '../growth/funnel';
 import { log } from '../logger';
 
 // 采集台账 —— 每一次抓取覆盖了哪段时间。
@@ -22,6 +23,16 @@ export const CHANNEL_LABEL: Record<CollectionChannel, string> = {
   server: '服务端定时',
   import: '文件导入',
   manual: '页面手动',
+};
+
+export const CHANNEL_LABEL_EN: Record<CollectionChannel, string> = {
+  plugin_home: 'Plugin · Homepage',
+  plugin_backend: 'Plugin · Studio',
+  local_browser: 'Local Browser',
+  desktop: 'Desktop Collector',
+  server: 'Server Scheduled',
+  import: 'File Import',
+  manual: 'Manual Entry',
 };
 
 export const SCOPE_LABEL: Record<CollectionScope, string> = {
@@ -89,6 +100,14 @@ export async function recordCollectionRun(input: CollectionRunInput): Promise<vo
     });
   } catch (e) {
     log.warn('采集台账写入失败（不影响本次入库）', { error: (e as Error).message });
+  }
+  // 漏斗第八步「首次数据回流」：这个工作区第一次真的采回东西时记一次（增长，2026-09-05）。
+  // 旁路、不 await：台账写完就返回，统计慢半拍无所谓。
+  if (input.items > 0) {
+    void (async () => {
+      const ws = await prisma.workspace.findUnique({ where: { id: input.workspaceId }, select: { tenantId: true } });
+      if (ws) await recordFunnelOnce({ name: 'first_ingest', tenantId: ws.tenantId, meta: input.channel });
+    })().catch(() => undefined);
   }
 }
 

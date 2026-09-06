@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { usePortalReady } from '@/components/Overlay';
-import { PLATFORM_LIST } from '@/lib/constants';
+import { PLATFORM_LIST, platformName } from '@/lib/constants';
 import { TierBadge } from '@/components/ui';
 import { Icon } from '@/components/icons';
 import { HighlightedEditor, type Mark } from './HighlightedEditor';
@@ -13,6 +13,7 @@ import { copyRichText } from '@/lib/clipboard/rich';
 import { AIGC_LABEL } from '@/lib/compliance/aigc';
 import { actRewrite, actSaveHumanVersion, actCoachDiagnose, actCoachOptimize, actDeflavor, type CoachDiagnoseResult } from './actions';
 import { applyLinePrefix as applyLinePrefixAt, wrapSelection as wrapSelectionAt, type EditResult } from './md-lite-edit';
+import { useI18n } from '@/lib/i18n';
 
 type Hit = { word: string; tier: string; action: string; start: number; end: number; suggestion?: string; platform?: string };
 type RewriteResult = {
@@ -38,10 +39,10 @@ type RewriteResult = {
   driftUrls?: string[];
 };
 
-const RISK_LABEL: Record<string, { text: string; cls: string }> = {
-  pass: { text: '合规通过', cls: 'badge-green' },
-  warn: { text: '存在提示项', cls: 'badge-amber' },
-  block: { text: '命中红线·禁止导出', cls: 'badge-red' },
+const RISK_LABEL: Record<string, { zh: string; en: string; cls: string }> = {
+  pass: { zh: '合规通过', en: 'Passed', cls: 'badge-green' },
+  warn: { zh: '存在提示项', en: 'Advisory Warning', cls: 'badge-amber' },
+  block: { zh: '命中红线·禁止导出', en: 'Redline Triggered · Export Blocked', cls: 'badge-red' },
 };
 
 function sevDot(sev: string): string {
@@ -52,13 +53,13 @@ function sevDot(sev: string): string {
 
 // 本机暂存时间的相对说法。只在客户端 effect 之后渲染（restorable 是 effect 里才置上的），
 // 不会像服务端渲染那样撞 hydration 不一致。
-function relLocal(ts: number): string {
+function relLocal(ts: number, isEn = false): string {
   const m = Math.floor((Date.now() - ts) / 60000);
-  if (m < 1) return '刚刚';
-  if (m < 60) return `${m} 分钟前`;
+  if (m < 1) return isEn ? 'just now' : '刚刚';
+  if (m < 60) return isEn ? `${m}m ago` : `${m} 分钟前`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h} 小时前`;
-  return `${Math.floor(h / 24)} 天前`;
+  if (h < 24) return isEn ? `${h}h ago` : `${h} 小时前`;
+  return isEn ? `${Math.floor(h / 24)}d ago` : `${Math.floor(h / 24)} 天前`;
 }
 
 function scoreColor(score: number): string {
@@ -78,6 +79,8 @@ export function Rewriter({
   draftTitle?: string;
   initialPlatform?: string;
 }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const [text, setText] = useState(initialText ?? '');
   const [platform, setPlatform] = useState(
     initialPlatform && PLATFORM_LIST.some((p) => p.key === initialPlatform) ? initialPlatform : (PLATFORM_LIST[0].key as string),
@@ -313,10 +316,10 @@ export function Rewriter({
     start(async () => {
       const r = await actSaveHumanVersion(draftId, result.rewritten);
       if (r.ok) {
-        setSaved(`已存为人工终稿 第${r.seq}版`);
+        setSaved(isEn ? `Saved as Human Final v${r.seq}` : `已存为人工终稿 第${r.seq}版`);
         router.refresh();
       } else {
-        setErr(r.error ?? '保存失败');
+        setErr(r.error ?? (isEn ? 'Save failed' : '保存失败'));
       }
     });
   }
@@ -326,10 +329,10 @@ export function Rewriter({
     start(async () => {
       const r = await actSaveHumanVersion(draftId, text);
       if (r.ok) {
-        setSaved(`已存为人工终稿 第${r.seq}版`);
+        setSaved(isEn ? `Saved as Human Final v${r.seq}` : `已存为人工终稿 第${r.seq}版`);
         router.refresh();
       } else {
-        setErr(r.error ?? '保存失败');
+        setErr(r.error ?? (isEn ? 'Save failed' : '保存失败'));
       }
     });
   }
@@ -372,29 +375,29 @@ export function Rewriter({
       <div className="row-between" style={{ marginBottom: 10 }}>
         <div className="row" style={{ gap: 6, alignItems: 'center' }}>
           <Icon.gauge size={15} style={{ color: 'var(--brand)' }} />
-          <b className="small" style={{ fontSize: 13.5 }}>算法教练 · 实时诊断</b>
-          {coachLoading && <span className="small muted">诊断中…</span>}
+          <b className="small" style={{ fontSize: 13.5 }}>{isEn ? 'Algorithm Coach · Live Diagnostics' : '算法教练 · 实时诊断'}</b>
+          {coachLoading && <span className="small muted">{isEn ? 'Diagnosing…' : '诊断中…'}</span>}
         </div>
         {coach && (
           <div className="row" style={{ gap: 6, alignItems: 'center' }}>
             {coach.personalized ? (
-              <span className="badge badge-brand" title="诊断阈值已结合账号真实回流数据">
-                已结合你 {coach.sample} 条真实数据
+              <span className="badge badge-brand" title={isEn ? 'Diagnostic thresholds tuned with real account performance data' : '诊断阈值已结合账号真实回流数据'}>
+                {isEn ? `Tuned with ${coach.sample} posts of yours` : `已结合你 ${coach.sample} 条真实数据`}
               </span>
             ) : (
-              <span className="badge badge-gray" title="到数据看板登记回流数据后，诊断会切换为个性化基线">
-                通用规则（暂无回流数据）
+              <span className="badge badge-gray" title={isEn ? 'Log post performance in Analytics to switch diagnostics to personalized baselines' : '到数据看板登记回流数据后，诊断会切换为个性化基线'}>
+                {isEn ? 'General rules (no performance data yet)' : '通用规则（暂无回流数据）'}
               </span>
             )}
             {/* score 为 null = 该平台规则表不全，给不出可比的分。印「— 分」也不行：
                 用户会读成「0 分」或「坏了」，而真相是「这一项我们没测」。 */}
             {coach.score === null ? (
               <span className="badge badge-gray" style={{ fontSize: 13.5 }} title={coach.scoreNote ?? undefined}>
-                本平台不给总分
+                {isEn ? 'No score on this platform' : '本平台不给总分'}
               </span>
             ) : (
               <span className="badge" style={{ background: 'var(--surface)', color: scoreColor(coach.score), fontSize: 13.5, fontWeight: 700 }}>
-                {coach.score} 分
+                {coach.score} {isEn ? 'pts' : '分'}
               </span>
             )}
           </div>
@@ -419,18 +422,18 @@ export function Rewriter({
           <div className="row-between" style={{ marginBottom: 6 }}>
             <div className="row" style={{ gap: 6, alignItems: 'center' }}>
               <Icon.user size={14} style={{ color: 'var(--brand)' }} />
-              <b className="small" style={{ fontSize: 13 }}>人味体检</b>
-              <span className="small muted" title="检测大模型套话、句子节奏、对仗密度、口语碎句——全部是确定性规则，不花 AI 额度">
-                像不像人写的
+              <b className="small" style={{ fontSize: 13 }}>{isEn ? 'Human-Tone Check' : '人味体检'}</b>
+              <span className="small muted" title={isEn ? 'Detects LLM clichés, sentence rhythm, symmetry density, colloquialisms — 100% deterministic rules, zero quota consumed' : '检测大模型套话、句子节奏、对仗密度、口语碎句——全部是确定性规则，不花 AI 额度'}>
+                {isEn ? 'Sounds human' : '像不像人写的'}
               </span>
             </div>
             {coach.humanize.sufficient ? (
               <span className="badge" style={{ background: 'var(--surface)', color: scoreColor(coach.humanize.score), fontSize: 13.5, fontWeight: 700 }}>
-                {coach.humanize.score} 分
+                {coach.humanize.score} {isEn ? 'pts' : '分'}
               </span>
             ) : (
-              <span className="badge badge-gray" title="不足 120 字或不足 5 句，方差类指标算不出可信结果">
-                字数不够，暂不评分
+              <span className="badge badge-gray" title={isEn ? 'Under 120 chars or 5 sentences; variance metrics cannot produce reliable results' : '不足 120 字或不足 5 句，方差类指标算不出可信结果'}>
+                {isEn ? 'Too short to score' : '字数不够，暂不评分'}
               </span>
             )}
           </div>
@@ -458,7 +461,7 @@ export function Rewriter({
                   </span>
                 ))}
                 {coach.humanize.hits.length > 12 && (
-                  <span className="small muted">等 {coach.humanize.hits.length} 处</span>
+                  <span className="small muted">{isEn ? `(${coach.humanize.hits.length} total)` : `等 ${coach.humanize.hits.length} 处`}</span>
                 )}
               </div>
             )}
@@ -468,7 +471,7 @@ export function Rewriter({
             <>
               <div className="divider" style={{ margin: '6px 0' }} />
               <div className="small muted">
-                {PLATFORM_LIST.find((p) => p.key === platform)?.name}核心信号：
+                {platformName(platform, lang)}{isEn ? ' Core Signals: ' : '核心信号：'}
                 <span style={{ color: 'var(--text-2)' }}>{coach.signals.map((s) => s.signal).join(' · ')}</span>
               </div>
             </>
@@ -488,29 +491,29 @@ export function Rewriter({
     <div className="card" style={{ padding: 16, boxShadow: 'none', background: 'var(--surface-2)', border: '1px solid var(--border)' }}>
       <div className="row-between" style={{ marginBottom: 10 }}>
         <b className="small" style={{ fontSize: 13.5 }}>
-          {result.coachAfter !== undefined ? '教练优化结果' : '改写结果'} · {PLATFORM_LIST.find((p) => p.key === platform)?.name}
+          {result.coachAfter !== undefined ? (isEn ? 'Coach Optimization Result' : '教练优化结果') : (isEn ? 'Rewrite Result' : '改写结果')} · {platformName(platform, lang)}
         </b>
         <div className="row" style={{ gap: 6 }}>
           {/* null（该平台规则表不全）走下面的 coachNote 说明，不能落进这里印成「null → null 分」 */}
           {typeof result.coachBefore === 'number' && typeof result.coachAfter === 'number' && (
-            <span className="badge badge-brand" title="按平台算法要点打的分，优化前 → 优化后">
-              {result.coachBefore} → {result.coachAfter} 分
+            <span className="badge badge-brand" title={isEn ? 'Scored on platform algorithm signals, before → after' : '按平台算法要点打的分，优化前 → 优化后'}>
+              {result.coachBefore} → {result.coachAfter} {isEn ? 'pts' : '分'}
             </span>
           )}
           {result.coachAfter === null && result.coachNote && (
             <span className="badge badge-gray" title={result.coachNote}>
-              本平台不给总分
+              {isEn ? 'No score on this platform' : '本平台不给总分'}
             </span>
           )}
           {result.humanBefore !== undefined && result.humanAfter !== undefined && (
-            <span className="badge badge-brand" title="人味分（套话/节奏/对仗/碎句），处理前 → 处理后">
-              人味 {result.humanBefore} → {result.humanAfter} 分
+            <span className="badge badge-brand" title={isEn ? 'Tone score (cliches/rhythm/symmetry/colloquialism), before → after' : '人味分（套话/节奏/对仗/碎句），处理前 → 处理后'}>
+              {isEn ? `Tone ${result.humanBefore} → ${result.humanAfter}` : `人味 ${result.humanBefore} → ${result.humanAfter} 分`}
             </span>
           )}
-          {risk && <span className={`badge ${risk.cls}`}>{risk.text}</span>}
+          {risk && <span className={`badge ${risk.cls}`}>{isEn ? risk.en : risk.zh}</span>}
           {result.mocked && (
-            <span className="badge badge-amber" title={result.degraded ? 'AI 服务临时失败，已用演示内容占位——点「重试」可再试一次' : '尚未接入真实模型，这是内置的演示产出，仅用于预览流程'}>
-              {result.degraded ? 'AI 临时失败（演示占位）' : '演示结果（未接入真实 AI）'}
+            <span className="badge badge-amber" title={result.degraded ? (isEn ? 'AI service failed temporarily, using demo placeholder — click Retry to try again' : 'AI 服务临时失败，已用演示内容占位——点「重试」可再试一次') : (isEn ? 'No real model connected yet; this is demo output for previewing workflow' : '尚未接入真实模型，这是内置的演示产出，仅用于预览流程')}>
+              {result.degraded ? (isEn ? 'AI Temporarily Failed (Demo)' : 'AI 临时失败（演示占位）') : (isEn ? 'Demo Result (Mock AI)' : '演示结果（未接入真实 AI）')}
             </span>
           )}
         </div>
@@ -551,13 +554,17 @@ export function Rewriter({
       {result.compliance.hits.length > 0 && (
         <>
           <div className="divider" style={{ margin: '10px 0' }} />
-          <div className="small muted" style={{ marginBottom: 6 }}>合规命中 {result.compliance.hits.length} 处</div>
+          <div className="small muted" style={{ marginBottom: 6 }}>
+            {isEn ? `${result.compliance.hits.length} compliance hits` : `合规命中 ${result.compliance.hits.length} 处`}
+          </div>
           <div className="stack" style={{ gap: 6 }}>
             {result.compliance.hits.map((h, i) => (
               <div key={i} className="row wrap" style={{ gap: 6, alignItems: 'center' }}>
                 <TierBadge tier={h.tier} />
                 <span className="mono small">「{h.word}」</span>
-                <span className="badge badge-gray">{h.action === 'block' ? '禁用' : h.action === 'warn' ? '慎用' : '建议'}</span>
+                <span className="badge badge-gray">
+                  {h.action === 'block' ? (isEn ? 'Block' : '禁用') : h.action === 'warn' ? (isEn ? 'Caution' : '慎用') : (isEn ? 'Suggest' : '建议')}
+                </span>
                 {h.suggestion && <span className="small muted">→ {h.suggestion}</span>}
               </div>
             ))}
@@ -571,8 +578,9 @@ export function Rewriter({
         <>
           <div className="divider" style={{ margin: '10px 0' }} />
           <div className="small" style={{ color: 'var(--red)', lineHeight: 1.6, marginBottom: 6 }}>
-            🚩 改写后多出了 {urlDrift.length} 条原文里没有的链接。别的漂移还可能只是换了个写法，
-            链接不会——模型拼出来的地址就是编的。逐条核完再采纳：
+            {isEn
+              ? `🚩 Rewriting added ${urlDrift.length} links not present in original text. Models may hallucinate URLs. Verify each link before adopting:`
+              : `🚩 改写后多出了 ${urlDrift.length} 条原文里没有的链接。别的漂移还可能只是换了个写法，链接不会——模型拼出来的地址就是编的。逐条核完再采纳：`}
           </div>
           <div className="stack" style={{ gap: 4, marginBottom: 8 }}>
             {urlDrift.map((u) => (
@@ -581,7 +589,9 @@ export function Rewriter({
           </div>
           <label className="row small" style={{ gap: 6, alignItems: 'center', cursor: 'pointer' }}>
             <input type="checkbox" checked={urlsChecked} onChange={(e) => setUrlsChecked(e.target.checked)} />
-            我已逐条核对这些链接，确认它们真实存在且指向我要引的内容
+            {isEn
+              ? 'I have verified these links individually and confirm they exist and point to my intended sources'
+              : '我已逐条核对这些链接，确认它们真实存在且指向我要引的内容'}
           </label>
         </>
       )}
@@ -593,17 +603,21 @@ export function Rewriter({
             className="btn btn-sm btn-accent"
             onClick={saveAsHuman}
             disabled={pending || result.compliance.riskLevel === 'block' || urlBlocked}
-            title={urlBlocked ? '先逐条核对上面那几条链接并勾选确认' : undefined}
+            title={urlBlocked ? (isEn ? 'Verify all links above and check confirmation first' : '先逐条核对上面那几条链接并勾选确认') : undefined}
           >
-            <Icon.check size={14} /> 采纳为人工终稿
+            <Icon.check size={14} /> {isEn ? 'Adopt as Human Final' : '采纳为人工终稿'}
           </button>
         ) : (
-          <span className="small muted">选中左侧草稿后可存为人工终稿</span>
+          <span className="small muted">{isEn ? 'Select a draft on the left to save as human final' : '选中左侧草稿后可存为人工终稿'}</span>
         )}
         <button className="btn btn-sm btn-ghost" onClick={() => setText(result.rewritten)} disabled={pending}>
-          回填到编辑框继续改
+          {isEn ? 'Apply to editor and continue editing' : '回填到编辑框继续改'}
         </button>
-        {result.compliance.riskLevel === 'block' && <span className="small" style={{ color: 'var(--red)' }}>命中红线，需先修改后才能落稿</span>}
+        {result.compliance.riskLevel === 'block' && (
+          <span className="small" style={{ color: 'var(--red)' }}>
+            {isEn ? 'Redline triggered; must resolve before saving draft' : '命中红线，需先修改后才能落稿'}
+          </span>
+        )}
         {saved && <span className="small" style={{ color: 'var(--green)' }}>{saved}</span>}
       </div>
     </div>
@@ -615,29 +629,29 @@ export function Rewriter({
       {focus && (
         <div className="row-between wrap" style={{ gap: 10 }}>
           <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
-            <b style={{ fontSize: 14 }}>{draftTitle ?? '未命名草稿'}</b>
-            <span className="badge badge-gray">{PLATFORM_LIST.find((p) => p.key === platform)?.name}</span>
-            <span className="small muted">{stats.chars} 字 · {stats.paras} 段</span>
-            {coachLoading && <span className="small muted">诊断中…</span>}
+            <b style={{ fontSize: 14 }}>{draftTitle ?? (isEn ? 'Untitled Draft' : '未命名草稿')}</b>
+            <span className="badge badge-gray">{platformName(platform, lang)}</span>
+            <span className="small muted">{stats.chars} {isEn ? 'chars' : '字'} · {stats.paras} {isEn ? 'paras' : '段'}</span>
+            {coachLoading && <span className="small muted">{isEn ? 'Diagnosing…' : '诊断中…'}</span>}
             {coach && coach.score !== null && (
               <span className="badge" style={{ background: 'var(--surface-2)', color: scoreColor(coach.score) }}>
-                算法 {coach.score}
+                {isEn ? 'Algorithm ' : '算法 '}{coach.score}
               </span>
             )}
             {coach?.humanize.sufficient && (
               <span className="badge" style={{ background: 'var(--surface-2)', color: scoreColor(coach.humanize.score) }}>
-                人味 {coach.humanize.score}
+                {isEn ? 'Tone ' : '人味 '}{coach.humanize.score}
               </span>
             )}
           </div>
           <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
             {draftId && (
               <button className="btn btn-sm" onClick={saveManualEdit} disabled={pending || !text.trim()}>
-                保存我的修改
+                {isEn ? 'Save My Edits' : '保存我的修改'}
               </button>
             )}
             <button className="btn btn-sm btn-ghost" onClick={() => setFocus(false)}>
-              <Icon.minimize size={14} /> 退出专注（Esc）
+              <Icon.minimize size={14} /> {isEn ? 'Exit Focus (Esc)' : '退出专注（Esc）'}
             </button>
             {saved && <span className="small" style={{ color: 'var(--green)' }}>{saved}</span>}
             {err && <span className="small" style={{ color: 'var(--red)' }}>{err}</span>}
@@ -653,15 +667,18 @@ export function Rewriter({
         >
           <div className="row-between wrap" style={{ gap: 10 }}>
             <div className="small" style={{ lineHeight: 1.6 }}>
-              这篇有一份<b>没保存的修改</b>（{restorable.at ? relLocal(restorable.at) : '上次'}留在本机），
-              和当前正文不一样。
+              {isEn ? (
+                <>This draft has <b>unsaved local edits</b> ({restorable.at ? relLocal(restorable.at, isEn) : 'cached locally'}), different from current text.</>
+              ) : (
+                <>这篇有一份<b>没保存的修改</b>（{restorable.at ? relLocal(restorable.at, isEn) : '上次'}留在本机），和当前正文不一样。</>
+              )}
             </div>
             <div className="row wrap" style={{ gap: 8 }}>
               <button
                 className="btn btn-sm btn-accent"
                 onClick={() => { setText(restorable.text); setRestorable(null); }}
               >
-                恢复它
+                {isEn ? 'Restore' : '恢复它'}
               </button>
               <button
                 className="btn btn-sm btn-ghost"
@@ -670,7 +687,7 @@ export function Rewriter({
                   setRestorable(null);
                 }}
               >
-                丢弃
+                {isEn ? 'Discard' : '丢弃'}
               </button>
             </div>
           </div>
@@ -685,11 +702,13 @@ export function Rewriter({
       >
         {!focus && (
           <div className="row-between wrap" style={{ gap: 8, marginBottom: 6 }}>
-            <label className="field-label" style={{ fontWeight: 650, marginBottom: 0 }}>原始正文</label>
+            <label className="field-label" style={{ fontWeight: 650, marginBottom: 0 }}>
+              {lang === 'en' ? 'Original Body' : '原始正文'}
+            </label>
             <span className="small muted">
-              {stats.chars} 字 · {stats.paras} 段
-              {coachLoading ? ' · 诊断中…' : ''}
-              {dirty && <span style={{ color: 'var(--amber)' }}> · 有未保存的修改（已暂存本机）</span>}
+              {lang === 'en' ? `${stats.chars} chars · ${stats.paras} paras` : `${stats.chars} 字 · ${stats.paras} 段`}
+              {coachLoading ? (lang === 'en' ? ' · Analyzing…' : ' · 诊断中…') : ''}
+              {dirty && <span style={{ color: 'var(--amber)' }}>{lang === 'en' ? ' · Unsaved changes (cached locally)' : ' · 有未保存的修改（已暂存本机）'}</span>}
             </span>
           </div>
         )}
@@ -697,13 +716,21 @@ export function Rewriter({
         {/* 轻结构工具条：只在文章型平台出现。插的是纯文本记号，正文仍然是纯文本 */}
         {mdOn && !preview && (
           <div className="row wrap" style={{ gap: 6, marginBottom: 6 }}>
-            <span className="small muted">排版</span>
-            <button className="btn btn-sm btn-ghost" onClick={() => applyLinePrefix('## ')} title="把光标所在行变成小标题">小标题</button>
-            <button className="btn btn-sm btn-ghost" onClick={() => wrapSelection('**')} title="加粗选中的字">加粗</button>
-            <button className="btn btn-sm btn-ghost" onClick={() => applyLinePrefix('- ')} title="把选中的几行变成列表">列表</button>
-            <button className="btn btn-sm btn-ghost" onClick={() => applyLinePrefix('> ')} title="把光标所在行变成引用块">引用</button>
-            <span className="small muted" title="记号只是普通字符，草稿存的仍然是纯文本；预览和「复制富文本」时才渲染成排版">
-              记号存的是纯文本
+            <span className="small muted">{lang === 'en' ? 'Format' : '排版'}</span>
+            <button className="btn btn-sm btn-ghost" onClick={() => applyLinePrefix('## ')} title={lang === 'en' ? 'Make line a heading' : '把光标所在行变成小标题'}>
+              {lang === 'en' ? 'Heading' : '小标题'}
+            </button>
+            <button className="btn btn-sm btn-ghost" onClick={() => wrapSelection('**')} title={lang === 'en' ? 'Bold selection' : '加粗选中的字'}>
+              {lang === 'en' ? 'Bold' : '加粗'}
+            </button>
+            <button className="btn btn-sm btn-ghost" onClick={() => applyLinePrefix('- ')} title={lang === 'en' ? 'Make lines a list' : '把选中的几行变成列表'}>
+              {lang === 'en' ? 'List' : '列表'}
+            </button>
+            <button className="btn btn-sm btn-ghost" onClick={() => applyLinePrefix('> ')} title={lang === 'en' ? 'Make line a quote' : '把光标所在行变成引用块'}>
+              {lang === 'en' ? 'Quote' : '引用'}
+            </button>
+            <span className="small muted" title={lang === 'en' ? 'Stored as plain text markdown; rendered in preview and rich-text copy' : '记号只是普通字符，草稿存的仍然是纯文本；预览和「复制富文本」时才渲染成排版'}>
+              {lang === 'en' ? 'Plain text markers' : '记号存的是纯文本'}
             </span>
           </div>
         )}
@@ -718,28 +745,32 @@ export function Rewriter({
           minHeight={focus ? undefined : 260}
           fontSize={focus ? 15 : undefined}
           lineHeight={focus ? 1.9 : undefined}
-          placeholder="粘贴或输入正文——算法教练会边写边诊断（钩子/篇幅/结构/互动引导），命中的敏感词和套话会直接标在字下面。"
+          placeholder={lang === 'en'
+            ? 'Paste or write body text — Algorithm coach diagnoses hooks, length, structure, and engagement in real-time. Sensitive terms and cliches are underlined.'
+            : '粘贴或输入正文——算法教练会边写边诊断（钩子/篇幅/结构/互动引导），命中的敏感词和套话会直接标在字下面。'}
         />
 
         {/* 标注图例 + 合规命中明细。镜像层挂不了 tooltip，能点开看建议的入口只能放这儿 */}
         {!focus && (inlineHits.length > 0 || aiHitCount > 0) && (
           <div className="row wrap" style={{ gap: 6, marginTop: 8, alignItems: 'center' }}>
             {inlineHits.length > 0 && (
-              <span className="small muted">正文里标出 {inlineHits.length} 处用词：</span>
+              <span className="small muted">
+                {lang === 'en' ? `${inlineHits.length} terms flagged:` : `正文里标出 ${inlineHits.length} 处用词：`}
+              </span>
             )}
             {inlineHits.slice(0, 10).map((h, i) => (
               <span
                 key={i}
                 className={`badge ${h.action === 'block' ? 'badge-red' : 'badge-amber'}`}
-                title={`${h.action === 'block' ? '禁用' : h.action === 'warn' ? '慎用' : '建议'}${h.suggestion ? ` → ${h.suggestion}` : ''}`}
+                title={`${h.action === 'block' ? (lang === 'en' ? 'Blocked' : '禁用') : h.action === 'warn' ? (lang === 'en' ? 'Caution' : '慎用') : (lang === 'en' ? 'Suggest' : '建议')}${h.suggestion ? ` → ${h.suggestion}` : ''}`}
               >
                 {h.word}
               </span>
             ))}
-            {inlineHits.length > 10 && <span className="small muted">等 {inlineHits.length} 处</span>}
+            {inlineHits.length > 10 && <span className="small muted">{lang === 'en' ? `(${inlineHits.length} total)` : `等 ${inlineHits.length} 处`}</span>}
             {aiHitCount > 0 && (
-              <span className="small muted" title="下方教练卡里有逐条明细">
-                · 另有 {aiHitCount} 处套话（虚线标注）
+              <span className="small muted" title={lang === 'en' ? 'Details in coach card below' : '下方教练卡里有逐条明细'}>
+                {lang === 'en' ? `· ${aiHitCount} cliches flagged (dashed)` : `· 另有 ${aiHitCount} 处套话（虚线标注）`}
               </span>
             )}
           </div>
@@ -747,8 +778,9 @@ export function Rewriter({
 
         {markerMismatch && (
           <div className="small" style={{ marginTop: 8, color: 'var(--amber)', lineHeight: 1.6 }}>
-            ⚠️ 正文里有 ## / ** / - 这类排版记号，但{PLATFORM_LIST.find((p) => p.key === platform)?.name}
-            的编辑器不认——发出去会原样显示成符号。改平台，或把记号删掉。
+            {isEn
+              ? `⚠️ Body text contains formatting markers (## / ** / -), which are not supported by ${platformName(platform, lang)}'s editor and will display as literal symbols. Switch platform or remove markers.`
+              : `⚠️ 正文里有 ## / ** / - 这类排版记号，但${platformName(platform, lang)}的编辑器不认——发出去会原样显示成符号。改平台，或把记号删掉。`}
           </div>
         )}
       </div>
@@ -757,12 +789,14 @@ export function Rewriter({
       {!focus && mdOn && preview && (
         <div className="card" style={{ padding: 16, boxShadow: 'none', background: 'var(--surface-2)' }}>
           <div className="row-between wrap" style={{ gap: 8, marginBottom: 10 }}>
-            <b className="small">排版预览 · 公众号</b>
+            <b className="small">{isEn ? 'Format Preview · WeChat Official Account' : '排版预览 · 公众号'}</b>
             <div className="row wrap" style={{ gap: 8 }}>
               <button className="btn btn-sm btn-accent" onClick={copyPreviewRich} disabled={!text.trim()}>
-                {mdCopied ? '已复制 ✓' : '复制富文本'}
+                {mdCopied ? (isEn ? 'Copied ✓' : '已复制 ✓') : (isEn ? 'Copy Rich Text' : '复制富文本')}
               </button>
-              <button className="btn btn-sm btn-ghost" onClick={() => setPreview(false)}>回到编辑</button>
+              <button className="btn btn-sm btn-ghost" onClick={() => setPreview(false)}>
+                {isEn ? 'Back to Edit' : '回到编辑'}
+              </button>
             </div>
           </div>
           <div
@@ -772,8 +806,9 @@ export function Rewriter({
             dangerouslySetInnerHTML={{ __html: mdLiteToHtml(text) }}
           />
           <div className="small muted" style={{ marginTop: 10, lineHeight: 1.6 }}>
-            「复制富文本」把排版和「{AIGC_LABEL}」标识一起写进剪贴板，可直接粘进公众号编辑器。
-            草稿本身存的仍是带记号的纯文本，合规检测、教练诊断、版本对比全都照常工作。
+            {isEn
+              ? `"Copy Rich Text" copies formatted text with "${AIGC_LABEL}" disclosure tag to clipboard, ready to paste into WeChat editor. Draft text remains plain markdown with markers; compliance checks, coaching, and version history function normally.`
+              : `「复制富文本」把排版和「${AIGC_LABEL}」标识一起写进剪贴板，可直接粘进公众号编辑器。草稿本身存的仍是带记号的纯文本，合规检测、教练诊断、版本对比全都照常工作。`}
           </div>
         </div>
       )}
@@ -784,49 +819,49 @@ export function Rewriter({
           <select className="select" value={platform} onChange={(e) => setPlatform(e.target.value)} style={{ maxWidth: 180 }}>
             {PLATFORM_LIST.map((p) => (
               <option key={p.key} value={p.key}>
-                目标平台 · {p.name}
+                {isEn ? `Target: ${platformName(p.key, lang)}` : `目标平台 · ${p.name}`}
               </option>
             ))}
           </select>
           <button className="btn btn-primary btn-sm" onClick={run} disabled={pending || !text.trim()}>
-            <Icon.sparkles size={14} /> {pending ? '处理中…' : '一键改写 + 合规检测'}
+            <Icon.sparkles size={14} /> {pending ? (isEn ? 'Processing…' : '处理中…') : (isEn ? 'Rewrite + Check' : '一键改写 + 合规检测')}
           </button>
           <button className="btn btn-accent btn-sm" onClick={optimize} disabled={pending || !text.trim()}>
-            <Icon.gauge size={14} /> {pending ? '处理中…' : '教练一键优化'}
+            <Icon.gauge size={14} /> {pending ? (isEn ? 'Processing…' : '处理中…') : (isEn ? 'Coach Optimize' : '教练一键优化')}
           </button>
           <button
             className="btn btn-sm"
             onClick={deflavor}
             disabled={pending || !text.trim()}
-            title="按你自己的原句样本改掉套话与均匀节奏，信息不增不减"
+            title={isEn ? 'Rewrites cliches and uniform rhythm based on your own sample sentences, preserving all factual info' : '按你自己的原句样本改掉套话与均匀节奏，信息不增不减'}
           >
-            <Icon.user size={14} /> {pending ? '处理中…' : '一键去 AI 味'}
+            <Icon.user size={14} /> {pending ? (isEn ? 'Processing…' : '处理中…') : (isEn ? 'Humanize Tone' : '一键去 AI 味')}
           </button>
           {draftId && (
             <button
               className="btn btn-sm"
               onClick={saveManualEdit}
               disabled={pending || !text.trim()}
-              title="把编辑框里的当前内容直接存为人工终稿"
+              title={isEn ? 'Save current editor content directly as human final draft' : '把编辑框里的当前内容直接存为人工终稿'}
             >
-              保存我的修改
+              {isEn ? 'Save My Edits' : '保存我的修改'}
             </button>
           )}
           {mdOn && (
             <button
               className="btn btn-sm btn-ghost"
               onClick={() => setPreview((v) => !v)}
-              title="看排版记号渲染出来是什么样，并可复制成富文本直接粘进公众号"
+              title={isEn ? 'Preview how formatting markers render and copy rich text to paste into WeChat' : '看排版记号渲染出来是什么样，并可复制成富文本直接粘进公众号'}
             >
-              <Icon.eye size={14} /> {preview ? '收起预览' : '排版预览'}
+              <Icon.eye size={14} /> {preview ? (isEn ? 'Hide Preview' : '收起预览') : (isEn ? 'Format Preview' : '排版预览')}
             </button>
           )}
           <button
             className="btn btn-sm btn-ghost"
             onClick={() => setFocus(true)}
-            title="整屏只留编辑框，专心写正文（Esc 退出）"
+            title={isEn ? 'Full screen editor, focus on writing (Esc to exit)' : '整屏只留编辑框，专心写正文（Esc 退出）'}
           >
-            <Icon.maximize size={14} /> 专注写作
+            <Icon.maximize size={14} /> {isEn ? 'Focus Mode' : '专注写作'}
           </button>
           {saved && !err && <span className="small" style={{ color: 'var(--green)' }}>{saved}</span>}
           {err && <span className="small" style={{ color: 'var(--red)' }}>{err}</span>}

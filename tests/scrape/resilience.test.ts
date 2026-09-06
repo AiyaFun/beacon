@@ -115,42 +115,66 @@ describe('按站点节流：代价是用户自己的账号', () => {
   });
 });
 
-describe('调试端口三态：别对一个什么都没做的人说「已启动」', () => {
+describe('采集专用浏览器：不碰用户日常的 Chrome', () => {
+  // 2026-09-04 重写。原先这里守的是「用日常 profile 带调试端口起 Chrome，端口三态 + ⌘Q 指引」，
+  // 那条路已经**被 Chrome 自己封死**：≥136 拒绝在默认 user-data-dir 上开调试端口（真机 152 实测），
+  // 而且日常 Chrome 开着时新进程会直接退出。真机连撞三次、任务三次判死，才换成独立 profile。
+  // 守卫跟着行为走：现在要钉住的是「独立目录、不碰日常浏览器、登录态长期留着」。
+  const cb = read('desktop/src-tauri/src/collect_browser.rs');
   const rs = read('desktop/src-tauri/src/main.rs');
 
-  it('🔒 先探端口，再看 Chrome 在不在跑', () => {
-    const probe = rs.indexOf('if debug_port_open() {');
-    const running = rs.indexOf('if chrome_running() {');
-    expect(probe).toBeGreaterThan(0);
-    expect(running).toBeGreaterThan(0);
-    // 顺序反了的话，一个已经照做过的用户会被要求白关一次浏览器（几十个标签）
-    expect(probe).toBeLessThan(running);
+  it('🔒 用独立的 user-data-dir，且端口不与日常那条老路撞号', () => {
+    expect(cb, '没传 --user-data-dir 就是又回到日常 profile（Chrome ≥136 上根本开不出端口）')
+      .toMatch(/--user-data-dir=/);
+    expect(cb).toContain('COLLECT_PORT: u16 = 9223');
+    // 剥注释再判：注释里正解释着「刻意不用 9222」，不剥的话这条会被自己的注释骗（本仓老坑）
+    const cbCode = cb.replace(/^\s*\/\/.*$/gm, '');
+    expect(cbCode, '端口撞回 9222 会连上用户手工起的日常 Chrome，行为不可预测').not.toContain('9222');
   });
 
-  it('端口通时不说「已启动」', () => {
-    expect(rs).toContain('已经在用调试端口跑着了，不用做任何事');
+  it('🔒 登录态要长期留着：profile 放在 app_data_dir，只有用户主动点才清', () => {
+    expect(cb).toContain('app_data_dir');
+    expect(cb).toContain('collect-profile');
+    // 清除是显式动作，且托盘里说明白后果（登录态会一起没）
+    expect(cb).toMatch(/pub fn wipe\(/);
+    expect(rs).toContain('清除采集浏览器登录数据');
+    expect(rs).toContain('登录态也一起没了');
   });
 
-  it('探测只连本机，且不发 HTTP（只判有没有人在听）', () => {
-    expect(rs).toContain('127.0.0.1:9222');
-    expect(rs).toContain('TcpStream::connect_timeout');
-  });
-
-  it('🔒 仍然不替用户杀浏览器', () => {
-    const code = rs.replace(/^\s*\/\/.*$/gm, '');
+  it('🔒 绝不杀浏览器，也不要求用户退出他日常的 Chrome', () => {
+    const code = (cb + rs).replace(/^\s*\/\/.*$/gm, '');
     for (const bad of ['pkill', 'taskkill', 'killall', '.kill()']) {
       expect(code, `不该出现 ${bad}`).not.toContain(bad);
     }
+    // ⌘Q 那句指引是旧路的产物：新路下用户什么都不用退出，再出现就是行为回退了
+    expect(code, '又要求用户退出 Chrome 了').not.toContain('完全退出 Chrome');
   });
 
-  it('给了一条以后不用每次退出的路（快捷方式），且是可见可删的普通文件', () => {
-    expect(rs).toContain('write_browser_shortcut');
-    expect(rs).toContain('生成采集浏览器快捷方式');
-    expect(rs).toContain('不想要了直接删掉即可');
-    // 不改系统设置：不写 LaunchAgent、不改默认浏览器
-    const code = rs.replace(/^\s*\/\/.*$/gm, '');
+  it('🔒 调试端口只绑本机，且不改任何系统设置', () => {
+    expect(cb).toContain('--remote-debugging-address=127.0.0.1');
+    expect(cb).toContain('TcpStream::connect_timeout');
+    const code = (cb + rs).replace(/^\s*\/\/.*$/gm, '');
     expect(code).not.toContain('LaunchAgents');
     expect(code).not.toContain('defaults write');
+  });
+
+  it('🔒 撞上登录墙时把窗口摆到用户面前，但绝不替他输密码', () => {
+    const ex = read('desktop/src-tauri/src/executor.rs');
+    // 2026-09-04 审计后：推到前台的必须是执行器自己那一页（原先另开标签，用户登完也检测不到）
+    expect(ex).toContain('Page.bringToFront');
+    expect(ex).toMatch(/不会替你输入账号密码/);
+    // 只读采集的红线：CDP 不点、不填、不提交
+    const code = ex.replace(/^\s*\/\/.*$/gm, '');
+    for (const bad of ['Input.dispatchMouseEvent', 'Input.dispatchKeyEvent', 'Input.insertText']) {
+      expect(code, `执行器出现了写操作 ${bad}`).not.toContain(bad);
+    }
+  });
+
+  it('🔒 冷启动的等待要够长（真机实测建 profile 要 5 秒以上）', () => {
+    const m = cb.match(/for _ in 0\.\.(\d+) \{[\s\S]{0,200}?port_open\(COLLECT_PORT\)/);
+    expect(m, '找不到等端口的循环').toBeTruthy();
+    const rounds = Number(m![1]);
+    expect(rounds * 400, '等待窗口短于 20 秒：冷启动那一次会误判成「端口没通」').toBeGreaterThanOrEqual(20000);
   });
 });
 
@@ -179,7 +203,11 @@ describe('自动检测端点：能探到就别让人手打', () => {
   it('界面上真的有这个按钮，且说清了托盘那条路', () => {
     const card = read('app/(app)/settings/LocalShellCard.tsx');
     expect(card).toContain('自动检测');
-    expect(card).toContain('生成采集浏览器快捷方式');
+    // 2026-09-04：托盘那两项随「采集专用浏览器」改名（旧的「生成采集浏览器快捷方式」
+    // 是给日常 profile 用的，那条路已被 Chrome ≥136 封死并删除）
+    expect(card).toContain('清除采集浏览器登录数据');
+    expect(card, '设置页没说破「每个平台要各登一次」——用户会一直等一个不会发生的自动登录')
+      .toContain('每个平台要各登录一次');
   });
 });
 
@@ -230,6 +258,7 @@ describe('久未成功：登录态过期最常见的形态不是跳登录页', (
     const call = sweep.indexOf('await noticeStaleRecipes(');
     const lastRecipeWork = sweep.lastIndexOf('await sleep(GAP_MS)');
     expect(call).toBeGreaterThan(0);
+    expect(lastRecipeWork, '逐个配方的 sleep(GAP_MS) 不在了——下一条 call > -1 会恒绿').toBeGreaterThan(0);
     expect(call, '久未成功的提醒必须在逐个配方跑完之后').toBeGreaterThan(lastRecipeWork);
   });
 });

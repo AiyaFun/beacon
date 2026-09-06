@@ -162,7 +162,7 @@ if [ -f "$COUNTS_FILE" ]; then
   if [ "$DRIFT" -gt 0 ]; then
     log "✅ 行数对账通过（$DRIFT 张表有容差内的漂移，是备份期间 cron 在写，不是丢数据）"
   else
-    log "✅ 行数对账全表一致（基准 $COUNTS_FILE）"
+    log "✅ 行数对账全表一致（基准 ${COUNTS_FILE}）"
   fi
 else
   log "⚠️  没有 .counts 基准（旧备份），跳过对账——只能证明「能还原」，不能证明「还原全」。"

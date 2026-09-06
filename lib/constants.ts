@@ -28,7 +28,27 @@ export type PlatformKey = keyof typeof PLATFORMS;
 
 export const PLATFORM_LIST = Object.values(PLATFORMS);
 
-export function platformName(key: string): string {
+export const PLATFORM_NAMES_EN: Record<string, string> = {
+  douyin: 'Douyin',
+  xiaohongshu: 'Xiaohongshu',
+  wechat: 'WeChat OA',
+  bilibili: 'Bilibili',
+  shipinhao: 'Channels',
+  x: 'X',
+  youtube: 'YouTube',
+  tiktok: 'TikTok',
+  weibo: 'Weibo',
+  zhihu: 'Zhihu',
+  toutiao: 'Toutiao',
+  baijiahao: 'Baijiahao',
+  kuaishou: 'Kuaishou',
+  multi: 'Multi-platform',
+};
+
+export function platformName(key: string, lang?: string | number): string {
+  if (typeof lang === 'string' && lang === 'en') {
+    return PLATFORM_NAMES_EN[key] ?? key;
+  }
   if (key === 'multi') return '多平台';
   return (PLATFORMS as Record<string, { name: string }>)[key]?.name ?? key;
 }
@@ -96,52 +116,96 @@ export const TOPIC_QUEUES = [
 
 export type TopicQueueKey = (typeof TOPIC_QUEUES)[number]['key'];
 
-export function topicQueueName(key: string): string {
+export function topicQueueName(key: string, lang: string = 'zh'): string {
+  if (lang === 'en') {
+    const map: Record<string, string> = {
+      today: 'Today Rush',
+      week: 'This Week Window',
+      evergreen: 'Evergreen Vault',
+    };
+    return map[key] ?? key;
+  }
   return TOPIC_QUEUES.find((q) => q.key === key)?.name ?? key;
 }
 
+export function topicQueueDesc(key: string, lang: string = 'zh'): string {
+  if (lang === 'en') {
+    const map: Record<string, string> = {
+      today: 'Tight window — fleeting if not acted on today',
+      week: 'Paced and timely, suitable for this week’s production',
+      evergreen: 'Not tied to trends, timeless for capacity gaps',
+    };
+    return map[key] ?? '';
+  }
+  return TOPIC_QUEUES.find((q) => q.key === key)?.desc ?? '';
+}
+
 // 选题来源标签。前四种来自「别人已经做爆的东西」，后四种是延伸候选源（lib/topic/sources/）。
-export const TOPIC_SOURCE_LABEL: Record<string, { name: string; badge: string; hint: string }> = {
-  hot: { name: '来自热点', badge: 'badge-red', hint: '当前热榜在榜话题' },
-  competitor: { name: '来自竞对', badge: 'badge-brand', hint: '订阅竞对的高热作品' },
-  advisor: { name: '来自智囊团', badge: 'badge-accent', hint: '智囊团会诊产出' },
-  manual: { name: '手动录入', badge: 'badge-gray', hint: '你自己加的选题' },
-  gap: { name: '抢跑窗口', badge: 'badge-amber', hint: '话题已在别的平台爆了，你的主战平台还没有' },
-  recycle: { name: '旧文翻新', badge: 'badge-accent', hint: '你做过同题内容，这个话题重新上榜了' },
-  crossplat: { name: '跨平台补发', badge: 'badge-brand', hint: '你在某平台的爆款，还没发到其他主战平台' },
-  evergreen: { name: '常青题', badge: 'badge-gray', hint: '赛道长青话题，无时效压力' },
-  calendar: { name: '节点日历', badge: 'badge-amber', hint: '每年确定会来的流量节点，赢在提前量' },
-  inspiration: { name: '灵感箱', badge: 'badge-accent', hint: '你自己收藏进灵感库的内容' },
-  comment: { name: '读者提问', badge: 'badge-amber', hint: '你的读者在评论区反复问到的问题' },
-  'rival-comment': { name: '同行读者提问', badge: 'badge-brand', hint: '同行作品评论区被反复问到的问题' },
+export const TOPIC_SOURCE_LABEL: Record<string, { name: string; nameEn: string; badge: string; hint: string; hintEn: string }> = {
+  hot: { name: '来自热点', nameEn: 'Trending Hotlist', badge: 'badge-red', hint: '当前热榜在榜话题', hintEn: 'Currently trending topic on platform charts' },
+  competitor: { name: '来自竞对', nameEn: 'Competitor Intel', badge: 'badge-brand', hint: '订阅竞对的高热作品', hintEn: 'High-performing work from tracked competitors' },
+  advisor: { name: '来自智囊团', nameEn: 'Council Advisory', badge: 'badge-accent', hint: '智囊团会诊产出', hintEn: 'Output from 12-persona advisor council' },
+  manual: { name: '手动录入', nameEn: 'Manual Entry', badge: 'badge-gray', hint: '你自己加的选题', hintEn: 'Custom topic entered by you' },
+  gap: { name: '抢跑窗口', nameEn: 'Opportunity Gap', badge: 'badge-amber', hint: '话题已在别的平台爆了，你的主战平台还没有', hintEn: 'Trending on other platforms but not yet on yours' },
+  recycle: { name: '旧文翻新', nameEn: 'Revived Post', badge: 'badge-accent', hint: '你做过同题内容，这个话题重新上榜了', hintEn: 'Past topic you covered that is trending again' },
+  crossplat: { name: '跨平台补发', nameEn: 'Cross-platform Syndicate', badge: 'badge-brand', hint: '你在某平台的爆款，还没发到其他主战平台', hintEn: 'Proven top post on one channel, absent on others' },
+  evergreen: { name: '常青题', nameEn: 'Evergreen Topic', badge: 'badge-gray', hint: '赛道长青话题，无时效压力', hintEn: 'Enduring topic in your niche with no time pressure' },
+  calendar: { name: '节点日历', nameEn: 'Content Calendar', badge: 'badge-amber', hint: '每年确定会来的流量节点，赢在提前量', hintEn: 'Predictable seasonal milestones to prep in advance' },
+  inspiration: { name: '灵感箱', nameEn: 'Inspiration Box', badge: 'badge-accent', hint: '你自己收藏进灵感库的内容', hintEn: 'Ideas saved to your personal inspiration box' },
+  comment: { name: '读者提问', nameEn: 'Reader Q&A', badge: 'badge-amber', hint: '你的读者在评论区反复问到的问题', hintEn: 'Frequent audience questions from comments' },
+  'rival-comment': { name: '同行读者提问', nameEn: 'Competitor Reader Q&A', badge: 'badge-brand', hint: '同行作品评论区被反复问到的问题', hintEn: 'Common questions asked on competitor posts' },
 };
+
+export function topicSourceName(key: string, lang: string = 'zh'): string {
+  const row = TOPIC_SOURCE_LABEL[key];
+  if (!row) return key;
+  return lang === 'en' ? row.nameEn : row.name;
+}
+
+export function topicSourceHint(key: string, lang: string = 'zh'): string {
+  const row = TOPIC_SOURCE_LABEL[key];
+  if (!row) return '';
+  return lang === 'en' ? row.hintEn : row.hint;
+}
 
 // 选题六维评分
 export const TOPIC_DIMENSIONS = [
-  { key: 'traffic', name: '流量潜力' },
-  { key: 'personaFit', name: '人设匹配' },
-  { key: 'cost', name: '制作成本' },
-  { key: 'monetization', name: '变现路径' },
-  { key: 'compliance', name: '合规风险' },
-  { key: 'differentiation', name: '差异空间' },
+  { key: 'traffic', name: '流量潜力', nameEn: 'Traffic Potential' },
+  { key: 'personaFit', name: '人设匹配', nameEn: 'Persona Fit' },
+  { key: 'cost', name: '制作成本', nameEn: 'Production Cost' },
+  { key: 'monetization', name: '变现路径', nameEn: 'Monetization' },
+  { key: 'compliance', name: '合规风险', nameEn: 'Compliance' },
+  { key: 'differentiation', name: '差异空间', nameEn: 'Differentiation' },
 ] as const;
+
+export function topicDimensionName(key: string, lang: string = 'zh'): string {
+  const dim = TOPIC_DIMENSIONS.find((d) => d.key === key);
+  if (!dim) return key;
+  return lang === 'en' ? dim.nameEn : dim.name;
+}
 
 // 账号项目体检六维
 export const ACCOUNT_HEALTH_DIMENSIONS = [
-  { key: 'positioning', name: '定位清晰度' },
-  { key: 'quality', name: '内容质量稳定度' },
-  { key: 'algoFit', name: '算法适配度' },
-  { key: 'audience', name: '粉丝结构' },
-  { key: 'monetization', name: '变现潜力' },
-  { key: 'risk', name: '风险敞口' },
+  { key: 'positioning', name: '定位清晰度', nameEn: 'Positioning' },
+  { key: 'quality', name: '内容质量稳定度', nameEn: 'Consistency' },
+  { key: 'algoFit', name: '算法适配度', nameEn: 'Algorithm Fit' },
+  { key: 'audience', name: '粉丝结构', nameEn: 'Audience Health' },
+  { key: 'monetization', name: '变现潜力', nameEn: 'Monetization' },
+  { key: 'risk', name: '风险敞口', nameEn: 'Risk Exposure' },
 ] as const;
+
+export function accountHealthDimName(key: string, lang: string = 'zh'): string {
+  const dim = ACCOUNT_HEALTH_DIMENSIONS.find((d) => d.key === key);
+  if (!dim) return key;
+  return lang === 'en' ? dim.nameEn : dim.name;
+}
 
 // 记忆类型
 export const MEMORY_TYPES = {
-  persona: { name: '人设记忆', desc: '我是谁' },
-  preference: { name: '偏好记忆', desc: '改稿与拒绝透露的口味' },
-  performance: { name: '绩效记忆', desc: '哪类内容数据好' },
-  fact: { name: '事实记忆', desc: '行业知识与粉丝画像' },
+  persona: { name: '人设记忆', nameEn: 'Persona Memory', desc: '我是谁', descEn: 'Who I am' },
+  preference: { name: '偏好记忆', nameEn: 'Preference Memory', desc: '改稿与拒绝透露的口味', descEn: 'Tastes revealed by edits and rejections' },
+  performance: { name: '绩效记忆', nameEn: 'Performance Memory', desc: '哪类内容数据好', descEn: 'Which content performs best' },
+  fact: { name: '事实记忆', nameEn: 'Factual Memory', desc: '行业知识与粉丝画像', descEn: 'Industry knowledge & audience profile' },
 } as const;
 
 // 合规词库四级

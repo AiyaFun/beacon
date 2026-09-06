@@ -31,7 +31,7 @@ beforeEach(async () => {
   memberId = m.id;
   await prisma.ingestToken.create({
     // 这枚令牌模拟的是**当前版本**的插件：自报过全部能力（老插件那种没自报的在 executor.test.ts 单独测）
-    data: { workspaceId, token: `bcn_${Math.random().toString(36).slice(2)}`, label: '测试设备', memberId, kinds: JSON.stringify(['collect_competitor', 'collect_self_profile', 'open_and_read']) },
+    data: { lastUsedAt: new Date(),  workspaceId, token: `bcn_${Math.random().toString(36).slice(2)}`, label: '测试设备', memberId, kinds: JSON.stringify(['collect_competitor', 'collect_self_profile', 'open_and_read']) },
   });
   const c = await prisma.competitorAccount.create({
     data: { platform: 'douyin', handle: 'wang_talks', name: '学习博主小王' },
@@ -270,14 +270,14 @@ describe('没装插件：配了本机浏览器就当场跑，没配就指路', (
 
   it('有令牌 + 本机就绪：**本机优先**，照样标 local（当场出结果，不排「以后」）', async () => {
     // 2026-09-03 真机：装了插件的用户派「采我的 X」，得到「已排给插件等它醒」——而 Chrome 就在眼前开着
-    await prisma.ingestToken.create({ data: { workspaceId, token: `bcn_${Math.random().toString(36).slice(2)}`, label: 'dev', memberId } });
+    await prisma.ingestToken.create({ data: { lastUsedAt: new Date(),  workspaceId, token: `bcn_${Math.random().toString(36).slice(2)}`, label: 'dev', memberId } });
     const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_competitor', competitorId }, { localCdpUrl: 'http://127.0.0.1:9222' });
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.local).toEqual({ cdpUrl: 'http://127.0.0.1:9222' });
   });
 
   it('有令牌 + 本机没传（没开或没在跑）：不标 local，照旧排队', async () => {
-    await prisma.ingestToken.create({ data: { workspaceId, token: `bcn_${Math.random().toString(36).slice(2)}`, label: 'dev', memberId } });
+    await prisma.ingestToken.create({ data: { lastUsedAt: new Date(),  workspaceId, token: `bcn_${Math.random().toString(36).slice(2)}`, label: 'dev', memberId } });
     const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_competitor', competitorId });
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.local).toBeUndefined();

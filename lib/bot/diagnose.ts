@@ -1,4 +1,12 @@
 import { feishuTenantAccessToken, feishuListBotChats, feishuSendToChat } from './feishu';
+import { beijingParts } from '../beijing';
+
+/** 北京时间「月-日 时:分」——体检文案给人看，别按容器时区渲染 */
+function beijingClock(d: Date): string {
+  const p = beijingParts(d);
+  const two = (n: number) => String(n).padStart(2, '0');
+  return `${two(p.month)}-${two(p.day)} ${two(p.hour)}:${two(p.minute)}`;
+}
 import { getDingtalkAccessToken, sendDingtalkApp } from './dingtalk';
 import { getWecomAccessToken, sendWecomApp } from './wecom';
 import { kfListAccounts } from './wechat-kf';
@@ -33,7 +41,7 @@ export async function diagnoseBot(
   webhookUrl: string | null,
   inboundKey: string | null,
   secrets: BotSecrets,
-  meta: { lastInboundAt?: Date | null } = {},
+  meta: { lastInboundAt?: Date | null; integrationId?: string } = {},
 ): Promise<DiagResult> {
   // 选路必须与 lib/bot/index.ts 的 routeSend 一致，否则体检测的不是真实推送走的那条路。
   const appReady =
@@ -51,6 +59,24 @@ export async function diagnoseBot(
         detail: r.ok ? '发送成功，去群里看看' : r.error ?? '发送失败',
         fix: r.ok ? undefined : '核对 Webhook 地址是否完整、机器人是否还在群里；开了加签就要填加签密钥',
       },
+    ]);
+  }
+
+  // 企微智能机器人：凭据只有 BotID/Secret，通不通看 worker 里那条长连接的状态（体检本身不另起连接——
+  // 协议只许一条活连接，体检去连会把正在服务的那条踢掉）
+  if (provider === 'wecom_aibot') {
+    const { aibotConnectionState } = await import('./wecom-aibot-poller');
+    const st = aibotConnectionState(meta.integrationId ?? '');
+    const hasCreds = !!(secrets.aibotId && secrets.aibotSecret);
+    return done([
+      { name: '读取凭据', ok: hasCreds, detail: hasCreds ? 'BotID 与 Secret 已保存' : '缺 BotID 或 Secret', fix: hasCreds ? undefined : '到企微管理后台「智能机器人 → API 模式 → 长连接」复制' },
+      {
+        name: '长连接',
+        ok: st.connected,
+        detail: st.connected ? `已连上（自 ${st.since ? beijingClock(st.since) : ''}）` : st.running ? `在重连：${st.lastError ?? '等待中'}` : '这个进程里没有连接（连接只在 worker 进程里起）',
+        fix: st.connected ? undefined : st.running ? '多半是 BotID/Secret 不对，或另一处也在连同一个机器人（协议只许一条）' : '在网页里体检看不到 worker 的连接状态；看渠道卡上的「最近收到」时间与错误',
+      },
+      ...(meta.lastInboundAt ? [{ name: '最近收到消息', ok: true, detail: beijingClock(meta.lastInboundAt) }] : []),
     ]);
   }
 

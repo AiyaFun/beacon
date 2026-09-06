@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Card } from '@/components/ui';
 import { Icon } from '@/components/icons';
 import { platformName } from '@/lib/constants';
+import { useI18n } from '@/lib/i18n';
 import { actArchiveInspiration, actRestoreInspiration, actDeleteInspiration } from '../inspiration/actions';
 
 // 资讯库列表：按平台筛 + 状态筛 + 排序 + 关键词搜 + 展开看正文摘录。
@@ -25,12 +26,12 @@ export type LibraryItem = {
   createdAt: string;
 };
 
-function relDays(iso: string): string {
+function relDays(iso: string, isEn = false): string {
   const n = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
-  if (n <= 0) return '今天';
-  if (n === 1) return '昨天';
-  if (n < 30) return `${n} 天前`;
-  return `${Math.floor(n / 30)} 个月前`;
+  if (n <= 0) return isEn ? 'Today' : '今天';
+  if (n === 1) return isEn ? 'Yesterday' : '昨天';
+  if (n < 30) return isEn ? `${n}d ago` : `${n} 天前`;
+  return isEn ? `${Math.floor(n / 30)}mo ago` : `${Math.floor(n / 30)} 个月前`;
 }
 
 // 平台颜色标识辅助
@@ -59,6 +60,8 @@ function platformBadgeStyle(platform: string | null): { bg: string; color: strin
 
 export function LibraryBoard({ items }: { items: LibraryItem[] }) {
   const router = useRouter();
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const [pending, start] = useTransition();
   const [platform, setPlatform] = useState<string>('all');
   const [stateFilter, setStateFilter] = useState<string>('all');
@@ -130,15 +133,19 @@ export function LibraryBoard({ items }: { items: LibraryItem[] }) {
         title={
           <div className="row" style={{ gap: 8, alignItems: 'center' }}>
             <Icon.file size={20} />
-            <span>资讯库暂无内容</span>
+            <span>{isEn ? 'Library is empty' : '资讯库暂无内容'}</span>
           </div>
         }
       >
         <div style={{ textAlign: 'center', padding: '30px 20px' }}>
           <div style={{ fontSize: '2.5rem', marginBottom: 12 }}>📭</div>
-          <h3 style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 600 }}>开始积累你的第一条热门资讯</h3>
+          <h3 style={{ margin: '0 0 8px 0', fontSize: '1.1rem', fontWeight: 600 }}>
+            {isEn ? 'Start building your library of hot content' : '开始积累你的第一条热门资讯'}
+          </h3>
           <p className="small muted" style={{ maxWidth: 500, margin: '0 auto 16px auto', lineHeight: 1.6 }}>
-            在任意网文或作品页右键 → 选择<b>「存进烽火台资讯库」</b>；或在群里粘贴链接/正文，系统将自动抓取存入并提取 AI 结构化要点。
+            {isEn
+              ? 'Right click on any article or post → "Save to Beacon Library"; or paste link/text in chat groups, the system will auto-fetch and produce AI structured takeaways.'
+              : '在任意网文或作品页右键 → 选择「存进烽火台资讯库」；或在群里粘贴链接/正文，系统将自动抓取存入并提取 AI 结构化要点。'}
           </p>
         </div>
       </Card>
@@ -149,13 +156,13 @@ export function LibraryBoard({ items }: { items: LibraryItem[] }) {
     <Card
       title={
         <div className="row wrap" style={{ gap: 10, alignItems: 'center' }}>
-          <span>资讯库内容看板</span>
+          <span>{isEn ? 'Content Library Board' : '资讯库内容看板'}</span>
           <span className="badge badge-primary" style={{ fontSize: '0.8rem' }}>
-            {shown.length} / {items.length} 条
+            {shown.length} / {items.length} {isEn ? 'items' : '条'}
           </span>
         </div>
       }
-      sub="点击资讯标题或「展开正文」看原文摘录，提取爆款分析"
+      sub={isEn ? 'Click topic title or "Expand Text Preview" to view excerpts and viral insights' : '点击资讯标题或「展开正文」看原文摘录，提取爆款分析'}
     >
       {/* 筛选与搜索工具栏 */}
       <div className="stack" style={{ gap: 12, marginBottom: 16 }}>
@@ -165,7 +172,7 @@ export function LibraryBoard({ items }: { items: LibraryItem[] }) {
             className={`btn btn-sm ${platform === 'all' ? 'btn-primary' : 'btn-ghost'}`}
             onClick={() => setPlatform('all')}
           >
-            全部平台 ({items.length})
+            {isEn ? `All Platforms (${items.length})` : `全部平台 (${items.length})`}
           </button>
           {platforms.map(([k, n]) => {
             const badge = platformBadgeStyle(k);
@@ -181,7 +188,7 @@ export function LibraryBoard({ items }: { items: LibraryItem[] }) {
                 }
                 onClick={() => setPlatform(k)}
               >
-                {k === 'other' ? '其它来源' : platformName(k)} ({n})
+                {k === 'other' ? (isEn ? 'Other' : '其它来源') : platformName(k)} ({n})
               </button>
             );
           })}
@@ -190,30 +197,30 @@ export function LibraryBoard({ items }: { items: LibraryItem[] }) {
         {/* 2. 状态筛选 + 排序 + 搜索框 */}
         <div className="row wrap" style={{ gap: 10, alignItems: 'center', justifyContent: 'space-between' }}>
           <div className="row wrap" style={{ gap: 6, alignItems: 'center' }}>
-            <span className="small muted">状态：</span>
+            <span className="small muted">{isEn ? 'Status:' : '状态：'}</span>
             <button
               className={`btn btn-sm ${stateFilter === 'all' ? 'btn-primary' : 'btn-ghost'}`}
               onClick={() => setStateFilter('all')}
             >
-              全部状态
+              {isEn ? 'All Statuses' : '全部状态'}
             </button>
             <button
               className={`btn btn-sm ${stateFilter === 'summary' ? 'btn-primary' : 'btn-ghost'}`}
               onClick={() => setStateFilter('summary')}
             >
-              已出摘要
+              {isEn ? 'Summarized' : '已出摘要'}
             </button>
             <button
               className={`btn btn-sm ${stateFilter === 'used' ? 'btn-primary' : 'btn-ghost'}`}
               onClick={() => setStateFilter('used')}
             >
-              已转选题
+              {isEn ? 'Converted' : '已转选题'}
             </button>
             <button
               className={`btn btn-sm ${stateFilter === 'archived' ? 'btn-primary' : 'btn-ghost'}`}
               onClick={() => setStateFilter('archived')}
             >
-              已归档
+              {isEn ? 'Archived' : '已归档'}
             </button>
           </div>
 
@@ -225,9 +232,9 @@ export function LibraryBoard({ items }: { items: LibraryItem[] }) {
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value as 'latest' | 'chars' | 'oldest')}
             >
-              <option value="latest">按最新存入</option>
-              <option value="chars">按正文字数最多</option>
-              <option value="oldest">按最早存入</option>
+              <option value="latest">{isEn ? 'Sort by Latest' : '按最新存入'}</option>
+              <option value="chars">{isEn ? 'Sort by Longest Text' : '按正文字数最多'}</option>
+              <option value="oldest">{isEn ? 'Sort by Oldest' : '按最早存入'}</option>
             </select>
 
             {/* 搜素框 */}
@@ -235,7 +242,7 @@ export function LibraryBoard({ items }: { items: LibraryItem[] }) {
               <input
                 className="input"
                 style={{ width: '100%', padding: '6px 30px 6px 28px', fontSize: '0.85rem' }}
-                placeholder="搜标题 / 摘要 / 洞察"
+                placeholder={isEn ? 'Search title / summary / insights' : '搜标题 / 摘要 / 洞察'}
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
               />
@@ -268,7 +275,9 @@ export function LibraryBoard({ items }: { items: LibraryItem[] }) {
       {/* 无结果反馈 */}
       {shown.length === 0 && (
         <div style={{ padding: '40px 20px', textAlign: 'center' }} className="muted small">
-          未找到匹配筛选或搜索条件（"{q}"）的资讯条目。
+          {isEn
+            ? `No content matches your filter or search query ("${q}").`
+            : `未找到匹配筛选或搜索条件（"${q}"）的资讯条目。`}
           <button
             className="btn btn-sm btn-ghost"
             style={{ marginLeft: 8 }}
@@ -278,7 +287,7 @@ export function LibraryBoard({ items }: { items: LibraryItem[] }) {
               setQ('');
             }}
           >
-            重置筛选条件
+            {isEn ? 'Reset Filters' : '重置筛选条件'}
           </button>
         </div>
       )}
@@ -312,7 +321,7 @@ export function LibraryBoard({ items }: { items: LibraryItem[] }) {
                         lineHeight: 1.4,
                       }}
                       onClick={() => setOpen(isOpened ? null : it.id)}
-                      title="点击展开/收起正文"
+                      title={isEn ? 'Click to expand/collapse text preview' : '点击展开/收起正文'}
                     >
                       {it.title}
                     </b>
@@ -325,8 +334,8 @@ export function LibraryBoard({ items }: { items: LibraryItem[] }) {
                         {platformName(it.platform)}
                       </span>
                     )}
-                    {it.state === 'used' && <span className="badge badge-emerald">已转选题</span>}
-                    {it.state === 'archived' && <span className="badge badge-gray">已归档</span>}
+                    {it.state === 'used' && <span className="badge badge-emerald">{isEn ? 'Converted' : '已转选题'}</span>}
+                    {it.state === 'archived' && <span className="badge badge-gray">{isEn ? 'Archived' : '已归档'}</span>}
                   </div>
 
                   {/* AI 结构化摘要 */}
@@ -345,7 +354,7 @@ export function LibraryBoard({ items }: { items: LibraryItem[] }) {
                         style={{ gap: 6, alignItems: 'center', fontWeight: 600, color: 'var(--primary)', marginBottom: 4 }}
                       >
                         <Icon.sparkles size={14} />
-                        <span>AI 结构化摘要</span>
+                        <span>{isEn ? 'AI Structured Summary' : 'AI 结构化摘要'}</span>
                       </div>
                       <p className="small" style={{ margin: 0, lineHeight: 1.65, color: 'var(--fg)' }}>
                         {it.summary}
@@ -353,7 +362,9 @@ export function LibraryBoard({ items }: { items: LibraryItem[] }) {
                     </div>
                   ) : (
                     <p className="small muted" style={{ margin: '6px 0' }}>
-                      ℹ️（该条目暂未提炼 AI 摘要——可能因录入时 AI 配额用完，后续可重新触发）
+                      {isEn
+                        ? 'ℹ️ (No AI summary yet—quota may have been exhausted at ingestion, can be re-analyzed later)'
+                        : 'ℹ️（该条目暂未提炼 AI 摘要——可能因录入时 AI 配额用完，后续可重新触发）'}
                     </p>
                   )}
 
@@ -361,7 +372,7 @@ export function LibraryBoard({ items }: { items: LibraryItem[] }) {
                   {it.points.length > 0 && (
                     <div style={{ margin: '8px 0' }}>
                       <div className="small muted" style={{ marginBottom: 4, fontWeight: 500 }}>
-                        核心要点提炼：
+                        {isEn ? 'Key Takeaways:' : '核心要点提炼：'}
                       </div>
                       <div className="row wrap" style={{ gap: 6 }}>
                         {it.points.map((p, i) => (
@@ -395,7 +406,7 @@ export function LibraryBoard({ items }: { items: LibraryItem[] }) {
                       }}
                     >
                       <div className="small" style={{ lineHeight: 1.65, color: 'var(--fg)' }}>
-                        <b style={{ color: '#d97706' }}>💡 对你账号的落地用处：</b>
+                        <b style={{ color: '#d97706' }}>{isEn ? '💡 Value for your account: ' : '💡 对你账号的落地用处：'}</b>
                         {it.analysis}
                       </div>
                     </div>
@@ -405,14 +416,16 @@ export function LibraryBoard({ items }: { items: LibraryItem[] }) {
                   {isOpened && it.excerpt && (
                     <div style={{ marginTop: 10 }}>
                       <div className="row-between" style={{ marginBottom: 4, padding: '0 4px' }}>
-                        <span className="small muted">正文预览（前 {it.excerpt.length} 字）：</span>
+                        <span className="small muted">
+                          {isEn ? `Text Preview (first ${it.excerpt.length} chars):` : `正文预览（前 ${it.excerpt.length} 字）：`}
+                        </span>
                         <button
                           className="btn btn-sm btn-ghost small"
                           onClick={() => handleCopy(it.id, it.excerpt)}
                           style={{ padding: '2px 8px', fontSize: '0.78rem' }}
                         >
                           <Icon.copy size={12} />
-                          {copiedId === it.id ? '已复制！' : '复制摘录'}
+                          {copiedId === it.id ? (isEn ? 'Copied!' : '已复制！') : (isEn ? 'Copy Excerpt' : '复制摘录')}
                         </button>
                       </div>
                       <div
@@ -432,7 +445,9 @@ export function LibraryBoard({ items }: { items: LibraryItem[] }) {
                         {it.excerpt}
                         {it.chars > it.excerpt.length && (
                           <div className="muted" style={{ marginTop: 8, fontStyle: 'italic' }}>
-                            …（全文共 {it.chars} 字，查看全文请点击下方「查看原文」）
+                            {isEn
+                              ? `… (${it.chars} chars total, click "View Original" below to read full post)`
+                              : `…（全文共 ${it.chars} 字，查看全文请点击下方「查看原文」）`}
                           </div>
                         )}
                       </div>
@@ -446,12 +461,12 @@ export function LibraryBoard({ items }: { items: LibraryItem[] }) {
                       style={{ padding: '2px 6px', fontSize: '0.78rem' }}
                       onClick={() => setOpen(isOpened ? null : it.id)}
                     >
-                      {isOpened ? '▲ 收起正文' : '▼ 展开正文预览'}
+                      {isOpened ? (isEn ? '▲ Collapse Text' : '▲ 收起正文') : (isEn ? '▼ Expand Text Preview' : '▼ 展开正文预览')}
                     </button>
                     <span>·</span>
-                    <span>{relDays(it.createdAt)}存入</span>
-                    {it.author && <span>· 作者: {it.author}</span>}
-                    {it.chars > 0 && <span>· 全文 {it.chars} 字</span>}
+                    <span>{isEn ? `Saved ${relDays(it.createdAt, true)}` : `${relDays(it.createdAt)}存入`}</span>
+                    {it.author && <span>· {isEn ? `Author: ${it.author}` : `作者: ${it.author}`}</span>}
+                    {it.chars > 0 && <span>· {isEn ? `${it.chars} chars` : `全文 ${it.chars} 字`}</span>}
                     {it.url && (
                       <a
                         href={it.url}
@@ -460,7 +475,7 @@ export function LibraryBoard({ items }: { items: LibraryItem[] }) {
                         className="row"
                         style={{ gap: 4, alignItems: 'center', textDecoration: 'none', color: 'var(--primary)' }}
                       >
-                        <span>查看原文</span>
+                        <span>{isEn ? 'View Original' : '查看原文'}</span>
                         <Icon.external size={12} />
                       </a>
                     )}
@@ -474,26 +489,29 @@ export function LibraryBoard({ items }: { items: LibraryItem[] }) {
                       className="btn btn-sm"
                       disabled={pending}
                       onClick={() => run(() => actArchiveInspiration(it.id))}
-                      title="归档后不再在每日推荐中频繁展示"
+                      title={isEn ? 'Archived items are no longer frequently featured in daily recommendations' : '归档后不再在每日推荐中频繁展示'}
                     >
                       <Icon.archive size={14} />
-                      归档
+                      {isEn ? 'Archive' : '归档'}
                     </button>
                   ) : (
                     <button className="btn btn-sm" disabled={pending} onClick={() => run(() => actRestoreInspiration(it.id))}>
-                      放回
+                      {isEn ? 'Restore' : '放回'}
                     </button>
                   )}
                   <button
                     className="btn btn-sm btn-ghost"
                     disabled={pending}
                     onClick={() => {
-                      if (window.confirm('删除后此正文与 AI 摘要将不再保留。确定删除？')) run(() => actDeleteInspiration(it.id));
+                      const msg = isEn
+                        ? 'Once deleted, this article and AI summary cannot be restored. Confirm deletion?'
+                        : '删除后此正文与 AI 摘要将不再保留。确定删除？';
+                      if (window.confirm(msg)) run(() => actDeleteInspiration(it.id));
                     }}
-                    title="删除此条内容"
+                    title={isEn ? 'Delete this item' : '删除此条内容'}
                   >
                     <Icon.trash size={14} />
-                    删除
+                    {isEn ? 'Delete' : '删除'}
                   </button>
                 </div>
               </div>
@@ -515,7 +533,9 @@ export function LibraryBoard({ items }: { items: LibraryItem[] }) {
       >
         <Icon.info size={14} style={{ flexShrink: 0 }} />
         <span>
-          资讯库中的条目会自动参与每日选题推演（与灵感收集箱共享选题出口）。第三方作品内容仅供分析参考，请勿未经授权直接公开发布原文。
+          {isEn
+            ? 'Items in the library participate automatically in daily topic generation (sharing the candidate pipeline with Inspiration Box). Third-party content is strictly for research reference; do not republish copyrighted text directly without permission.'
+            : '资讯库中的条目会自动参与每日选题推演（与灵感收集箱共享选题出口）。第三方作品内容仅供分析参考，请勿未经授权直接公开发布原文。'}
         </span>
       </div>
     </Card>

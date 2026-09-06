@@ -8,22 +8,25 @@ import { topBuckets, type FollowerPoint, type AudienceBuckets } from '@/lib/inge
 // 退化形态是这张卡的重点：粉丝曲线 <2 个观测点不画线、受众画像没数据就直说没数据 +
 // 指路怎么拿到，绝不用「暂无数据」四个字打发人（用户不知道该做什么才能有数据）。
 
-const DIMS: { key: keyof Omit<AudienceBuckets, 'updatedAt'>; label: string }[] = [
-  { key: 'gender', label: '性别' },
-  { key: 'age', label: '年龄' },
-  { key: 'region', label: '地域' },
-  { key: 'interest', label: '兴趣' },
+const DIMS: { key: keyof Omit<AudienceBuckets, 'updatedAt'>; labelZh: string; labelEn: string }[] = [
+  { key: 'gender', labelZh: '性别', labelEn: 'Gender' },
+  { key: 'age', labelZh: '年龄', labelEn: 'Age' },
+  { key: 'region', labelZh: '地域', labelEn: 'Region' },
+  { key: 'interest', labelZh: '兴趣', labelEn: 'Interests' },
 ];
 
 export function AudienceCard({
   platform,
   series,
   audience,
+  lang,
 }: {
   platform: string;
   series: FollowerPoint[];
   audience: AudienceBuckets | null;
+  lang?: string;
 }) {
+  const isEn = lang === 'en';
   const withFollowers = series.filter((p) => p.followers !== null);
   const latest = withFollowers[withFollowers.length - 1] ?? null;
   const first = withFollowers[0] ?? null;
@@ -41,10 +44,18 @@ export function AudienceCard({
 
   if (withFollowers.length === 0 && !hasAudience) {
     return (
-      <Card title="👥 粉丝与受众" sub={`${platformName(platform)} · 只有创作者后台给得到`} style={{ marginBottom: 16 }}>
+      <Card
+        title={isEn ? '👥 Followers & Audience' : '👥 粉丝与受众'}
+        sub={isEn ? `${platformName(platform)} · Only from creator studio` : `${platformName(platform)} · 只有创作者后台给得到`}
+        style={{ marginBottom: 16 }}
+      >
         <Empty
           icon="📈"
-          text="还没有账号级数据——用插件在你自己的创作者后台点一次「这是我的作品」，粉丝曲线与受众画像会一起回填；在自己的主页上点同一个按钮，也能记下当天的粉丝数（受众画像仍只有后台给得到）。也可以到「数据看板」手动回填基础受众数据"
+          text={
+            isEn
+              ? 'No account-level data yet — click "This is My Post" in your creator studio using the extension to backfill followers & audience demographics. You can also manually backfill basic audience data.'
+              : '还没有账号级数据——用插件在你自己的创作者后台点一次「这是我的作品」，粉丝曲线与受众画像会一起回填；在自己的主页上点同一个按钮，也能记下当天的粉丝数（受众画像仍只有后台给得到）。也可以到「数据看板」手动回填基础受众数据'
+          }
         />
       </Card>
     );
@@ -52,8 +63,8 @@ export function AudienceCard({
 
   return (
     <Card
-      title="👥 粉丝与受众"
-      sub={`${platformName(platform)} · 来自创作者后台回填，非推测`}
+      title={isEn ? '👥 Followers & Audience' : '👥 粉丝与受众'}
+      sub={isEn ? `${platformName(platform)} · Backfilled from creator studio, verified` : `${platformName(platform)} · 来自创作者后台回填，非推测`}
       style={{ marginBottom: 16 }}
     >
       {/* 粉丝 */}
@@ -61,12 +72,14 @@ export function AudienceCard({
         <div style={{ marginBottom: hasAudience ? 18 : 0 }}>
           <div className="row wrap" style={{ gap: 20, marginBottom: 10 }}>
             <div>
-              <div className="small muted">当前粉丝</div>
+              <div className="small muted">{isEn ? 'Current Followers' : '当前粉丝'}</div>
               <div style={{ fontSize: 22, fontWeight: 700 }}>{fmtNum(latest?.followers ?? 0)}</div>
             </div>
             {netGrowth !== null && (
               <div>
-                <div className="small muted">{withFollowers.length} 天累计净增</div>
+                <div className="small muted">
+                  {isEn ? `${withFollowers.length}d Net Growth` : `${withFollowers.length} 天累计净增`}
+                </div>
                 <div
                   style={{
                     fontSize: 22,
@@ -84,10 +97,12 @@ export function AudienceCard({
 
           {withFollowers.length < 2 ? (
             <div className="small muted">
-              只有 1 个观测点，画不出曲线——再回填一次即可看到增长趋势。
+              {isEn
+                ? 'Only 1 observation point, trend cannot be plotted — backfill once more to view growth curves.'
+                : '只有 1 个观测点，画不出曲线——再回填一次即可看到增长趋势。'}
             </div>
           ) : (
-            <FollowerBars series={withFollowers} />
+            <FollowerBars series={withFollowers} isEn={isEn} />
           )}
         </div>
       )}
@@ -100,7 +115,9 @@ export function AudienceCard({
             if (top.length === 0) return null;
             return (
               <div key={d.key}>
-                <div className="small muted" style={{ marginBottom: 6 }}>{d.label}分布</div>
+                <div className="small muted" style={{ marginBottom: 6 }}>
+                  {isEn ? `${d.labelEn} Distribution` : `${d.labelZh}分布`}
+                </div>
                 <div className="stack" style={{ gap: 6 }}>
                   {top.map((t) => (
                     <div key={t.name}>
@@ -116,14 +133,16 @@ export function AudienceCard({
             );
           })}
           <div className="small muted" style={{ lineHeight: 1.6 }}>
-            这份分布已注入 AI 的选题精排与智囊团会诊——判断「选题跟你的读者对不对得上」时以它为准，
-            与人设卡里写的受众不一致时 AI 会直接指出差异。
+            {isEn
+              ? 'This distribution is injected into AI topic ranking and advisory council consults — matching topic suitability against your actual audience data rather than generic estimates.'
+              : '这份分布已注入 AI 的选题精排与智囊团会诊——判断「选题跟你的读者对不对得上」时以它为准，与人设卡里写的受众不一致时 AI 会直接指出差异。'}
           </div>
         </div>
       ) : (
         <div className="small muted" style={{ lineHeight: 1.6 }}>
-          受众画像还没回填。在创作者后台的「粉丝/受众分析」页再点一次插件按钮即可——
-          有了它，AI 判断选题匹配度时就不必再靠人设卡里手写的那句话推测。
+          {isEn
+            ? 'Audience demographics not backfilled yet. Click the extension button on your creator studio "Follower / Audience Analytics" page to import demographics.'
+            : '受众画像还没回填。在创作者后台的「粉丝/受众分析」页再点一次插件按钮即可——有了它，AI 判断选题匹配度时就不必再靠人设卡里手写的那句话推测。'}
         </div>
       )}
     </Card>
@@ -133,7 +152,7 @@ export function AudienceCard({
 // 粉丝净增柱状图：零依赖手绘 SVG（项目惯例）。
 // 画的是**净增**不是总数：总数曲线在基数大时看不出变化，净增才是「这周做得怎么样」。
 // 缺失的日期**不补齐**——后台没给的那天就是没数据，插值会让「你多久回填一次」看起来像增长节奏。
-function FollowerBars({ series }: { series: FollowerPoint[] }) {
+function FollowerBars({ series, isEn }: { series: FollowerPoint[]; isEn?: boolean }) {
   const pts = series.slice(-30);
   const deltas = pts.map((p, i) => {
     if (p.delta !== null) return p.delta;
@@ -149,7 +168,7 @@ function FollowerBars({ series }: { series: FollowerPoint[] }) {
 
   return (
     <div>
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: W, display: 'block' }} role="img" aria-label="粉丝净增">
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: W, display: 'block' }} role="img" aria-label={isEn ? 'Follower Net Growth' : '粉丝净增'}>
         <line x1={0} y1={MID} x2={W} y2={MID} stroke="var(--border)" strokeWidth="1" />
         {deltas.map((d, i) => {
           const h = (Math.abs(d) / max) * (MID - 4);
@@ -170,7 +189,7 @@ function FollowerBars({ series }: { series: FollowerPoint[] }) {
       </svg>
       <div className="row-between small muted" style={{ marginTop: 2 }}>
         <span>{pts[0]?.date}</span>
-        <span>每日净增（↑涨 ↓掉）</span>
+        <span>{isEn ? 'Daily Net (↑gain ↓drop)' : '每日净增（↑涨 ↓掉）'}</span>
         <span>{pts[pts.length - 1]?.date}</span>
       </div>
     </div>

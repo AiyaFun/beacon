@@ -32,6 +32,16 @@ const EVERGREEN_FORMULAS: { key: string; title: (n: string) => string; why: stri
   { key: 'standard', title: (n) => `判断${n}做得好不好，我看这几个标准`, why: '标准/判据类内容建立专业信任，利于人设沉淀' },
 ];
 
+/**
+ * 公开「今日选题榜」用的常青题清单（2026-09-05）：只给赛道词，返回标题 + 为什么常青。
+ * 纯函数、不查库、不打模型——它是拿给没登录的人看的，八条公式本身就是内容。
+ */
+export function evergreenBoard(niche: string): { key: string; title: string; why: string }[] {
+  const n = niche.trim();
+  if (n.length < 2 || n.length > 20) return [];
+  return EVERGREEN_FORMULAS.map((f) => ({ key: f.key, title: f.title(n), why: f.why }));
+}
+
 // 储备水位线：低于这个数就补货。设 3 是因为一屏能看完的储备才像「储备」，
 // 攒一大堆没人看的常青题只是让列表更难读。
 export const EVERGREEN_MIN_RESERVE = 3;

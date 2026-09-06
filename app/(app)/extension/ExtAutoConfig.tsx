@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from '@/components/icons';
 import { actIssueIngestToken } from '../settings/actions';
+import { useI18n } from '@/lib/i18n';
 
 // 「一键把令牌写进插件」。与 app/login/ExtUnlink.tsx 的 clear-token 对称：一个下发、一个收回。
 //
@@ -11,6 +12,8 @@ import { actIssueIngestToken } from '../settings/actions';
 //   · 顺带把令牌从服务端渲染的 HTML 里拿掉了。它此前会出现在每一次 /extension 的页面源码里，
 //     哪怕用户根本没打算配置插件。
 export function ExtAutoConfig({ host }: { host: string }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const [extPresent, setExtPresent] = useState(false);
   const [status, setStatus] = useState<'idle' | 'sending' | 'done' | 'fail' | 'rejected'>('idle');
   const [label, setLabel] = useState('');
@@ -55,18 +58,18 @@ export function ExtAutoConfig({ host }: { host: string }) {
       <div className="row" style={{ gap: 8, alignItems: 'center' }}>
         <span style={{ color: 'var(--green)', flexShrink: 0 }}><Icon.check size={16} /></span>
         <span className="small" style={{ flex: 1 }}>
-          检测到已安装烽火台插件
-          {status === 'done' && `　·　已为「${label || '这台设备'}」签发令牌并写入插件`}
-          {status === 'fail' && ' · 写入超时，请用下方令牌手动配置'}
-          {status === 'rejected' && ` · 插件拒绝了这个地址（${host}）——它只接受本页面所在的地址或官方地址，请用下方令牌手动配置`}
+          {isEn ? 'Beacon extension detected' : '检测到已安装烽火台插件'}
+          {status === 'done' && (isEn ? ` · Token issued and written to extension for "${label || 'this device'}"` : `　·　已为「${label || '这台设备'}」签发令牌并写入插件`)}
+          {status === 'fail' && (isEn ? ' · Write timed out, please configure manually using the token below' : ' · 写入超时，请用下方令牌手动配置')}
+          {status === 'rejected' && (isEn ? ` · Extension rejected this address (${host}) — it only accepts the current page address or official address. Please configure manually below` : ` · 插件拒绝了这个地址（${host}）——它只接受本页面所在的地址或官方地址，请用下方令牌手动配置`)}
         </span>
         {status === 'idle' && (
           <button className="btn btn-sm btn-primary" onClick={send}>
-            一键配置这台设备
+            {isEn ? 'Configure This Device' : '一键配置这台设备'}
           </button>
         )}
-        {status === 'sending' && <button className="btn btn-sm" disabled>签发并写入中…</button>}
-        {status === 'done' && <span className="badge badge-green">已完成</span>}
+        {status === 'sending' && <button className="btn btn-sm" disabled>{isEn ? 'Issuing & writing…' : '签发并写入中…'}</button>}
+        {status === 'done' && <span className="badge badge-green">{isEn ? 'Completed' : '已完成'}</span>}
       </div>
     </div>
   );

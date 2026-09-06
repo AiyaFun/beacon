@@ -3,6 +3,7 @@
 import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Overlay } from './Overlay';
+import { useI18n } from '@/lib/i18n';
 
 // 报告里「起稿」的就地执行面板 —— 点了不跳走，在报告上原地把初稿写出来。
 //
@@ -22,6 +23,8 @@ type Done = { draftId?: string; seq?: number; warning?: string };
 
 export function BattleStartDraft({ topicId, title }: { topicId: string; title: string }) {
   const router = useRouter();
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const [open, setOpen] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [preview, setPreview] = useState('');
@@ -51,7 +54,7 @@ export function BattleStartDraft({ topicId, title }: { topicId: string; title: s
       if (!res.ok || !res.body) {
         // 设计内拒绝（没配 Key / 配额 / 无权限）：如实展示，不回落重跑白烧额度
         const data = (await res.json().catch(() => ({}))) as { error?: string };
-        setErr(data.error ?? '生成失败');
+        setErr(data.error ?? (isEn ? 'Generation failed' : '生成失败'));
         setStreaming(false);
         return;
       }
@@ -90,7 +93,7 @@ export function BattleStartDraft({ topicId, title }: { topicId: string; title: s
             return;
           } else if (ev === 'error') {
             setStreaming(false);
-            setErr((data as { error?: string }).error ?? '生成失败');
+            setErr((data as { error?: string }).error ?? (isEn ? 'Generation failed' : '生成失败'));
             setPreview('');
             return;
           }
@@ -99,11 +102,11 @@ export function BattleStartDraft({ topicId, title }: { topicId: string; title: s
       // 流结束却没收到 done：也当失败处理，别让面板卡在「正在写」
       if (!done) {
         setStreaming(false);
-        if (!err) setErr('生成中断，请重试');
+        if (!err) setErr(isEn ? 'Generation interrupted, please retry' : '生成中断，请重试');
       }
     } catch (e) {
       setStreaming(false);
-      setErr((e as Error).message || '网络中断，请重试');
+      setErr((e as Error).message || (isEn ? 'Network interrupted, please retry' : '网络中断，请重试'));
     }
   }
 
@@ -114,35 +117,41 @@ export function BattleStartDraft({ topicId, title }: { topicId: string; title: s
     <>
       {finished ? (
         <div className="stack" style={{ gap: 6, minWidth: 128 }}>
-          <span className="badge badge-green" style={{ justifyContent: 'center' }}>✓ 已起稿</span>
+          <span className="badge badge-green" style={{ justifyContent: 'center' }}>
+            {isEn ? '✓ Draft Created' : '✓ 已起稿'}
+          </span>
           {draftId ? (
-            <a href={`/studio?draft=${draftId}`} className="btn btn-sm btn-primary" style={{ width: '100%' }}>去精修 →</a>
+            <a href={`/studio?draft=${draftId}`} className="btn btn-sm btn-primary" style={{ width: '100%' }}>
+              {isEn ? 'Edit Draft →' : '去精修 →'}
+            </a>
           ) : null}
         </div>
       ) : (
-        <button type="button" className="btn btn-sm btn-primary" style={{ width: '100%' }} onClick={run}>✎ 起稿 →</button>
+        <button type="button" className="btn btn-sm btn-primary" style={{ width: '100%' }} onClick={run}>
+          {isEn ? '✎ Start Draft →' : '✎ 起稿 →'}
+        </button>
       )}
 
       {open && (
-        <Overlay onClose={() => setOpen(false)} label="就地起稿" closable={!streaming}>
+        <Overlay onClose={() => setOpen(false)} label={isEn ? 'Quick Draft' : '就地起稿'} closable={!streaming}>
           <div className="card" style={{ width: 'min(560px, 94vw)', maxHeight: '86vh', display: 'flex', flexDirection: 'column' }}>
             <div className="row-between" style={{ marginBottom: 6 }}>
-              <div className="card-title">✎ 就地起稿</div>
+              <div className="card-title">{isEn ? '✎ Quick Draft' : '✎ 就地起稿'}</div>
               {!streaming && (
                 <button className="btn btn-sm btn-ghost" onClick={() => setOpen(false)}>✕</button>
               )}
             </div>
             <div className="small muted" style={{ marginBottom: 12 }}>
-              选题 · <b style={{ color: 'var(--text)' }}>{title}</b> ｜ 走你的人设与原句风格，写完自动存进草稿箱
+              {isEn ? 'Topic · ' : '选题 · '}<b style={{ color: 'var(--text)' }}>{title}</b>{isEn ? ' ｜ In your persona & style, auto-saved to drafts once completed' : ' ｜ 走你的人设与原句风格，写完自动存进草稿箱'}
             </div>
 
             {err ? (
               <div className="stack" style={{ gap: 10 }}>
                 <div style={{ fontSize: 13, lineHeight: 1.6, color: 'var(--red)', background: 'var(--red-soft)', border: '1px solid var(--red-soft)', borderRadius: 10, padding: '11px 13px' }}>{err}</div>
                 {keyIssue && (
-                  <a href="/settings/keys" className="btn btn-sm">去配模型 Key →</a>
+                  <a href="/settings/keys" className="btn btn-sm">{isEn ? 'Configure Model Key →' : '去配模型 Key →'}</a>
                 )}
-                <button className="btn btn-sm" onClick={run}>重试</button>
+                <button className="btn btn-sm" onClick={run}>{isEn ? 'Retry' : '重试'}</button>
               </div>
             ) : (
               <>
@@ -154,13 +163,13 @@ export function BattleStartDraft({ topicId, title }: { topicId: string; title: s
                     whiteSpace: 'pre-wrap', minHeight: 200, background: 'var(--surface)',
                   }}
                 >
-                  {preview || <span className="muted">正在按你的风格起草…</span>}
+                  {preview || <span className="muted">{isEn ? 'Drafting in your persona style…' : '正在按你的风格起草…'}</span>}
                   {streaming && <span className="battle-caret">▍</span>}
                 </div>
 
                 {done && (
                   <div className="small" style={{ marginTop: 10, color: 'var(--green)' }}>
-                    ✓ 已生成第 {done.seq} 版初稿，存进草稿箱
+                    {isEn ? `✓ Draft version ${done.seq} generated, saved to drafts` : `✓ 已生成第 ${done.seq} 版初稿，存进草稿箱`}
                     {done.warning && <span style={{ color: 'var(--amber)' }}>｜⚠️ {done.warning}</span>}
                   </div>
                 )}
@@ -169,15 +178,21 @@ export function BattleStartDraft({ topicId, title }: { topicId: string; title: s
                   {done ? (
                     <>
                       {draftId && (
-                        <a href={`/studio?draft=${draftId}`} className="btn btn-sm btn-primary" style={{ flex: 1, justifyContent: 'center' }}>去编辑器精修 →</a>
+                        <a href={`/studio?draft=${draftId}`} className="btn btn-sm btn-primary" style={{ flex: 1, justifyContent: 'center' }}>
+                          {isEn ? 'Open Editor →' : '去编辑器精修 →'}
+                        </a>
                       )}
                       {/* 再 roll 一版：不满意就地重来，不用跳去编辑器。复投 draftId → 同一份草稿加新版本 */}
-                      <button className="btn btn-sm" onClick={run} title="按同一选题再生成一版，存为新版本">↻ 再写一版</button>
-                      <button className="btn btn-sm btn-ghost" onClick={() => setOpen(false)}>完成</button>
+                      <button className="btn btn-sm" onClick={run} title={isEn ? 'Generate another draft for the same topic as a new version' : '按同一选题再生成一版，存为新版本'}>
+                        {isEn ? '↻ Another Version' : '↻ 再写一版'}
+                      </button>
+                      <button className="btn btn-sm btn-ghost" onClick={() => setOpen(false)}>
+                        {isEn ? 'Done' : '完成'}
+                      </button>
                     </>
                   ) : (
                     <button className="btn btn-sm" disabled style={{ flex: 1, justifyContent: 'center' }}>
-                      {streaming ? '正在写…' : '准备中…'}
+                      {streaming ? (isEn ? 'Writing…' : '正在写…') : (isEn ? 'Preparing…' : '准备中…')}
                     </button>
                   )}
                 </div>

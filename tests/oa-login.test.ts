@@ -10,6 +10,7 @@ import {
   memberByOaIdentity,
 } from '@/lib/auth/oa';
 import { handleInbound } from '@/lib/bot/router';
+import { at } from './helpers/anchor';
 
 // 企业应用登录。这是企业版**唯一**的进门方式（短信已在形态闸上关掉），
 // 所以每条拒绝分支都要能说清楚下一步，每条放行分支都要一次性、可撤销。
@@ -133,7 +134,7 @@ describe('登录票据', () => {
     // 谁要是把它改成「读出来 → 判 consumed → update」，Postgres 上就能一票换多个会话。
     const fs = await import('node:fs');
     const src = fs.readFileSync('lib/auth/oa.ts', 'utf-8');
-    const fn = src.slice(src.indexOf('export async function consumeOaLoginTicket'));
+    const fn = src.slice(at(src, 'export async function consumeOaLoginTicket'));
     expect(fn).toMatch(/updateMany\(\{[\s\S]*?where: \{ id: rec\.id, consumed: false \}/);
     expect(fn).toMatch(/consumed\.count === 0/);
   });

@@ -349,5 +349,20 @@ export async function actLogout() {
   redirect('/login');
 }
 
+/**
+ * 游客 → 注册的接力（2026-09-05）：退出演示会话，把「刚才在看的那一页」带到登录页，
+ * 登录成功后原地接着看（LoginForm 认 next；微信那条路由 cookie 带过去）。
+ * 只认站内相对路径（lib/auth/safe-next.ts），认不出就退回普通登录页。
+ */
+export async function actDemoExit(nextPath?: string) {
+  const store = await cookies();
+  const token = store.get(AUTH_COOKIE)?.value;
+  await destroySession(token);
+  store.delete(AUTH_COOKIE);
+  const { safeNextPath } = await import('@/lib/auth/safe-next');
+  const next = safeNextPath(nextPath);
+  redirect(next ? `/login?from=demo&next=${encodeURIComponent(next)}` : '/login?from=demo');
+}
+
 // ── 界面外壳偏好 ────────────────────────────────────────────────────────────
 

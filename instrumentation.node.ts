@@ -25,4 +25,7 @@ if (schedulerKind() === 'local') {
   // 游标是消费性的，两处同时拉同一个 token 会互吞消息，所以这里与 worker 互斥，判据同上。
   const { startIlinkSupervisor } = await import('./lib/bot/wechat-ilink-poller');
   startIlinkSupervisor();
+  // 企微智能机器人长连接同理（每个机器人只许一条活连接，与 worker 互斥）
+  const { startAibotSupervisor } = await import('./lib/bot/wecom-aibot-poller');
+  startAibotSupervisor();
 }

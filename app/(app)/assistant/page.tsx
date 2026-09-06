@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { readPersona, personaCompleteness } from '@/lib/persona';
@@ -23,6 +24,8 @@ export default async function AssistantPage({
   const lang = await getServerLang();
   const dict = getDictionary(lang);
   const { run, goal } = await searchParams;
+  // 派活的框只在首页「今天」（2026-09-06）。老链接 /assistant?goal=… 送回首页预填，仍然只预填不开跑
+  if (goal) redirect(`/?goal=${encodeURIComponent(goal.slice(0, 2000))}`);
   const [account, memoryCount, ws, waiting, models] = await Promise.all([
     prisma.creatorAccount.findUnique({ where: { id: s.accountId } }),
     prisma.memoryEntry.count({ where: { workspaceId: s.workspaceId, active: true } }),
@@ -32,12 +35,15 @@ export default async function AssistantPage({
       orderBy: { updatedAt: 'desc' },
       select: { id: true, goal: true },
     }),
-    listSelectableModels(s.tenantId),
+    listSelectableModels(s.tenantId, lang),
   ]);
 
   const persona = readPersona(account?.personaCard ?? '{}');
   const completeness = personaCompleteness(persona);
-  const accountName = account?.name ?? (lang === 'en' ? 'My Account' : '我的账号');
+  const rawAccountName = account?.name ?? '';
+  const accountName = (lang === 'en' && (rawAccountName === '我的账号' || !rawAccountName))
+    ? 'My Account'
+    : (rawAccountName || '我的账号');
   const resume = waiting && waiting.id !== run ? waiting : null;
 
   return (
@@ -60,7 +66,6 @@ export default async function AssistantPage({
         models={models}
         tools={availableTools(s.role, disabledTools(ws?.agentToolConfig))}
         initialRunId={run ?? null}
-        initialGoal={goal ? goal.slice(0, 2000) : null}
       />
 
       <div style={{ marginTop: 18 }}>

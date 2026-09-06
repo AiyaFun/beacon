@@ -13,10 +13,16 @@ export function LanguageSwitcher({ compact = false, className = '' }: LanguageSw
 
   return (
     <div
-      className={`inline-flex items-center rounded-full p-0.5 border ${className}`}
+      className={`inline-flex items-center ${className}`}
       style={{
-        background: 'var(--surface-2, rgba(127,127,127,0.08))',
-        borderColor: 'var(--line, rgba(127,127,127,0.15))',
+        display: 'inline-flex',
+        alignItems: 'center',
+        background: 'var(--surface-2, #f0f2f5)',
+        border: '1px solid var(--border, #e5e7eb)',
+        borderRadius: '20px',
+        padding: '2px',
+        height: '28px',
+        userSelect: 'none',
       }}
       role="group"
       aria-label="Switch Language"
@@ -24,17 +30,21 @@ export function LanguageSwitcher({ compact = false, className = '' }: LanguageSw
       <button
         type="button"
         onClick={() => setLang('zh')}
-        className="btn-pill"
         style={{
-          padding: compact ? '2px 7px' : '3px 10px',
-          fontSize: compact ? '11px' : '12px',
-          fontWeight: lang === 'zh' ? 600 : 400,
-          borderRadius: 9999,
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: '22px',
+          padding: compact ? '0 8px' : '0 10px',
+          fontSize: '11.5px',
+          fontWeight: lang === 'zh' ? 650 : 500,
+          borderRadius: '16px',
           border: 'none',
           cursor: 'pointer',
-          background: lang === 'zh' ? 'var(--brand, #ff6a42)' : 'transparent',
-          color: lang === 'zh' ? '#ffffff' : 'var(--text-2, #64748b)',
-          transition: 'all 0.15s ease',
+          background: lang === 'zh' ? 'var(--surface, #ffffff)' : 'transparent',
+          color: lang === 'zh' ? 'var(--text, #1a1d21)' : 'var(--text-3, #8a919e)',
+          boxShadow: lang === 'zh' ? '0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 1px rgba(0, 0, 0, 0.04)' : 'none',
+          transition: 'all 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
         }}
         title="切换为简体中文"
       >
@@ -43,17 +53,21 @@ export function LanguageSwitcher({ compact = false, className = '' }: LanguageSw
       <button
         type="button"
         onClick={() => setLang('en')}
-        className="btn-pill"
         style={{
-          padding: compact ? '2px 7px' : '3px 10px',
-          fontSize: compact ? '11px' : '12px',
-          fontWeight: lang === 'en' ? 600 : 400,
-          borderRadius: 9999,
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: '22px',
+          padding: compact ? '0 8px' : '0 10px',
+          fontSize: '11.5px',
+          fontWeight: lang === 'en' ? 650 : 500,
+          borderRadius: '16px',
           border: 'none',
           cursor: 'pointer',
-          background: lang === 'en' ? 'var(--brand, #ff6a42)' : 'transparent',
-          color: lang === 'en' ? '#ffffff' : 'var(--text-2, #64748b)',
-          transition: 'all 0.15s ease',
+          background: lang === 'en' ? 'var(--surface, #ffffff)' : 'transparent',
+          color: lang === 'en' ? 'var(--text, #1a1d21)' : 'var(--text-3, #8a919e)',
+          boxShadow: lang === 'en' ? '0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 1px rgba(0, 0, 0, 0.04)' : 'none',
+          transition: 'all 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
         }}
         title="Switch to English"
       >
@@ -62,3 +76,4 @@ export function LanguageSwitcher({ compact = false, className = '' }: LanguageSw
     </div>
   );
 }
+

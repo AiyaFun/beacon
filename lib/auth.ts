@@ -10,8 +10,10 @@ import { AUTH_COOKIE } from './auth-constants';
 import { isProd } from './env';
 import { effectivePlan } from './pay/plan';
 import { TRIAL_DAYS } from './pay/pricing';
+import { recordFunnelEventAsync } from './growth/funnel';
 import { LEGAL_VERSION } from './legal';
 import { can } from './edition';
+import { log } from './logger';
 
 // 手机短信验证码鉴权 + 多租户自动开通。
 
@@ -64,7 +66,7 @@ export async function requestLoginCode(phone: string): Promise<RequestCodeResult
   return { ok: true, devCode };
 }
 
-export type VerifyResult = { ok: boolean; message?: string; token?: string };
+export type VerifyResult = { ok: boolean; message?: string; token?: string; isNew?: boolean };
 
 // 校验验证码：通过则登录。
 // 分叉：带有效邀请 token → 加入邀请方租户（用邀请里的 role）；否则新号自动注册（新开租户）。
@@ -74,6 +76,7 @@ export async function verifyLoginCode(
   userAgent?: string,
   inviteToken?: string,
   consent?: boolean,
+  referralCode?: string | null,
 ): Promise<VerifyResult> {
   if (!isValidPhone(phone)) return { ok: false, message: '手机号格式不正确' };
 
@@ -93,6 +96,7 @@ export async function verifyLoginCode(
 
   // 找到或自动创建 member（+租户/工作区/起始账号）
   let member = await prisma.member.findUnique({ where: { phone } });
+  let isNew = false;
   if (member) {
     // 停用成员不得登录，也不得借邀请链接绕回来；先于任何邀请状态变更判断，免得白烧一张邀请
     if (member.status !== 'active') return { ok: false, message: '账号已被停用，请联系工作区管理员' };
@@ -116,6 +120,17 @@ export async function verifyLoginCode(
     if (!member) return { ok: false, message: '邀请链接已被使用，请向邀请人索取新链接' };
   } else {
     member = await provisionNewUser(phone);
+    isNew = true;
+    // 漏斗第四步「注册成功」（增长，2026-09-05）：旁路，不影响注册
+    recordFunnelEventAsync({ name: 'register_ok', tenantId: member.tenantId, meta: 'phone' });
+    if (referralCode) {
+      try {
+        const { applyReferral } = await import('@/lib/growth/referral');
+        await applyReferral(member.tenantId, referralCode);
+      } catch (e) {
+        log.warn('Referral grant failed', { tenantId: member.tenantId, error: String(e) });
+      }
+    }
   }
 
   if (consent) {
@@ -126,7 +141,7 @@ export async function verifyLoginCode(
   }
 
   const token = await createSession(member.id, userAgent);
-  return { ok: true, token };
+  return { ok: true, token, isNew };
 }
 
 // 校验并消费一条短信验证码。登录（verifyLoginCode）与绑定手机号（actBindPhone）共用；
@@ -358,14 +373,26 @@ export async function loginByWechat(
   nickname: string,
   userAgent?: string,
   consent?: boolean,
+  referralCode?: string | null,
 ): Promise<VerifyResult> {
   let member = await prisma.member.findUnique({ where: { wechatOpenId: openId } });
+  let isNew = false;
   if (member) {
     if (member.status !== 'active') return { ok: false, message: '账号已被停用，请联系工作区管理员' };
     const suspended = await tenantSuspendedMessage(member.tenantId);
     if (suspended) return { ok: false, message: suspended };
   } else {
     member = await provisionNewWechatUser(openId, nickname);
+    isNew = true;
+    recordFunnelEventAsync({ name: 'register_ok', tenantId: member.tenantId, meta: 'wechat' });
+    if (referralCode) {
+      try {
+        const { applyReferral } = await import('@/lib/growth/referral');
+        await applyReferral(member.tenantId, referralCode);
+      } catch (e) {
+        log.warn('WeChat referral grant failed', { tenantId: member.tenantId, error: String(e) });
+      }
+    }
   }
   if (consent) {
     await prisma.member.update({
@@ -374,7 +401,7 @@ export async function loginByWechat(
     });
   }
   const token = await createSession(member.id, userAgent);
-  return { ok: true, token };
+  return { ok: true, token, isNew };
 }
 
 export type BindResult = { ok: boolean; message?: string };

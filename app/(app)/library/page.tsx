@@ -164,38 +164,71 @@ export default async function LibraryPage() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 }}>
             <div style={{ padding: 12, borderRadius: 8, background: 'var(--surface-2)', border: '1px solid var(--border)' }}>
               <div style={{ fontWeight: 600, color: 'var(--fg)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span className="badge badge-primary">1</span> 采集助手（最通用推荐）
+                <span className="badge badge-primary">1</span> {lang === 'en' ? 'Browser Extension (Recommended)' : '采集助手（最通用推荐）'}
               </div>
               <div className="muted">
-                在网页任意内容页右键 → <b>「存进烽火台资讯库」</b>。<br />
-                小红书、抖音、X、B站、YouTube、公众号、头条等需要 JS 渲染的页面均适用。
+                {lang === 'en' ? (
+                  <>
+                    Right click on any webpage → <b>"Save to Beacon Library"</b>.<br />
+                    Works on Rednote, Douyin, X, Bilibili, YouTube, WeChat articles, and JS-rendered pages.
+                  </>
+                ) : (
+                  <>
+                    在网页任意内容页右键 → <b>「存进烽火台资讯库」</b>。<br />
+                    小红书、抖音、X、B站、YouTube、公众号、头条等需要 JS 渲染的页面均适用。
+                  </>
+                )}
               </div>
             </div>
 
             <div style={{ padding: 12, borderRadius: 8, background: 'var(--surface-2)', border: '1px solid var(--border)' }}>
               <div style={{ fontWeight: 600, color: 'var(--fg)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span className="badge badge-primary">2</span> 社群消息发链接
+                <span className="badge badge-primary">2</span> {lang === 'en' ? 'Send Link in Chat Group' : '社群消息发链接'}
               </div>
               <div className="muted">
-                在对接群内 <b>@机器人 发一条链接</b>，服务器能直连抓取的普通网页/资讯站/技术博客会自动入库并生成摘要。
+                {lang === 'en' ? (
+                  <>
+                    Send a link with <b>@Bot</b> in connected groups; accessible articles, news, and technical blogs will auto-ingest with structured summaries.
+                  </>
+                ) : (
+                  <>
+                    在对接群内 <b>@机器人 发一条链接</b>，服务器能直连抓取的普通网页/资讯站/技术博客会自动入库并生成摘要。
+                  </>
+                )}
               </div>
             </div>
 
             <div style={{ padding: 12, borderRadius: 8, background: 'var(--surface-2)', border: '1px solid var(--border)' }}>
               <div style={{ fontWeight: 600, color: 'var(--fg)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span className="badge badge-primary">3</span> 社群直接粘贴正文
+                <span className="badge badge-primary">3</span> {lang === 'en' ? 'Paste Text Directly in Group' : '社群直接粘贴正文'}
               </div>
               <div className="muted">
-                在对接群内将 300 字以上正文直接粘贴，机器人也会自动识别入库并提取结构化摘要。链接防爬时最省心。
+                {lang === 'en' ? (
+                  <>
+                    Paste articles (300+ chars) in connected groups; the bot parses text and produces structured takeaways—best when links are paywalled/anti-scrape.
+                  </>
+                ) : (
+                  <>
+                    在对接群内将 300 字以上正文直接粘贴，机器人也会自动识别入库并提取结构化摘要。链接防爬时最省心。
+                  </>
+                )}
               </div>
             </div>
 
             <div style={{ padding: 12, borderRadius: 8, background: 'var(--surface-2)', border: '1px solid var(--border)' }}>
               <div style={{ fontWeight: 600, color: 'var(--fg)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span className="badge badge-primary">4</span> 视频与作品拆解
+                <span className="badge badge-primary">4</span> {lang === 'en' ? 'Video & Post Dissection' : '视频与作品拆解'}
               </div>
               <div className="muted">
-                上方卡片上传本地视频进行<b>画面级</b>拆解；或在作品页右键「一键拆解」获取<b>封面 + 文案 + 字幕轨时间戳</b>。
+                {lang === 'en' ? (
+                  <>
+                    Upload local videos above for <b>frame-level</b> breakdown, or right click on post pages via extension for <b>covers + script + timeline</b>.
+                  </>
+                ) : (
+                  <>
+                    上方卡片上传本地视频进行<b>画面级</b>拆解；或在作品页右键「一键拆解」获取<b>封面 + 文案 + 字幕轨时间戳</b>。
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -213,7 +246,15 @@ export default async function LibraryPage() {
           >
             <Icon.info size={14} style={{ flexShrink: 0 }} />
             <span>
-              存入内容仅在你的工作区内作为分析参考，<b>绝不进入</b>系统仿写语料池。请勿直接复制使用第三方版权文本。
+              {lang === 'en' ? (
+                <>
+                  Saved content is only used for analysis within your workspace, and <b>never enters</b> public training corpora. Please respect third-party copyrights.
+                </>
+              ) : (
+                <>
+                  存入内容仅在你的工作区内作为分析参考，<b>绝不进入</b>系统仿写语料池。请勿直接复制使用第三方版权文本。
+                </>
+              )}
             </span>
           </div>
         </div>

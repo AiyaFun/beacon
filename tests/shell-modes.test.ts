@@ -95,7 +95,7 @@ describe('导航自洽（原对等守卫的单表版本）', () => {
     }
   });
 
-  it('必须收着「新任务」「任务记录」——少了任一条，这个模式就不成立', () => {
+  it('必须收着「问 AI」「任务记录」——少了任一条，这个模式就不成立', () => {
     const hrefs = items.map((i) => i.href);
     expect(hrefs).toContain('/assistant');
     expect(hrefs).toContain('/runs');
@@ -170,18 +170,23 @@ describe('首页：chat-first', () => {
 });
 
 describe('浮标助手：随身入口，但不许一个链接就开跑', () => {
-  it('浮标接上了移交通道', () => {
+  it('浮标接上了移交通道，落点是首页「今天」的框（全站唯一的派活入口）', () => {
     const src = code('components/GlobalAIAssistant.tsx');
     expect(src).toMatch(/looksActionable\(/);
-    expect(src).toMatch(/\/assistant\?goal=/);
+    expect(src).toMatch(/href=\{`\/\?goal=/);
+    expect(src, '又指回 /assistant 了——那边没有派活框').not.toMatch(/\/assistant\?goal=/);
+    // 老链接 /assistant?goal= 不能变成死胡同：送回首页预填
+    expect(code('app/(app)/assistant/page.tsx')).toMatch(/if \(goal\) redirect\(`\/\?goal=/);
   });
 
   it('?goal= 只预填不自动跑——否则任意站点一个链接就能让登录用户发起付费执行', () => {
-    const src = code('app/(app)/assistant/AgentPanel.tsx');
+    const src = code('components/TaskDeckHome.tsx');
     const m = /useEffect\(\(\) => \{\s*if \(initialGoal\)([\s\S]{0,200}?)\}, \[initialGoal\]\)/.exec(src);
     expect(m, '没找到 initialGoal 的处理').toBeTruthy();
     expect(m![1], 'URL 参数直接触发了执行').not.toMatch(/actStartAgent/);
     expect(m![1]).toMatch(/setGoal/);
+    // 首页只认 searchParams 里的 goal 预填，不许把它传成别的
+    expect(code('app/(app)/page.tsx')).toMatch(/initialGoal=\{goal \? goal\.slice\(0, 2000\) : null\}/);
   });
 });
 

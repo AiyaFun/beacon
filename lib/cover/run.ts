@@ -186,7 +186,8 @@ export async function runCover(input: CoverRunInput): Promise<CoverRunResult> {
       return { ok: false, reason: 'input', error: '没有封面文案：填一个封面大字，或让系统从正文里提炼' };
     }
     progress('meta', '正在从正文提炼封面文案…');
-    const derived = await deriveCoverMeta(input.tenantId, input.instruction, input.fallbackTitle);
+    // spec 在上面（第一次用到比例的地方）就算好了，这里一定要带上：不带就按小红书写文案
+    const derived = await deriveCoverMeta(input.tenantId, input.instruction, input.fallbackTitle, spec);
     meta = derived.meta;
     mocked = derived.mocked;
     if (!meta.mainTitle) {

@@ -142,7 +142,14 @@ const CHANNEL_LABEL: Record<PublishChannel, string> = {
   manual: '手动发布',
 };
 
-export function channelLabel(channel: string): string {
+const CHANNEL_LABEL_EN: Record<PublishChannel, string> = {
+  api: 'Direct API',
+  extension: 'Extension Assisted',
+  manual: 'Manual Posting',
+};
+
+export function channelLabel(channel: string, lang: string = 'zh'): string {
+  if (lang === 'en') return CHANNEL_LABEL_EN[channel as PublishChannel] ?? channel;
   return CHANNEL_LABEL[channel as PublishChannel] ?? channel;
 }
 
@@ -164,4 +171,14 @@ export const TASK_STATUS_LABEL: Record<string, string> = {
   published: '已发布',
   failed: '失败',
   skipped: '已跳过',
+};
+
+export const TASK_STATUS_LABEL_EN: Record<string, string> = {
+  pending: 'Pending',
+  ready: 'Content Ready',
+  filled: 'Filled in Studio (Awaiting Click)',
+  submitted: 'Submitted to WeChat Drafts',
+  published: 'Published',
+  failed: 'Failed',
+  skipped: 'Skipped',
 };

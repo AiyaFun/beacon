@@ -15,6 +15,9 @@ import {
   setTemplatePersona,
 } from '@/lib/workflow/market';
 import { createWorkflowRun, readWorkflowRun, type WorkflowRunView } from '@/lib/workflow/run';
+import { enableRoutine } from '@/lib/workflow/routines';
+import { ledgerSet, clearSeen } from '@/lib/agent/ledger';
+import { prisma } from '@/lib/db';
 import { kickWorkflowRun } from '@/lib/workflow/kick';
 
 function designed(e: unknown): string | null {
@@ -28,6 +31,46 @@ export async function actInstallWorkflow(templateId: string) {
   const r = await installTemplate(s.tenantId, templateId);
   revalidatePath('/workflows');
   return r;
+}
+
+/** 开一条 bot 的建议定时（装上之后页面问一次；幂等，见 lib/workflow/routines.ts） */
+export async function actEnableRoutine(templateId: string, index: number): Promise<{ ok: boolean; error?: string }> {
+  const s = await getSession();
+  requireRole(s, 'content.create');
+  const r = await enableRoutine({
+    tenantId: s.tenantId, workspaceId: s.workspaceId, accountId: s.accountId, memberId: s.memberId,
+    templateId, index: Number.isInteger(index) ? index : -1,
+  });
+  revalidatePath('/workflows');
+  return r.ok ? { ok: true } : { ok: false, error: r.error };
+}
+
+// ── 台账（2026-09-05）：bot 自己记的盯单与进度，用户在卡上能看、能改、能清 ──
+// 只认这个租户看得见的模板 slug：台账按工作区隔离，写到别的 slug 也只是自己工作区里多一格，
+// 但界面上只该出现真实存在的 bot，所以这里还是校一次。
+async function visibleSlug(tenantId: string, slug: string): Promise<boolean> {
+  const n = await prisma.workflowTemplate.count({ where: { slug, enabled: true, OR: [{ isBuiltin: true }, { tenantId }] } });
+  return n > 0;
+}
+
+/** 写/改一条台账；value 空 = 删 */
+export async function actLedgerWrite(slug: string, key: string, value: string): Promise<{ ok: boolean; error?: string }> {
+  const s = await getSession();
+  requireRole(s, 'content.create');
+  if (!(await visibleSlug(s.tenantId, slug))) return { ok: false, error: '这个智能体不存在' };
+  const r = await ledgerSet(s.workspaceId, slug, key, value);
+  revalidatePath('/workflows');
+  return r.ok ? { ok: true } : { ok: false, error: r.error };
+}
+
+/** 清空已见清单：下次它会把所有东西当新的再报一遍 */
+export async function actLedgerClearSeen(slug: string): Promise<{ ok: boolean; error?: string; cleared?: number }> {
+  const s = await getSession();
+  requireRole(s, 'content.create');
+  if (!(await visibleSlug(s.tenantId, slug))) return { ok: false, error: '这个智能体不存在' };
+  const cleared = await clearSeen(s.workspaceId, slug);
+  revalidatePath('/workflows');
+  return { ok: true, cleared };
 }
 
 export async function actUninstallWorkflow(templateId: string) {
@@ -47,7 +90,7 @@ export async function actSetWorkflowPersona(templateId: string, persona: string)
   return r;
 }
 
-export async function actCreateWorkflow(input: { name: string; description?: string; emoji?: string; persona?: string; steps: unknown }) {
+export async function actCreateWorkflow(input: { name: string; description?: string; emoji?: string; persona?: string; steps: unknown; requires?: string; mode?: string; agentConfig?: unknown }) {
   const s = await getSession();
   requireRole(s, 'content.create');
   const r = await createTemplate(s.tenantId, s.memberId, input);

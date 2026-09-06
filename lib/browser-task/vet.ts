@@ -1,6 +1,7 @@
 import { prisma } from '../db';
 import { platformName } from '../constants';
 import { collectorKinds, collectorAgents } from './index';
+import { competitorHomeUrl } from '@/lib/competitor-url';
 import { selfCollectKindFor, SELF_PROFILE_PLATFORMS } from './kinds';
 import { isReadAllowed, readAllowlistLabels } from './read-allowlist';
 
@@ -125,6 +126,23 @@ export async function vetBrowserTaskArgs(workspaceId: string, args: VetArgs, opt
     });
     if (!watched) {
       return { ok: false, error: '这个竞对不在你的监控列表里，先用 add_competitor 加进来', summary: '竞对未订阅' };
+    }
+    // 【拼不出主页地址就别派】2026-09-04 审计查出：公众号/微博/快手/知乎/头条/百家号/视频号
+    // 这些平台 competitorHomeUrl 返回 null，但这里照样放行。任务派下去后 executorTarget 也是 null，
+    // 客户端每次都白拉起一次采集浏览器、报「这条任务没带目标地址（服务端太旧？）」，
+    // 重试三次判死，通知里写「常见原因是目标平台没登录」——三条理由没有一条是真的。
+    const comp = await prisma.competitorAccount.findUnique({
+      where: { id: args.competitorId ?? '' },
+      select: { platform: true, handle: true },
+    });
+    if (!comp || !competitorHomeUrl(comp.platform, comp.handle)) {
+      const name = comp ? (platformName(comp.platform) || comp.platform) : '这个平台';
+      return {
+        ok: false,
+        error: `${name}没有可以直接打开的公开主页地址，采集器打不开它，所以这个活派不出去。`
+          + `${name}的竞对数据要走服务端数据源或手动导入（对标账号页有导入入口），不是浏览器采集这条路。`,
+        summary: '这个平台没有可采的公开主页',
+      };
     }
   }
 

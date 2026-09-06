@@ -19,31 +19,26 @@ type ToolInfo = { name: string; label: string; write: boolean; costly: boolean; 
 // **用户点了才开一次执行**。于是「会不会动数据」的边界比原来更硬——
 // 原来是「我点的是执行页签，所以它可能会动」，现在是「我按了那个按钮，所以它会动」。
 //
-// 页签保留（有人就是想直接进执行、也有人想纯聊天），但它不再是必须先做对的那道选择题。
+// 【这一页没有派活输入框】（2026-09-06）派活的框只在首页「今天」。此前这里还有一个
+// 「执行模式」的独立输入框，与首页那个一字不差，用户三次问「是不是重复了」。
+// 「执行过程」页签只做两件事：看某一次执行的过程与追问，以及接住对话里点的「让它直接去做」。
+import { useI18n } from '@/lib/i18n';
+
 export function AssistantTabs({
   accountName,
   models,
   tools,
   initialRunId,
-  initialGoal,
 }: {
   accountName: string;
   /** 可选模型清单，透传给对话的输入工具条 */
   models: SelectableModel[];
   tools: ToolInfo[];
-  /** 从运行中心/提示条带过来的运行 id：进来就该看到那次执行，而不是空白输入框 */
+  /** 从运行中心/提示条带过来的运行 id：进来就该看到那次执行 */
   initialRunId?: string | null;
-  /**
-   * 从右下角浮标移交过来的那句话，**只预填、不开跑**。
-   *
-   * 自动开跑的代价：任意站点放一个 /assistant?goal=… 的链接，就能让登录用户
-   * 发起一次付费执行；用户刷新或把地址分享给同事也会各重复开跑一次。
-   * 页内的移交（Chat → AgentPanel）是另一回事——那一下点击本身就是授权。
-   */
-  initialGoal?: string | null;
 }) {
-  // 带着 run 或 goal 参数进来的，都是来干活的，别再让他先点一下页签
-  const [mode, setMode] = useState<'chat' | 'agent'>(initialRunId || initialGoal ? 'agent' : 'chat');
+  // 带着 run 参数进来的，是来看执行的，别再让他先点一下页签
+  const [mode, setMode] = useState<'chat' | 'agent'>(initialRunId ? 'agent' : 'chat');
   /** 对话里点了「让它直接去做」时交接过来的那句话。带序号是为了让同一句话也能再交接一次 */
   const [handoff, setHandoff] = useState<{ goal: string; seq: number } | null>(null);
 
@@ -52,14 +47,16 @@ export function AssistantTabs({
     if (initialRunId) setMode('agent');
   }, [initialRunId]);
 
+  const { lang } = useI18n();
+
   return (
     <>
       <div className="tabs tabs-sub" style={{ justifyContent: "center" }}>
         <button className={`tab ${mode === 'chat' ? 'active' : ''}`} onClick={() => setMode('chat')}>
-          问一句
+          {lang === 'en' ? 'Ask AI' : '问一句'}
         </button>
         <button className={`tab ${mode === 'agent' ? 'active' : ''}`} onClick={() => setMode('agent')}>
-          让它去做
+          {lang === 'en' ? 'Execution' : '执行过程'}
         </button>
       </div>
       {/* 两个都挂着、用 CSS 藏——对话是流式的，卸载重挂等于把刚才那段回答扔了，
@@ -75,7 +72,7 @@ export function AssistantTabs({
         />
       </div>
       <div hidden={mode !== 'agent'}>
-        <AgentPanel tools={tools} initialRunId={initialRunId ?? null} initialGoal={initialGoal ?? null} handoff={handoff} />
+        <AgentPanel tools={tools} initialRunId={initialRunId ?? null} handoff={handoff} />
       </div>
     </>
   );

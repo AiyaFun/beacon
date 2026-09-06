@@ -1,4 +1,5 @@
 import { prisma } from '../db';
+import { parseAgentConfig } from '../agent/autonomous';
 import { HOT_SOURCES } from '../constants';
 import { parseJson } from '../json';
 import { BOT_COMMANDS, TOGGLEABLE_COMMANDS, isCommandAllowed, isExternalProvider, type BotCommandKey } from './types';
@@ -315,12 +316,12 @@ async function cmdBrief(workspaceId: string, boundId: string | null): Promise<st
 //
 // 优先级：本会话选的（/智能体 X、「换成 X」）→ 渠道默认（设置页绑的）→ 通用运营助手。
 // 查不到（模板被删/被卸载）按未选处理——机器人不该因此哑火。
-type BotAgent = { id: string; name: string; persona: string };
+type BotAgent = { id: string; name: string; persona: string; mode?: string | null; agentConfig?: string | null };
 
 async function agentById(id: string | null | undefined): Promise<BotAgent | null> {
   if (!id) return null;
-  const tpl = await prisma.workflowTemplate.findUnique({ where: { id }, select: { id: true, name: true, persona: true } }).catch(() => null);
-  return tpl ? { id: tpl.id, name: tpl.name, persona: tpl.persona || '（未填写职责说明）' } : null;
+  const tpl = await prisma.workflowTemplate.findUnique({ where: { id }, select: { id: true, name: true, persona: true, mode: true, agentConfig: true } }).catch(() => null);
+  return tpl ? { id: tpl.id, name: tpl.name, persona: tpl.persona || '（未填写职责说明）', mode: tpl.mode, agentConfig: tpl.agentConfig } : null;
 }
 
 async function currentAgent(integrationId: string | undefined, state: ConversationState): Promise<BotAgent | null> {
@@ -337,7 +338,7 @@ async function usableAgents(workspaceId: string): Promise<BotAgent[]> {
   if (!ws) return [];
   const { listTemplates } = await import('../workflow/market');
   const all = await listTemplates(ws.tenantId);
-  return all.filter((t) => t.installed).map((t) => ({ id: t.id, name: t.name, persona: t.persona || '（未填写职责说明）' }));
+  return all.filter((t) => t.installed).map((t) => ({ id: t.id, name: t.name, persona: t.persona || '（未填写职责说明）', mode: t.mode, agentConfig: t.agentConfig }));
 }
 
 /** 按名字找智能体：全等优先，其次包含；多于一个不猜。 */
@@ -377,7 +378,13 @@ async function cmdAgent(workspaceId: string, name: string, key: ChatKey, state: 
   }
   const ok = await bindConversationAgent(key, picked.hit.id);
   if (!ok) return `这个渠道记不住选择（缺会话信息）。本次可用「/派」或「/执行」直接派。`;
-  return `✅ 本群之后由「${picked.hit.name}」出面：${picked.hit.persona.slice(0, 80)}\n之后的对话按它的职责回答，派活也交给它。换回来：/智能体 默认`;
+  // 带建议定时的职能 bot（2026-09-05）：绑定时顺手问一句。定时默认关、只在智能体页开——
+  // 群里不做「回复 1 就开」：群消息谁都能发，一句话就让全工作区每天多花一次额度，闸口得在登录后的页面上
+  const routines = parseAgentConfig(picked.hit.agentConfig).routines ?? [];
+  const routineHint = routines.length
+    ? `\n它还带建议定时（默认关）：${routines.map((r) => `${r.atHour}:00 ${r.title}`).join('；')}。要开的话去 ${beaconUrl('/workflows')} 在它的卡上点「开启」。`
+    : '';
+  return `✅ 本群之后由「${picked.hit.name}」出面：${picked.hit.persona.slice(0, 80)}\n之后的对话按它的职责回答，派活也交给它。换回来：/智能体 默认${routineHint}`;
 }
 
 // 自由对话。历史轮次来自本会话，回答完把这一轮追加回去。
@@ -459,7 +466,7 @@ async function handleInboundNow(workspaceId: string, rawText: string, ctx: Inbou
     }
     if (ctx.isGroup) return '这条要私聊我说——登录链接和绑定码只对你一个人有效，发在群里等于给了所有人。';
     if (!ctx.senderId) return '取不到你的企业应用账号，无法完成身份操作。';
-    const oaProvider = (provider === 'dingtalk' || provider === 'wecom' ? provider : 'feishu') as OaProvider;
+    const oaProvider = (provider === 'dingtalk' || provider === 'wecom' ? provider : provider === 'wecom_aibot' ? 'wecom' : 'feishu') as OaProvider;
     const arg = text.replace(/^\/?(登录|登陆|绑定)\s*/, '').trim();
 
     // 绑定：只有装机管理员会用一次（把 /setup 建的那个账号和自己的企业应用账号接上）

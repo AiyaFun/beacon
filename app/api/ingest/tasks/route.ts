@@ -66,6 +66,16 @@ export async function POST(req: Request) {
   let resultText = typeof body.result === 'string' ? body.result : undefined;
   let okFlag = body.ok === true; // 只认显式 true：漏传 ok 的旧版插件不该把一次失败记成成功
   let errorText = typeof body.error === 'string' ? body.error : undefined;
+  const claimerId = auth.tokenId ?? 'legacy';
+
+  // 【先验状态与持有者，再落库】（2026-09-04 审计）原先先 ingest 再 completeTask：被取代/取消/过期的任务
+  // 回执虽被 409 拒掉，正文与指标却已经写进数据看板了——一条「作废」的活照样改了数据。
+  {
+    const cur = await prisma.browserTask.findFirst({ where: { id: taskId, workspaceId: auth.workspace.id }, select: { status: true, claimedBy: true } });
+    if (!cur) return json({ ok: false, error: '任务不存在' }, 404);
+    if (cur.status !== 'claimed') return json({ ok: false, error: `任务当前状态是 ${cur.status}，不能交付（结果未入库）` }, 409);
+    if (cur.claimedBy && cur.claimedBy !== claimerId) return json({ ok: false, error: '这条活已被另一台执行器重新领走，这份迟到的结果不收（未入库）' }, 409);
+  }
   if (okFlag && body.data && typeof body.data === 'object') {
     const task = await prisma.browserTask.findFirst({
       where: { id: taskId, workspaceId: auth.workspace.id },
@@ -79,6 +89,8 @@ export async function POST(req: Request) {
         body.data as Record<string, unknown>,
       );
       resultText = accepted.summary;
+      // 读回空正文不算成功（2026-09-04 审计）：原先照样记 done、通知「跑完了」、等它的运行以 ok 醒来
+      if (!accepted.stored) { okFlag = false; errorText = accepted.summary; }
     }
   }
   if (okFlag && body.parsed && typeof body.parsed === 'object') {
@@ -103,6 +115,6 @@ export async function POST(req: Request) {
     }
   }
 
-  const r = await completeTask(auth.workspace.id, taskId, { ok: okFlag, result: resultText, error: errorText });
+  const r = await completeTask(auth.workspace.id, taskId, { ok: okFlag, result: resultText, error: errorText }, claimerId);
   return json(r, r.ok ? 200 : 409);
 }

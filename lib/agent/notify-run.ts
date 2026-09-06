@@ -56,7 +56,7 @@ function messageFor(run: RunForNotify, who: string): { title: string; body: stri
       };
     case 'waiting_browser':
       return {
-        title: `任务在等浏览器插件：${g}`,
+        title: `任务在等采集执行器：${g}`,
         body: '已经把活排给浏览器插件了，等它下次醒来跑完就会自动接着做。',
       };
     case 'waiting_quota':

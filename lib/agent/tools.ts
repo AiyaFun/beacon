@@ -4,7 +4,7 @@ import { platformName } from '../constants';
 import { parseCompetitorUrl } from '../competitor-url';
 import { generateRecommendations, crawlOneCompetitor } from '../pipeline';
 import { runWorkflow, createWorkflowRun } from '../workflow/run';
-import { isAutonomous, parseAgentConfig } from './autonomous';
+import { isAutonomous, parseAgentConfig, type AgentConfig } from './autonomous';
 import { kickWorkflowRun } from '../workflow/kick';
 import { workflowWaitToken } from './wake';
 import { listTemplates } from '../workflow/market';
@@ -23,6 +23,7 @@ import { INSIGHT_TOOLS } from './tools-insight';
 import { CONTENT_TOOLS } from './tools-content';
 import { PRODUCE_TOOLS } from './tools-produce';
 import { PLANNING_TOOLS } from './tools-draft-plan';
+import { LEDGER_TOOLS } from './tools-ledger';
 import { LOCAL_TOOLS } from './tools-local';
 
 // ── AI 能调用的系统能力清单 ────────────────────────────────────────────────
@@ -440,13 +441,23 @@ const dispatchBrowserTask: AgentTool = {
       createdBy: ctx.memberId,
     });
     if (!r.ok) return { ok: false, error: r.error, summary: '任务没排上' };
+    // 半小时内刚采过同一个活：把那次结果直接给模型，不再排队、也不挂起等——
+    // 同一主页几分钟内反复打开对平台来说就是可疑流量（用户 2026-09-04 真机看到浏览器反复开关）。
+    if (r.recentlyDone) {
+      return {
+        ok: true,
+        data: { taskId: r.id, kind, recentlyDone: true },
+        summary: `${r.recentlyDone.minutesAgo} 分钟前刚采过这个，结果直接复用（不重复打开页面）：${r.recentlyDone.result || '已完成'}`,
+      };
+    }
 
+    const supersedeNote = r.superseded?.length ? `（取消了之前排着的 ${r.superseded.length} 条同样的任务，以这次为准）` : '';
     const finalKind = String(payload.kind ?? kind);
     const label = BROWSER_KIND_LABEL[finalKind as keyof typeof BROWSER_KIND_LABEL] ?? finalKind;
     // 配了本机浏览器却没开着：说破为什么这次排队了、怎么让下次当场跑——不然用户以为开关坏了
     // 「插件」还是「桌面客户端」：用户原话「但是我没安装插件」——他登记的是客户端，回执却叫它插件
     const who = vetted.executors === 'desktop' ? '你的桌面客户端' : vetted.executors === 'both' ? '插件/桌面客户端' : '插件';
-    const when = vetted.executors === 'desktop' ? '客户端每分钟领一次活，跑完自动交回' : `${who}下次醒来会执行`;
+    const when = vetted.executors === 'desktop' ? '客户端几秒内领走，跑完自动交回' : `${who}下次醒来会执行`;
     const offlineNote = localState.state === 'offline'
       ? `（本机浏览器已开启但 Chrome 现在没带调试端口跑着，所以这次排给了${who}；想当场采，${LOCAL_BROWSER_WAKE_HINT}）`
       : '';
@@ -458,13 +469,13 @@ const dispatchBrowserTask: AgentTool = {
         ok: true,
         data: { taskId: r.id, kind },
         waitFor: browserWaitToken(r.id),
-        summary: `已排给${who}：${label}。这次执行先停在这里等它的结果。${offlineNote}`,
+        summary: `已排给${who}：${label}${supersedeNote}。这次执行先停在这里等它的结果。${offlineNote}`,
       };
     }
     return {
       ok: true,
       data: { taskId: r.id, kind },
-      summary: `已排给${who}：${label}。${when}，现在还没有数据。${offlineNote}`,
+      summary: `已排给${who}：${label}${supersedeNote}。${when}，现在还没有数据。${offlineNote}`,
     };
   },
 };
@@ -508,6 +519,14 @@ const listBrowserTasks: AgentTool = {
 // 「一步」是技能，「一串」是智能体。这两个工具让**对话**也能派智能体上工，
 // 而不是只能去 /workflows 页面手点——用户说「用一键成稿跑一下」时，
 // 模型先 list_agents 认人，再 run_agent 派活。
+
+/** 技能与建议定时（2026-09-05）：让模型知道这个 bot 自带哪些剧本、有没有例行安排可开 */
+function botExtrasForModel(cfg: AgentConfig): Record<string, string[]> {
+  return {
+    ...(cfg.skills?.length ? { 技能: cfg.skills.map((k) => `${k.slug}（${k.when}）`) } : {}),
+    ...(cfg.routines?.length ? { 建议定时: cfg.routines.map((r) => `${r.title}（${r.atHour}:00，用户在智能体页开启）`) } : {}),
+  };
+}
 
 const listAgents: AgentTool = {
   name: 'list_agents',
@@ -554,6 +573,7 @@ const listAgents: AgentTool = {
                 形态: '自主（给它目标，自己安排怎么做）',
                 可用工具数: cfg.tools.length || '不限（受你自己的权限约束）',
                 ...(cfg.callBudget ? { 调用预算: cfg.callBudget } : {}),
+                ...botExtrasForModel(cfg),
               };
             })()
           : { 形态: '流水线（步骤定死）', steps: t.steps.length }),
@@ -855,6 +875,8 @@ export const AGENT_TOOLS: AgentTool[] = [
   ...PRODUCE_TOOLS,
   // 起草制（配定时/拼智能体）：AI 出草案，落库仍然要用户在确认卡上点头
   ...PLANNING_TOOLS,
+  // 台账类（读写自己的工作状态 / 已见清单去重）——按 bot 隔离，不花钱不签合约
+  ...LEDGER_TOOLS,
 ];
 
 export function toolByName(name: string): AgentTool | null {

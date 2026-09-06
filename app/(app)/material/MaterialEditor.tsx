@@ -5,6 +5,7 @@ import { Icon } from '@/components/icons';
 import { actCreateMaterial, actUpdateMaterial, actDeleteMaterial } from './actions';
 import { MATERIAL_TYPES, type MaterialItem, type MaterialType } from './types';
 import { fmtDateFull } from '@/lib/format';
+import { useI18n } from '@/lib/i18n';
 
 type Props = { items: MaterialItem[] };
 
@@ -18,6 +19,7 @@ const TYPE_BADGES: Record<MaterialType, string> = {
 };
 
 export function MaterialEditor({ items }: Props) {
+  const { lang } = useI18n();
   const [list, setList] = useState(items);
   const [editId, setEditId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
@@ -32,7 +34,7 @@ export function MaterialEditor({ items }: Props) {
           className={`btn btn-sm ${filter === 'all' ? 'btn-primary' : ''}`}
           onClick={() => setFilter('all')}
         >
-          全部 ({list.length})
+          {lang === 'en' ? 'All' : '全部'} ({list.length})
         </button>
         {TYPE_KEYS.map((t) => (
           <button
@@ -40,17 +42,18 @@ export function MaterialEditor({ items }: Props) {
             className={`btn btn-sm ${filter === t ? 'btn-primary' : ''}`}
             onClick={() => setFilter(t)}
           >
-            {MATERIAL_TYPES[t].name} ({list.filter((m) => m.type === t).length})
+            {lang === 'en' ? MATERIAL_TYPES[t].nameEn : MATERIAL_TYPES[t].name} ({list.filter((m) => m.type === t).length})
           </button>
         ))}
         <div style={{ flex: 1 }} />
         <button className="btn btn-sm btn-primary" onClick={() => { setShowForm(true); setEditId(null); }}>
-          <Icon.plus size={13} /> 添加素材
+          <Icon.plus size={13} /> {lang === 'en' ? 'Add Material' : '添加素材'}
         </button>
       </div>
 
       {showForm && (
         <MaterialForm
+          lang={lang}
           onDone={(item) => {
             if (item) setList([item, ...list]);
             setShowForm(false);
@@ -61,8 +64,8 @@ export function MaterialEditor({ items }: Props) {
       {filtered.length === 0 && !showForm && (
         <div className="small muted" style={{ textAlign: 'center', padding: 32 }}>
           {list.length === 0
-            ? '还没有素材，点「添加素材」录入你的经历、案例、观点或口头禅'
-            : '该分类暂无素材'}
+            ? (lang === 'en' ? 'No materials yet. Click "Add Material" to record your experiences, cases, views, or catchphrases.' : '还没有素材，点「添加素材」录入你的经历、案例、观点或口头禅')
+            : (lang === 'en' ? 'No materials in this category' : '该分类暂无素材')}
         </div>
       )}
 
@@ -75,6 +78,7 @@ export function MaterialEditor({ items }: Props) {
             onEdit={() => setEditId(editId === m.id ? null : m.id)}
             onUpdated={(updated) => setList(list.map((x) => x.id === updated.id ? updated : x))}
             onDeleted={() => setList(list.filter((x) => x.id !== m.id))}
+            lang={lang}
           />
         ))}
       </div>
@@ -82,7 +86,7 @@ export function MaterialEditor({ items }: Props) {
   );
 }
 
-function MaterialForm({ onDone }: { onDone: (item?: MaterialItem) => void }) {
+function MaterialForm({ onDone, lang }: { onDone: (item?: MaterialItem) => void; lang?: string }) {
   const [type, setType] = useState<MaterialType>('experience');
   const [content, setContent] = useState('');
   const [tagInput, setTagInput] = useState('');
@@ -103,7 +107,7 @@ function MaterialForm({ onDone }: { onDone: (item?: MaterialItem) => void }) {
           createdAt: new Date().toISOString(),
         });
       } else {
-        setError(r.error ?? '添加失败');
+        setError(r.error ?? (lang === 'en' ? 'Failed to add' : '添加失败'));
       }
     });
   }
@@ -118,29 +122,31 @@ function MaterialForm({ onDone }: { onDone: (item?: MaterialItem) => void }) {
               className={`btn btn-sm ${type === t ? 'btn-primary' : ''}`}
               onClick={() => setType(t)}
             >
-              {MATERIAL_TYPES[t].name}
+              {lang === 'en' ? MATERIAL_TYPES[t].nameEn : MATERIAL_TYPES[t].name}
             </button>
           ))}
         </div>
         <textarea
           className="textarea"
           rows={4}
-          placeholder={MATERIAL_TYPES[type].placeholder}
+          placeholder={lang === 'en' ? MATERIAL_TYPES[type].placeholderEn : MATERIAL_TYPES[type].placeholder}
           value={content}
           onChange={(e) => setContent(e.target.value)}
           maxLength={2000}
         />
         <input
           className="input"
-          placeholder="标签（逗号分隔，最多5个）"
+          placeholder={lang === 'en' ? 'Tags (comma separated, max 5)' : '标签（逗号分隔，最多5个）'}
           value={tagInput}
           onChange={(e) => setTagInput(e.target.value)}
         />
         <div className="row" style={{ gap: 10, alignItems: 'center' }}>
           <button className="btn btn-primary btn-sm" onClick={submit} disabled={pending || !content.trim()}>
-            {pending ? '保存中…' : '保存'}
+            {pending ? (lang === 'en' ? 'Saving…' : '保存中…') : (lang === 'en' ? 'Save' : '保存')}
           </button>
-          <button className="btn btn-sm" onClick={() => onDone()} disabled={pending}>取消</button>
+          <button className="btn btn-sm" onClick={() => onDone()} disabled={pending}>
+            {lang === 'en' ? 'Cancel' : '取消'}
+          </button>
           {error && <span className="small" style={{ color: 'var(--red)' }}>{error}</span>}
         </div>
       </div>
@@ -154,12 +160,14 @@ function MaterialCard({
   onEdit,
   onUpdated,
   onDeleted,
+  lang,
 }: {
   item: MaterialItem;
   editing: boolean;
   onEdit: () => void;
   onUpdated: (m: MaterialItem) => void;
   onDeleted: () => void;
+  lang?: string;
 }) {
   const [content, setContent] = useState(item.content);
   const [tagInput, setTagInput] = useState(item.tags.join(', '));
@@ -198,17 +206,21 @@ function MaterialCard({
         />
         <input
           className="input"
-          placeholder="标签"
+          placeholder={lang === 'en' ? 'Tags' : '标签'}
           value={tagInput}
           onChange={(e) => setTagInput(e.target.value)}
           style={{ marginTop: 8 }}
         />
         <div className="row" style={{ gap: 8, marginTop: 8 }}>
-          <button className="btn btn-primary btn-sm" onClick={save} disabled={pending}>保存</button>
-          <button className="btn btn-sm" onClick={onEdit} disabled={pending}>取消</button>
+          <button className="btn btn-primary btn-sm" onClick={save} disabled={pending}>
+            {lang === 'en' ? 'Save' : '保存'}
+          </button>
+          <button className="btn btn-sm" onClick={onEdit} disabled={pending}>
+            {lang === 'en' ? 'Cancel' : '取消'}
+          </button>
           <div style={{ flex: 1 }} />
           <button className="btn btn-sm" style={{ color: 'var(--red)' }} onClick={remove} disabled={pending}>
-            删除
+            {lang === 'en' ? 'Delete' : '删除'}
           </button>
         </div>
       </div>
@@ -222,7 +234,9 @@ function MaterialCard({
       onClick={onEdit}
     >
       <div className="row" style={{ gap: 8, marginBottom: 6 }}>
-        <span className={`badge ${badge}`} style={{ fontSize: 10 }}>{typeInfo.name}</span>
+        <span className={`badge ${badge}`} style={{ fontSize: 10 }}>
+          {lang === 'en' ? typeInfo.nameEn : typeInfo.name}
+        </span>
         {item.tags.map((t, i) => (
           <span key={i} className="badge badge-gray" style={{ fontSize: 10 }}>{t}</span>
         ))}

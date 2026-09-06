@@ -49,8 +49,9 @@ export async function actDeleteAccount(confirmText: string): Promise<{ ok: false
   const s = await getSession();
   assertNotDemo(s.tenantId);
 
-  if (String(confirmText ?? '').trim() !== DELETE_CONFIRM_TEXT) {
-    return { ok: false, error: `请逐字输入「${DELETE_CONFIRM_TEXT}」以确认` };
+  const trimmed = String(confirmText ?? '').trim();
+  if (trimmed !== DELETE_CONFIRM_TEXT && trimmed.toUpperCase() !== 'DELETE') {
+    return { ok: false, error: `请逐字输入「${DELETE_CONFIRM_TEXT}」或「DELETE」以确认` };
   }
 
   // 限流：注销不可撤销。拿到会话 cookie 的人若能无限次调用，一次就能把租户清空——

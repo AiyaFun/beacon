@@ -4,9 +4,18 @@ import type { CompetitorAdapter, CompetitorPostEntry } from './types';
 //   抖音/小红书 → TikHub    公众号 → 新榜(NewRank)    YouTube → 官方 Data API    X → twitterapi.io    B站 → 公开接口
 // 未配 key 时由 registry 回退 Mock。注意：第三方响应字段可能随版本变化，接入真实 key 后需按其文档校对 normalize 映射。
 
-function num(v: unknown): number {
-  const n = typeof v === 'string' ? parseInt(v, 10) : typeof v === 'number' ? v : 0;
-  return Number.isFinite(n) ? n : 0;
+/** 接口给了才是数；没给（null/undefined/空串）返回 undefined，随后被 compact 剔掉——
+ *  「缺席不许当成 0」（本仓老规矩）：填 0 会在合并时把插件/桌面通道采到的真值盖成 0。 */
+function num(v: unknown): number | undefined {
+  if (v == null || v === '') return undefined;
+  const n = typeof v === 'string' ? parseInt(v, 10) : typeof v === 'number' ? v : NaN;
+  return Number.isFinite(n) ? n : undefined;
+}
+/** 去掉 undefined 的键 */
+function compact(o: Record<string, number | undefined>): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const [k, v] of Object.entries(o)) if (typeof v === 'number') out[k] = v;
+  return out;
 }
 
 async function getJson(url: string, headers: Record<string, string> = {}): Promise<any> {
@@ -54,13 +63,13 @@ export class TikHubAdapter implements CompetitorAdapter {
         summary: it.desc ?? undefined,
         url: it.share_url ?? it.url,
         publishedAt: it.create_time ? new Date(Number(it.create_time) * 1000) : undefined,
-        metrics: {
+        metrics: compact({
           views: num(it.statistics?.play_count ?? it.interact_info?.view_count),
           likes: num(it.statistics?.digg_count ?? it.interact_info?.liked_count),
           comments: num(it.statistics?.comment_count ?? it.interact_info?.comment_count),
           shares: num(it.statistics?.share_count ?? it.interact_info?.share_count),
           collects: num(it.statistics?.collect_count ?? it.interact_info?.collected_count),
-        },
+        }),
       }];
     });
   }
@@ -101,7 +110,7 @@ export class YouTubeAdapter implements CompetitorAdapter {
         summary: it.snippet?.description?.slice(0, 200),
         url: `https://youtu.be/${vid}`,
         publishedAt: it.snippet?.publishedAt ? new Date(it.snippet.publishedAt) : undefined,
-        metrics: { views: num(st.viewCount), likes: num(st.likeCount), comments: num(st.commentCount) },
+        metrics: compact({ views: num(st.viewCount), likes: num(st.likeCount), comments: num(st.commentCount) }),
       }];
     });
   }
@@ -129,12 +138,12 @@ export class TwitterApiAdapter implements CompetitorAdapter {
         title: t.text ?? '',
         url: t.url,
         publishedAt: t.createdAt ? new Date(t.createdAt) : undefined,
-        metrics: {
+        metrics: compact({
           views: num(t.viewCount),
           likes: num(t.likeCount),
           comments: num(t.replyCount),
           shares: num(t.retweetCount),
-        },
+        }),
       }];
     });
   }
@@ -165,7 +174,7 @@ export class NewRankAdapter implements CompetitorAdapter {
         summary: a.summary,
         url: a.url,
         publishedAt: a.publicTime ? new Date(a.publicTime) : undefined,
-        metrics: { views: num(a.readNum), likes: num(a.likeNum ?? a.zanNum) },
+        metrics: compact({ views: num(a.readNum), likes: num(a.likeNum ?? a.zanNum) }),
       }];
     });
   }

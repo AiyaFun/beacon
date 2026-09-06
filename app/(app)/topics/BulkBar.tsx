@@ -110,7 +110,7 @@ export function BulkBar({ ids }: { ids: string[] }) {
               type="button"
               className={`badge ${on ? 'badge-brand' : 'badge-gray'}`}
               style={{ cursor: 'pointer', border: 'none' }}
-              title={on ? '取消选择这一条' : '选择这一条'}
+              title={lang === 'en' ? (on ? 'Deselect this topic' : 'Select this topic') : (on ? '取消选择这一条' : '选择这一条')}
               onClick={() =>
                 setSelected((prev) => {
                   const next = new Set(prev);

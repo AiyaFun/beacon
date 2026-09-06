@@ -3,6 +3,7 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { actSetBrowserRead } from './actions';
+import { useI18n } from '@/lib/i18n';
 
 // 「让插件替我打开指定网址并读取正文」的开关。
 //
@@ -24,6 +25,8 @@ export function BrowserReadSwitch({
   allowlist: string[];
   readOnly: boolean;
 }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const router = useRouter();
   const [pending, start] = useTransition();
   const [local, setLocal] = useState(enabled);
@@ -39,7 +42,7 @@ export function BrowserReadSwitch({
         // 权限不够 / 演示租户只读：把开关翻回去，并如实说原因。
         // 不翻回去的话，界面上显示「已开启」而库里还是关的——用户会以为开了却一直不生效
         setLocal(!next);
-        setErr((e as Error).message.slice(0, 120) || '没改成');
+        setErr((e as Error).message.slice(0, 120) || (isEn ? 'Failed to update' : '没改成'));
         return;
       }
       router.refresh();
@@ -51,13 +54,21 @@ export function BrowserReadSwitch({
       <div className="row-between wrap" style={{ gap: 10, alignItems: 'flex-start' }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 650 }}>
-            让插件替我打开网页并读正文
-            <span className="badge badge-gray" style={{ marginLeft: 8 }}>默认关闭</span>
+            {isEn ? 'Allow extension to open web pages and read content' : '让插件替我打开网页并读正文'}
+            <span className="badge badge-gray" style={{ marginLeft: 8 }}>{isEn ? 'Off by default' : '默认关闭'}</span>
           </div>
           <p className="small muted" style={{ margin: '6px 0 0', lineHeight: 1.75 }}>
-            开启后，你让 AI 看一条链接、而服务端又抓不到那个平台的内容时（要登录、或整页靠 JS 渲染），
-            它会在你的浏览器里用<b>后台标签页</b>打开这一页、把正文读回来、读完立即关闭。
-            <b>只读不动</b>：不点击、不填写、不提交、不读 Cookie。
+            {isEn ? (
+              <>
+                When enabled, if you ask AI to inspect a link that the server cannot fetch (e.g. requires login or full client-side JS rendering), it will open the page in your browser as a <b>background tab</b>, extract the content, and close it immediately. <b>Read-only</b>: no clicks, form filling, submissions, or cookie access.
+              </>
+            ) : (
+              <>
+                开启后，你让 AI 看一条链接、而服务端又抓不到那个平台的内容时（要登录、或整页靠 JS 渲染），
+                它会在你的浏览器里用<b>后台标签页</b>打开这一页、把正文读回来、读完立即关闭。
+                <b>只读不动</b>：不点击、不填写、不提交、不读 Cookie。
+              </>
+            )}
           </p>
         </div>
         <label className="row" style={{ gap: 6, flexShrink: 0, cursor: readOnly ? 'not-allowed' : 'pointer' }}>
@@ -67,20 +78,30 @@ export function BrowserReadSwitch({
             disabled={readOnly || pending}
             onChange={(e) => toggle(e.target.checked)}
           />
-          <span className="small">{local ? '已开启' : '未开启'}</span>
+          <span className="small">{local ? (isEn ? 'Enabled' : '已开启') : (isEn ? 'Disabled' : '未开启')}</span>
         </label>
       </div>
 
       <details style={{ marginTop: 10 }}>
         <summary className="small" style={{ cursor: 'pointer' }}>
-          只能打开这 {allowlist.length} 个站点（清单写死在插件里，别的一律拒绝）
+          {isEn
+            ? `Can only open these ${allowlist.length} sites (allowlist hardcoded in extension, all others rejected)`
+            : `只能打开这 ${allowlist.length} 个站点（清单写死在插件里，别的一律拒绝）`}
         </summary>
         <div className="small muted" style={{ marginTop: 8, lineHeight: 1.9 }}>
           {allowlist.join('　·　')}
           <p style={{ margin: '8px 0 0' }}>
-            这份清单<strong>硬编码在插件里、由插件自己校验</strong>，不是由服务端说了算——
-            即使服务端下发清单以外的网址，插件也会拒绝。页面跳转之后还会按最终网址再验一次
-            （这些站点里有短链和跳转页），落到清单以外就放弃、不读取、不回传。
+            {isEn ? (
+              <>
+                This allowlist is <strong>hardcoded in the extension and verified by the extension itself</strong>, not dictated by the server — even if the server requests an external URL, the extension will refuse it. Redirects are re-validated against final destinations; any non-allowlisted target is discarded without reading or sending back data.
+              </>
+            ) : (
+              <>
+                这份清单<strong>硬编码在插件里、由插件自己校验</strong>，不是由服务端说了算——
+                即使服务端下发清单以外的网址，插件也会拒绝。页面跳转之后还会按最终网址再验一次
+                （这些站点里有短链和跳转页），落到清单以外就放弃、不读取、不回传。
+              </>
+            )}
           </p>
         </div>
       </details>

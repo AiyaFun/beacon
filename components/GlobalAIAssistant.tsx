@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import { Icon } from './icons';
 import { looksActionable } from '@/lib/agent/intent';
 import { prepareReferenceImage } from '@/lib/cover/client-image';
+import { useLanguage } from '@/lib/i18n';
 
 /** 与助手页、服务端同一个数：3 张（超大请求体会被 WAF 回一个假的 200）。 */
 const MAX_PICS = 3;
@@ -13,133 +14,190 @@ type ChatTurn = { role: 'user' | 'assistant'; content: string };
 type Msg = { role: 'user' | 'assistant'; content: string; mocked?: boolean; error?: boolean };
 
 // 页面路径到友好名称和功能说明的映射
-export const PAGE_INFOS: Record<string, { name: string; desc: string }> = {
+export const PAGE_INFOS: Record<string, { name: string; desc: string; nameEn?: string; descEn?: string }> = {
   '/': {
     name: '今日概览',
+    nameEn: "Today's Overview",
     desc: '工作区核心看板，包含全平台总播放量、今日推荐Top3选题、今日运营建议、待办任务清单和快速入口。',
+    descEn: "Core workspace dashboard: total cross-platform views, top 3 recommended topics, today's operational advice, task checklist, and quick shortcuts.",
   },
   '/battle': {
     name: '本周作战',
+    nameEn: 'Weekly Battle',
     desc: '本周内容作战报告：把自有表现指标、高潜选题、低表现作品诊断、竞对本周动向拼成一页操作台，每条选题后面就是起稿入口，可直接进创作工坊起草并发布。',
+    descEn: 'Weekly content battle report: self performance metrics, high-potential topics, low-performing post diagnostics, and competitor moves on one console.',
   },
   '/runs': {
     name: '运行中心',
+    nameEn: 'Run Center',
     desc: 'AI 执行、工作流、采集、发布四类运行记录汇总。「等你处理」是停下来等人的（等确认写操作、等去平台点发布），不是系统还在跑；AI 执行那条可展开看它调了哪些工具。跨账号全收，每条标明归属账号。',
+    descEn: 'Execution logs for AI runs, workflows, data collection, and publishing. Pending approval tasks wait for user confirmation.',
   },
   '/competitors': {
     name: '竞对监控',
+    nameEn: 'Competitors',
     desc: '多平台对标账号监控。可以添加竞对链接并获取粉丝数、作品数及最新发布的高热作品。',
+    descEn: 'Multi-platform competitor monitoring: track follower counts, post counts, and top viral content.',
   },
   '/algorithm': {
     name: '平台算法教练',
+    nameEn: 'Algorithm Coach',
     desc: '各大平台的算法规则库和发布前 Checklist，传统且有 S/A/B/C 级可信度的运营优化建议。',
+    descEn: 'Platform algorithm rulebook and pre-publish checklist with S/A/B/C credibility tiering.',
   },
   '/topics': {
     name: '选题引擎',
+    nameEn: 'Topic Engine',
     desc: '基于你的账号人设与平台热点分析生成的推荐选题，提供选题切入点与六维评分。页内含三个标签：挑选题（候选与六维评分）、灵感箱（随手存的点子与读者提问）、找角度（12 位人物智囊团会诊）。',
+    descEn: 'Persona & trending topic engine with 6-dimension scoring, inspiration box, and 12-advisor consultation.',
   },
   '/studio': {
     name: '创作工坊',
+    nameEn: 'Studio',
     desc: '跨平台内容撰写和发布编辑器，集成 AI 初稿生成、合规词检测和一键敏感词改写。',
+    descEn: 'Cross-platform content creation editor: AI draft generation, compliance checking, and sensitive word rewriting.',
   },
   '/compliance': {
     name: '合规检测',
+    nameEn: 'Compliance Check',
     desc: '广告法、平台敏感词、行业高危违规项分级预警中心，提供敏感词改写建议。',
+    descEn: 'Advertising law, platform sensitive words, and industry violation alert center with rewriting suggestions.',
   },
   '/persona': {
     name: '人设与记忆',
+    nameEn: 'Persona & Memory',
     desc: '账号人设卡配置（身份/语气/受众等）与长期记忆脑库（行为偏好、数据反馈积累）。',
+    descEn: 'Creator persona card (identity/tone/audience) and long-term memory bank.',
   },
   '/material': {
     name: '素材库',
+    nameEn: 'Material Library',
     desc: '创作者自建的经历、案例、观点和金句素材库，作为生成差异化选题和文案的专属原料。',
+    descEn: 'Creator story, case study, opinion, and quote library for differentiated content.',
   },
   '/publish': {
     name: '发布中心',
+    nameEn: 'Publishing Hub',
     desc: '把稿子发出去的那一段：进行中的发布计划与每个平台的任务状态、等你去点发布的任务、平台通道能力矩阵（公众号可接口直发/插件填好你来点/只能手动）、最近发布记录与缺链接提醒。按当前账号过滤。',
+    descEn: 'Post distribution hub: active publish plans, cross-platform tasks, and publishing status.',
   },
   '/images': {
     name: 'AI 出图',
+    nameEn: 'AI Image Studio',
     desc: '不绑草稿的出图工位：自己写画面描述批量出图（一律不上字）、我的形象与素材库上传管理、最近生成图片的画廊与钉住/删除。封面上字在创作工坊「标题与封面」。',
+    descEn: 'Standalone AI image generation studio: prompts, reference faces, and asset gallery.',
   },
   '/data': {
     name: '数据看板',
+    nameEn: 'Analytics Dashboard',
     desc: '账号发布历史、播放趋势分析和缺少平台ItemId的作品回填管理。',
+    descEn: 'Post history, view trend analysis, and backfill management.',
   },
   '/extension': {
     name: '下载采集助手',
+    nameEn: 'Extension',
     desc: '浏览器采集助手插件下载，安装后可免去 Cookie 实现各平台公开页一键回填。',
+    descEn: 'Browser extension download for one-click cross-platform data synchronization.',
   },
   '/desktop': {
     name: '桌面客户端',
+    nameEn: 'Desktop Client',
     desc: 'Mac / Windows 桌面客户端下载：独立窗口、托盘常驻、开机自启，可连云端账号或本机整机版；整机版还能在这里一键增量更新本机服务。',
+    descEn: 'Mac / Windows desktop client download with tray support and offline appliance mode.',
   },
   '/skills': {
     name: '技能中心',
+    nameEn: 'Skill Center',
     desc: '定制化创作提示词模板市场，安装或自定义不同平台与体裁的文案渲染格式。',
+    descEn: 'Prompt recipe and template marketplace for platform-specific copywriting.',
   },
   '/assistant': {
     name: 'AI 助手独立页',
+    nameEn: 'AI Assistant',
     desc: '全屏对话窗口，带人设与历史记忆上下文的自由互动创作助手。',
+    descEn: 'Full-screen conversational assistant with persona and memory context.',
   },
   '/settings': {
     name: '运行设置',
+    nameEn: 'Settings',
     desc: '后台定时任务的开关与最近运行结果、热榜数据源健康度、语义向量实况。不含任何密钥——那些在「接入与密钥」。',
+    descEn: 'Background schedule management, trending data health, and embedding status.',
   },
   '/settings/keys': {
     name: '接入与密钥',
+    nameEn: 'Keys & Integrations',
     desc: '这个产品里所有要填 Key 的地方：模型渠道（BYOK）与按功能路由、生图渠道、公众号发布凭证、插件采集令牌、机器人凭据，另有「一键检测」逐条探连通性（不发测试消息、不真出图）。',
+    descEn: 'API keys, BYOK model routing, image providers, tokens, and connectivity testing.',
   },
   '/workflows': {
     name: '工作流模板',
+    nameEn: 'Workflows',
     desc: '把「选题→初稿→技能改写→封面→配图→发布计划」串成可复用的流水线，内置模板装上即用，自建模板可导出分享。技能是一步，模板是一串。',
+    descEn: 'Automated pipelines from topic ideation to drafting, cover design, and scheduling.',
   },
   '/billing': {
     name: '套餐与计费',
+    nameEn: 'Billing & Plans',
     desc: '升级订阅套餐或查看工作区各功能的当前用量配额。',
+    descEn: 'Subscription plans, workspace quotas, and billing management.',
   },
   '/members': {
     name: '成员与权限',
+    nameEn: 'Members & Roles',
     desc: '团队成员协同管理、邀请链接生成以及 RBAC 角色权限配置。',
+    descEn: 'Team collaboration, invite link generation, and RBAC permissions.',
   },
   '/help': {
     name: '使用帮助',
+    nameEn: 'Help & Docs',
     desc: '快速上手图文说明，以及群消息机器人集成教程。',
+    descEn: 'Quick start guides and bot integration walkthroughs.',
   },
-  // ⚠️ 新增页面务必同步登记到这里。漏登记不只是状态栏显示成「当前页面：当前页面」这么简单：
-  // desc 会整条缺席，而「✨ 一键分析当前页面」正是靠它告诉模型这一页是干什么的——
-  // 助手在这些页面上等于瞎着眼分析。真机 2026-07-30 漏了 7 个页面（/genes、/notifications 等）。
   '/hotlists': {
     name: '热点聚合中心',
+    nameEn: 'Trending Hub',
     desc: '八大平台热榜聚合与跨源话题聚类，可选一个实时热点做「账号 × 热点」结合分析。部分平台没有真实采集通道时会显示带「示例」标的占位词条，那些词条不参与选题推荐。',
+    descEn: 'Real-time trending topics across 8 platforms and topic clustering.',
   },
   '/library': {
     name: '内容资讯库',
+    nameEn: 'Content Library',
     desc: '剪藏进来的文章与竞对内容全文库，可做正文摘要、竞对拆解和结合账号的选题分析。',
+    descEn: 'Clipped articles, competitor content library, and video transcription analysis.',
   },
   '/genes': {
     name: '爆款基因',
+    nameEn: 'Viral Genes',
     desc: '把已发布内容按来源、切入角、结构等维度拆解，找出你自己账号上被数据验证过的高表现要素。',
+    descEn: 'Deconstruct viral elements across source, angle, and structure based on verified data.',
   },
   '/notifications': {
     name: '机器人与通知',
+    nameEn: 'Bots & Notifications',
     desc: '飞书/钉钉/企业微信机器人配置：出站推送每日推荐与合规告警，入站 ChatOps 在群里收录链接、@机器人对话。',
+    descEn: 'Feishu, DingTalk, and WeCom bot configurations for automated notifications.',
   },
   '/feedback': {
     name: '问题反馈与社群支持',
+    nameEn: 'Feedback & Support',
     desc: '提交产品问题与需求反馈，以及用户社群的加入方式。',
+    descEn: 'Submit feedback, report issues, and join the creator community.',
   },
   '/settings/account': {
     name: '账号与安全',
+    nameEn: 'Account & Security',
     desc: '登录设备与会话管理、数据导出、账号注销（含工作区数据删除）等账号级安全操作。',
+    descEn: 'Session management, data export, and security operations.',
   },
 };
 
-function getPageContext(pathname: string): { name: string; desc: string; dataText?: string } {
+function getPageContext(pathname: string, lang: 'zh' | 'en' = 'zh'): { name: string; desc: string; dataText?: string } {
   const matched = PAGE_INFOS[pathname] || {
-    name: '当前导航页',
-    desc: '烽火台内容作战室页面。',
+    name: lang === 'en' ? 'Current Page' : '当前导航页',
+    desc: lang === 'en' ? 'Beacon Content Operations Room' : '烽火台内容作战室页面。',
   };
+  const name = (lang === 'en' && matched.nameEn) ? matched.nameEn : matched.name;
+  const desc = (lang === 'en' && matched.descEn) ? matched.descEn : matched.desc;
 
   let dataText = '';
   try {
@@ -150,7 +208,7 @@ function getPageContext(pathname: string): { name: string; desc: string; dataTex
         if (text) stats.push(text);
       });
       if (stats.length > 0) {
-        dataText += '页面关键指标：';
+        dataText += lang === 'en' ? 'Key metrics: ' : '页面关键指标：';
         for (let i = 0; i < stats.length; i += 2) {
           if (stats[i] && stats[i + 1]) {
             dataText += `${stats[i]}: ${stats[i + 1]}; `;
@@ -167,7 +225,7 @@ function getPageContext(pathname: string): { name: string; desc: string; dataTex
         }
       });
       if (items.length > 0) {
-        dataText += '页面当前主要条目：' + items.join(', ') + '\n';
+        dataText += (lang === 'en' ? 'Main items: ' : '页面当前主要条目：') + items.join(', ') + '\n';
       }
     }
   } catch (e) {
@@ -175,24 +233,40 @@ function getPageContext(pathname: string): { name: string; desc: string; dataTex
   }
 
   return {
-    name: matched.name,
-    desc: matched.desc,
+    name,
+    desc,
     dataText: dataText || undefined,
   };
 }
 
 export function GlobalAIAssistant({ accountName }: { accountName: string }) {
   const pathname = usePathname();
+  const { lang } = useLanguage();
   const [isOpen, setIsOpen] = useState(false);
+
+  const defaultWelcome = useCallback((l: 'zh' | 'en') => {
+    const acc = (l === 'en' && (accountName === '我的账号' || !accountName)) ? 'My Account' : (accountName || '我的账号');
+    return l === 'en'
+      ? `Hello, I am the AI Operations Assistant for "${acc}". Feel free to ask me about topics, copy, and operations.\n\n💡 I can sense the page you are currently viewing. Click "Analyze Page" in the upper right, and I'll provide insights and actionable suggestions tailored to this page.`
+      : `你好，我是「${acc}」的 AI 运营助手。选题、文案、运营都可以随时问我。\n\n💡 我能感知你当前浏览的页面，点右上角的「一键分析」，我会结合这一页的数据给你洞察和落地建议。`;
+  }, [accountName]);
+
   const [messages, setMessages] = useState<Msg[]>([
     {
       role: 'assistant',
-      // 这条消息按纯文本渲染，**不过 markdown**——写 `**粗体**` 只会让用户看见两串星号
-      // （真机 2026-07-30 界面上就是 `**「✨ 一键分析当前页面」**`）。
-      // 按钮名也要和界面上真实的那个一致：它写的是「一键分析」，不是「一键分析当前页面」。
-      content: `你好，我是「${accountName}」的 AI 运营助手。选题、文案、运营都可以随时问我。\n\n💡 我能感知你当前浏览的页面，点右上角的「一键分析」，我会结合这一页的数据给你洞察和落地建议。`,
+      content: defaultWelcome(lang),
     },
   ]);
+
+  // 当用户切换中英文时，如果尚未开始多轮对话，同步将欢迎词切为对应语言
+  useEffect(() => {
+    setMessages((prev) => {
+      if (prev.length === 1 && prev[0].role === 'assistant' && !prev[0].error) {
+        return [{ role: 'assistant', content: defaultWelcome(lang) }];
+      }
+      return prev;
+    });
+  }, [lang, defaultWelcome]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
@@ -215,7 +289,7 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
   async function addPics(files: File[]) {
     setPicErr('');
     const room = MAX_PICS - picsRef.current.length;
-    if (room <= 0) { setPicErr(`最多 ${MAX_PICS} 张`); return; }
+    if (room <= 0) { setPicErr(lang === 'en' ? `Max ${MAX_PICS} images` : `最多 ${MAX_PICS} 张`); return; }
     const next: string[] = [];
     for (const f of files.slice(0, room)) {
       try {
@@ -252,7 +326,9 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
   useEffect(() => () => { dragCleanupRef.current.forEach(fn => fn()); }, []);
 
   // 获取当前页面的简短友好名称
-  const pageInfo = PAGE_INFOS[pathname] || { name: '当前页面', desc: '' };
+  const pageInfo = PAGE_INFOS[pathname] || { name: lang === 'en' ? 'Current Page' : '当前页面', desc: '' };
+  const pageName = (lang === 'en' && pageInfo.nameEn) ? pageInfo.nameEn : pageInfo.name;
+  const pageDesc = (lang === 'en' && pageInfo.descEn) ? pageInfo.descEn : pageInfo.desc;
 
   useEffect(() => {
     if (isOpen) {
@@ -447,7 +523,7 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
 
       setMessages((prev) => [
         ...prev,
-        { role: 'user', content: userTextToShow || `（发了 ${picsRef.current.length} 张图）` },
+        { role: 'user', content: userTextToShow || (lang === 'en' ? `(Sent ${picsRef.current.length} images)` : `（发了 ${picsRef.current.length} 张图）`) },
       ]);
       setInput('');
       const sendingPics = picsRef.current;
@@ -470,7 +546,7 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
           const errBody = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
           setMessages((prev) => [
             ...prev,
-            { role: 'assistant', content: errBody.error || `请求失败 (${res.status})`, error: true },
+            { role: 'assistant', content: errBody.error || (lang === 'en' ? `Request failed (${res.status})` : `请求失败 (${res.status})`), error: true },
           ]);
           return;
         }
@@ -509,14 +585,14 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
         if ((e as Error).name === 'AbortError') return;
         setMessages((prev) => [
           ...prev,
-          { role: 'assistant', content: '出了点问题：' + (e as Error).message.slice(0, 60), error: true },
+          { role: 'assistant', content: (lang === 'en' ? 'Something went wrong: ' : '出了点问题：') + (e as Error).message.slice(0, 60), error: true },
         ]);
       } finally {
         setStreaming(false);
         abortRef.current = null;
       }
     },
-    [streaming]
+    [streaming, lang]
   );
 
   // 最后一句用户说的话，答完之后才判。带上它去执行那一侧——
@@ -527,14 +603,23 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
 
   const handleAnalyzePage = () => {
     if (streaming) return;
-    const ctx = getPageContext(pathname);
-    const userDisplayMsg = `请分析当前浏览的「${ctx.name}」页面`;
-    const fullPrompt = [
-      `请帮我分析当前浏览的「${ctx.name}」页面。`,
-      `该页面的功能是：${ctx.desc}`,
-      ctx.dataText ? `当前页面中提取到的数据摘要有：\n${ctx.dataText}` : '',
-      `请结合我的账号人设和历史记忆，为我提供针对该页面的运营洞察、使用引导或具体的选题建议。`,
-    ].filter(Boolean).join('\n');
+    const ctx = getPageContext(pathname, lang);
+    const userDisplayMsg = lang === 'en'
+      ? `Please analyze the current "${ctx.name}" page`
+      : `请分析当前浏览的「${ctx.name}」页面`;
+    const fullPrompt = lang === 'en'
+      ? [
+          `Please help me analyze the current "${ctx.name}" page.`,
+          `Page purpose/function: ${ctx.desc}`,
+          ctx.dataText ? `Extracted key metrics:\n${ctx.dataText}` : '',
+          `Combining my creator persona and long-term memory, please provide operational insights, usage guidance, or actionable topic suggestions for this page.`,
+        ].filter(Boolean).join('\n')
+      : [
+          `请帮我分析当前浏览的「${ctx.name}」页面。`,
+          `该页面的功能是：${ctx.desc}`,
+          ctx.dataText ? `当前页面中提取到的数据摘要有：\n${ctx.dataText}` : '',
+          `请结合我的账号人设和历史记忆，为我提供针对该页面的运营洞察、使用引导或具体的选题建议。`,
+        ].filter(Boolean).join('\n');
 
     send(fullPrompt, userDisplayMsg);
   };
@@ -947,8 +1032,8 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
         }}
         onMouseDown={onTriggerMouseDown}
         onClick={onTriggerClick}
-        title="按住鼠标拖拽可自由移动图标到屏幕任意位置；点击打开 AI 运营助手"
-        aria-label="打开 AI 运营助手"
+        title={lang === 'en' ? 'Drag to move anywhere; Click to open AI Assistant' : '按住鼠标拖拽可自由移动图标到屏幕任意位置；点击打开 AI 运营助手'}
+        aria-label={lang === 'en' ? 'Open AI Assistant' : '打开 AI 运营助手'}
       >
         {isOpen ? <Icon.x size={20} /> : <Icon.chat size={20} />}
       </button>
@@ -964,13 +1049,13 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
             <div
               className="fap-resize-handle bottom-right"
               onMouseDown={(e) => onResizeMouseDown(e, 'bottom-right')}
-              title="按住拖拽调整窗口大小"
+              title={lang === 'en' ? 'Drag to resize window' : '按住拖拽调整窗口大小'}
             />
             {pos && (
               <div
                 className="fap-resize-handle top-left"
                 onMouseDown={(e) => onResizeMouseDown(e, 'top-left')}
-                title="按住拖拽调整窗口大小"
+                title={lang === 'en' ? 'Drag to resize window' : '按住拖拽调整窗口大小'}
               />
             )}
           </>
@@ -981,12 +1066,12 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
           className="fap-header"
           onMouseDown={onHeaderMouseDown}
           onDoubleClick={resetPos}
-          title="按住拖拽自由移动位置，双击重置默认位置"
+          title={lang === 'en' ? 'Drag to move, double-click to reset position' : '按住拖拽自由移动位置，双击重置默认位置'}
         >
           <div className="fap-header-title">
             <Icon.move size={14} style={{ opacity: 0.8 }} />
             <Icon.sparkles size={16} />
-            <span>AI 运营助手</span>
+            <span>{lang === 'en' ? 'AI Assistant' : 'AI 运营助手'}</span>
           </div>
 
           <div className="fap-header-actions" onClick={(e) => e.stopPropagation()}>
@@ -996,16 +1081,16 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
                 className="fap-icon-btn"
                 onClick={zoomOut}
                 disabled={fontScale <= 85}
-                title="缩小内容字号 (A-)"
+                title={lang === 'en' ? 'Zoom out (A-)' : '缩小内容字号 (A-)'}
               >
                 <Icon.zoomOut size={13} />
               </button>
-              <span className="fap-zoom-badge" title="当前内容字号比例">{fontScale}%</span>
+              <span className="fap-zoom-badge" title={lang === 'en' ? 'Current font scale' : '当前内容字号比例'}>{fontScale}%</span>
               <button
                 className="fap-icon-btn"
                 onClick={zoomIn}
                 disabled={fontScale >= 145}
-                title="放大内容字号 (A+)"
+                title={lang === 'en' ? 'Zoom in (A+)' : '放大内容字号 (A+)'}
               >
                 <Icon.zoomIn size={13} />
               </button>
@@ -1019,7 +1104,7 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
                 setTriggerPosMode(next);
                 setPos(null);
               }}
-              title={triggerPosMode === 'top' ? '切到页面下方固定' : '切到页面上方固定'}
+              title={triggerPosMode === 'top' ? (lang === 'en' ? 'Dock to bottom' : '切到页面下方固定') : (lang === 'en' ? 'Dock to top' : '切到页面上方固定')}
             >
               <Icon.refresh size={13} />
             </button>
@@ -1028,13 +1113,13 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
             <button
               className="fap-icon-btn"
               onClick={() => setIsMaximized(!isMaximized)}
-              title={isMaximized ? '还原窗口大小' : '放大窗口'}
+              title={isMaximized ? (lang === 'en' ? 'Restore window' : '还原窗口大小') : (lang === 'en' ? 'Maximize window' : '放大窗口')}
             >
               {isMaximized ? <Icon.minimize size={13} /> : <Icon.maximize size={13} />}
             </button>
 
             {/* 关闭按钮 */}
-            <button className="fap-header-close" onClick={() => setIsOpen(false)} title="关闭助手">
+            <button className="fap-header-close" onClick={() => setIsOpen(false)} title={lang === 'en' ? 'Close Assistant' : '关闭助手'}>
               <Icon.x size={14} />
             </button>
           </div>
@@ -1042,20 +1127,20 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
 
         {/* 当前页面上下文联动栏 */}
         <div className="fap-banner">
-          <div className="fap-banner-text" title={`${pageInfo.name} - ${pageInfo.desc}`}>
+          <div className="fap-banner-text" title={`${pageName} - ${pageDesc}`}>
             <span style={{ color: 'var(--brand)', display: 'flex', alignItems: 'center' }}>
               <Icon.radar size={14} />
             </span>
-            <span>当前页面：<b>{pageInfo.name}</b></span>
+            <span>{lang === 'en' ? 'Current Page: ' : '当前页面：'}<b>{pageName}</b></span>
           </div>
           <button
             className="fap-banner-btn"
             onClick={handleAnalyzePage}
             disabled={streaming}
-            title="提取并分析当前页面数据与上下文"
+            title={lang === 'en' ? 'Extract and analyze current page data and context' : '提取并分析当前页面数据与上下文'}
           >
             <Icon.sparkles size={12} />
-            <span>一键分析</span>
+            <span>{lang === 'en' ? 'Analyze Page' : '一键分析'}</span>
           </button>
         </div>
 
@@ -1085,7 +1170,7 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
                 <Icon.chat size={14} />
               </div>
               <div className="fap-bubble-card assistant" style={{ color: 'var(--text-3)' }}>
-                思考中…
+                {lang === 'en' ? 'Thinking…' : '思考中…'}
               </div>
             </div>
           )}
@@ -1099,15 +1184,16 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
             抄给用户（提示词泄漏那三次），而这里的收益只是一个按钮显不显示。
 
             ⚠️ 只**预填**不自动跑：URL 参数带着就开跑的话，任意站点放一个链接就能让
-            登录用户发起一次付费执行；用户刷新或分享这个地址也会重复开跑。 */}
+            登录用户发起一次付费执行；用户刷新或分享这个地址也会重复开跑。
+            落点是首页「今天」的框（2026-09-06 起全站唯一的派活入口），不再是 /assistant。 */}
         {handoffGoal && (
           <div className="fap-handoff">
-            <span className="small">这件事我可以直接去做</span>
+            <span className="small">{lang === 'en' ? 'I can execute this task directly' : '这件事我可以直接去做'}</span>
             <a
               className="btn btn-sm btn-primary"
-              href={`/assistant?goal=${encodeURIComponent(handoffGoal)}`}
+              href={`/?goal=${encodeURIComponent(handoffGoal)}`}
             >
-              让它直接去做 →
+              {lang === 'en' ? 'Automate Task →' : '让它直接去做 →'}
             </a>
           </div>
         )}
@@ -1116,10 +1202,10 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
           <div className="fap-pics">
             {pics.map((src, i) => (
               <span key={i} style={{ position: 'relative', display: 'inline-block', width: 46, height: 46, flexShrink: 0 }}>
-                <img src={src} alt={`参考图 ${i + 1}`} className="fap-pic" />
+                <img src={src} alt={lang === 'en' ? `Reference image ${i + 1}` : `参考图 ${i + 1}`} className="fap-pic" />
                 <button
                   className="fap-pic-x"
-                  aria-label="移除这张图"
+                  aria-label={lang === 'en' ? 'Remove this image' : '移除这张图'}
                   onClick={() => setPics((l) => l.filter((_, j) => j !== i))}
                 >
                   ×
@@ -1134,7 +1220,7 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
         <div className="fap-footer">
           <textarea
             className="fap-input"
-            placeholder="输入您的问题..."
+            placeholder={lang === 'en' ? 'Ask anything...' : '输入您的问题...'}
             value={input}
             disabled={streaming}
             onChange={(e) => setInput(e.target.value)}
@@ -1143,7 +1229,7 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
           />
           <label
             className="fap-pic-btn"
-            title={pics.length >= MAX_PICS ? `最多 ${MAX_PICS} 张` : '带一张参考图问'}
+            title={pics.length >= MAX_PICS ? (lang === 'en' ? `Max ${MAX_PICS} images` : `最多 ${MAX_PICS} 张`) : (lang === 'en' ? 'Attach reference image' : '带一张参考图问')}
           >
             <Icon.upload size={15} />
             <input

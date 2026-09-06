@@ -17,6 +17,14 @@ export const dynamic = 'force-dynamic';
 
 const TIER_ORDER = ['legal', 'platform', 'industry', 'custom'] as const;
 
+const COMPLIANCE_TIER_I18N: Record<string, { nameEn: string; descEn: string }> = {
+  legal: { nameEn: 'Legal Tier', descEn: 'Statutory redlines (Ad Law, AIGC rules)' },
+  platform: { nameEn: 'Platform Tier', descEn: 'Platform community guidelines' },
+  industry: { nameEn: 'Industry Tier', descEn: 'High-risk sectors (medical, financial)' },
+  custom: { nameEn: 'Custom Tier', descEn: 'Tenant custom blocklist & allowlist' },
+  semantic: { nameEn: 'Semantic Tier', descEn: 'AI semantic analysis findings' },
+};
+
 export default async function CompliancePage() {
   const s = await getSession();
   const lang = await getServerLang();
@@ -79,12 +87,13 @@ export default async function CompliancePage() {
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
         {TIER_ORDER.map((tier) => {
           const t = COMPLIANCE_TIERS[tier];
+          const tEn = COMPLIANCE_TIER_I18N[tier];
           return (
             <Stat
               key={tier}
-              label={t.name}
+              label={lang === 'en' ? (tEn?.nameEn ?? t.name) : t.name}
               value={byTier.get(tier)?.length ?? 0}
-              foot={t.desc}
+              foot={lang === 'en' ? (tEn?.descEn ?? t.desc) : t.desc}
             />
           );
         })}
@@ -107,32 +116,33 @@ export default async function CompliancePage() {
             {TIER_ORDER.map((tier) => {
               const list = byTier.get(tier) ?? [];
               const t = COMPLIANCE_TIERS[tier];
+              const tEn = COMPLIANCE_TIER_I18N[tier];
               return (
                 <div key={tier}>
                   <div className="row-between" style={{ marginBottom: 8 }}>
                     <div className="row" style={{ gap: 8 }}>
-                      <TierBadge tier={tier} />
-                      <span className="small muted">{t.desc}</span>
+                      <TierBadge tier={tier} lang={lang} />
+                      <span className="small muted">{lang === 'en' ? (tEn?.descEn ?? t.desc) : t.desc}</span>
                     </div>
-                    <span className="badge badge-gray">{list.length} 条</span>
+                    <span className="badge badge-gray">{list.length} {lang === 'en' ? 'items' : '条'}</span>
                   </div>
                   {list.length === 0 ? (
-                    <div className="small muted">暂无词条</div>
+                    <div className="small muted">{lang === 'en' ? 'No entries' : '暂无词条'}</div>
                   ) : (
                     <div className="stack" style={{ gap: 6 }}>
                       {list.slice(0, 4).map((w) => (
                         <div key={w.id} className="list-row" style={{ alignItems: 'center' }}>
                           <span className="mono" style={{ minWidth: 84, fontWeight: 600 }}>{w.word}</span>
                           <span className={`badge ${w.action === 'block' ? 'badge-red' : w.action === 'warn' ? 'badge-amber' : 'badge-brand'}`}>
-                            {w.action === 'block' ? '禁用' : w.action === 'warn' ? '警告' : '建议'}
+                            {w.action === 'block' ? (lang === 'en' ? 'Block' : '禁用') : w.action === 'warn' ? (lang === 'en' ? 'Warn' : '警告') : (lang === 'en' ? 'Suggest' : '建议')}
                           </span>
                           <span className="small muted" style={{ flex: 1 }}>
-                            {w.platform ? `${platformName(w.platform)} · ` : ''}
-                            {w.suggestion ? `改为 ${w.suggestion}` : (w.category ?? '')}
+                            {w.platform ? `${platformName(w.platform, lang)} · ` : ''}
+                            {w.suggestion ? `${lang === 'en' ? 'Replace with ' : '改为 '}${w.suggestion}` : (w.category ?? '')}
                           </span>
                         </div>
                       ))}
-                      {list.length > 4 && <div className="small muted">…另有 {list.length - 4} 条</div>}
+                      {list.length > 4 && <div className="small muted">…{lang === 'en' ? `plus ${list.length - 4} more` : `另有 ${list.length - 4} 条`}</div>}
                     </div>
                   )}
                 </div>
@@ -142,11 +152,19 @@ export default async function CompliancePage() {
         </Fold>
       </div>
 
-      <Fold title="自定义词库管理" sub="添加黑名单词条或白名单替代建议" note={<span className="small muted">要加词才翻开</span>}>
+      <Fold
+        title={lang === 'en' ? 'Custom Lexicon Management' : '自定义词库管理'}
+        sub={lang === 'en' ? 'Add blacklist terms or whitelist replacement suggestions' : '添加黑名单词条或白名单替代建议'}
+        note={<span className="small muted">{lang === 'en' ? 'Expand to add terms' : '要加词才翻开'}</span>}
+      >
         <WordManager words={customWords} />
       </Fold>
 
-      <Fold title="误报反馈" sub="认为某词在你的语境下属误报？告诉我们" note={<span className="small muted">偶尔用</span>}>
+      <Fold
+        title={lang === 'en' ? 'False Positive Feedback' : '误报反馈'}
+        sub={lang === 'en' ? 'Believe a term is a false positive in your context? Let us know' : '认为某词在你的语境下属误报？告诉我们'}
+        note={<span className="small muted">{lang === 'en' ? 'Occasional' : '偶尔用'}</span>}
+      >
         <FeedbackPanel items={feedbackItems.map((f) => ({
           id: f.id,
           word: f.word,
@@ -164,29 +182,46 @@ export default async function CompliancePage() {
             <Icon.shield size={18} />
           </div>
           <div>
-            <b className="small" style={{ color: 'var(--brand)', fontSize: 13.5 }}>AIGC 标识义务提醒（国家网信办新规）</b>
+            <b className="small" style={{ color: 'var(--brand)', fontSize: 13.5 }}>
+              {lang === 'en' ? 'AIGC Labeling Obligation Reminder (CAC Regulatory Standard)' : 'AIGC 标识义务提醒（国家网信办新规）'}
+            </b>
             <div className="small" style={{ marginTop: 2, opacity: 0.9, lineHeight: 1.6 }}>
-              依据《人工智能生成合成内容标识办法》，AI 生成或合成的内容需显著声明「本内容由 AI 生成」，
-              并保留必要的隐式元数据标识。发布 AI 参与创作的图文／视频前，请在正文或水印处加注声明。
+              {lang === 'en'
+                ? 'Under the "Measures for the Labeling of AI-Generated Synthesized Content", AI-generated or synthetic content must prominently state "This content is generated by AI" and retain necessary implicit metadata labels. Before publishing AI-assisted images, text, or video, please include declarations in copy or watermarks.'
+                : '依据《人工智能生成合成内容标识办法》，AI 生成或合成的内容需显著声明「本内容由 AI 生成」，并保留必要的隐式元数据标识。发布 AI 参与创作的图文／视频前，请在正文或水印处加注声明。'}
             </div>
           </div>
         </div>
       </div>
 
-      <Fold title="合规说明" sub="发布前必读" note={<span className="small muted">看一次就够</span>}>
+      <Fold
+        title={lang === 'en' ? 'Compliance Guide' : '合规说明'}
+        sub={lang === 'en' ? 'Must-read before publishing' : '发布前必读'}
+        note={<span className="small muted">{lang === 'en' ? 'Reference' : '看一次就够'}</span>}
+      >
         <div className="stack" style={{ gap: 12 }}>
           <div className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
             <span style={{ color: 'var(--brand)', marginTop: 2 }}><Icon.bulb size={16} /></span>
             <div>
-              <b className="small">词库秒查 + AI 语义二次复核</b>
+              <b className="small">{lang === 'en' ? 'Lexicon Instant Match + AI Semantic Recheck' : '词库秒查 + AI 语义二次复核'}</b>
               <div className="small muted" style={{ marginTop: 3 }}>
-                检测分两步：先在<b>服务端</b>跑词库匹配（毫秒级、不调用模型、不计费），
-                再把文案送一次 AI 做语义复核，找词库覆盖不到的变体与隐含承诺。
-                <b>你贴进来的文案会离开浏览器</b>——它会发到烽火台服务器，并在第二步随请求发给模型服务商。
-                检测记录只有在<b>关联了草稿且确实命中</b>时才会留存（用于「上周被拦了什么」），
-                检测框里的临时文本不入库。
-                法律级红线命中即禁止导出，需先改写规避。
-                <b>边界说明：</b>本工具做的是发布前自查，不替代平台审核，也不构成法律意见；变体规避写法（拼音/谐音/拆字）可能漏检。
+                {lang === 'en' ? (
+                  <>
+                    Two-step check: First run server-side lexicon matching (millisecond speed, zero model cost, no billing), then send copy to AI for semantic review to detect unlisted variants and implicit claims.{' '}
+                    <b>Your pasted text will leave the browser</b>—it is sent to Beacon server, and in step 2 sent to the model provider. Inspection records are persisted only when <b>linked to a draft and actual violations are hit</b> (for "what was blocked last week" audits). Temporary scratchpad text is never stored in DB. Statutory legal redlines block one-click export and must be rewritten first.{' '}
+                    <b>Boundary note:</b> This tool provides pre-publication self-checks, not a substitute for platform moderation or legal counsel. Variant evasions (pinyin/homophones/split characters) may escape detection.
+                  </>
+                ) : (
+                  <>
+                    检测分两步：先在<b>服务端</b>跑词库匹配（毫秒级、不调用模型、不计费），
+                    再把文案送一次 AI 做语义复核，找词库覆盖不到的变体与隐含承诺。
+                    <b>你贴进来的文案会离开浏览器</b>——它会发到烽火台服务器，并在第二步随请求发给模型服务商。
+                    检测记录只有在<b>关联了草稿且确实命中</b>时才会留存（用于「上周被拦了什么」），
+                    检测框里的临时文本不入库。
+                    法律级红线命中即禁止导出，需先改写规避。
+                    <b>边界说明：</b>本工具做的是发布前自查，不替代平台审核，也不构成法律意见；变体规避写法（拼音/谐音/拆字）可能漏检。
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -194,10 +229,11 @@ export default async function CompliancePage() {
           <div className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
             <span style={{ color: 'var(--brand)', marginTop: 2 }}><Icon.chat size={16} /></span>
             <div>
-              <b className="small">误报可反馈</b>
+              <b className="small">{lang === 'en' ? 'False Positives Can Be Reported' : '误报可反馈'}</b>
               <div className="small muted" style={{ marginTop: 3 }}>
-                词库为宁可错杀的保守策略，若某词在你的语境下属误报，可在「自定义级」加入白名单或调整动作等级，
-                词库会按平台规则版本持续更新。
+                {lang === 'en'
+                  ? 'The rulebook leans conservative. If a word is a false positive in your industry context, you can whitelist or adjust its action in the "Custom Tier", or submit feedback. Rules are continuously updated with platform policies.'
+                  : '词库为宁可错杀的保守策略，若某词在你的语境下属误报，可在「自定义级」加入白名单或调整动作等级，词库会按平台规则版本持续更新。'}
               </div>
             </div>
           </div>

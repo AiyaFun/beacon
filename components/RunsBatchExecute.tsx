@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { useI18n } from '@/lib/i18n';
 
 // 运行中心「等你处理」卡的一键执行（2026-08-26 用户指定加在卡右上）。
 //
@@ -13,6 +14,8 @@ import Link from 'next/link';
 // 插件不在场（没装/没连）时按钮如实降级成「先装插件 →」。
 export function RunsBatchExecute() {
   const router = useRouter();
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const [present, setPresent] = useState(false);
   const [state, setState] = useState<'idle' | 'running' | 'done'>('idle');
   const [progress, setProgress] = useState('');
@@ -40,25 +43,38 @@ export function RunsBatchExecute() {
 
   if (!present) {
     return (
-      <Link href="/extension" className="btn btn-sm btn-ghost" title="一键执行需要浏览器插件在场：装好并连上后，这里就能直接唤醒它采集">
-        一键执行需要插件 →
+      <Link
+        href="/extension"
+        className="btn btn-sm btn-ghost"
+        title={isEn ? 'Batch execution requires the browser extension: install and connect it to trigger collection here' : '一键执行需要浏览器插件在场：装好并连上后，这里就能直接唤醒它采集'}
+      >
+        {isEn ? 'Extension required for batch run →' : '一键执行需要插件 →'}
       </Link>
     );
   }
   if (state === 'running') {
-    return <span className="small muted"><span className="run-live-spinner" style={{ display: 'inline-block', verticalAlign: -3, marginRight: 6 }} />插件采集中… {progress}</span>;
+    return (
+      <span className="small muted">
+        <span className="run-live-spinner" style={{ display: 'inline-block', verticalAlign: -3, marginRight: 6 }} />
+        {isEn ? 'Extension collecting… ' : '插件采集中… '}{progress}
+      </span>
+    );
   }
   if (state === 'done') {
-    return <span className="badge badge-green">✓ 这一轮采完了</span>;
+    return <span className="badge badge-green">{isEn ? '✓ Batch collected' : '✓ 这一轮采完了'}</span>;
   }
   return (
     <button
       type="button"
       className="btn btn-sm btn-primary"
-      title="唤醒你浏览器里的插件，立刻把监控的竞对采一遍"
-      onClick={() => { setState('running'); setProgress('启动中'); window.postMessage({ __beacon: 'batch-collect' }, '*'); }}
+      title={isEn ? 'Wake up browser extension to collect data for all monitored competitors immediately' : '唤醒你浏览器里的插件，立刻把监控的竞对采一遍'}
+      onClick={() => {
+        setState('running');
+        setProgress(isEn ? 'Starting…' : '启动中');
+        window.postMessage({ __beacon: 'batch-collect' }, '*');
+      }}
     >
-      ⚡ 一键执行
+      {isEn ? '⚡ Run Batch' : '⚡ 一键执行'}
     </button>
   );
 }

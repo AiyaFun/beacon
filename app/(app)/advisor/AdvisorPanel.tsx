@@ -13,11 +13,11 @@ import { getServerLang } from '@/lib/i18n/server';
 
 export const dynamic = 'force-dynamic';
 
-const TRIGGER_LABEL: Record<string, string> = {
-  manual: '主动召唤',
-  cold_start: '冷启动',
-  repeated_reject: '连续被拒',
-  draft_review: '草稿会诊',
+const TRIGGER_LABEL: Record<string, { zh: string; en: string }> = {
+  manual: { zh: '主动召唤', en: 'On-demand' },
+  cold_start: { zh: '冷启动', en: 'Cold Start' },
+  repeated_reject: { zh: '连续被拒', en: 'Rejection Pivot' },
+  draft_review: { zh: '草稿会诊', en: 'Draft Review' },
 };
 
 export async function AdvisorPanel() {
@@ -55,6 +55,12 @@ export async function AdvisorPanel() {
   const adoptedCount = opinions.filter((o) => o.adopted === true).length;
   const rejectedCount = opinions.filter((o) => o.adopted === false).length;
   const pendingCount = opinions.filter((o) => o.adopted === null).length;
+
+  const triggerText = session
+    ? (lang === 'en'
+        ? (TRIGGER_LABEL[session.trigger]?.en ?? session.trigger)
+        : (TRIGGER_LABEL[session.trigger]?.zh ?? session.trigger))
+    : '';
 
   return (
     <>
@@ -162,14 +168,20 @@ export async function AdvisorPanel() {
       </Card>
 
       <Card
-        title="最近一次会诊"
-        sub={session ? `${TRIGGER_LABEL[session.trigger] ?? session.trigger} · ${relTime(session.createdAt)}` : undefined}
+        title={lang === 'en' ? 'Latest Council Consultation' : '最近一次会诊'}
+        sub={session ? `${triggerText} · ${relTime(session.createdAt)}` : undefined}
         action={
           opinions.length > 0 ? (
             <span className="row wrap" style={{ gap: 6 }}>
-              <span className="badge badge-green">采纳 {adoptedCount}</span>
-              <span className="badge badge-gray">否决 {rejectedCount}</span>
-              <span className="badge badge-amber">待定 {pendingCount}</span>
+              <span className="badge badge-green">
+                {lang === 'en' ? `Adopted ${adoptedCount}` : `采纳 ${adoptedCount}`}
+              </span>
+              <span className="badge badge-gray">
+                {lang === 'en' ? `Dismissed ${rejectedCount}` : `否决 ${rejectedCount}`}
+              </span>
+              <span className="badge badge-amber">
+                {lang === 'en' ? `Pending ${pendingCount}` : `待定 ${pendingCount}`}
+              </span>
             </span>
           ) : undefined
         }
@@ -177,7 +189,11 @@ export async function AdvisorPanel() {
         {opinions.length === 0 ? (
           <Empty
             icon="🧑‍⚖️"
-            text="还没有会诊记录——点右上角「召集智囊团」，12 位人物会各自给你一条选题方向。"
+            text={
+              lang === 'en'
+                ? 'No council sessions yet — click "Convene Council" above to generate perspectives from 12 distinct persona angles.'
+                : '还没有会诊记录——点右上角「召集智囊团」，12 位人物会各自给你一条选题方向。'
+            }
           />
         ) : (
           <>
@@ -188,22 +204,30 @@ export async function AdvisorPanel() {
             )}
 
             <div className="row" style={{ gap: 8, marginBottom: 10 }}>
-              <span className="badge badge-brand">受众侧 {audienceOpinions.length} 席</span>
-              <span className="small muted">谁在看你 · 第一反应模拟</span>
+              <span className="badge badge-brand">
+                {lang === 'en' ? `Audience Panel (${audienceOpinions.length})` : `受众侧 ${audienceOpinions.length} 席`}
+              </span>
+              <span className="small muted">
+                {lang === 'en' ? 'Simulated first impressions from target readers' : '谁在看你 · 第一反应模拟'}
+              </span>
             </div>
             <div className="grid grid-3" style={{ marginBottom: 16 }}>
               {audienceOpinions.map((o) => (
-                <OpinionCard key={o.id} o={o} emoji={personaEmoji(o.personaKey, o.personaRole)} weight={personaWeight(o.personaKey)} />
+                <OpinionCard key={o.id} o={o} emoji={personaEmoji(o.personaKey, o.personaRole)} weight={personaWeight(o.personaKey)} lang={lang} />
               ))}
             </div>
 
             <div className="row" style={{ gap: 8, marginBottom: 10 }}>
-              <span className="badge badge-accent">专家侧 {expertOpinions.length} 席</span>
-              <span className="small muted">算法 / 爆款 / 变现 / 合规 / 数据 / 竞对</span>
+              <span className="badge badge-accent">
+                {lang === 'en' ? `Expert Panel (${expertOpinions.length})` : `专家侧 ${expertOpinions.length} 席`}
+              </span>
+              <span className="small muted">
+                {lang === 'en' ? 'Algorithm / Viral Hooks / Monetization / Compliance / Data / Competitors' : '算法 / 爆款 / 变现 / 合规 / 数据 / 竞对'}
+              </span>
             </div>
             <div className="grid grid-3">
               {expertOpinions.map((o) => (
-                <OpinionCard key={o.id} o={o} emoji={personaEmoji(o.personaKey, o.personaRole)} weight={personaWeight(o.personaKey)} />
+                <OpinionCard key={o.id} o={o} emoji={personaEmoji(o.personaKey, o.personaRole)} weight={personaWeight(o.personaKey)} lang={lang} />
               ))}
             </div>
           </>
@@ -229,6 +253,7 @@ function OpinionCard({
   o,
   emoji,
   weight,
+  lang,
 }: {
   o: {
     id: string;
@@ -242,6 +267,7 @@ function OpinionCard({
   };
   emoji: string;
   weight: number;
+  lang: string;
 }) {
   const isAudience = o.personaRole === 'audience';
   return (
@@ -253,10 +279,15 @@ function OpinionCard({
             <b className="small">{o.personaName}</b>
             <span className="row" style={{ gap: 4 }}>
               {weight !== 1 && (
-                <span className="badge badge-gray" title="自学习出的说话分量">×{weight.toFixed(2)}</span>
+                <span
+                  className="badge badge-gray"
+                  title={lang === 'en' ? 'Persona weight learned from past feedback' : '自学习出的说话分量'}
+                >
+                  ×{weight.toFixed(2)}
+                </span>
               )}
               <span className={`badge ${isAudience ? 'badge-brand' : 'badge-accent'}`}>
-                {isAudience ? '受众' : '专家'}
+                {isAudience ? (lang === 'en' ? 'Audience' : '受众') : (lang === 'en' ? 'Expert' : '专家')}
               </span>
             </span>
           </div>

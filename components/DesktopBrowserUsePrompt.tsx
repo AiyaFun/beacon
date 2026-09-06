@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { actIssueIngestToken } from '@/app/(app)/settings/actions';
+import { useI18n } from '@/lib/i18n';
 
 // 桌面客户端的「浏览器操作」权限提示（2026-09-04）。
 //
@@ -17,13 +18,15 @@ import { actIssueIngestToken } from '@/app/(app)/settings/actions';
 //
 // 🔒 令牌不经过页面存储：签出后直接 invoke 交给壳。
 
-type Status = { registered: boolean; base?: string; lastPollAt?: string; lastError?: string };
+type Status = { registered: boolean; base?: string; lastPollAt?: string; lastError?: string; host?: string };
 type TauriWin = Window & { __TAURI_INTERNALS__?: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } };
 
 const SNOOZE_KEY = 'beacon.desktop.browserUse.snoozedUntil';
 const SNOOZE_MS = 7 * 24 * 3600 * 1000;
 
 export function DesktopBrowserUsePrompt() {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const [status, setStatus] = useState<Status | null>(null);
   const [inDesktop, setInDesktop] = useState(false);
   const [snoozed, setSnoozed] = useState(true); // 先当作已推迟，等读到本机值再决定，避免闪一下
@@ -60,26 +63,29 @@ export function DesktopBrowserUsePrompt() {
   // 已登记且没报错：什么都不显示，权限已经给过了
   if (status.registered && !status.lastError) return null;
 
+  // 令牌被吊销：壳会自己清掉登记（executor.rs 收到 401），状态回到未登记 → 下面的「允许」按钮重新出现。
+  // 旧版壳不清的话，这里按错误文案兜底：也当未登记处理，别让他对着一行「登记已解除」找不到入口。
+  const revoked = !!status.lastError && /吊销|登记已解除/.test(status.lastError);
   // 已登记但执行器报错：说破那一条（多半是 Chrome 开着没带端口，只有用户能处理）
-  if (status.registered && status.lastError) {
+  if (status.registered && status.lastError && !revoked) {
     return (
       <div className="card" role="status" data-testid="desktop-browser-use-error"
         style={{ margin: '0 0 12px', padding: '10px 14px', borderLeft: '3px solid var(--red)' }}>
         <div className="small" style={{ lineHeight: 1.7 }}>
-          <b>浏览器操作暂时跑不动：</b>{status.lastError}
+          <b>{isEn ? 'Browser Use is temporarily stopped: ' : '浏览器操作暂时跑不动：'}</b>{status.lastError}
         </div>
       </div>
     );
   }
 
-  if (snoozed) return null;
+  if (snoozed && !revoked) return null;
 
   const allow = async () => {
     setBusy(true); setMsg(null);
     try {
-      const issued = await actIssueIngestToken(false, { agent: 'desktop' });
+      const issued = await actIssueIngestToken(false, { agent: 'desktop', host: status?.host });
       const token = (issued as { token?: string }).token;
-      if (!token) throw new Error('没签出令牌');
+      if (!token) throw new Error(isEn ? 'Failed to issue token' : '没签出令牌');
       await (window as TauriWin).__TAURI_INTERNALS__!.invoke('register_executor', { base: location.origin, token });
       await refresh();
     } catch (e) {
@@ -93,22 +99,37 @@ export function DesktopBrowserUsePrompt() {
   };
 
   return (
-    <div className="card" role="dialog" aria-label="浏览器操作权限" data-testid="desktop-browser-use-prompt"
+    <div className="card" role="dialog" aria-label={isEn ? 'Browser Use Permission' : '浏览器操作权限'} data-testid="desktop-browser-use-prompt"
       style={{ margin: '0 0 12px', padding: '12px 14px', borderLeft: '3px solid var(--brand, #f26b3a)' }}>
       <div className="row" style={{ gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ flex: 1, minWidth: 260 }}>
-          <div style={{ fontWeight: 600, marginBottom: 2 }}>允许这台客户端操作浏览器采集？</div>
+          <div style={{ fontWeight: 600, marginBottom: 2 }}>{isEn ? 'Allow this client to perform browser collection?' : '允许这台客户端操作浏览器采集？'}</div>
           <div className="small muted" style={{ lineHeight: 1.7 }}>
-            不装插件也能采：AI 派的采集任务（采竞对主页、回填你自己的 X / TikTok 主页、读网页）由客户端在后台用你自己的 Chrome 打开页面读取，结果直接交回。
-            <b>只读</b>：不点击、不填写、不提交，不替你登录。Chrome 需要带调试端口——客户端会自己拉起；已经开着的话第一次要完全退出（⌘Q）再让它起一次。
+            {isEn ? (
+              <>
+                Collect without browser extensions: collection tasks dispatched by AI (collecting competitor profiles, backfilling your own X/TikTok profiles, reading webpages) are executed by the client in the background and returned directly.
+                Uses an <b>isolated collection browser</b> (runs separately from your daily Chrome without interference—<b>no need to close anything</b>).
+                The only setup is logging into each platform once: the first time a platform is accessed, the window will appear on the login page; session state persists afterward.
+                <b> Read-only</b>: does not click, fill, submit, or handle passwords for you.
+              </>
+            ) : (
+              <>
+                不装插件也能采：AI 派的采集任务（采竞对主页、回填你自己的 X / TikTok 主页、读网页）由客户端在后台跑完，结果直接交回。
+                用的是一个<b>独立的采集浏览器</b>（跟你日常的 Chrome 分开，互不影响，<b>你不用退出任何东西</b>）。
+                代价是每个平台要各登录一次：首次采某个平台时，它会把那个窗口摆到你面前停在登录页，登完之后登录态长期留着。
+                <b>只读</b>：不点击、不填写、不提交，不替你输账号密码。
+              </>
+            )}
           </div>
           {msg && <div className="small" style={{ color: 'var(--red)', marginTop: 4 }}>{msg}</div>}
         </div>
         <div className="row" style={{ gap: 8 }}>
           <button type="button" className="btn btn-sm btn-primary" disabled={busy} data-act="allow-browser-use" onClick={allow}>
-            {busy ? '登记中…' : '允许'}
+            {busy ? (isEn ? 'Registering…' : '登记中…') : (isEn ? 'Allow' : '允许')}
           </button>
-          <button type="button" className="btn btn-sm" disabled={busy} data-act="snooze-browser-use" onClick={snooze}>以后再说</button>
+          <button type="button" className="btn btn-sm" disabled={busy} data-act="snooze-browser-use" onClick={snooze}>
+            {isEn ? 'Later' : '以后再说'}
+          </button>
         </div>
       </div>
     </div>

@@ -28,15 +28,18 @@ export type SelectableModel = {
 export const AUTO_MODEL_ID = 'auto';
 
 /** 这次派活可以选哪些模型。顺序即界面顺序：自动 → 自接入若干 → 外接入。 */
-export async function listSelectableModels(tenantId: string): Promise<SelectableModel[]> {
+export async function listSelectableModels(tenantId: string, lang: string = 'zh'): Promise<SelectableModel[]> {
+  const isEn = lang === 'en';
   const out: SelectableModel[] = [
     {
       id: AUTO_MODEL_ID,
-      label: '自动',
+      label: isEn ? 'Auto' : '自动',
       model: null,
       kind: 'auto',
       overseas: false,
-      note: '按你在「接入与密钥」里配的功能路由挑，没配就用默认渠道',
+      note: isEn
+        ? 'Routes automatically by function; uses default provider if unconfigured'
+        : '按你在「接入与密钥」里配的功能路由挑，没配就用默认渠道',
     },
   ];
 
@@ -54,7 +57,9 @@ export async function listSelectableModels(tenantId: string): Promise<Selectable
       model: p.model,
       kind: 'byok',
       overseas: p.region === 'overseas',
-      note: p.isDefault ? '你的默认渠道 · 烧你自己的额度' : '你自己接入的 · 烧你自己的额度',
+      note: isEn
+        ? (p.isDefault ? 'Default channel · uses your quota' : 'Custom connected · uses your quota')
+        : (p.isDefault ? '你的默认渠道 · 烧你自己的额度' : '你自己接入的 · 烧你自己的额度'),
     });
   }
 
@@ -63,11 +68,13 @@ export async function listSelectableModels(tenantId: string): Promise<Selectable
   if (can('platformLlmChannel')) {
     out.push({
       id: PLATFORM_PROVIDER_ID,
-      label: '平台默认模型',
+      label: isEn ? 'Platform Default Model' : '平台默认模型',
       model: null,
       kind: 'platform',
       overseas: false,
-      note: '平台垫付 · 按套餐分档计费，不用自己填 Key',
+      note: isEn
+        ? 'Platform covered · billed by plan tier, no key needed'
+        : '平台垫付 · 按套餐分档计费，不用自己填 Key',
     });
   }
   return out;

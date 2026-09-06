@@ -54,13 +54,13 @@ export type PostGrowth = {
 
 // 榜上摆哪些绝对数。**全是真实采到的量**，没采到的项自己不出现。
 const METRIC_CHIPS = [
-  { key: 'views', icon: '▶️', title: '播放/阅读量' },
-  { key: 'likes', icon: '👍', title: '点赞量' },
-  { key: 'comments', icon: '💬', title: '评论量' },
-  { key: 'collects', icon: '⭐', title: '收藏量' },
-  { key: 'shares', icon: '🔁', title: '转发量' },
-  { key: 'coins', icon: '🪙', title: '投币数（B站）' },
-  { key: 'danmaku', icon: '🎬', title: '弹幕数（B站）' },
+  { key: 'views', icon: '▶️', title: '播放/阅读量', titleEn: 'Views / Reads' },
+  { key: 'likes', icon: '👍', title: '点赞量', titleEn: 'Likes' },
+  { key: 'comments', icon: '💬', title: '评论量', titleEn: 'Comments' },
+  { key: 'collects', icon: '⭐', title: '收藏量', titleEn: 'Saves' },
+  { key: 'shares', icon: '🔁', title: '转发量', titleEn: 'Shares' },
+  { key: 'coins', icon: '🪙', title: '投币数（B站）', titleEn: 'Coins (Bilibili)' },
+  { key: 'danmaku', icon: '🎬', title: '弹幕数（B站）', titleEn: 'Danmaku (Bilibili)' },
 ] as const;
 
 /** 卡片行上按顺序考虑的指标键（平台没有的会被 displayKeys 滤掉）。 */
@@ -76,33 +76,34 @@ const GROWTH_PRIORITY = ['views', 'likes', 'comments', 'collects', 'shares'] as 
 function podiumCells(p: {
   views: number; likes: number; comments: number; collects: number; shares: number;
   rate: number | null; interaction: number;
-}): { lbl: string; val: string; hot: boolean }[] {
+}, lang: string): { lbl: string; val: string; hot: boolean }[] {
   const cells: { lbl: string; val: string; hot: boolean }[] = [];
   const push = (lbl: string, v: number) => { if (v > 0) cells.push({ lbl, val: fmtNum(v), hot: false }); };
-  push('播放量', p.views);
-  push('点赞', p.likes);
-  push('评论', p.comments);
-  push('收藏', p.collects);
-  push('转发', p.shares);
+  push(lang === 'en' ? 'Views' : '播放量', p.views);
+  push(lang === 'en' ? 'Likes' : '点赞', p.likes);
+  push(lang === 'en' ? 'Comments' : '评论', p.comments);
+  push(lang === 'en' ? 'Saves' : '收藏', p.collects);
+  push(lang === 'en' ? 'Shares' : '转发', p.shares);
   // 用同一个 pctOrNull 走格式化：文件里只留一条百分比路径，
   // 也避免绕过「不许无条件 toFixed」那条守卫（见 tests/algorithm/no-views-platforms.test.ts）
-  if (p.rate !== null) cells.push({ lbl: '互动率', val: pctOrNull(p.rate) ?? NA_TEXT, hot: p.rate > 0.03 });
+  if (p.rate !== null) cells.push({ lbl: lang === 'en' ? 'Rate' : '互动率', val: pctOrNull(p.rate) ?? NA_TEXT, hot: p.rate > 0.03 });
   // 一项都没采到时，至少把互动量摆出来（它自己会是 —）
-  if (cells.length === 0 && p.interaction >= 0) cells.push({ lbl: '互动量', val: fmtNum(p.interaction), hot: false });
+  if (cells.length === 0 && p.interaction >= 0) cells.push({ lbl: lang === 'en' ? 'Interactions' : '互动量', val: fmtNum(p.interaction), hot: false });
   return cells.slice(0, 3);
 }
 
-function GrowthChip({ g, label }: { g?: PostGrowth; label: string }) {
+function GrowthChip({ g, label, lang }: { g?: PostGrowth; label: string; lang: string }) {
   if (!g || g.status !== 'ok') return null;
   for (const k of GROWTH_PRIORITY) {
     const d = g.delta[k];
     if (typeof d !== 'number' || d === 0) continue;
-    const name = METRIC_CHIPS.find((c) => c.key === k)?.title.replace(/[（(].*$/, '') ?? k;
+    const c = METRIC_CHIPS.find((item) => item.key === k);
+    const name = lang === 'en' ? (c?.titleEn ?? k) : (c?.title.replace(/[（(].*$/, '') ?? k);
     return (
       <span
         className="metric-chip"
         style={{ color: d > 0 ? 'var(--green)' : 'var(--red)', fontWeight: 600 }}
-        title={`近 ${label}${name}净增（两次采集之间的差值）`}
+        title={lang === 'en' ? `Past ${label} net ${name} increase (delta between syncs)` : `近 ${label}${name}净增（两次采集之间的差值）`}
       >
         {d > 0 ? '↑' : '↓'} {fmtNum(Math.abs(d))} {name}
       </span>
@@ -115,7 +116,10 @@ function GrowthChip({ g, label }: { g?: PostGrowth; label: string }) {
 // 于是互动率/赞播比这些以播放为分母的指标一律不可得——
 // 表格里必须留个位置说明「没有」，而不是填一个 0.0% 冒充观测值。
 const NA_TEXT = '—';
-const NA_TITLE = '该平台公开页面不提供播放量，这项算不出来（点赞/评论/收藏/转发是真实采到的）';
+const getNaTitle = (lang: string) =>
+  lang === 'en'
+    ? 'Public page on this platform does not provide views; this rate cannot be calculated (likes/comments/saves/shares are actual observed metrics)'
+    : '该平台公开页面不提供播放量，这项算不出来（点赞/评论/收藏/转发是真实采到的）';
 /** 比率 → 百分比文本；null 表示算不出来，返回 null 让调用方决定是留白还是画占位。 */
 const pctOrNull = (x: number | null): string | null => (x === null ? null : `${(x * 100).toFixed(1)}%`);
 
@@ -197,7 +201,7 @@ export function CompetitorTopPosts({
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `高热作品榜单_${beijingDayKey()}.csv`);
+    link.setAttribute('download', lang === 'en' ? `viral_posts_${beijingDayKey()}.csv` : `高热作品榜单_${beijingDayKey()}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -364,14 +368,18 @@ export function CompetitorTopPosts({
             {undatedHidden > 0 && (
               <span
                 className="badge"
-                title="这些作品的发布时间没有采集到。「近 24 小时 / 7 天 / 30 天」问的是这段时间里发的，而我们并不知道它们是不是，所以不替你断言。换成「全部」就能看到。"
+                title={lang === 'en'
+                  ? 'Publish time was not captured for these posts. Time windows like 24h / 7d / 30d filter by publish date. Switch to "All" to view all posts.'
+                  : '这些作品的发布时间没有采集到。「近 24 小时 / 7 天 / 30 天」问的是这段时间里发的，而我们并不知道它们是不是，所以不替你断言。换成「全部」就能看到。'}
               >
-                另有 {undatedHidden} 条没采到发布时间，不在此时间窗内
+                {lang === 'en'
+                  ? `${undatedHidden} undated posts not in this time window`
+                  : `另有 ${undatedHidden} 条没采到发布时间，不在此时间窗内`}
               </span>
             )}
             {selectedIds.size > 0 && (
               <span className="badge badge-brand" style={{ fontWeight: 600 }}>
-                已勾选 {selectedIds.size} 项
+                {lang === 'en' ? `${selectedIds.size} selected` : `已勾选 ${selectedIds.size} 项`}
               </span>
             )}
           </div>
@@ -389,10 +397,10 @@ export function CompetitorTopPosts({
                 style={{ fontSize: 11, padding: '2px 10px', borderRadius: 12 }}
               >
                 <Icon.sparkles size={12} />
-                <span>批量转选题 ({selectedIds.size})</span>
+                <span>{lang === 'en' ? `Batch to Topics (${selectedIds.size})` : `批量转选题 (${selectedIds.size})`}</span>
               </Link>
               <button onClick={() => setSelectedIds(new Set())} className="btn btn-sm btn-ghost" style={{ fontSize: 11 }}>
-                取消勾选
+                {lang === 'en' ? 'Deselect' : '取消勾选'}
               </button>
             </div>
           )}
@@ -404,9 +412,9 @@ export function CompetitorTopPosts({
         <div className="podium-section">
           <div className="podium-header row-between">
             <span className="badge badge-brand" style={{ fontWeight: 700, fontSize: 12, padding: '3px 10px' }}>
-              👑 TOP 3 超级爆款领跑台
+              {lang === 'en' ? '👑 TOP 3 Viral Leaderboard' : '👑 TOP 3 超级爆款领跑台'}
             </span>
-            <span className="small muted">互动量最高的对标作品</span>
+            <span className="small muted">{lang === 'en' ? 'Competitor posts with highest interaction' : '互动量最高的对标作品'}</span>
           </div>
 
           <div className="podium-grid">
@@ -418,7 +426,11 @@ export function CompetitorTopPosts({
                   {/* 勋章 Header */}
                   <div className="podium-badge-header row-between">
                     <span className="podium-rank-tag">
-                      {rank === 1 ? '🥇 榜首爆款' : rank === 2 ? '🥈 榜眼高热' : '🥉 探花佳作'}
+                      {rank === 1
+                        ? (lang === 'en' ? '🥇 #1 Viral' : '🥇 榜首爆款')
+                        : rank === 2
+                          ? (lang === 'en' ? '🥈 #2 Top' : '🥈 榜眼高热')
+                          : (lang === 'en' ? '🥉 #3 Featured' : '🥉 探花佳作')}
                     </span>
                     <span
                       className="badge"
@@ -464,7 +476,7 @@ export function CompetitorTopPosts({
                       于是榜首赫然写着「评论 0 · 收藏 0」——那不是零互动，是没采到这两项。
                       和本文件其它地方同一条纪律：没有的项不出现，绝不用 0 冒充观测值。 */}
                   <div className="podium-metrics-grid">
-                    {podiumCells(p).map((it) => (
+                    {podiumCells(p, lang).map((it) => (
                       <div className="podium-metric-item" key={it.lbl}>
                         <span className="metric-lbl">{it.lbl}</span>
                         <span className="metric-val" style={{ color: it.hot ? '#10b981' : 'inherit' }}>
@@ -476,14 +488,14 @@ export function CompetitorTopPosts({
 
                   {/* 底部一键转选题 */}
                   <div className="row-between" style={{ marginTop: 12, paddingTop: 8, borderTop: '1px dashed var(--border)' }}>
-                    <span className="small muted">互动量 {p.interaction >= 0 ? fmtNum(p.interaction) : NA_TEXT}</span>
+                    <span className="small muted">{lang === 'en' ? 'Interactions ' : '互动量 '}{p.interaction >= 0 ? fmtNum(p.interaction) : NA_TEXT}</span>
                     <Link
                       href={`/topics?source=${encodeURIComponent(p.cleanTitle)}`}
                       className="btn btn-sm btn-primary"
                       style={{ borderRadius: 16, fontSize: 11, padding: '3px 10px' }}
                     >
                       <Icon.sparkles size={12} />
-                      <span>转选题</span>
+                      <span>{lang === 'en' ? 'To Topic' : '转选题'}</span>
                     </Link>
                   </div>
                 </div>
@@ -524,7 +536,7 @@ export function CompetitorTopPosts({
                       checked={isSelected}
                       onChange={() => toggleSelect(p.id)}
                       className="card-checkbox"
-                      title="勾选加入批量转选题"
+                      title={lang === 'en' ? 'Select to batch convert to topics' : '勾选加入批量转选题'}
                     />
                     <div className={`rank-badge rank-${rank <= 3 ? rank : 'normal'}`}>
                       {rank === 1 && <span className="rank-crown">🥇</span>}
@@ -559,7 +571,7 @@ export function CompetitorTopPosts({
                           target="_blank"
                           rel="noopener noreferrer"
                           className="post-title-link"
-                          title="在新标签页打开原作品"
+                          title={lang === 'en' ? 'Open original post in new tab' : '在新标签页打开原作品'}
                         >
                           {p.cleanTitle}
                           <Icon.arrow size={12} style={{ display: 'inline', marginLeft: 4, transform: 'rotate(-45deg)', opacity: 0.7 }} />
@@ -587,12 +599,13 @@ export function CompetitorTopPosts({
                           const c = METRIC_CHIPS.find((x) => x.key === k)!;
                           const v = p[k];
                           const has = typeof v === 'number' && v > 0;
+                          const titleLabel = lang === 'en' ? c.titleEn : c.title;
                           return (
                             <span
                               key={k}
                               className="metric-chip"
                               style={has ? undefined : { opacity: 0.5 }}
-                              title={has ? c.title : `${c.title}：${absenceNote(p.platform, k)}`}
+                              title={has ? titleLabel : `${titleLabel}: ${absenceNote(p.platform, k)}`}
                             >
                               {c.icon} {has ? fmtNum(v) : NA_TEXT}
                             </span>
@@ -604,14 +617,14 @@ export function CompetitorTopPosts({
                           <span
                             className={`badge ${p.rate > 0.03 ? 'badge-green' : p.rate > 0.015 ? 'badge-brand' : 'badge-gray'}`}
                             style={{ fontSize: 11, padding: '1px 6px' }}
-                            title="互动率 (点赞+评论+收藏 / 播放)"
+                            title={lang === 'en' ? 'Engagement rate (Likes+Comments+Saves / Views)' : '互动率 (点赞+评论+收藏 / 播放)'}
                           >
-                            {p.rate > 0.03 ? '🔥 ' : ''}互动率 {pctOrNull(p.rate)}
+                            {p.rate > 0.03 ? '🔥 ' : ''}{lang === 'en' ? 'Rate ' : '互动率 '}{pctOrNull(p.rate)}
                           </span>
                         )}
 
                         {/* 这条作品在当前时间窗内的增长 */}
-                        <GrowthChip g={p.growth} label={windowLabel} />
+                        <GrowthChip g={p.growth} label={windowLabel} lang={lang} />
                       </div>
                     </div>
                   </div>
@@ -622,10 +635,10 @@ export function CompetitorTopPosts({
                       onClick={() => setExpandedId(isExpanded ? null : p.id)}
                       className={`btn btn-sm ${isExpanded ? 'btn-brand-soft' : 'btn-ghost'}`}
                       style={{ fontSize: 12, padding: '4px 10px', borderRadius: 14 }}
-                      title="展开查看完整全维数据与爆点拆解"
+                      title={lang === 'en' ? 'Expand to view complete multidimensional data and viral breakdown' : '展开查看完整全维数据与爆点拆解'}
                     >
                       <Icon.bulb size={13} />
-                      <span>{isExpanded ? '收起拆解' : '拆解爆款'}</span>
+                      <span>{isExpanded ? (lang === 'en' ? 'Collapse' : '收起拆解') : (lang === 'en' ? 'Breakdown' : '拆解爆款')}</span>
                     </button>
 
                     <CompetitorTrendCell snapshots={p.snaps} />
@@ -643,10 +656,10 @@ export function CompetitorTopPosts({
                         gap: 4,
                         textDecoration: 'none',
                       }}
-                      title="将此爆款作品一键转为我的创作选题"
+                      title={lang === 'en' ? 'Turn this viral post into my topic with one click' : '将此爆款作品一键转为我的创作选题'}
                     >
                       <Icon.sparkles size={13} />
-                      <span>转选题</span>
+                      <span>{lang === 'en' ? 'To Topic' : '转选题'}</span>
                     </Link>
                   </div>
                 </div>
@@ -657,7 +670,7 @@ export function CompetitorTopPosts({
                     <div className="analysis-grid">
                       {/* 全维数据指标卡 */}
                       <div className="analysis-box">
-                        <div className="analysis-title">📊 基础数据对比</div>
+                        <div className="analysis-title">{lang === 'en' ? '📊 Core Metrics Comparison' : '📊 基础数据对比'}</div>
                         {/* 与卡片行上的 chip **同一套判据**：平台没有的项不占位，
                             平台有、这次没采到的画「—」并说明原因。
                             此前这里是七行写死的 fmtNum(p.x)，于是抖音的「播放/阅读: 0」、
@@ -668,9 +681,10 @@ export function CompetitorTopPosts({
                             const c = METRIC_CHIPS.find((x) => x.key === k)!;
                             const v = p[k];
                             const has = typeof v === 'number' && v > 0;
+                            const titleLabel = lang === 'en' ? c.titleEn : c.title;
                             return (
                               <span key={k} style={has ? undefined : { opacity: 0.6 }} title={has ? undefined : absenceNote(p.platform, k)}>
-                                {c.icon} {c.title}: <b>{has ? fmtNum(v) : NA_TEXT}</b>
+                                {c.icon} {titleLabel}: <b>{has ? fmtNum(v) : NA_TEXT}</b>
                               </span>
                             );
                           })}
@@ -682,34 +696,36 @@ export function CompetitorTopPosts({
                           绝大多数作品上三行全是「—」。换成真实采到的绝对数，
                           没采到的项不出现（不是显示 0）。 */}
                       <div className="analysis-box">
-                        <div className="analysis-title">📊 互动构成</div>
+                        <div className="analysis-title">{lang === 'en' ? '📊 Interaction Breakdown' : '📊 互动构成'}</div>
                         <div className="stack" style={{ gap: 6, fontSize: 12 }}>
                           {METRIC_CHIPS.map((c) => {
                             const v = p[c.key];
                             if (typeof v !== 'number' || v <= 0) return null;
+                            const titleLabel = lang === 'en' ? c.titleEn : c.title;
                             return (
                               <div className="row-between" key={c.key}>
-                                <span className="muted">{c.icon} {c.title}:</span>
+                                <span className="muted">{c.icon} {titleLabel}:</span>
                                 <b>{fmtNum(v)}</b>
                               </div>
                             );
                           })}
                           {p.interaction >= 0 && (
                             <div className="row-between" style={{ borderTop: '1px dashed var(--border)', paddingTop: 6 }}>
-                              <span className="muted">互动量合计（赞+评+藏+转）:</span>
+                              <span className="muted">{lang === 'en' ? 'Total interactions (Likes+Comments+Saves+Shares):' : '互动量合计（赞+评+藏+转）:'}</span>
                               <b>{fmtNum(p.interaction)}</b>
                             </div>
                           )}
                           {p.growth?.status === 'ok' && (
                             <div className="row-between">
-                              <span className="muted">近 {windowLabel}净增:</span>
+                              <span className="muted">{lang === 'en' ? `Net gain in past ${windowLabel}:` : `近 ${windowLabel}净增:`}</span>
                               <b>
                                 {GROWTH_PRIORITY.map((k) => {
                                   const d = p.growth!.delta[k];
                                   if (typeof d !== 'number' || d === 0) return null;
-                                  const name = METRIC_CHIPS.find((c) => c.key === k)?.title.replace(/[（(].*$/, '') ?? k;
+                                  const c = METRIC_CHIPS.find((item) => item.key === k);
+                                  const name = lang === 'en' ? (c?.titleEn ?? k) : (c?.title.replace(/[（(].*$/, '') ?? k);
                                   return `${name} ${d > 0 ? '+' : ''}${fmtNum(d)}`;
-                                }).filter(Boolean).join(' · ') || '无变化'}
+                                }).filter(Boolean).join(' · ') || (lang === 'en' ? 'No change' : '无变化')}
                               </b>
                             </div>
                           )}
@@ -722,19 +738,31 @@ export function CompetitorTopPosts({
                       <div className="row-between">
                         <span className="row" style={{ gap: 6, fontWeight: 600, fontSize: 12.5 }}>
                           <Icon.sparkles size={14} style={{ color: 'var(--brand)' }} />
-                          <span>AI 爆款拆解切入建议</span>
+                          <span>{lang === 'en' ? 'AI Viral Breakdown Angle Suggestions' : 'AI 爆款拆解切入建议'}</span>
                         </span>
                         <CopyTitleBtn title={p.cleanTitle} />
                       </div>
-                      <p className="small muted" style={{ marginTop: 4, lineHeight: 1.6 }}>
-                        💡 该作品在【{platformName(p.platform)}】展现出强烈的
-                        {p.collects > p.likes * 0.15
-                          ? '【实用干货与复看沉淀】'
-                          : p.comments > p.likes * 0.08
-                            ? '【话题争议与情绪共鸣】'
-                            : '【第一眼 Hook 吸睛力】'}。
-                        建议创作时保留原题的痛点切入，但使用差异化的案例或从反面视角反套路重构。
-                      </p>
+                      {lang === 'en' ? (
+                        <p className="small muted" style={{ marginTop: 4, lineHeight: 1.6 }}>
+                          💡 This post on [{platformName(p.platform)}] demonstrates strong{' '}
+                          {p.collects > p.likes * 0.15
+                            ? 'practical takeaways and retention value'
+                            : p.comments > p.likes * 0.08
+                              ? 'topical controversy and emotional resonance'
+                              : 'first-hook attention grab'}
+                          . When creating content, retain the original pain point angle, but employ differentiated examples or reframe from an unexpected contrarian perspective.
+                        </p>
+                      ) : (
+                        <p className="small muted" style={{ marginTop: 4, lineHeight: 1.6 }}>
+                          💡 该作品在【{platformName(p.platform)}】展现出强烈的
+                          {p.collects > p.likes * 0.15
+                            ? '【实用干货与复看沉淀】'
+                            : p.comments > p.likes * 0.08
+                              ? '【话题争议与情绪共鸣】'
+                              : '【第一眼 Hook 吸睛力】'}。
+                          建议创作时保留原题的痛点切入，但使用差异化的案例或从反面视角反套路重构。
+                        </p>
+                      )}
                     </div>
                   </div>
                 )}
@@ -755,16 +783,16 @@ export function CompetitorTopPosts({
                     onChange={toggleSelectAll}
                   />
                 </th>
-                <th style={{ width: 50, textAlign: 'center' }}>排名</th>
-                <th style={{ width: 90 }}>平台</th>
-                <th>作品标题 / 对标账号</th>
-                <th style={{ textAlign: 'right' }}>播放量</th>
-                <th style={{ textAlign: 'right' }}>点赞量</th>
-                <th style={{ textAlign: 'right' }}>评论量</th>
-                <th style={{ textAlign: 'right' }}>收藏量</th>
-                <th style={{ textAlign: 'right' }}>转发量</th>
-                <th style={{ textAlign: 'right' }}>互动率</th>
-                <th style={{ textAlign: 'center', width: 90 }}>操作</th>
+                <th style={{ width: 50, textAlign: 'center' }}>{lang === 'en' ? 'Rank' : '排名'}</th>
+                <th style={{ width: 90 }}>{lang === 'en' ? 'Platform' : '平台'}</th>
+                <th>{lang === 'en' ? 'Post Title / Creator' : '作品标题 / 对标账号'}</th>
+                <th style={{ textAlign: 'right' }}>{lang === 'en' ? 'Views' : '播放量'}</th>
+                <th style={{ textAlign: 'right' }}>{lang === 'en' ? 'Likes' : '点赞量'}</th>
+                <th style={{ textAlign: 'right' }}>{lang === 'en' ? 'Comments' : '评论量'}</th>
+                <th style={{ textAlign: 'right' }}>{lang === 'en' ? 'Saves' : '收藏量'}</th>
+                <th style={{ textAlign: 'right' }}>{lang === 'en' ? 'Shares' : '转发量'}</th>
+                <th style={{ textAlign: 'right' }}>{lang === 'en' ? 'Rate' : '互动率'}</th>
+                <th style={{ textAlign: 'center', width: 90 }}>{lang === 'en' ? 'Action' : '操作'}</th>
               </tr>
             </thead>
             <tbody>
@@ -814,7 +842,7 @@ export function CompetitorTopPosts({
                       </td>
                     ))}
                     <td style={{ textAlign: 'right', fontWeight: 600, color: (p.rate ?? 0) > 0.03 ? 'var(--green)' : 'inherit' }}>
-                      {pctOrNull(p.rate) ?? <span className="muted" title={NA_TITLE}>{NA_TEXT}</span>}
+                      {pctOrNull(p.rate) ?? <span className="muted" title={getNaTitle(lang)}>{NA_TEXT}</span>}
                     </td>
                     <td style={{ textAlign: 'center' }}>
                       <Link
@@ -822,7 +850,7 @@ export function CompetitorTopPosts({
                         className="btn btn-sm btn-ghost"
                         style={{ fontSize: 11, padding: '2px 6px' }}
                       >
-                        转选题
+                        {lang === 'en' ? 'To Topic' : '转选题'}
                       </Link>
                     </td>
                   </tr>
@@ -1195,6 +1223,7 @@ export function CompetitorTopPosts({
 }
 
 function CopyTitleBtn({ title }: { title: string }) {
+  const { lang } = useI18n();
   const [copied, setCopied] = useState(false);
   const copy = useCallback(() => {
     navigator.clipboard.writeText(title);
@@ -1203,7 +1232,7 @@ function CopyTitleBtn({ title }: { title: string }) {
   }, [title]);
   return (
     <button onClick={copy} className="btn btn-sm btn-ghost" style={{ fontSize: 11, padding: '2px 8px' }}>
-      {copied ? '已复制 ✓' : '复制标题'}
+      {copied ? (lang === 'en' ? 'Copied ✓' : '已复制 ✓') : (lang === 'en' ? 'Copy Title' : '复制标题')}
     </button>
   );
 }

@@ -16,6 +16,7 @@ import { fmtDate } from '@/lib/format';
 import { can as canEdition } from '@/lib/edition';
 import { botProviderName } from '@/lib/bot/types';
 import { HubHeader } from '@/components/HubHeader';
+import { getServerLang } from '@/lib/i18n/server';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,6 +24,8 @@ type SettingsQuery = { wx_bind?: string; wx_bind_error?: string };
 
 export default async function AccountSecurityPage(props: { searchParams: Promise<SettingsQuery> }) {
   const s = await getSession();
+  const lang = await getServerLang();
+  const isEn = lang === 'en';
   // 只有本机/私有化部署才有对外调用面；SaaS 上这张卡整个不渲染
   const apiTokens = apiEnabled()
     ? (await listApiTokens(s.memberId)).map((t) => ({
@@ -64,8 +67,8 @@ export default async function AccountSecurityPage(props: { searchParams: Promise
   return (
     <>
       <HubHeader
-        title="账号与安全"
-        hint="登录方式绑定与换绑 · 隐私与数据安全声明 · 数据导出与账号注销"
+        title={isEn ? 'Account & Security' : '账号与安全'}
+        hint={isEn ? 'Login methods & unbinding · Privacy & data security statement · Data export & account deletion' : '登录方式绑定与换绑 · 隐私与数据安全声明 · 数据导出与账号注销'}
       />
 
       {/* 本机密码（个人创作者小站）：设了它，登录页就多一条不依赖企业应用的门 */}

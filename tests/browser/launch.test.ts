@@ -5,8 +5,8 @@ import { chromeCandidates, cdpLive, DEFAULT_CDP_URL } from '@/lib/browser/launch
 import { orderedBefore } from '../helpers/anchor';
 
 // 服务端自己拉起本机 Chrome（2026-09-03）——「浏览器操作」一个开关的底座。
-// 【守的核心】与托盘那份（desktop/src-tauri/src/main.rs launch_collect_browser）同一套规矩：
-// 先探端口 / 绝不替用户杀浏览器 / 只 spawn / 只认本机回环。
+// 【守的核心】与客户端那份（desktop/src-tauri/src/collect_browser.rs）同一套规矩：
+// 先探端口 / 绝不替用户杀浏览器 / 独立 profile 只 spawn / 只认本机回环。
 
 const read = (p: string) => fs.readFileSync(path.join(__dirname, '..', '..', p), 'utf8');
 const strip = (s: string) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
@@ -19,16 +19,18 @@ describe('拉起本机 Chrome 的边界', () => {
     }
   });
 
-  it('🔒 顺序：先探端口 → 没通再看在不在跑 → 没跑才 spawn；Chrome 在跑就如实要求他自己退出', () => {
-    orderedBefore(src, 'await cdpLive(url)', 'await chromeRunning()');
-    orderedBefore(src, 'await chromeRunning()', 'spawn(chrome');
-    expect(src).toContain("reason: 'running_without_port'");
-    expect(src).toContain('我们不会替你关掉它');
+  it('🔒 顺序：先探端口 → 没通就用独立 profile 起一个；不再要求用户退出日常 Chrome（2026-09-05：Chrome ≥136 默认 profile 开不了端口，那条指引照做也永远不会成功）', () => {
+    orderedBefore(src, 'await cdpLive(url)', 'spawn(chrome');
+    expect(src, '还在要求 ⌘Q').not.toContain('完全退出 Chrome');
+    expect(src, '还在指向已删除的托盘项').not.toContain('「启动采集浏览器」');
+    expect(src).toContain("reason: 'not_up'");
   });
 
-  it('🔒 用默认 profile（登录态全在）、detached+unref（服务重启不带走浏览器）、端口只在本机', () => {
-    expect(src).not.toContain('--user-data-dir');
+  it('🔒 独立采集 profile（不碰日常 Chrome）、detached+unref（服务重启不带走浏览器）、端口只在本机', () => {
+    orderedBefore(src, 'fs.mkdirSync(dir, { recursive: true })', 'spawn(chrome');
+    expect(src).toContain('`--user-data-dir=${dir}`');
     expect(src).toContain('--remote-debugging-port=9222');
+    expect(src).toContain('--remote-debugging-address=127.0.0.1');
     expect(src).toContain('detached: true');
     expect(src).toContain('child.unref()');
     expect(src).toContain('vetCdpUrl(url)'); // cdpLive 先过回环闸

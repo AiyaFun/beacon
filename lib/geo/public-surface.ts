@@ -19,6 +19,10 @@
  * 「无法访问隐私权政策链接」，提交直接卡住（2026-07-27 真机撞到）。
  */
 export const PUBLIC_ALLOW: readonly string[] = [
+  // `/$`：只放行**首页本身**（`$` 是 Google / Bing / Baidu 都认的行尾锚）。
+  // 写成裸 `/` 会和 `Disallow: /` 等长打平，Google 按「平局 allow 胜」处理——等于全站放行。
+  '/$',
+  '/pricing', '/desktop', '/extension', '/topics-today',
   '/login', '/hotlists', '/legal', '/legal/', '/downloads',
   // ⚠️ 这两个是**给爬虫看的文件本身，必须自己放行自己**（2026-08-30 补）。
   // 少了它们，`Disallow: /` 会一并把它们封掉，于是同一份 robots.txt 底部的
@@ -36,6 +40,31 @@ export const PUBLIC_ALLOW: readonly string[] = [
  * llms.txt 的全部价值就在那句话上；只给链接的话，它和 sitemap.xml 没有区别。
  */
 export const PUBLIC_PAGES: readonly { path: string; title: string; desc: string }[] = [
+  {
+    path: '/',
+    title: '烽火台首页',
+    desc: '产品介绍：先知道做什么，再谈怎么写——每天一份带理由的选题推荐，八条选题来源、价格、下载入口、我们坚决没做的事。',
+  },
+  {
+    path: '/topics-today',
+    title: '今日选题榜',
+    desc: '按赛道给出今天可做的选题：跨平台正在扩散的话题 + 不依赖热点的常青题，每条带「为什么是今天」。免登录可看。',
+  },
+  {
+    path: '/pricing',
+    title: '价格',
+    desc: '三档价格与免费档能做什么，注册送 30 天标准版，不用填付款方式。',
+  },
+  {
+    path: '/desktop',
+    title: '桌面客户端下载',
+    desc: 'Mac / Windows 客户端：装上它，同行动态与你在 X / TikTok 的主页数据每天自动回流，不用装插件。',
+  },
+  {
+    path: '/extension',
+    title: '浏览器插件下载',
+    desc: 'Chrome 应用商店版与自托管 zip 版：在浏览时顺手存灵感、回填自己作品的表现数据。',
+  },
   {
     path: '/hotlists',
     title: '全网热榜',
@@ -65,6 +94,8 @@ export const PUBLIC_PAGES: readonly { path: string; title: string; desc: string 
  */
 export function allowedByRobots(path: string): boolean {
   return PUBLIC_ALLOW.some((a) => {
+    // `/$` 这类带行尾锚的条目只匹配那一个精确路径
+    if (a.endsWith('$')) return path === a.slice(0, -1);
     const prefix = a.replace(/\/$/, '');
     return path === prefix || path.startsWith(`${prefix}/`);
   });

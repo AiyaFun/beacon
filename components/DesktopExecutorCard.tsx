@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Card } from '@/components/ui';
 import { actIssueIngestToken } from '@/app/(app)/settings/actions';
+import { useI18n } from '@/lib/i18n';
 
 // 把这台桌面客户端登记为采集执行器（2026-09-03）。
 //
@@ -17,8 +18,10 @@ import { actIssueIngestToken } from '@/app/(app)/settings/actions';
 type TauriWin = Window & { __TAURI_INTERNALS__?: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } };
 
 export function DesktopExecutorCard() {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const [inDesktop, setInDesktop] = useState(false);
-  const [status, setStatus] = useState<{ registered: boolean; base?: string; label?: string; lastPollAt?: string; lastError?: string } | null>(null);
+  const [status, setStatus] = useState<{ registered: boolean; base?: string; label?: string; lastPollAt?: string; lastError?: string; host?: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -28,7 +31,7 @@ export function DesktopExecutorCard() {
     try {
       setStatus((await w.__TAURI_INTERNALS__.invoke('executor_status')) as typeof status);
     } catch (e) {
-      setMsg(`客户端版本太旧，还没有执行器能力（${e instanceof Error ? e.message : String(e)}）。先更新桌面客户端。`);
+      setMsg(isEn ? `Client version too old, lacking executor support (${e instanceof Error ? e.message : String(e)}). Please update desktop client first.` : `客户端版本太旧，还没有执行器能力（${e instanceof Error ? e.message : String(e)}）。先更新桌面客户端。`);
     }
   };
 
@@ -42,40 +45,61 @@ export function DesktopExecutorCard() {
   if (!inDesktop) return null;
 
   return (
-    <Card title="浏览器操作 · 让这台客户端替你采" sub="不装插件也能采：客户端在后台用你自己的 Chrome 跑" style={{ marginBottom: 16 }}>
+    <Card
+      title={isEn ? 'Browser Use · Let this client collect for you' : '浏览器操作 · 让这台客户端替你采'}
+      sub={isEn ? 'Collect without browser extensions: client runs an isolated collection browser in background' : '不装插件也能采：客户端在后台用一个独立的采集浏览器跑'}
+      style={{ marginBottom: 16 }}
+    >
       <p className="small muted" style={{ lineHeight: 1.8, margin: '0 0 10px' }}>
-        登记后，AI 派出的采集任务（采竞对主页、回填你自己的 X / TikTok 主页、读网页）由<b>这台电脑上的客户端</b>领走，
-        用你的 Chrome（带调试端口）打开页面读取，结果直接交回工作区。<b>只读</b>：不点击、不填写、不提交，不替你登录。
-        Chrome 需要带调试端口启动——客户端会自己拉起；已经开着的话第一次要完全退出再让它起一次。
+        {isEn ? (
+          <>
+            After registration, collection tasks dispatched by AI (collecting competitor profiles, backfilling your own X/TikTok profiles, reading webpages) are claimed by <b>this desktop client</b>,
+            opened and read in an <b>isolated collection browser</b>, and returned directly to your workspace. It runs separately from your daily Chrome without interference—<b>no need to close or quit anything</b>.
+            The only setup is logging into each platform once: the first time a platform is accessed, a window will appear on the login page; session state persists afterward.
+            <b> Read-only</b>: does not click, fill, submit, or handle passwords for you.
+          </>
+        ) : (
+          <>
+            登记后，AI 派出的采集任务（采竞对主页、回填你自己的 X / TikTok 主页、读网页）由<b>这台电脑上的客户端</b>领走，
+            用一个<b>独立的采集浏览器</b>打开页面读取，结果直接交回工作区。它跟你日常的 Chrome 分开、互不影响，<b>你不用退出任何东西</b>。
+            代价是每个平台要各登录一次：首次采某平台时窗口会摆到你面前停在登录页，登完之后登录态长期留着。
+            <b>只读</b>：不点击、不填写、不提交，不替你输账号密码。
+          </>
+        )}
       </p>
       <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         {status?.registered ? (
           <>
-            <span className="badge badge-ok">已登记</span>
+            <span className="badge badge-ok">{isEn ? 'Registered' : '已登记'}</span>
             <span className="small muted">
-              {status.base}{status.lastPollAt ? ` · 最近领活 ${status.lastPollAt}` : ' · 还没轮询过'}
+              {status.base}{status.lastPollAt ? (isEn ? ` · Last polled ${status.lastPollAt}` : ` · 最近领活 ${status.lastPollAt}`) : (isEn ? ' · Never polled' : ' · 还没轮询过')}
               {status.lastError ? <span style={{ color: 'var(--red)' }}> · {status.lastError}</span> : null}
             </span>
             <button type="button" className="btn btn-sm" disabled={busy} onClick={async () => {
               setBusy(true); setMsg(null);
-              try { await (window as TauriWin).__TAURI_INTERNALS__!.invoke('unregister_executor'); await refresh(); setMsg('已解除。令牌仍在「已授权设备」里，不用了可以吊销。'); }
-              catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
+              try {
+                await (window as TauriWin).__TAURI_INTERNALS__!.invoke('unregister_executor');
+                await refresh();
+                setMsg(isEn ? 'Unregistered. Token remains in Authorized Devices and can be revoked if no longer needed.' : '已解除。令牌仍在「已授权设备」里，不用了可以吊销。');
+              } catch (e) {
+                setMsg(e instanceof Error ? e.message : String(e));
+              }
               setBusy(false);
-            }}>解除登记</button>
+            }}>{isEn ? 'Unregister' : '解除登记'}</button>
           </>
         ) : (
           <button type="button" className="btn btn-sm btn-primary" disabled={busy} data-act="register-desktop-executor" onClick={async () => {
             setBusy(true); setMsg(null);
             try {
-              const issued = await actIssueIngestToken(false, { agent: 'desktop' });
+              const issued = await actIssueIngestToken(false, { agent: 'desktop', host: status?.host });
               const token = (issued as { token?: string }).token;
-              if (!token) throw new Error('没签出令牌');
+              if (!token) throw new Error(isEn ? 'Failed to issue token' : '没签出令牌');
               await (window as TauriWin).__TAURI_INTERNALS__!.invoke('register_executor', { base: location.origin, token });
               await refresh();
-              setMsg('已登记。现在派「采我的 X」这类任务，客户端会在一分钟内领走并跑完。');
+              setMsg(isEn ? 'Registered. Tasks like "Collect my X" will be claimed and completed by the client within a minute.' : '已登记。现在派「采我的 X」这类任务，客户端会在一分钟内领走并跑完。');
             } catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
             setBusy(false);
-          }}>{busy ? '登记中…' : '把这台客户端登记为采集执行器'}</button>
+          }}>{busy ? (isEn ? 'Registering…' : '登记中…') : (isEn ? 'Register this client as collector' : '把这台客户端登记为采集执行器')}</button>
         )}
       </div>
       {msg && <p className="small" style={{ marginTop: 8, lineHeight: 1.7 }}>{msg}</p>}

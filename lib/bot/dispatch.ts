@@ -38,7 +38,7 @@ const STATUS_LABEL: Record<string, string> = {
   queued: '排队中',
   running: '正在跑',
   awaiting_confirm: '等确认（要到网页里点头）',
-  waiting_browser: '等浏览器插件',
+  waiting_browser: '等采集执行器',
   waiting_quota: '等额度重置',
   done: '✅ 跑完了',
   failed: '❌ 没跑成',
@@ -76,7 +76,10 @@ export async function resolveDispatcher(
       return { ok: false, message: '这个微信号不是绑定这条机器人的那个号，或绑定它的成员已被停用——到网页「消息渠道」重新扫码绑定后再派。' };
     }
   } else {
-    const provider = (inbound.provider === 'dingtalk' || inbound.provider === 'wecom' ? inbound.provider : 'feishu') as OaProvider;
+    // 企微智能机器人回调里的 from.userid 就是企业成员的企微 userid，与企微自建应用同一套身份
+    const provider = (inbound.provider === 'dingtalk' || inbound.provider === 'wecom' || inbound.provider === 'wecom_aibot'
+      ? (inbound.provider === 'wecom_aibot' ? 'wecom' : inbound.provider)
+      : 'feishu') as OaProvider;
     member = await memberByOaIdentity(oaIdentity(provider, inbound.senderId));
     if (!member) {
       return {
@@ -177,7 +180,7 @@ export async function cmdDispatchPreset(workspaceId: string, ctx: InboundCtx, ar
 }
 
 /** 派活时出面的智能体（本会话选的，或渠道默认的）。见 router.ts 的 currentAgent。 */
-export type DispatchAgent = { id: string; name: string; persona: string };
+export type DispatchAgent = { id: string; name: string; persona: string; mode?: string | null; agentConfig?: string | null };
 
 /**
  * /执行 <目标>：一句话派给 AI 执行器。走 origin:'bot'，缺省直接跑完（与页面同权）。
@@ -203,12 +206,21 @@ export async function cmdDispatchGoal(
     // 此前走 origin:'api' 被强制成每步确认，群里派的活必然要回网页点头——用户拍板改掉。
     // 派活人已过 resolveDispatcher 三道身份闸，这里不再比「另一个模型代签」的对外 API 更严。
     // 选了智能体就让它出面：身份与职责拼进系统提示，运行记录上也记着是谁跑的
+    // 【职能型 bot 的白名单要接进运行】（2026-09-05）原先只把职责说明拼进提示——「情报员」照样能建发布计划，
+    // 职能只是嘴上说说。自主型模板的 agentConfig.tools 作为 toolAllowlist 传下去（startAgentRun 里
+    // 与用户自己的权限求交集，只能收窄不能放宽）；人设补充与缺省授权档一并带上。
+    const { parseAgentConfig, isAutonomous } = await import('../agent/autonomous');
+    const cfg = agent && isAutonomous(agent.mode) ? parseAgentConfig(agent.agentConfig) : null;
     const turn = await startAgentRun(who.ctx, g, {
       origin: 'bot',
       botChatRef: chatRef,
       ...(agent ? {
         agentTemplateId: agent.id,
-        agentSystemPrompt: `你现在以智能体「${agent.name}」的身份承接这件事。它的职责：${agent.persona || '（未填写职责说明）'}`,
+        agentSystemPrompt: `你现在以智能体「${agent.name}」的身份承接这件事。它的职责：${agent.persona || '（未填写职责说明）'}`
+          + (cfg?.systemPrompt ? `\n${cfg.systemPrompt}` : ''),
+        ...(cfg && cfg.tools.length ? { toolAllowlist: cfg.tools } : {}),
+        ...(cfg?.callBudget ? { callBudget: cfg.callBudget } : {}),
+        ...(cfg?.defaultAuthMode ? { authMode: cfg.defaultAuthMode } : {}),
       } : {}),
     });
     void import('./progress').then((m) => m.startProgressCard(turn.runId)).catch(() => {});
@@ -286,7 +298,7 @@ export async function echoRunToChat(runId: string, status: string): Promise<bool
         : status === 'failed'
           ? { title: `❌ 任务没跑成：${g}`, lines: [(run.error ?? '未说明原因').slice(0, 300)] }
           : status === 'waiting_browser'
-            ? { title: `🧩 任务在等浏览器插件：${g}`, lines: ['这一步要在你的浏览器里采集，打开装了烽火台插件的浏览器它就会接着跑。'] }
+            ? { title: `🧩 任务在等采集执行器（等浏览器插件）：${g}`, lines: ['这一步要在你的浏览器里采集，打开装了烽火台插件的浏览器它就会接着跑。'] }
             : status === 'waiting_quota'
               ? { title: `⏳ 任务在等额度：${g}`, lines: ['今天的 AI 额度用完了，额度重置后自动继续；急的话到网页里升级套餐。'] }
               : { title: `✋ 任务等你确认：${g}`, lines: ['下一步会改数据或花额度，到网页里点头它才继续（群里不能确认）。'] };

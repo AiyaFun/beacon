@@ -4,6 +4,7 @@ import path from 'node:path';
 import { shouldRun, parseWeekdays, MAX_RUNS_PER_DAY, AUTO_PAUSE_FAILS, type ScheduleRow } from '@/lib/workflow/schedule';
 import { AGENT_TICK_MINUTES, SCHEDULES, SCHEDULE_TZ } from '@/lib/jobs/schedule-config';
 import { JOB_TRACK } from '@/lib/jobs/types';
+import { at, between } from './helpers/anchor';
 
 const ROOT = path.resolve(__dirname, '..');
 const code = (p: string) =>
@@ -105,14 +106,14 @@ describe('三道闸是这个功能的前提，不是加分项', () => {
     // 2026-08-19 第一版只做了「自动停用」，告警漏了。定时是用户睡着时在跑：
     // 不通知的话他下一次知道是「某天发现稿子没出」，中间已经白停了好几天
     const src = code('lib/workflow/schedule.ts');
-    const pause = src.slice(src.indexOf('async function autoPauseIfBroken'));
+    const pause = src.slice(at(src, 'async function autoPauseIfBroken'));
     expect(pause).toMatch(/enabled: false/);
     expect(pause, '停用了却不通知').toMatch(/notify\(/);
   });
 
   it('闸①跳过也要说一声——那条计划今天没执行，不说等于静默吞掉', () => {
     const src = code('lib/workflow/schedule.ts');
-    const gate = src.slice(src.indexOf('MAX_RUNS_PER_DAY'), src.indexOf('await runWorkflow'));
+    const gate = between(src, 'MAX_RUNS_PER_DAY', 'await runWorkflow');
     expect(gate).toMatch(/notify\(/);
   });
 

@@ -3,6 +3,7 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Card } from '@/components/ui';
+import { useI18n } from '@/lib/i18n';
 import { actIssueApiToken, actRevokeApiToken } from './api-token-actions';
 
 // 对外调用令牌：让别的程序驱动这台烽火台。
@@ -18,6 +19,8 @@ import { actIssueApiToken, actRevokeApiToken } from './api-token-actions';
 export type TokenRow = { id: string; label: string; prefix: string; createdAt: string; lastUsedAt: string | null };
 
 export function ApiTokenCard({ rows, siteUrl }: { rows: TokenRow[]; siteUrl: string }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const router = useRouter();
   const [pending, start] = useTransition();
   const [label, setLabel] = useState('');
@@ -28,7 +31,7 @@ export function ApiTokenCard({ rows, siteUrl }: { rows: TokenRow[]; siteUrl: str
     setErr('');
     start(async () => {
       const r = await actIssueApiToken(label);
-      if (!r.ok) { setErr(r.error ?? '签发失败'); return; }
+      if (!r.ok) { setErr(r.error ?? (isEn ? 'Failed to issue token' : '签发失败')); return; }
       setFresh({ token: r.token!, label: r.label! });
       setLabel('');
       router.refresh();
@@ -41,7 +44,7 @@ export function ApiTokenCard({ rows, siteUrl }: { rows: TokenRow[]; siteUrl: str
           mcpServers: {
             beacon: {
               command: 'npx',
-              args: ['tsx', '<烽火台目录>/mcp-server.ts'],
+              args: ['tsx', isEn ? '<beacon-dir>/mcp-server.ts' : '<烽火台目录>/mcp-server.ts'],
               env: { BEACON_API_URL: siteUrl, BEACON_API_TOKEN: fresh.token },
             },
           },
@@ -54,22 +57,32 @@ export function ApiTokenCard({ rows, siteUrl }: { rows: TokenRow[]; siteUrl: str
   return (
     <Card
       id="api-tokens"
-      title="对外调用令牌"
-      sub="让脚本、系统定时任务，或 Claude 这类 MCP 客户端直接驱动这台烽火台"
+      title={isEn ? 'Outbound API Tokens' : '对外调用令牌'}
+      sub={isEn ? 'Enable scripts, cron jobs, or MCP clients like Claude to drive this Beacon instance directly' : '让脚本、系统定时任务，或 Claude 这类 MCP 客户端直接驱动这台烽火台'}
       style={{ marginBottom: 16 }}
     >
       <p className="small muted" style={{ marginTop: 0, lineHeight: 1.85 }}>
-        拿着令牌可以让烽火台<b>去做一件事</b>（查选题、看数据、写初稿…），
-        与你在网页上说一句话走的是同一条路——<b>权限也按你自己的角色算</b>。
-        <br />
-        ⚠️ 它<b>确认不了</b>会改数据或花钱的步骤：那一步永远停下来等人在网页上点。
-        调用方常常是另一个模型，让一个模型替你签下会花钱的事，这条线不开。
+        {isEn ? (
+          <>
+            With a token, other programs can <b>instruct Beacon to perform actions</b> (search topics, view data, draft content…), using the exact same path as chatting on the web — <b>permissions follow your own role</b>.
+            <br />
+            ⚠️ It <b>cannot confirm</b> actions that modify data or incur costs: those steps always pause and wait for human confirmation in the web UI. Callers are often other models, and letting an external model sign off on paid actions is not permitted.
+          </>
+        ) : (
+          <>
+            拿着令牌可以让烽火台<b>去做一件事</b>（查选题、看数据、写初稿…），
+            与你在网页上说一句话走的是同一条路——<b>权限也按你自己的角色算</b>。
+            <br />
+            ⚠️ 它<b>确认不了</b>会改数据或花钱的步骤：那一步永远停下来等人在网页上点。
+            调用方常常是另一个模型，让一个模型替你签下会花钱的事，这条线不开。
+          </>
+        )}
       </p>
 
       <div className="row wrap" style={{ gap: 8, marginBottom: 12 }}>
         <input
           className="input"
-          placeholder="给它起个名字，如「我的 Mac mini」"
+          placeholder={isEn ? 'Give it a name, e.g. "My Mac mini"' : '给它起个名字，如「我的 Mac mini」'}
           value={label}
           maxLength={40}
           disabled={pending}
@@ -77,7 +90,7 @@ export function ApiTokenCard({ rows, siteUrl }: { rows: TokenRow[]; siteUrl: str
           style={{ minWidth: 240 }}
         />
         <button className="btn btn-sm btn-primary" disabled={pending || !label.trim()} onClick={issue}>
-          {pending ? '签发中…' : '签一枚'}
+          {pending ? (isEn ? 'Issuing…' : '签发中…') : (isEn ? 'Issue Token' : '签一枚')}
         </button>
         {err && <span className="small" style={{ color: 'var(--red)' }}>{err}</span>}
       </div>
@@ -85,7 +98,9 @@ export function ApiTokenCard({ rows, siteUrl }: { rows: TokenRow[]; siteUrl: str
       {/* 明文只在这一刻出现一次 */}
       {fresh && (
         <div className="card" style={{ padding: 12, marginBottom: 12, borderColor: 'var(--amber)' }}>
-          <b className="small">「{fresh.label}」的令牌（只显示这一次，关掉就看不到了）</b>
+          <b className="small">
+            {isEn ? `Token for "${fresh.label}" (displayed once only; disappears once closed)` : `「${fresh.label}」的令牌（只显示这一次，关掉就看不到了）`}
+          </b>
           <input
             className="input"
             readOnly
@@ -94,7 +109,7 @@ export function ApiTokenCard({ rows, siteUrl }: { rows: TokenRow[]; siteUrl: str
             style={{ width: '100%', margin: '8px 0', fontFamily: 'ui-monospace, monospace', fontSize: 12 }}
           />
           <details>
-            <summary className="small" style={{ cursor: 'pointer' }}>配进 Claude 这类 MCP 客户端</summary>
+            <summary className="small" style={{ cursor: 'pointer' }}>{isEn ? 'Configure into MCP clients like Claude' : '配进 Claude 这类 MCP 客户端'}</summary>
             <pre
               className="small"
               style={{ marginTop: 8, whiteSpace: 'pre-wrap', wordBreak: 'break-all', background: 'var(--bg-2)', padding: 10, borderRadius: 6 }}
@@ -102,15 +117,18 @@ export function ApiTokenCard({ rows, siteUrl }: { rows: TokenRow[]; siteUrl: str
               {mcpConfig}
             </pre>
             <p className="small muted" style={{ margin: 0 }}>
-              把 <code>&lt;烽火台目录&gt;</code> 换成这台机器上烽火台代码所在的路径。
-              配好之后，在那个客户端里就能直接说「让烽火台看看我最近数据怎么样」。
+              {isEn ? (
+                <>Replace <code>&lt;beacon-dir&gt;</code> with the actual directory path where Beacon code is located on this machine. Once configured, you can directly ask the client "Ask Beacon to check my recent data".</>
+              ) : (
+                <>把 <code>&lt;烽火台目录&gt;</code> 换成这台机器上烽火台代码所在的路径。配好之后，在那个客户端里就能直接说「让烽火台看看我最近数据怎么样」。</>
+              )}
             </p>
           </details>
         </div>
       )}
 
       {rows.length === 0 ? (
-        <p className="small muted">还没有签过令牌。</p>
+        <p className="small muted">{isEn ? 'No tokens issued yet.' : '还没有签过令牌。'}</p>
       ) : (
         <div className="stack" style={{ gap: 2 }}>
           {rows.map((r) => (
@@ -118,22 +136,22 @@ export function ApiTokenCard({ rows, siteUrl }: { rows: TokenRow[]; siteUrl: str
               <span className="run-main">
                 <strong style={{ fontSize: 13 }}>{r.label}</strong>
                 <span className="small muted">
-                  <code>{r.prefix}</code> · 签于 {r.createdAt}
-                  {r.lastUsedAt ? ` · 最近用于 ${r.lastUsedAt}` : ' · 还没用过'}
+                  <code>{r.prefix}</code> {isEn ? `· Issued on ${r.createdAt}` : `· 签于 ${r.createdAt}`}
+                  {r.lastUsedAt ? (isEn ? ` · Last used ${r.lastUsedAt}` : ` · 最近用于 ${r.lastUsedAt}`) : (isEn ? ' · Never used' : ' · 还没用过')}
                 </span>
               </span>
               <button
                 className="btn btn-sm btn-ghost"
                 disabled={pending}
                 onClick={() => {
-                  if (!window.confirm(`收回「${r.label}」？用它的程序会立刻调不动。`)) return;
+                  if (!window.confirm(isEn ? `Revoke "${r.label}"? Programs using it will immediately lose access.` : `收回「${r.label}」？用它的程序会立刻调不动。`)) return;
                   start(async () => {
                     await actRevokeApiToken(r.id);
                     router.refresh();
                   });
                 }}
               >
-                收回
+                {isEn ? 'Revoke' : '收回'}
               </button>
             </div>
           ))}

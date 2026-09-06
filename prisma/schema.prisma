@@ -27,6 +27,11 @@ model Tenant {
   // Tenant.plan 已是 lib/quota.ts planOf() 的唯一真值来源，拆表必然造成双写漂移。
   // 付费历史/对账由 PaymentOrder 流水承担。
   planExpiresAt DateTime?
+  // 邀请码（2026-09-05 增长）：第一次打开「邀请」卡时懒生成，8 位 base32，全局唯一。null = 还没生成过。
+  referralCode  String?   @unique
+  // 由谁邀请来的（邀请方 Tenant.id）。注册那一刻写入，之后不改；邀请方被注销后它指向的行不存在，
+  // 所以**不设外键**——它是一条历史事实，不是活的关系。
+  referredBy    String?
   createdAt     DateTime  @default(now())
 
   workspaces         Workspace[]
@@ -86,6 +91,7 @@ model Workspace {
   accounts        CreatorAccount[]
   watchlistItems  WatchlistItem[]
   memories        MemoryEntry[]
+  agentLedgers AgentLedger[]
   tasks           TaskItem[]
   botIntegrations BotIntegration[]
   inspirations    InspirationItem[]
@@ -1060,6 +1066,29 @@ model MemoryEntry {
   account   CreatorAccount? @relation(fields: [accountId], references: [id], onDelete: SetNull)
 
   @@index([workspaceId, type])
+}
+
+// ── 智能体台账（2026-09-05，学 Grok Bot 的「工作状态放文件不放记忆」）────────────
+// 按「工作区 × 智能体」隔离的小型状态：
+//   kind='kv'   键值：盯单（watch list）、上次复盘到哪、用户偏好之类，key=名字 value=内容
+//   kind='seen' 已见清单：报过的帖子/热榜条目标识，情报员靠它做到「同一条不报两次」
+// 【为什么不放 MemoryEntry】记忆是按工作区/账号的「关于用户」的事实；台账是某个 bot 自己的
+// 工作进度，换个 bot 就不该看见。两者混在一张表里，检索时会把台账当成用户事实注入。
+model AgentLedger {
+  id          String   @id @default(cuid())
+  workspaceId String
+  // WorkflowTemplate.slug；通用助手用 'assistant'
+  botSlug     String
+  kind        String   @default("kv")
+  key         String
+  value       String   @default("")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, botSlug, kind, key])
+  @@index([workspaceId, botSlug, kind, updatedAt])
 }
 
 // ─────────────────────────── 域7：发布与回流 ───────────────────────────
@@ -2314,6 +2343,53 @@ model AiCrawlerHit {
 
   @@unique([agent, path, day])
   @@index([day])
+}
+
+// 漏斗事件（2026-09-05 增长缺口整改）：陌生人从「看到首页」到「下载 / 首次回流」走到了哪一步。
+//
+// 【为什么自己记而不是接第三方统计】① 全站此前没有一行访问埋点，「人是在哪一步走掉的」只能猜；
+// ② 第三方脚本要出网、要过隐私政策的披露，而我们只需要八个事件的计数；
+// ③ 与 AiCrawlerHit 同一条纪律：**不记 IP、不记 UA、不记查询串**。
+//
+// visitorId 是浏览器里随机生成的匿名串（localStorage），只用来把同一个人的几步串起来算转化率；
+// 它不是身份，换浏览器就断。tenantId 只在登录后的服务端事件里填（注册成功 / 建人设 / 首次推荐 / 首次回流），
+// 用来把「注册 → 付费」这一段接上。
+//
+// 【站点级表，刻意不启用 RLS】写入方多半还没有租户（匿名访客），只供运维台 /ops/growth 读。
+// 与 AiCrawlerHit / WxPayNotifyLog 同类，在 tests/rls-coverage.test.ts 的 EXEMPT 里写了理由。
+model FunnelEvent {
+  id        String   @id @default(cuid())
+  // 事件名，白名单见 lib/growth/funnel.ts 的 FUNNEL_EVENTS
+  name      String
+  // 发生在哪一页（去查询串、截断）
+  path      String   @default("")
+  // 事件附注：下载点击填 mac/win/ext-store/ext-zip；其余多为空
+  meta      String   @default("")
+  // 匿名访客串（客户端随机），可空：服务端事件没有它
+  visitorId String?
+  tenantId  String?
+  // 北京时间逻辑日 YYYY-MM-DD（容器 UTC 会把清晨算进前一天，见 lib/beijing.ts）
+  day       String
+  createdAt DateTime @default(now())
+
+  @@index([day, name])
+  @@index([visitorId])
+  @@index([tenantId])
+}
+
+// 邀请奖励发放记录（2026-09-05）：谁邀请了谁、各给了几天。
+//
+// 一张表而不是两个计数字段，是为了**可对账**：邀请奖励改的是 planExpiresAt（钱的边界），
+// 出了争议要能回答「这 7 天从哪来」。inviteeTenantId 唯一 = 一个新租户只能被奖励一次。
+// 没有外键：任一方注销后这条历史仍要留着对账（与 CollectionRun 同口径）。
+model ReferralGrant {
+  id              String   @id @default(cuid())
+  inviterTenantId String
+  inviteeTenantId String   @unique
+  days            Int
+  createdAt       DateTime @default(now())
+
+  @@index([inviterTenantId, createdAt])
 }
 
 // AI 引用回执：AI 的回答里引了谁，其中有没有你自己的（2026-08-29）。

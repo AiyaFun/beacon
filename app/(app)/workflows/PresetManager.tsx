@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { actSavePreset, actTogglePreset, actDeletePreset } from './preset-actions';
 import { AUTH_GROUPS, groupOf, toolsForGroups, type AuthGroupKey } from '@/lib/agent/auth-groups';
+import { useI18n } from '@/lib/i18n/context';
 
 // ── 一键任务的管理区（/workflows#presets）────────────────────────────────────
 //
@@ -33,6 +34,8 @@ export function PresetManager({
   tools: ToolOption[];
 }) {
   const router = useRouter();
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const [pending, start] = useTransition();
   const [editing, setEditing] = useState<PresetRow | null>(null);
   const [err, setErr] = useState('');
@@ -53,7 +56,7 @@ export function PresetManager({
         authMode: row.authMode,
         preauthorizedTools: row.preauthorizedTools,
       });
-      if (!r.ok) { setErr(r.error ?? '没能保存'); return; }
+      if (!r.ok) { setErr(r.error ?? (isEn ? 'Failed to save' : '没能保存')); return; }
       setEditing(null);
       router.refresh();
     });
@@ -63,7 +66,7 @@ export function PresetManager({
     setErr('');
     start(async () => {
       const r = await fn();
-      if (!r.ok) { setErr(r.error ?? '没能完成'); return; }
+      if (!r.ok) { setErr(r.error ?? (isEn ? 'Failed to complete' : '没能完成')); return; }
       router.refresh();
     });
   }
@@ -74,12 +77,14 @@ export function PresetManager({
           （用户 2026-08-26 截图里「一键任务」上下两行连着出现两次）。这里只留动作按钮。 */}
       <div className="row" style={{ justifyContent: 'flex-end', marginBottom: 10 }}>
         <button className="btn btn-sm" disabled={pending} onClick={() => setEditing(blank())}>
-          ＋ 新建一张
+          {isEn ? '＋ New Preset' : '＋ 新建一张'}
         </button>
       </div>
 
       {presets.length === 0 && !editing && (
-        <p className="small muted">还没有一键任务。反复要做的事存成一张卡，以后点一下就派。</p>
+        <p className="small muted">
+          {isEn ? 'No one-click tasks yet. Save recurring tasks as cards to dispatch with a single click.' : '还没有一键任务。反复要做的事存成一张卡，以后点一下就派。'}
+        </p>
       )}
 
       <div className="stack" style={{ gap: 8 }}>
@@ -92,20 +97,20 @@ export function PresetManager({
               </span>
               {p.agentTemplateId && (
                 <span className="badge badge-gray">
-                  {agents.find((a) => a.id === p.agentTemplateId)?.label ?? '（智能体已删除）'}
+                  {agents.find((a) => a.id === p.agentTemplateId)?.label ?? (isEn ? '(Agent deleted)' : '（智能体已删除）')}
                 </span>
               )}
               {p.preauthorizedTools.length > 0 && (
-                <span className="badge badge-amber">已授权 {p.preauthorizedTools.length} 个动作</span>
+                <span className="badge badge-amber">{isEn ? `${p.preauthorizedTools.length} actions authorized` : `已授权 ${p.preauthorizedTools.length} 个动作`}</span>
               )}
-              {!p.enabled && <span className="badge badge-gray">已停用</span>}
+              {!p.enabled && <span className="badge badge-gray">{isEn ? 'Disabled' : '已停用'}</span>}
             </span>
             <span className="row" style={{ gap: 6 }}>
-              <button className="btn btn-sm btn-ghost" disabled={pending} onClick={() => setEditing(p)}>改</button>
+              <button className="btn btn-sm btn-ghost" disabled={pending} onClick={() => setEditing(p)}>{isEn ? 'Edit' : '改'}</button>
               <button className="btn btn-sm btn-ghost" disabled={pending} onClick={() => act(() => actTogglePreset(p.id, !p.enabled))}>
-                {p.enabled ? '停用' : '启用'}
+                {p.enabled ? (isEn ? 'Disable' : '停用') : (isEn ? 'Enable' : '启用')}
               </button>
-              <button className="btn btn-sm btn-ghost" disabled={pending} onClick={() => act(() => actDeletePreset(p.id))}>删</button>
+              <button className="btn btn-sm btn-ghost" disabled={pending} onClick={() => act(() => actDeletePreset(p.id))}>{isEn ? 'Delete' : '删'}</button>
             </span>
           </div>
         ))}
@@ -127,6 +132,8 @@ function PresetForm({
   onCancel: () => void;
   onSave: (r: PresetRow) => void;
 }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const [draft, setDraft] = useState<PresetRow>(row);
   const checked = new Set<AuthGroupKey>(
     AUTH_GROUPS.filter((g) => tools.some((t) => groupOf(t) === g.key && draft.preauthorizedTools.includes(t.name))).map((g) => g.key),
@@ -144,40 +151,40 @@ function PresetForm({
     <div className="card" style={{ padding: 14, marginTop: 12 }}>
       <div className="stack" style={{ gap: 10 }}>
         <input
-          className="input" placeholder="卡片名字，例如：看昨天数据给建议"
+          className="input" placeholder={isEn ? 'Card title, e.g., Review yesterday performance & advise' : '卡片名字，例如：看昨天数据给建议'}
           value={draft.title} disabled={pending}
           onChange={(e) => setDraft({ ...draft, title: e.target.value })}
         />
         <textarea
-          className="textarea" rows={3} placeholder="派出去的那句话，例如：看看我最近三天的作品数据，挑两条值得复用的思路"
+          className="textarea" rows={3} placeholder={isEn ? 'Goal prompt to dispatch, e.g., Check my post metrics over past 3 days and pick 2 reusable patterns' : '派出去的那句话，例如：看看我最近三天的作品数据，挑两条值得复用的思路'}
           value={draft.goal} disabled={pending}
           onChange={(e) => setDraft({ ...draft, goal: e.target.value })}
         />
         <label className="small">
-          让谁干：
+          {isEn ? 'Assign to: ' : '让谁干：'}
           <select
             className="select" style={{ marginLeft: 8, maxWidth: 280 }}
             value={draft.agentTemplateId ?? ''} disabled={pending}
             onChange={(e) => setDraft({ ...draft, agentTemplateId: e.target.value || null })}
           >
-            <option value="">通用助手</option>
+            <option value="">{isEn ? 'General Assistant' : '通用助手'}</option>
             {agents.map((a) => (
-              <option key={a.id} value={a.id}>{a.label}{a.autonomous ? '（自主）' : ''}</option>
+              <option key={a.id} value={a.id}>{a.label}{a.autonomous ? (isEn ? ' (Autonomous)' : '（自主）') : ''}</option>
             ))}
           </select>
         </label>
 
         <div>
-          <div className="small" style={{ marginBottom: 6 }}>这张卡派出去时：</div>
+          <div className="small" style={{ marginBottom: 6 }}>{isEn ? 'When dispatched:' : '这张卡派出去时：'}</div>
           <label className="row small" style={{ gap: 8, alignItems: 'flex-start', cursor: 'pointer', marginBottom: 6 }}>
             <input type="radio" name="preset-auth-mode" checked={!askEach} disabled={pending}
               onChange={() => setDraft({ ...draft, authMode: 'unattended', preauthorizedTools: [] })} style={{ marginTop: 3 }} />
-            <span><strong>直接跑完</strong><span className="muted" style={{ marginLeft: 6 }}>不逐个问你，做完汇报（缺省）</span></span>
+            <span><strong>{isEn ? 'Run autonomously' : '直接跑完'}</strong><span className="muted" style={{ marginLeft: 6 }}>{isEn ? 'Execute without asking each step, report at completion (Default)' : '不逐个问你，做完汇报（缺省）'}</span></span>
           </label>
           <label className="row small" style={{ gap: 8, alignItems: 'flex-start', cursor: 'pointer', marginBottom: 6 }}>
             <input type="radio" name="preset-auth-mode" checked={askEach} disabled={pending}
               onChange={() => setDraft({ ...draft, authMode: 'confirm_each', preauthorizedTools: [] })} style={{ marginTop: 3 }} />
-            <span><strong>每一步都先问我</strong><span className="muted" style={{ marginLeft: 6 }}>下面勾上的几类不用问，没勾的照旧停下来</span></span>
+            <span><strong>{isEn ? 'Ask before each step' : '每一步都先问我'}</strong><span className="muted" style={{ marginLeft: 6 }}>{isEn ? 'Checked categories below run preauthorized; unchecked will pause and ask' : '下面勾上的几类不用问，没勾的照旧停下来'}</span></span>
           </label>
           {askEach && AUTH_GROUPS.map((g) => {
             const inGroup = tools.filter((t) => groupOf(t) === g.key);
@@ -185,21 +192,29 @@ function PresetForm({
             return (
               <label key={g.key} className="row small" style={{ gap: 8, alignItems: 'flex-start', cursor: 'pointer', marginBottom: 6, marginLeft: 24 }}>
                 <input type="checkbox" checked={checked.has(g.key)} disabled={pending} onChange={() => toggleGroup(g.key)} style={{ marginTop: 3 }} />
-                <span><strong>{g.name}</strong><span className="muted" style={{ marginLeft: 6 }}>{g.hint}</span></span>
+                <span><strong>{isEn ? g.nameEn : g.name}</strong><span className="muted" style={{ marginLeft: 6 }}>{isEn ? g.hintEn : g.hint}</span></span>
               </label>
             );
           })}
           {/* 与派发卡同一条说明：签合约那几样是机制级的闸，勾了也仍然会问 */}
           <div className="small muted">
-            建发布计划、写长期记忆、配定时、拼新智能体这几样<strong>无论选哪种都会再问你一次</strong>。
+            {isEn ? (
+              <>
+                Publish plans, long-term memory, recurring schedules, and new agents <strong>will always ask for confirmation regardless of setting</strong>.
+              </>
+            ) : (
+              <>
+                建发布计划、写长期记忆、配定时、拼新智能体这几样<strong>无论选哪种都会再问你一次</strong>。
+              </>
+            )}
           </div>
         </div>
 
         <div className="row wrap" style={{ gap: 8 }}>
           <button className="btn btn-sm btn-primary" disabled={pending || !draft.title.trim() || !draft.goal.trim()} onClick={() => onSave(draft)}>
-            {pending ? '保存中…' : '保存'}
+            {pending ? (isEn ? 'Saving...' : '保存中…') : (isEn ? 'Save' : '保存')}
           </button>
-          <button className="btn btn-sm btn-ghost" disabled={pending} onClick={onCancel}>取消</button>
+          <button className="btn btn-sm btn-ghost" disabled={pending} onClick={onCancel}>{isEn ? 'Cancel' : '取消'}</button>
         </div>
       </div>
     </div>

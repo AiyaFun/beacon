@@ -2,7 +2,18 @@ import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { parseJson } from '@/lib/json';
-import { TOPIC_DIMENSIONS, TOPIC_STATES, TOPIC_QUEUES, TOPIC_SOURCE_LABEL, platformName } from '@/lib/constants';
+import {
+  TOPIC_DIMENSIONS,
+  TOPIC_STATES,
+  TOPIC_QUEUES,
+  TOPIC_SOURCE_LABEL,
+  platformName,
+  topicDimensionName,
+  topicSourceName,
+  topicSourceHint,
+  topicQueueName,
+  topicQueueDesc,
+} from '@/lib/constants';
 import { EVERGREEN_MIN_RESERVE } from '@/lib/topic/sources/evergreen';
 import { buildBattleCards, hasBattleContent, formatViews, type BattleCard } from '@/lib/topic/battlecard';
 import { BLUE_SEA_BADGE } from '@/lib/topic/bluesea';
@@ -36,49 +47,50 @@ const TABS = [
 
 type TopicRow = Awaited<ReturnType<typeof prisma.topicIdea.findMany>>[number];
 
-// 作战卡：只放查库查出来的事实，一条预测都不放（见 lib/topic/battlecard.ts 文件头）。
-// 用 <details> 折叠，默认收起——它是「决定要做之后」才需要的信息，
-// 摊开在卡片上会把真正要做的判断（切入角 + 证据）淹掉。
-function BattleSection({ card }: { card: BattleCard }) {
+function BattleSection({ card, lang }: { card: BattleCard; lang: string }) {
   return (
     <details style={{ marginTop: 12 }}>
       <summary className="small" style={{ cursor: 'pointer', color: 'var(--brand)' }}>
-        作战卡 · 参考样本 / 发布时机 / 竞争密度
+        {lang === 'en'
+          ? 'Battle Card · Reference Samples / Timing / Competition'
+          : '作战卡 · 参考样本 / 发布时机 / 竞争密度'}
       </summary>
       <div className="stack small" style={{ gap: 8, marginTop: 10, paddingLeft: 4 }}>
-        {/* 小成本验证建议：只在「这条贵 + 你有做不完的历史」同时成立时才出现，
-            所以它出现的时候值得放在最前面看到。 */}
         {card.lightTrial && (
           <div style={{ padding: 8, borderRadius: 8, background: 'var(--surface-2)' }}>
-            <span className="muted">小成本验证：</span>
+            <span className="muted">{lang === 'en' ? 'Low-Cost Trial: ' : '小成本验证：'}</span>
             {card.lightTrial}
           </div>
         )}
         {card.bestSlot && (
           <div>
-            <span className="muted">建议时段：</span>
+            <span className="muted">{lang === 'en' ? 'Suggested Slot: ' : '建议时段：'}</span>
             {card.bestSlot.label}
             <span className="muted">
-              （你在这个时段发过 {card.bestSlot.sample} 条，均播 {formatViews(card.bestSlot.avgViews)}）
+              {lang === 'en'
+                ? ` (You posted ${card.bestSlot.sample} times in this slot, avg ${formatViews(card.bestSlot.avgViews)})`
+                : `（你在这个时段发过 ${card.bestSlot.sample} 条，均播 ${formatViews(card.bestSlot.avgViews)}）`}
             </span>
           </div>
         )}
         {card.benchmark && (
           <div>
-            <span className="muted">你的水位：</span>
-            {platformName(card.benchmark.platform)}近 {card.benchmark.sample} 条均播{' '}
-            {formatViews(card.benchmark.avgViews)}，最好一条 {formatViews(card.benchmark.bestViews)}
+            <span className="muted">{lang === 'en' ? 'Your Baseline: ' : '你的水位：'}</span>
+            {platformName(card.benchmark.platform)}
+            {lang === 'en'
+              ? ` recent ${card.benchmark.sample} posts avg ${formatViews(card.benchmark.avgViews)}, best ${formatViews(card.benchmark.bestViews)}`
+              : `近 ${card.benchmark.sample} 条均播 ${formatViews(card.benchmark.avgViews)}，最好一条 ${formatViews(card.benchmark.bestViews)}`}
           </div>
         )}
         <div>
-          <span className="muted">竞争密度：</span>
+          <span className="muted">{lang === 'en' ? 'Competition Density: ' : '竞争密度：'}</span>
           {card.rivals === 0
-            ? '近 72 小时你监控的竞对里没人做同题'
-            : `近 72 小时有 ${card.rivals} 条同题竞对作品`}
+            ? (lang === 'en' ? 'No tracked competitors covered this topic in past 72h' : '近 72 小时你监控的竞对里没人做同题')
+            : (lang === 'en' ? `${card.rivals} competitor posts on this topic in past 72h` : `近 72 小时有 ${card.rivals} 条同题竞对作品`)}
         </div>
         {card.references.length > 0 && (
           <div>
-            <span className="muted">参考样本：</span>
+            <span className="muted">{lang === 'en' ? 'Reference Samples: ' : '参考样本：'}</span>
             <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
               {card.references.map((r, i) => (
                 <li key={i} style={{ lineHeight: 1.7 }}>
@@ -92,7 +104,7 @@ function BattleSection({ card }: { card: BattleCard }) {
                   <span className="muted">
                     {' '}
                     · {platformName(r.platform)}
-                    {r.views > 0 ? ` · ${formatViews(r.views)} 播放` : ''}
+                    {r.views > 0 ? ` · ${formatViews(r.views)} ${lang === 'en' ? 'views' : '播放'}` : ''}
                   </span>
                 </li>
               ))}
@@ -104,13 +116,22 @@ function BattleSection({ card }: { card: BattleCard }) {
   );
 }
 
-function TopicCard({ t, battle, votes }: { t: TopicRow; battle?: BattleCard; votes?: VoteSummary }) {
+function TopicCard({
+  t,
+  battle,
+  votes,
+  lang,
+}: {
+  t: TopicRow;
+  battle?: BattleCard;
+  votes?: VoteSummary;
+  lang: string;
+}) {
   const scores = parseJson<Record<string, number>>(t.scores, {});
-  const source = TOPIC_SOURCE_LABEL[t.sourceType] ?? {
-    name: t.sourceType,
-    badge: 'badge-gray',
-    hint: '',
-  };
+  const sourceLabel = topicSourceName(t.sourceType, lang);
+  const sourceHint = topicSourceHint(t.sourceType, lang);
+  const sourceBadge = TOPIC_SOURCE_LABEL[t.sourceType]?.badge ?? 'badge-gray';
+
   return (
     <Card style={{ display: 'flex', flexDirection: 'column' }}>
       {/* 标题 + 大分 */}
@@ -118,52 +139,80 @@ function TopicCard({ t, battle, votes }: { t: TopicRow; battle?: BattleCard; vot
         <div style={{ flex: 1 }}>
           <div className="row wrap" style={{ gap: 8, alignItems: 'center', marginBottom: 6 }}>
             <b style={{ fontSize: 16 }}>{t.title}</b>
-            {/* 信任分层：这条推荐是「查库查出证据」还是「AI 凭人设直觉给的」，用户一眼要能分。
-                有 evidence（候选源查库查出的事实）＝有据；否则如实标 AI 建议，不装成有依据。 */}
             {t.evidence ? (
-              <span className="badge badge-green" title="有站内可观测数据支撑：竞对同题密度、你的历史水位、跨平台扩散等（见下方「为什么推给你」）">有据推荐</span>
+              <span
+                className="badge badge-green"
+                title={
+                  lang === 'en'
+                    ? 'Supported by observable metrics: competitor coverage, historical baseline, platform diffusion'
+                    : '有站内可观测数据支撑：竞对同题密度、你的历史水位、跨平台扩散等（见下方「为什么推给你」）'
+                }
+              >
+                {lang === 'en' ? 'Evidence-backed' : '有据推荐'}
+              </span>
             ) : (
-              <span className="badge badge-gray" title="这条主要靠人设匹配与热度信号给出，暂无你的账号数据支撑——登记回流数据后推荐会更准">AI 建议</span>
+              <span
+                className="badge badge-gray"
+                title={
+                  lang === 'en'
+                    ? 'AI suggestion based on niche matching. Log performance data to refine accuracy.'
+                    : '这条主要靠人设匹配与热度信号给出，暂无你的账号数据支撑——登记回流数据后推荐会更准'
+                }
+              >
+                {lang === 'en' ? 'AI Suggestion' : 'AI 建议'}
+              </span>
             )}
             {t.isExploration && (
-              <span className="badge badge-amber" title="故意放一条不那么稳的，帮你开新赛道">探索位</span>
+              <span
+                className="badge badge-amber"
+                title={lang === 'en' ? 'Exploratory angle outside your usual comfort zone' : '故意放一条不那么稳的，帮你开新赛道'}
+              >
+                {lang === 'en' ? 'Exploration' : '探索位'}
+              </span>
             )}
-            {/* 蓝海标：门槛定得高（0.55），满屏都是就等于没有。
-                title 里如实说清它是站内可观测的代理信号，不是搜索指数。 */}
             {(t.blueSea ?? 0) >= BLUE_SEA_BADGE && (
               <span
                 className="badge badge-green"
-                title="这个话题在榜上活得久、跨平台扩散广，而你监控的同行还没怎么做。依据是站内可观测信号（在榜时长 × 扩散平台数 × 竞对同题密度），不是全网搜索指数。"
+                title={
+                  lang === 'en'
+                    ? 'Long chart shelf-life and wide cross-platform spread with minimal competitor coverage.'
+                    : '这个话题在榜上活得久、跨平台扩散广，而你监控的同行还没怎么做。依据是站内可观测信号（在榜时长 × 扩散平台数 × 竞对同题密度），不是全网搜索指数。'
+                }
               >
-                蓝海
+                {lang === 'en' ? 'Blue Ocean' : '蓝海'}
               </span>
             )}
           </div>
-          <span className={`badge ${source.badge}`} title={source.hint}>
-            {source.name}
+          <span className={`badge ${sourceBadge}`} title={sourceHint}>
+            {sourceLabel}
           </span>
         </div>
         <div style={{ textAlign: 'center', minWidth: 64 }}>
           <div className="stat-value" style={{ fontSize: 30, lineHeight: 1 }}>
             {Math.round(t.totalScore)}
           </div>
-          <div className="stat-label" style={{ marginTop: 2 }}>综合分</div>
-          {/* mocked 的两种成因必须分开说。原来一律写「未接入真实 AI」，可真机上接着 MiniMax
-              也会出现这个标——那是 30s 超时被 Mock 兜底，说成「没接 AI」是把用户往错方向指，
-              而且那种情况是**能重试好**的（见 TopicRescore）。 */}
+          <div className="stat-label" style={{ marginTop: 2 }}>{lang === 'en' ? 'Score' : '综合分'}</div>
           {t.mocked && (
             t.degraded ? (
               <div
                 className="card-sub"
                 style={{ marginTop: 4, color: 'var(--amber, #b45309)' }}
-                title="这条的 AI 调用失败/超时，已用占位分兜底（自动重试过一次仍未成功）。点「重新评分」可再试。"
+                title={
+                  lang === 'en'
+                    ? 'AI call timed out, placeholder score applied. Click "Rescore" to retry.'
+                    : '这条的 AI 调用失败/超时，已用占位分兜底（自动重试过一次仍未成功）。点「重新评分」可再试。'
+                }
               >
-                评分未完成
+                {lang === 'en' ? 'Incomplete' : '评分未完成'}
                 <TopicRescore topicId={t.id} />
               </div>
             ) : (
-              <div className="card-sub" style={{ marginTop: 4 }} title="演示评分：未接入真实 AI，分数仅为占位">
-                示例数据
+              <div
+                className="card-sub"
+                style={{ marginTop: 4 }}
+                title={lang === 'en' ? 'Demo score: AI not connected' : '演示评分：未接入真实 AI，分数仅为占位'}
+              >
+                {lang === 'en' ? 'Demo Data' : '示例数据'}
               </div>
             )
           )}
@@ -184,13 +233,12 @@ function TopicCard({ t, battle, votes }: { t: TopicRow; battle?: BattleCard; vot
       >
         <Icon.sparkles size={16} className="" />
         <div className="small">
-          <span className="muted">差异化切入角：</span>
+          <span className="muted">{lang === 'en' ? 'Unique Angle: ' : '差异化切入角：'}</span>
           <b>{t.angle}</b>
         </div>
       </div>
 
-      {/* 「为什么是你 / 为什么是现在」——候选源查库查出来的事实，不是 AI 推测。
-          与切入角分开展示：那句是创意，这句是证据，混在一起用户分不清哪句可信。 */}
+      {/* 为什么推给你 */}
       {t.evidence && (
         <div
           className="row"
@@ -205,15 +253,12 @@ function TopicCard({ t, battle, votes }: { t: TopicRow; battle?: BattleCard; vot
         >
           <Icon.check size={16} className="" />
           <div className="small">
-            <span className="muted">为什么推给你：</span>
+            <span className="muted">{lang === 'en' ? 'Why Recommended: ' : '为什么推给你：'}</span>
             {t.evidence}
           </div>
         </div>
       )}
 
-      {/* 琥珀色 + 时钟是「时间压力」的视觉语言，只给真有窗口的队列用。
-          常青题的提示说的恰恰是「无时效压力」，配上倒计时图标就是自相矛盾的假紧迫感——
-          与晨报里同一条规则一致（lib/topic/brief.ts）。 */}
       {t.windowHint && (
         <div
           className={`small${t.queue === 'evergreen' ? ' muted' : ''}`}
@@ -226,7 +271,7 @@ function TopicCard({ t, battle, votes }: { t: TopicRow; battle?: BattleCard; vot
       {/* 六维评分 */}
       <div className="wrap" style={{ gap: 8 }}>
         {TOPIC_DIMENSIONS.map((d) => (
-          <ScorePill key={d.key} label={d.name} value={scores[d.key] ?? 0} />
+          <ScorePill key={d.key} label={topicDimensionName(d.key, lang)} value={scores[d.key] ?? 0} />
         ))}
       </div>
 
@@ -237,13 +282,13 @@ function TopicCard({ t, battle, votes }: { t: TopicRow; battle?: BattleCard; vot
         </p>
       )}
 
-      {/* 作战卡（有内容才渲染，避免点开是空的） */}
-      {hasBattleContent(battle) && <BattleSection card={battle!} />}
+      {/* 作战卡 */}
+      {hasBattleContent(battle) && <BattleSection card={battle!} lang={lang} />}
 
       {/* 拒绝原因 */}
       {t.state === 'rejected' && t.rejectReason && (
         <p className="small" style={{ marginTop: 8, color: 'var(--red)' }}>
-          <Icon.x size={12} /> 拒绝原因：{t.rejectReason}
+          <Icon.x size={12} /> {lang === 'en' ? 'Rejection Reason: ' : '拒绝原因：'}{t.rejectReason}
         </p>
       )}
 
@@ -251,7 +296,6 @@ function TopicCard({ t, battle, votes }: { t: TopicRow; battle?: BattleCard; vot
       {t.state === 'recommended' && (
         <div style={{ marginTop: 'auto', paddingTop: 14 }}>
           <div className="divider" />
-          {/* 投票只在多人工作区出现：一个人给自己的选题投票是纯噪声 */}
           {votes && (
             <div style={{ marginBottom: 10 }}>
               <TopicVotes topicId={t.id} votes={votes} />
@@ -357,38 +401,56 @@ export default async function TopicsPage({
       >
 
         <div className="row wrap" style={{ gap: 8, alignItems: 'center', marginBottom: 12 }}>
-          <span className="badge badge-brand">两阶段打分</span>
-          <span className="small muted">候选先过一遍粗筛，剩下的才交给 AI 逐条打分</span>
+          <span className="badge badge-brand">{lang === 'en' ? 'Two-Stage Scoring' : '两阶段打分'}</span>
+          <span className="small muted">
+            {lang === 'en'
+              ? 'Candidates pass coarse screening first, only survivors are scored by AI'
+              : '候选先过一遍粗筛，剩下的才交给 AI 逐条打分'}
+          </span>
         </div>
         <div className="flow-strip">
           <div className="flow-step">
             <div className="flow-step-head">
               <span className="flow-step-no">1</span>
-              <b className="small">候选池</b>
+              <b className="small">{lang === 'en' ? 'Candidate Pool' : '候选池'}</b>
             </div>
-            <div className="small">热榜 · 竞对 · 抢跑窗口 · 旧文翻新 · 跨平台补发</div>
+            <div className="small">
+              {lang === 'en'
+                ? 'Trending · Competitors · Lead Windows · Revivals · Cross-platform'
+                : '热榜 · 竞对 · 抢跑窗口 · 旧文翻新 · 跨平台补发'}
+            </div>
           </div>
           <div className="flow-arrow" aria-hidden>→</div>
           <div className="flow-step">
             <div className="flow-step-head">
               <span className="flow-step-no">2</span>
-              <b className="small">海选</b>
+              <b className="small">{lang === 'en' ? 'Broad Filter' : '海选'}</b>
             </div>
-            <div className="small">按热度和人设匹配快速筛一遍</div>
+            <div className="small">
+              {lang === 'en'
+                ? 'Fast coarse screen on viral momentum and persona fit'
+                : '按热度和人设匹配快速筛一遍'}
+            </div>
           </div>
           <div className="flow-arrow" aria-hidden>→</div>
           <div className="flow-step">
             <div className="flow-step-head">
               <span className="flow-step-no">3</span>
-              <b className="small">AI 精选</b>
+              <b className="small">{lang === 'en' ? 'AI Curation' : 'AI 精选'}</b>
             </div>
-            <div className="small">六维评分 + 必须给出差异化切入角</div>
+            <div className="small">
+              {lang === 'en'
+                ? 'Six-dimension scoring + mandatory differentiated angle'
+                : '六维评分 + 必须给出差异化切入角'}
+            </div>
           </div>
         </div>
         {/* 候选池那几个自造词的注解放在条外：塞进第 1 格会把它撑成三行，
             三格就不等高了，流程条一歪就不像流程 */}
         <div className="small muted" style={{ marginTop: 10 }}>
-          抢跑窗口＝别的平台已经爆了、你的平台还没有；旧文翻新与跨平台补发＝你自己验证过的内容。
+          {lang === 'en'
+            ? 'Lead window = trending elsewhere but not on your platform; Revivals & Cross-platform = your own validated content.'
+            : '抢跑窗口＝别的平台已经爆了、你的平台还没有；旧文翻新与跨平台补发＝你自己验证过的内容。'}
         </div>
       </Fold>
 
@@ -443,26 +505,30 @@ export default async function TopicsPage({
             <section key={q.key} style={{ marginBottom: 24 }}>
               <div className="row wrap" style={{ gap: 8, alignItems: 'center', marginBottom: 10 }}>
                 <b style={{ fontSize: 15 }}>
-                  {q.icon} {q.name}
+                  {q.icon} {lang === 'en' ? topicQueueName(q.key, lang) : q.name}
                 </b>
                 <span className="badge badge-gray">{list.length}</span>
-                <span className="small muted">{q.desc}</span>
+                <span className="small muted">{lang === 'en' ? topicQueueDesc(q.key, lang) : q.desc}</span>
                 {isEvergreen && reserve < EVERGREEN_MIN_RESERVE && (
-                  <ActionButton action={actReplenishEvergreen} loadingText="生成中…">
-                    补充常青储备
+                  <ActionButton action={actReplenishEvergreen} loadingText={lang === 'en' ? 'Generating…' : '生成中…'}>
+                    {lang === 'en' ? 'Replenish Evergreen Vault' : '补充常青储备'}
                   </ActionButton>
                 )}
               </div>
               {list.length === 0 ? (
                 <p className="small muted" style={{ margin: 0 }}>
                   {isEvergreen
-                    ? '常青储备是空的——热点断供的日子就靠它，建议先补几条放着。'
-                    : '这一队今天没有货。不是出错，是当前候选里没有符合这个时间窗口的选题。'}
+                    ? (lang === 'en'
+                        ? 'Evergreen vault is empty — essential when hot trends dry up. Recommend replenishing a few.'
+                        : '常青储备是空的——热点断供的日子就靠它，建议先补几条放着。')
+                    : (lang === 'en'
+                        ? 'No topics in this queue today. Not an error — no candidates matched this window.'
+                        : '这一队今天没有货。不是出错，是当前候选里没有符合这个时间窗口的选题。')}
                 </p>
               ) : (
                 <div className="grid grid-2">
                   {list.map((t) => (
-                    <TopicCard key={t.id} t={t} battle={battles.get(t.id)} votes={voteByTopic.get(t.id)} />
+                    <TopicCard key={t.id} t={t} battle={battles.get(t.id)} votes={voteByTopic.get(t.id)} lang={lang} />
                   ))}
                 </div>
               )}
@@ -472,7 +538,7 @@ export default async function TopicsPage({
       ) : (
         <div className="grid grid-2">
           {shown.map((t) => (
-            <TopicCard key={t.id} t={t} battle={battles.get(t.id)} votes={voteByTopic.get(t.id)} />
+            <TopicCard key={t.id} t={t} battle={battles.get(t.id)} votes={voteByTopic.get(t.id)} lang={lang} />
           ))}
         </div>
       )}

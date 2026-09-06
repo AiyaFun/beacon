@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { TrendChart, type TrendPoint } from '@/components/TrendChart';
 import { fmtNum } from '@/lib/format';
 import { platformName } from '@/lib/constants';
+import { useI18n } from '@/lib/i18n';
 
 // 增长页的渲染层。所有数字都在服务端算好传进来（见 page.tsx），这里只负责展示与切换。
 //
@@ -41,8 +42,17 @@ function pct(delta: number | undefined, base: number | undefined): string | null
 }
 
 function DeltaValue({ v }: { v: number | undefined }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   if (typeof v !== 'number') {
-    return <span className="muted" title="这一项在区间两端没有都采到，算不出增长（不是没涨）">{NA}</span>;
+    return (
+      <span
+        className="muted"
+        title={isEn ? 'Not captured at both ends of the interval, growth cannot be calculated (not zero growth)' : '这一项在区间两端没有都采到，算不出增长（不是没涨）'}
+      >
+        {NA}
+      </span>
+    );
   }
   const color = v > 0 ? 'var(--green)' : v < 0 ? 'var(--red)' : 'inherit';
   return <b style={{ color }}>{v > 0 ? '+' : ''}{fmtNum(v)}</b>;
@@ -50,31 +60,35 @@ function DeltaValue({ v }: { v: number | undefined }) {
 
 // 主指标之外还要摆哪些增量。抽成常量：原来这串写死在 JSX 里，
 // 判断「有没有可展开的内容」时还得再抄一遍同样的过滤条件，两处一定会漂移。
-const OTHER_METRICS: [string, string][] = [
-  ['views', '播放'], ['likes', '点赞'], ['comments', '评论'],
-  ['collects', '收藏'], ['shares', '转发'], ['followers', '粉丝'],
+const OTHER_METRICS: [string, string, string][] = [
+  ['views', '播放', 'Views'], ['likes', '点赞', 'Likes'], ['comments', '评论', 'Comments'],
+  ['collects', '收藏', 'Bookmarks'], ['shares', '转发', 'Shares'], ['followers', '粉丝', 'Followers'],
 ];
 
-function statusNote(row: GrowthRow): string | null {
-  if (row.status === 'no-data') return '这个时间窗内没有采集记录';
-  if (row.status === 'single-point') return '窗口内只采了一次，两点才算得出增长';
-  if (row.partial) return '窗口开始前没有观测，下面是「首次采集→现在」的增长，实际涨幅只多不少';
+function statusNote(row: GrowthRow, isEn: boolean): string | null {
+  if (row.status === 'no-data') return isEn ? 'No collection records within this time window' : '这个时间窗内没有采集记录';
+  if (row.status === 'single-point') return isEn ? 'Only collected once in this window; two points required to calculate growth' : '窗口内只采了一次，两点才算得出增长';
+  if (row.partial) return isEn ? 'No observations before window start; below is growth from first collection to now (actual growth is at least this)' : '窗口开始前没有观测，下面是「首次采集→现在」的增长，实际涨幅只多不少';
   return null;
 }
 
 // 约数提醒。**只在增长为 0 时才说**——那正是会被误读成「不涨了」的时刻；
 // 有明确涨幅时再挂一句只会变成噪音。
-function approxNote(row: GrowthRow): string | null {
+function approxNote(row: GrowthRow, isEn: boolean): string | null {
   if (!row.approximate || row.status !== 'ok') return null;
   const d = row.delta[row.primaryKey];
   if (d !== 0) return null;
-  return `这个平台的公开页面只给约数（如「1.0亿」），${row.primaryLabel}的变化没到展示精度就看不出来——「+0」不等于真的没涨`;
+  return isEn
+    ? `This platform's public pages only provide approximations (e.g. "100M"), so changes below display precision cannot be observed — "+0" does not mean no growth`
+    : `这个平台的公开页面只给约数（如「1.0亿」），${row.primaryLabel}的变化没到展示精度就看不出来——「+0」不等于真的没涨`;
 }
 
 function RowCard({ row }: { row: GrowthRow }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const [open, setOpen] = useState(false);
-  const note = statusNote(row);
-  const approx = approxNote(row);
+  const note = statusNote(row, isEn);
+  const approx = approxNote(row, isEn);
   const d = row.delta[row.primaryKey];
   const rate = pct(d, row.baseline[row.primaryKey]);
 
@@ -109,7 +123,7 @@ function RowCard({ row }: { row: GrowthRow }) {
               {open ? '▾' : '▸'}
             </span>
           )}
-          <span className="badge" style={{ flex: 'none' }}>{platformName(row.platform)}</span>
+          <span className="badge" style={{ flex: 'none' }}>{platformName(row.platform, lang)}</span>
           <b style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.name}</b>
         </div>
         <div className="row" style={{ gap: 12, flex: 'none' }}>
@@ -129,9 +143,9 @@ function RowCard({ row }: { row: GrowthRow }) {
 
           {others.length > 0 && (
             <div className="row wrap small" style={{ gap: 14, marginTop: 8 }}>
-              {others.map(([k, label]) => (
+              {others.map(([k, labelZh, labelEn]) => (
                 <span key={k}>
-                  {label} <DeltaValue v={row.delta[k]} />
+                  {isEn ? labelEn : labelZh} <DeltaValue v={row.delta[k]} />
                 </span>
               ))}
             </div>
@@ -143,7 +157,9 @@ function RowCard({ row }: { row: GrowthRow }) {
                   （采集是手动触发的），画「日增量柱」会把跨 5 天的增量当一天画。 */}
               <TrendChart points={points} label={row.primaryLabel} xUnit="observation" showDelta={false} />
               <div className="small muted" style={{ marginTop: 4 }}>
-                横轴是第几次采集（不是日历天）：共 {points.length} 次观测。
+                {isEn
+                  ? `Horizontal axis represents collection sequence (not calendar days): ${points.length} total observations.`
+                  : `横轴是第几次采集（不是日历天）：共 ${points.length} 次观测。`}
               </div>
             </div>
           )}
@@ -180,11 +196,17 @@ export function GrowthBoard({
   windowHrefs: Record<string, string>;
   empty: string;
 }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   return (
     <div className="stack" style={{ gap: 16 }}>
       <div className="row-between wrap" style={{ gap: 8 }}>
         <div className="row" style={{ gap: 6 }}>
-          {[['24h', '24 小时'], ['7d', '7 天'], ['30d', '30 天']].map(([k, label]) => (
+          {[
+            ['24h', isEn ? '24 Hours' : '24 小时'],
+            ['7d', isEn ? '7 Days' : '7 天'],
+            ['30d', isEn ? '30 Days' : '30 天'],
+          ].map(([k, label]) => (
             <a
               key={k}
               href={windowHrefs[k] ?? '#'}
@@ -194,7 +216,7 @@ export function GrowthBoard({
             </a>
           ))}
         </div>
-        <span className="small muted">{rows.length} 项</span>
+        <span className="small muted">{rows.length} {isEn ? (rows.length === 1 ? 'item' : 'items') : '项'}</span>
       </div>
 
       {rows.length === 0 ? (

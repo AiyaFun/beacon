@@ -37,8 +37,8 @@ beforeEach(async () => {
   // 两台执行体：一台是浏览器插件，一台是 Mac mini 上的本机执行体
   tokenA = `bcn_a_${Math.random().toString(36).slice(2)}`;
   tokenB = `bcn_b_${Math.random().toString(36).slice(2)}`;
-  await prisma.ingestToken.create({ data: { workspaceId: ws.id, token: tokenA, label: '浏览器插件', memberId: member.id } });
-  await prisma.ingestToken.create({ data: { workspaceId: ws.id, token: tokenB, label: 'Mac mini', memberId: member.id } });
+  await prisma.ingestToken.create({ data: { lastUsedAt: new Date(),  workspaceId: ws.id, token: tokenA, label: '浏览器插件', memberId: member.id } });
+  await prisma.ingestToken.create({ data: { lastUsedAt: new Date(),  workspaceId: ws.id, token: tokenB, label: 'Mac mini', memberId: member.id } });
 
   const draft = await prisma.draft.create({ data: { accountId: account.id, title: '一篇稿子', platform: 'xiaohongshu' } });
   const plan = await prisma.publishPlan.create({
@@ -98,7 +98,7 @@ describe('别家工作区一条都看不到', () => {
     const other = await prisma.tenant.create({ data: { name: 'O', plan: 'free' } });
     const otherWs = await prisma.workspace.create({ data: { tenantId: other.id, name: 'OW' } });
     const otherToken = `bcn_o_${Math.random().toString(36).slice(2)}`;
-    await prisma.ingestToken.create({ data: { workspaceId: otherWs.id, token: otherToken, label: '别家' } });
+    await prisma.ingestToken.create({ data: { lastUsedAt: new Date(),  workspaceId: otherWs.id, token: otherToken, label: '别家' } });
 
     expect(await tasksOf(await call(otherToken))).toHaveLength(0);
     // 而且不能因此把别人的活租走

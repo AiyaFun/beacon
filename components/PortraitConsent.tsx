@@ -1,3 +1,6 @@
+'use client';
+
+import { useI18n } from '@/lib/i18n';
 import { IMAGE_PROCESSOR_NAME, MAX_REFERENCE_MB } from '@/lib/cover/rules';
 
 // 上传参考图前的**单独同意**（PIPL 第 29 条：处理人脸这类敏感个人信息要单独同意）。
@@ -8,6 +11,17 @@ import { IMAGE_PROCESSOR_NAME, MAX_REFERENCE_MB } from '@/lib/cover/rules';
 //
 // 调用方负责那个 checkbox 的状态与「未勾选就禁用上传」，这里只负责那段字。
 export function PortraitConsentText() {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
+
+  if (isEn) {
+    return (
+      <span>
+        I confirm that the person in the uploaded photo is <b>myself</b>, or I have obtained their <b>separate consent</b> in accordance with applicable laws. Photos are sent inline to {IMAGE_PROCESSOR_NAME} for generation, up to {MAX_REFERENCE_MB}MB per image. <b>Discarded by default after use</b> (never persisted or saved to disk); only saved securely if you check "Save to My Avatars", and can be deleted anytime. Generating images without uploading photos is also supported.
+      </span>
+    );
+  }
+
   return (
     <span>
       我确认上传的照片中的人物是<b>我本人</b>，或我已依法取得其<b>单独同意</b>；照片会以内联方式发送给
@@ -20,6 +34,17 @@ export function PortraitConsentText() {
 
 /** 出图工位那一版：这里上传即入库（没有「用完即弃」这一档），措辞必须跟着变。 */
 export function PortraitConsentTextForLibrary() {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
+
+  if (isEn) {
+    return (
+      <span>
+        I confirm that the person in the uploaded photo is <b>myself</b>, or I have obtained their <b>separate consent</b> in accordance with applicable laws. Photos will be <b>securely saved</b> to "My Avatars" for future selection, and sent inline to {IMAGE_PROCESSOR_NAME} during generation, up to {MAX_REFERENCE_MB}MB per image. You can delete them at any time, which permanently removes them from storage.
+      </span>
+    );
+  }
+
   return (
     <span>
       我确认上传的照片中的人物是<b>我本人</b>，或我已依法取得其<b>单独同意</b>；照片会<b>加密保存</b>进

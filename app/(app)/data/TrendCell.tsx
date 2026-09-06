@@ -5,19 +5,23 @@ import { parseJson, type Metrics } from '@/lib/json';
 import { toDailySeries, dailyDeltas } from '@/lib/insight/timeseries';
 import { sourceTier } from '@/lib/insight/csv';
 import { TrendChart, type TrendPoint } from '@/components/TrendChart';
+import { useI18n } from '@/lib/i18n';
 
 type RawSnap = { takenAt: string | Date; metrics: string; source: string | null; milestone: string | null };
 
-const METRICS: { key: keyof Metrics; label: string }[] = [
-  { key: 'views', label: '播放' },
-  { key: 'likes', label: '点赞' },
-  { key: 'comments', label: '评论' },
-  { key: 'shares', label: '转发' },
-  { key: 'collects', label: '收藏' },
-];
+const METRIC_LABELS: Record<string, { zh: string; en: string }> = {
+  views: { zh: '播放', en: 'Views' },
+  likes: { zh: '点赞', en: 'Likes' },
+  comments: { zh: '评论', en: 'Comments' },
+  shares: { zh: '转发', en: 'Shares' },
+  collects: { zh: '收藏', en: 'Collects' },
+};
+
+const METRIC_KEYS: (keyof Metrics)[] = ['views', 'likes', 'comments', 'shares', 'collects'];
 
 // 单篇趋势的行内展开。用已随页面取回的快照本地计算逐日序列，不额外查库。
 export function TrendCell({ publishedAt, snapshots }: { publishedAt: string | Date | null; snapshots: RawSnap[] }) {
+  const { lang } = useI18n();
   const [open, setOpen] = useState(false);
   const [metric, setMetric] = useState<keyof Metrics>('views');
 
@@ -29,15 +33,24 @@ export function TrendCell({ publishedAt, snapshots }: { publishedAt: string | Da
   // 把回填时间当发布时间存下来所导致的（D+0 上挂着全生命周期的累计播放，
   // 一律被判成「首日爆发」）。
   if (!publishedAt) {
-    return <span className="small muted" title="这条作品没有采到发布时间，算不出「发布后第 N 天」">没有发布时间</span>;
+    return (
+      <span
+        className="small muted"
+        title={lang === 'en' ? 'No publish date recorded, cannot calculate days post-publication' : '这条作品没有采到发布时间，算不出「发布后第 N 天」'}
+      >
+        {lang === 'en' ? 'No Publish Date' : '没有发布时间'}
+      </span>
+    );
   }
 
   return (
     <div className="stack" style={{ gap: 6 }}>
       <button className="btn btn-sm btn-ghost" onClick={() => setOpen((v) => !v)}>
-        {open ? '收起趋势' : `看趋势 · ${snapshots.length}点`}
+        {open
+          ? (lang === 'en' ? 'Hide Trend' : '收起趋势')
+          : (lang === 'en' ? `View Trend · ${snapshots.length} pts` : `看趋势 · ${snapshots.length}点`)}
       </button>
-      {open && <TrendBody publishedAt={publishedAt} snapshots={snapshots} metric={metric} setMetric={setMetric} />}
+      {open && <TrendBody publishedAt={publishedAt} snapshots={snapshots} metric={metric} setMetric={setMetric} lang={lang} />}
     </div>
   );
 }
@@ -47,11 +60,13 @@ function TrendBody({
   snapshots,
   metric,
   setMetric,
+  lang,
 }: {
   publishedAt: string | Date;
   snapshots: RawSnap[];
   metric: keyof Metrics;
   setMetric: (m: keyof Metrics) => void;
+  lang: string;
 }) {
   const pub = new Date(publishedAt);
   const series = toDailySeries(
@@ -69,7 +84,11 @@ function TrendBody({
   if (series.length < 2) {
     return (
       <div className="card" style={{ padding: 10, boxShadow: 'none', background: 'var(--surface-2)' }}>
-        <div className="small muted" style={{ marginBottom: 4 }}>数据点积累中（连接插件或授权后自动加密度）</div>
+        <div className="small muted" style={{ marginBottom: 4 }}>
+          {lang === 'en'
+            ? 'Accumulating data points (connect extension to increase density)'
+            : '数据点积累中（连接插件或授权后自动加密度）'}
+        </div>
         {series.map((p) => (
           <div key={p.day} className="row-between small">
             <span className="muted">D+{p.day}</span>
@@ -89,27 +108,27 @@ function TrendBody({
     return { day: sp.day, value, delta: (perDay as number) ?? 0, tier: sourceTier(sp.source), suspect };
   });
 
-  const label = METRICS.find((m) => m.key === metric)?.label ?? '';
+  const label = (lang === 'en' ? METRIC_LABELS[metric]?.en : METRIC_LABELS[metric]?.zh) ?? '';
 
   return (
     <div className="card" style={{ padding: 10, boxShadow: 'none', background: 'var(--surface-2)', minWidth: 300 }}>
       <div className="row wrap" style={{ gap: 4, marginBottom: 6 }}>
-        {METRICS.map((m) => (
+        {METRIC_KEYS.map((k) => (
           <button
-            key={m.key}
-            className={`badge ${metric === m.key ? 'badge-brand' : 'badge-gray'}`}
+            key={k}
+            className={`badge ${metric === k ? 'badge-brand' : 'badge-gray'}`}
             style={{ cursor: 'pointer', border: 'none' }}
-            onClick={() => setMetric(m.key)}
+            onClick={() => setMetric(k)}
           >
-            {m.label}
+            {lang === 'en' ? METRIC_LABELS[k]?.en : METRIC_LABELS[k]?.zh}
           </button>
         ))}
       </div>
       <TrendChart points={points} label={label} />
       <div className="row wrap small muted" style={{ gap: 10, marginTop: 4 }}>
-        <span>● 官方</span>
-        <span>○ 插件</span>
-        <span style={{ color: 'var(--text-3)' }}>● 手填</span>
+        <span>● {lang === 'en' ? 'Official' : '官方'}</span>
+        <span>○ {lang === 'en' ? 'Extension' : '插件'}</span>
+        <span style={{ color: 'var(--text-3)' }}>● {lang === 'en' ? 'Manual' : '手填'}</span>
       </div>
     </div>
   );

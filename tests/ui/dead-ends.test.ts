@@ -66,15 +66,18 @@ describe('能力不许住在插件页里', () => {
 });
 
 describe('首页那个框：文案必须跟着真实行为', () => {
-  it('🔒 不许再承诺「我去办」——它现在只是把话带过去预填', () => {
-    // 「文案与实际行为对不上」是本仓反复出现的一类缺陷。这一框的真实行为是
-    // 跳到 /assistant?goal= 预填，**用户在那边按开始才真的跑**。
-    // 写「说一句话，我去办」（旧文案）会让人以为回车就开跑；
-    // 写「它会先答你」也不对——落点是执行那一侧，不是对话。
+  it('🔒 它现在就地开跑——不许再写「带到新任务预填」「按开始才跑」这类旧行为', () => {
+    // 「文案与实际行为对不上」是本仓反复出现的一类缺陷。这一框 2026-09-06 起是全站唯一的
+    // 派活入口，回车/按钮就开跑。此前两版（预填等二次点击 / cookie 移交自动跑）的文案
+    // 都在字典里留过尾巴，其中 deckHint 一度是没人渲染的死键还写着已经不成立的话。
     const src = code('components/TaskDeckHome.tsx');
     const copy = src.slice(src.indexOf('<h1'), src.indexOf('</textarea>') > 0 ? src.indexOf('</textarea>') : src.length);
-    expect(copy, '又写回了「我去办」这种直接开跑的承诺').not.toMatch(/我去办/);
-    expect(copy, '文案没说清是在那边才开始跑').toMatch(/新任务|按开始|预填/);
+    expect(copy).not.toMatch(/新任务|预填|按开始/);
+    const dict = code('lib/i18n/dict/today.ts');
+    expect(dict, '字典里还留着「带到新任务预填」那类旧文案').not.toMatch(/deckHint|预填|New Task/);
+    expect(dict, '按钮得说清是开跑').toMatch(/dispatchBtn: '开始执行'/);
+    // 派出去之后要告诉他在后台跑、去哪看
+    expect(src, '派完没说已经开始、去哪看过程').toMatch(/\/assistant\?run=\$\{started\.runId\}/);
   });
 });
 

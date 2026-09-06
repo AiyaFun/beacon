@@ -11,10 +11,13 @@ import { LanguageSwitcher } from './LanguageSwitcher';
 import { ModelStatusBadge } from './ModelStatusBadge';
 import { visibleNav } from '@/lib/nav';
 import { can } from '@/lib/edition';
+import { getServerLang } from '@/lib/i18n/server';
 
 export async function Topbar() {
   const session = await getSessionOrNull();
-  let llmMode = '演示数据模式';
+  const lang = await getServerLang();
+  const isEn = lang === 'en';
+  let llmMode = isEn ? 'Demo Data Mode' : '演示数据模式';
   let isDemo = true;
   let accounts: { id: string; name: string; platform: string }[] = [];
   let notifCount = 0;
@@ -39,7 +42,7 @@ export async function Topbar() {
       llmMode = provider.label;
       isDemo = false;
     } else if (can('platformLlmChannel') && process.env.BEACON_DEFAULT_LLM_API_KEY) {
-      llmMode = '平台默认模型';
+      llmMode = isEn ? 'Platform Default Model' : '平台默认模型';
       isDemo = false;
     }
   }
@@ -50,7 +53,7 @@ export async function Topbar() {
         {session && (
           <AccountSwitcher
             currentId={session.accountId}
-            accounts={accounts.map((a) => ({ ...a, platformLabel: platformName(a.platform) }))}
+            accounts={accounts.map((a) => ({ ...a, platformLabel: platformName(a.platform, lang) }))}
           />
         )}
       </div>
@@ -59,7 +62,7 @@ export async function Topbar() {
       <LanguageSwitcher compact />
       {session && <NotificationBell count={notifCount} items={notifItems} />}
       <form action={actLogout} className="show-mobile">
-        <button className="btn btn-sm btn-ghost" type="submit">退出</button>
+        <button className="btn btn-sm btn-ghost" type="submit">{isEn ? 'Log out' : '退出'}</button>
       </form>
     </div>
   );

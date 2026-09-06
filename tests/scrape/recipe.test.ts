@@ -382,34 +382,38 @@ describe('定时扫描：只有真卡住才重学', () => {
 });
 
 describe('装完就能用：客户端替用户起采集浏览器', () => {
+  // 2026-09-04 重写。原来这一组守的是「用**默认 profile**、Chrome 开着时先叫用户 ⌘Q」，
+  // 其中一条断言甚至写着 `expect(rs).not.toContain('--user-data-dir=')`——
+  // 那正是今天必须反过来做的事：Chrome ≥136 拒绝在默认 user-data-dir 上开调试端口
+  // （真机 Chrome 152 实测），旧路 100% 失败。守卫是跟着行为走的，行为的前提被上游改掉了，
+  // 守卫就得跟着改，否则它会把唯一能跑的实现判成错的。
   const rs = read('desktop/src-tauri/src/main.rs');
+  const cb = read('desktop/src-tauri/src/collect_browser.rs');
   const card = read('app/(app)/settings/LocalShellCard.tsx');
 
-  it('托盘里有「启动采集浏览器」', () => {
-    expect(rs).toContain('"启动采集浏览器"');
-    expect(rs).toContain('fn launch_collect_browser');
+  it('托盘里有「打开采集浏览器」，走的是专用 profile 那条路', () => {
+    expect(rs).toContain('打开采集浏览器（登录用）');
+    expect(rs).toContain('collect_browser::ensure');
+    // 旧路的函数必须真的删掉：留着会让人以为还有第二条路可选
+    expect(rs, '死路 launch_collect_browser 又回来了').not.toContain('fn launch_collect_browser');
   });
 
-  it('用默认 profile（不传 --user-data-dir），否则每个站点都要重登一次', () => {
-    // 2026-08-29 用户拍板：独立 profile 的干净不值得「每个站点重登一次」的代价，
-    // 而采集的价值恰恰在于读登录后才看得见的内容
-    expect(rs).not.toContain('--user-data-dir=');
+  it('🔒 用独立 profile —— 这是唯一能开出调试端口的方式', () => {
+    expect(cb).toMatch(/--user-data-dir=/);
+    expect(cb).toContain('collect-profile');
   });
 
-  it('Chrome 正开着时不硬启动，也不替用户杀进程', () => {
-    // 运行中的 Chrome 无法再打开调试端口（Chrome 的限制），硬启动只会静默失败，
-    // 用户会以为是我们坏了。而替他杀浏览器更不行——他可能开着几十个标签在干活。
-    //
-    // 【断言必须落在真分支上】第一版只验了「函数存在」和「文案存在」，
-    // 把 `if chrome_running()` 改成 `if false` 两者都还在——mutation 当场证明它是假绿。
-    const i = rs.indexOf('fn launch_collect_browser');
-    const body = rs.slice(i, rs.indexOf('fn main()', i));
-    const guardAt = body.indexOf('if chrome_running() {');
+  it('不硬闯、不杀进程，也不要求用户退出他日常的 Chrome', () => {
+    // 已经在跑就直接用（先探端口再决定要不要拉起），绝不重复启动
+    const i = cb.indexOf('pub fn ensure');
+    const body = cb.slice(i, cb.indexOf('pub fn bring_to_front', i));
+    const probeAt = body.indexOf('port_open(COLLECT_PORT)');
     const spawnAt = body.indexOf('.spawn()');
-    expect(guardAt, '启动前必须先判 Chrome 在不在跑').toBeGreaterThan(-1);
-    expect(spawnAt).toBeGreaterThan(guardAt); // 判据必须在 spawn **之前**
-    expect(body.slice(guardAt, spawnAt)).toContain('return Err(');
-    expect(rs).not.toMatch(/pkill|taskkill|killall/);
+    expect(probeAt, '拉起前必须先探端口').toBeGreaterThan(-1);
+    expect(spawnAt, '探端口必须在 spawn 之前').toBeGreaterThan(probeAt);
+    const code = (rs + cb).replace(/^\s*\/\/.*$/gm, '');
+    expect(code).not.toMatch(/pkill|taskkill|killall/);
+    expect(code, '又要求用户 ⌘Q 退出日常 Chrome 了').not.toContain('完全退出 Chrome');
   });
 
   it('只在固定安装位置找浏览器，不去 PATH 里碰运气', () => {
@@ -424,12 +428,9 @@ describe('装完就能用：客户端替用户起采集浏览器', () => {
     expect(body).toContain('window.alert');
   });
 
-  it('设置页把两件必踩的事都说破了', () => {
-    expect(card).toContain('已经开着的 Chrome 没法再打开调试端口');
-    // 调试端口开着 = 本机任何程序都能驱动这个浏览器。用了默认 profile 之后
-    // 这一条的影响更大（他所有登录态都在里面），更不能不说
+  it('设置页仍然说破「调试端口开着=本机任何程序都能驱动它」', () => {
+    // 这一条与 profile 怎么选无关：端口开着的安全影响必须始终告知
     expect(card).toContain('任何本地程序');
-    expect(card).toContain('启动采集浏览器');
   });
 });
 

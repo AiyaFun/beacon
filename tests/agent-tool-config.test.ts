@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { readToolConfig, writeToolConfig, disabledTools, toolsFor, toolCatalog } from '@/lib/agent/tool-config';
 import { AGENT_TOOLS } from '@/lib/agent/tools';
+import { at, between } from './helpers/anchor';
 
 const ROOT = path.resolve(__dirname, '..');
 const code = (p: string) =>
@@ -66,7 +67,7 @@ describe('两个判据必须一起收口', () => {
   it('执行时必须再查一次开关——只从清单里拿掉，模型会凭记忆继续调', () => {
     const run = code('lib/agent/run.ts');
     // executeCall 里那道拦截：没有它，被关掉的工具照样执行成功且不报错
-    const exec = run.slice(run.indexOf('async function executeCall'));
+    const exec = run.slice(at(run, 'async function executeCall'));
     expect(exec).toMatch(/offTools\(ctx\.workspaceId\)/);
     expect(exec).toMatch(/已被工作区关闭/);
   });
@@ -94,7 +95,7 @@ describe('智能体这两个工具要真的被用起来', () => {
   it('系统提示要明说派活次序——只在工具清单里列名字，模型会自己一步步做', async () => {
     const { dispatchOrderBlock } = await import('@/lib/agent/roles');
     const src = code('lib/agent/run.ts');
-    const prompt = src.slice(src.indexOf('function systemPrompt'), src.indexOf('async function loadContext'));
+    const prompt = between(src, 'function systemPrompt', 'async function loadContext');
 
     // 次序那一段由 roles.ts 生成——**界面上写给用户看的四类分工，和模型看到的是同一份**。
     // 光在这里断言源码里出现过「智能体」三个字是抓不住退化的：真正的退化形状是

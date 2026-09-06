@@ -146,8 +146,8 @@ export default async function SkillsPage({
       {marketHasEntries && (
         <Card
           id="market"
-          title="技能市场"
-          sub="现成的技能与智能体，装上就能用。都是提示词模板与步骤配置，不含可执行代码"
+          title={lang === 'en' ? 'Skill Market' : '技能市场'}
+          sub={lang === 'en' ? 'Off-the-shelf skills and agents, ready to install. Prompt templates and step configurations only, no executable code.' : '现成的技能与智能体，装上就能用。都是提示词模板与步骤配置，不含可执行代码'}
           style={{ marginBottom: 16 }}
         >
           <Market readOnly={readOnly} />
@@ -177,6 +177,7 @@ export default async function SkillsPage({
  */
 async function AbilitiesView() {
   const s = await getSession();
+  const lang = await getServerLang();
   const [ws, workspace] = await Promise.all([
     prisma.workspace.findUnique({ where: { id: s.workspaceId }, select: { agentToolConfig: true } }),
     prisma.workspace.findUnique({ where: { id: s.workspaceId }, select: { browserReadEnabled: true } }),
@@ -188,14 +189,14 @@ async function AbilitiesView() {
   return (
     <>
       <HubHeader
-        title="技能 · 连接器"
-        hint={`${AGENT_ROLES.ability.oneLine} · ${AGENT_ROLES.ability.decidedBy} · 这里可以整个关掉`}
+        title={lang === 'en' ? 'Skills & Connectors' : '技能 · 连接器'}
+        hint={lang === 'en' ? 'AI action tools · Can be toggled on/off here' : `${AGENT_ROLES.ability.oneLine} · ${AGENT_ROLES.ability.decidedBy} · 这里可以整个关掉`}
         tabs={<RoleTabs active="ability" inline />}
       />
       <Card
         id="abilities"
-        title={`AI ${AGENT_ROLES.ability.name}`}
-        sub="关掉之后 AI 既看不到它，也调不动它"
+        title={lang === 'en' ? 'AI Tool Abilities' : `AI ${AGENT_ROLES.ability.name}`}
+        sub={lang === 'en' ? 'When disabled, AI cannot see or invoke it' : '关掉之后 AI 既看不到它，也调不动它'}
       >
         <AgentTools tools={rows} readOnly={!canManageTools} />
         {/* 这一个开关刻意不混进上面那张表：那些缺省全开（「默认能用，你可以关」），

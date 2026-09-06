@@ -7,6 +7,7 @@ import { checkRateLimit, getClientIp, ipKey, retryHint } from '@/lib/ratelimit';
 import { getSmsProvider } from '@/lib/sms/provider';
 import { isProd } from '@/lib/env';
 import { ensureDemoTenant } from '@/lib/demo/seed';
+import { recordFunnelEventAsync } from '@/lib/growth/funnel';
 
 // 游客登录闸门：同 IP 每小时 20 次（演示会话很轻，但仍要挡刷）
 const GUEST_LIMIT = { limit: 20, windowMs: 3600_000 };
@@ -40,10 +41,13 @@ export async function actRequestCode(phone: string) {
       return { ok: false, message: `操作过于频繁，请${retryHint(rl.resetAt)}再试` };
     }
   }
-  return requestLoginCode(phone.trim());
+  const r = await requestLoginCode(phone.trim());
+  // 漏斗第三步：发出去一条码（不记手机号，只记「发生了」）
+  if (r.ok) recordFunnelEventAsync({ name: 'code_sent', meta: 'phone' });
+  return r;
 }
 
-export async function actVerifyCode(phone: string, code: string, inviteToken?: string, consent?: boolean) {
+export async function actVerifyCode(phone: string, code: string, inviteToken?: string, consent?: boolean, referralCode?: string | null) {
   const h = await headers();
   const ip = getClientIp(h);
   const rl = await checkRateLimit(ipKey('login:verify', ip), VERIFY_LIMIT);
@@ -51,7 +55,7 @@ export async function actVerifyCode(phone: string, code: string, inviteToken?: s
     return { ok: false, message: `验证尝试过于频繁，请${retryHint(rl.resetAt)}再试` };
   }
   const ua = h.get('user-agent') ?? undefined;
-  const r = await verifyLoginCode(phone.trim(), code.trim(), ua, inviteToken?.trim() || undefined, consent);
+  const r = await verifyLoginCode(phone.trim(), code.trim(), ua, inviteToken?.trim() || undefined, consent, referralCode);
   if (r.ok && r.token) {
     const store = await cookies();
     store.set(AUTH_COOKIE, r.token, {
@@ -62,7 +66,7 @@ export async function actVerifyCode(phone: string, code: string, inviteToken?: s
       maxAge: AUTH_COOKIE_MAX_AGE_S,
     });
   }
-  return { ok: r.ok, message: r.message };
+  return { ok: r.ok, message: r.message, isNew: r.isNew };
 }
 
 // 游客访问：进入只读演示租户（viewer 角色 + 固定 DEMO_TENANT_ID，写/生成/下单全被挡）。
@@ -73,6 +77,7 @@ export async function actGuestLogin() {
   const rl = await checkRateLimit(ipKey('login:guest', ip), GUEST_LIMIT);
   if (!rl.ok) return { ok: false, message: `操作过于频繁，请${retryHint(rl.resetAt)}再试` };
 
+  recordFunnelEventAsync({ name: 'demo_click' });
   const { memberId } = await ensureDemoTenant();
   const token = await createSession(memberId, h.get('user-agent') ?? undefined, GUEST_TTL_MS);
   const store = await cookies();

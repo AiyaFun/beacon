@@ -132,7 +132,7 @@ export default async function HotlistsPage() {
                               <span
                                 className="badge badge-gray"
                                 style={{ marginLeft: 6 }}
-                                title="该平台暂无真实采集通道，这条是占位示例，不参与选题推荐"
+                                title={lang === 'en' ? 'No active ingest channel for this platform; placeholder sample, excluded from recommendations' : '该平台暂无真实采集通道，这条是占位示例，不参与选题推荐'}
                               >
                                 {dict.intel.mockItem}
                               </span>

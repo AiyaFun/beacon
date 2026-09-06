@@ -1,9 +1,12 @@
 export const todayDict = {
   zh: {
     greeting: '今天要干什么，{name}？',
-    deckHint: '写下要做的事，带到「新任务」预填好——你在那边按开始它才真的跑。',
     placeholder: '例如：把我监控的对标账号都采一遍最新数据，然后告诉我谁涨得最快',
-    dispatchBtn: '去派活 →',
+    dispatchBtn: '开始执行',
+    dispatching: '派出去了…',
+    startedTitle: '已经开始，在后台跑着。',
+    startedHint: '可以离开去做别的，跑完（或需要你确认时）右上角 🔔 会提醒你。',
+    startedLink: '看执行过程 →',
     quick: [
       '看看我最近作品数据怎么样，给点建议',
       '按我的人设生成 6 条选题推荐',
@@ -45,9 +48,12 @@ export const todayDict = {
   },
   en: {
     greeting: 'What are we doing today, {name}?',
-    deckHint: 'Type your task to prefill into "New Task" — review and run it there with one click.',
     placeholder: 'e.g. Fetch latest data on all monitored competitors and tell me who is growing fastest',
-    dispatchBtn: 'Dispatch Task →',
+    dispatchBtn: 'Start Execution',
+    dispatching: 'Dispatching…',
+    startedTitle: 'Started, running in background.',
+    startedHint: 'Feel free to leave — the 🔔 at top right will notify you when it finishes or needs your approval.',
+    startedLink: 'View progress →',
     quick: [
       'Review my recent performance and give suggestions',
       'Generate 6 topic recommendations based on my persona',

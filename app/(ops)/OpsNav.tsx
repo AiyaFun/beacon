@@ -2,18 +2,22 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useI18n } from '@/lib/i18n';
 
 const ITEMS = [
-  { href: '/ops', label: '总览' },
-  { href: '/ops/tenants', label: '租户' },
-  { href: '/ops/ai', label: '全域 AI' },
-  { href: '/ops/health', label: '采集健康' },
-  { href: '/ops/parser', label: '解析自愈' },
-  { href: '/ops/audit', label: '审计日志' },
+  { href: '/ops', labelZh: '总览', labelEn: 'Overview' },
+  { href: '/ops/tenants', labelZh: '租户', labelEn: 'Tenants' },
+  { href: '/ops/ai', labelZh: '全域 AI', labelEn: 'Global AI' },
+  { href: '/ops/health', labelZh: '采集健康', labelEn: 'Ingest Health' },
+  { href: '/ops/parser', labelZh: '解析自愈', labelEn: 'Parser Self-Healing' },
+  { href: '/ops/audit', labelZh: '审计日志', labelEn: 'Audit Logs' },
+  { href: '/ops/growth', labelZh: '增长漏斗', labelEn: 'Growth Funnel' },
 ];
 
 export function OpsNav() {
   const path = usePathname();
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   return (
     <nav className="row" style={{ gap: 4 }}>
       {ITEMS.map((it) => {
@@ -25,7 +29,7 @@ export function OpsNav() {
             href={it.href}
             className={`btn btn-sm ${active ? 'btn-primary' : 'btn-ghost'}`}
           >
-            {it.label}
+            {isEn ? it.labelEn : it.labelZh}
           </Link>
         );
       })}

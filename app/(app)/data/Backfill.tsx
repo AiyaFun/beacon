@@ -6,8 +6,11 @@ import { PLATFORM_LIST, platformName } from '@/lib/constants';
 import { AIGC_LABEL } from '@/lib/compliance/aigc';
 import { parsePublishUrl } from '@/lib/publish/parse-url';
 import { actBackfill } from './actions';
+import { useI18n } from '@/lib/i18n';
 
 export function Backfill() {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const router = useRouter();
   const [pending, start] = useTransition();
   const [platform, setPlatform] = useState<string>(PLATFORM_LIST[0].key);
@@ -25,11 +28,11 @@ export function Backfill() {
   function submit() {
     const v = Number(views);
     if (!v || v <= 0) {
-      setMsg('请填写有效播放量');
+      setMsg(isEn ? 'Please enter a valid view count' : '请填写有效播放量');
       return;
     }
     if (!aigcConfirmed) {
-      setMsg('请先勾选「AI 使用声明」');
+      setMsg(isEn ? 'Please confirm AI Usage Declaration first' : '请先勾选「AI 使用声明」');
       return;
     }
     start(async () => {
@@ -39,10 +42,14 @@ export function Backfill() {
           aigcConfirmed,
         });
         if (!r.ok) {
-          setMsg('出错：' + (r.error ?? '登记失败'));
+          setMsg((isEn ? 'Error: ' : '出错：') + (r.error ?? (isEn ? 'Failed to log' : '登记失败')));
           return;
         }
-        setMsg(r.platformItemId ? '已登记，作品 ID 已绑定，将自动回流数据' : '已登记一条发布回流');
+        setMsg(
+          r.platformItemId
+            ? (isEn ? 'Logged. Post ID linked, metrics will auto-sync.' : '已登记，作品 ID 已绑定，将自动回流数据')
+            : (isEn ? 'Publication metrics logged.' : '已登记一条发布回流'),
+        );
         setWarn(r.warning ?? '');
         setUrl('');
         setViews('');
@@ -52,7 +59,7 @@ export function Backfill() {
         router.refresh();
         setTimeout(() => setMsg(''), 2500);
       } catch (e) {
-        setMsg('出错：' + (e as Error).message.slice(0, 40));
+        setMsg((isEn ? 'Error: ' : '出错：') + (e as Error).message.slice(0, 40));
       }
     });
   }
@@ -61,32 +68,36 @@ export function Backfill() {
     <div className="stack" style={{ gap: 12 }}>
       <div className="grid grid-2" style={{ gap: 12 }}>
         <div className="field">
-          <label className="field-label">发布平台</label>
+          <label className="field-label">{isEn ? 'Platform' : '发布平台'}</label>
           <select className="select" value={platform} onChange={(e) => setPlatform(e.target.value)}>
             {PLATFORM_LIST.map((p) => (
-              <option key={p.key} value={p.key}>{p.name}</option>
+              <option key={p.key} value={p.key}>{platformName(p.key)}</option>
             ))}
           </select>
         </div>
         <div className="field">
-          <label className="field-label">归因来源</label>
+          <label className="field-label">{isEn ? 'Attribution' : '归因来源'}</label>
           <label className="row" style={{ gap: 8, height: 38, alignItems: 'center' }}>
             <input
               type="checkbox"
               checked={fromRecommend}
               onChange={(e) => setFromRecommend(e.target.checked)}
             />
-            <span className="small">这条来自产品的 AI 推荐选题</span>
+            <span className="small">
+              {isEn ? 'Originated from AI topic recommendation' : '这条来自产品的 AI 推荐选题'}
+            </span>
           </label>
         </div>
       </div>
 
       <div className="field">
-        <label className="field-label">发布链接（选填，填了才能自动回流数据）</label>
+        <label className="field-label">
+          {isEn ? 'Post Link (optional, required for auto metric sync)' : '发布链接（选填，填了才能自动回流数据）'}
+        </label>
         <input
           className="input"
           type="url"
-          placeholder="如 https://www.douyin.com/video/7123456789012345678"
+          placeholder={isEn ? 'e.g. https://www.douyin.com/video/7123456789012345678' : '如 https://www.douyin.com/video/7123456789012345678'}
           value={url}
           onChange={(e) => {
             setUrl(e.target.value);
@@ -98,39 +109,41 @@ export function Backfill() {
         {parsed && (
           <span className="small" style={{ color: parsed.ok ? 'var(--green)' : 'var(--amber)' }}>
             {parsed.ok
-              ? `已识别：${platformName(parsed.platform)} · 作品 ID ${parsed.platformItemId}`
+              ? (isEn ? `Identified: ${platformName(parsed.platform)} · Post ID ${parsed.platformItemId}` : `已识别：${platformName(parsed.platform)} · 作品 ID ${parsed.platformItemId}`)
               : parsed.message}
           </span>
         )}
         {parsed && !parsed.ok && (
           <span className="small" style={{ color: 'var(--text-3)' }}>
-            仍可直接登记，但这条记录的数据自动回流将不可用，需要手动回填。
+            {isEn
+              ? 'Can still be logged directly, but automatic data sync will be disabled; manual entry required.'
+              : '仍可直接登记，但这条记录的数据自动回流将不可用，需要手动回填。'}
           </span>
         )}
       </div>
 
       <div className="grid grid-2" style={{ gap: 12 }}>
         <div className="field">
-          <label className="field-label">播放 / 曝光量</label>
+          <label className="field-label">{isEn ? 'Views / Impressions' : '播放 / 曝光量'}</label>
           <input
             className="input"
             type="number"
             inputMode="numeric"
             min={0}
-            placeholder="如 45000"
+            placeholder={isEn ? 'e.g. 45000' : '如 45000'}
             value={views}
             onKeyDown={(e) => { if (['e', 'E', '+', '-'].includes(e.key)) e.preventDefault(); }}
             onChange={(e) => setViews(e.target.value)}
           />
         </div>
         <div className="field">
-          <label className="field-label">点赞量</label>
+          <label className="field-label">{isEn ? 'Likes' : '点赞量'}</label>
           <input
             className="input"
             type="number"
             inputMode="numeric"
             min={0}
-            placeholder="如 3200"
+            placeholder={isEn ? 'e.g. 3200' : '如 3200'}
             value={likes}
             onKeyDown={(e) => { if (['e', 'E', '+', '-'].includes(e.key)) e.preventDefault(); }}
             onChange={(e) => setLikes(e.target.value)}
@@ -150,17 +163,25 @@ export function Backfill() {
             style={{ marginTop: 3 }}
           />
           <span className="small">
-            <b>AI 使用声明（必选）</b>：我确认本次发布的内容如包含 AI 生成/合成成分，已按《人工智能生成合成内容标识办法》
-            在内容中保留显式标识（如「{AIGC_LABEL}」），并已在平台侧勾选其 AI 内容声明选项。
+            {isEn ? (
+              <>
+                <b>AI Usage Declaration (Required)</b>: I confirm that if this published content contains AI-generated or synthesized elements, explicit disclosure labels (e.g. &quot;{AIGC_LABEL}&quot;) have been retained, and the platform AI declaration option has been checked.
+              </>
+            ) : (
+              <>
+                <b>AI 使用声明（必选）</b>：我确认本次发布的内容如包含 AI 生成/合成成分，已按《人工智能生成合成内容标识办法》
+                在内容中保留显式标识（如「{AIGC_LABEL}」），并已在平台侧勾选其 AI 内容声明选项。
+              </>
+            )}
           </span>
         </label>
       </div>
 
       <div className="row" style={{ gap: 10 }}>
         <button className="btn btn-primary btn-sm" onClick={submit} disabled={pending || !aigcConfirmed}>
-          {pending ? '登记中…' : '登记发布回流'}
+          {pending ? (isEn ? 'Logging…' : '登记中…') : (isEn ? 'Log Publication' : '登记发布回流')}
         </button>
-        {msg && <span className="small" style={{ color: msg.startsWith('出错') ? 'var(--red)' : 'var(--green)' }}>{msg}</span>}
+        {msg && <span className="small" style={{ color: msg.startsWith('出错') || msg.startsWith('Error') ? 'var(--red)' : 'var(--green)' }}>{msg}</span>}
       </div>
       {warn && <span className="small" style={{ color: 'var(--text-3)' }}>{warn}</span>}
     </div>

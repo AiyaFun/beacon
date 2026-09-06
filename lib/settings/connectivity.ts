@@ -196,6 +196,14 @@ async function checkBot(b: {
         ? { group: 'bot', name, state: 'ok', detail: '自建应用凭据有效' }
         : { group: 'bot', name, state: 'fail', detail: r.error ?? '换取 token 失败', fix: '核对 AppKey / AppSecret' };
     }
+    if (b.provider === 'wecom_aibot') {
+      if (!sec.aibotId || !sec.aibotSecret) return { group: 'bot', name, state: 'fail', detail: '缺 BotID 或 Secret', fix: '到企微管理后台「智能机器人 → API 模式 → 长连接」复制' };
+      const { aibotConnectionState } = await import('../bot/wecom-aibot-poller');
+      const st = aibotConnectionState(b.id);
+      if (st.connected) return { group: 'bot', name, state: 'ok', detail: '长连接在线' };
+      if (st.running) return { group: 'bot', name, state: 'fail', detail: `连接未建立：${st.lastError ?? '重连中'}`, fix: '核对 BotID / Secret；同一个机器人只能有一处在连' };
+      return { group: 'bot', name, state: 'idle', detail: '连接在 worker 进程里；这里看不到实时状态，看渠道卡上的「最近收到」与错误' };
+    }
     if (b.provider === 'wecom' && sec.corpId && sec.appSecret) {
       const { getWecomAccessToken } = await import('../bot/wecom');
       const r = await getWecomAccessToken(sec.corpId, sec.appSecret);

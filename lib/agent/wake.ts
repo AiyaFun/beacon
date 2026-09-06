@@ -9,7 +9,7 @@ const log = createLogger({ module: 'agent-wake' });
 
 // ── 叫醒在等外部结果的执行 ────────────────────────────────────────────────────
 //
-// 一次运行可以停在「等浏览器插件把活干完」上（AgentRun.status=waiting_browser，
+// 一次运行可以停在「等采集执行器把活干完」上（AgentRun.status=waiting_browser，
 // waitingOn=`browser:<taskId>`）。这个文件是它**唯一的醒来通道**。
 //
 // 【叫醒矩阵要全，缺一格就是永远醒不来】那件事的结局不止「成功」一种：

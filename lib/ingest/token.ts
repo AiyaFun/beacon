@@ -113,6 +113,10 @@ export async function issueIngestToken(opts: {
       label,
       token: plainToken,
       tokenHash: hashToken(plainToken),
+      // 刚签出来的令牌算「活着」：桌面登记后立刻就领活，插件填完令牌也马上会来。
+      // 执行器的在线判据是 lastUsedAt 在 EXECUTOR_ALIVE_MINUTES 内（2026-09-05），
+      // 留空的话，签完令牌到第一次领活之间派的活会被判「没有执行器」。
+      lastUsedAt: new Date(),
     },
   });
 

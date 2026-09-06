@@ -28,7 +28,16 @@ export const SOURCE_LABEL: Record<string, string> = {
   server: '服务端抓取',
   import: '文件导入',
 };
-export const sourceLabel = (s?: string | null): string => SOURCE_LABEL[s || 'home'] ?? '未知来源';
+export const SOURCE_LABEL_EN: Record<string, string> = {
+  home: 'Profile Page',
+  detail: 'Post Detail',
+  server: 'Server Crawl',
+  import: 'File Import',
+};
+export const sourceLabel = (s?: string | null, lang?: string): string => {
+  if (lang === 'en') return SOURCE_LABEL_EN[s || 'home'] ?? 'Unknown Source';
+  return SOURCE_LABEL[s || 'home'] ?? '未知来源';
+};
 
 export type CompetitorTrendPoint = {
   index: number; // 观测序号，0 起
@@ -114,11 +123,14 @@ export function competitorTrend(snapshots: CompetitorSnapshotInput[]): Competito
  * 一句话增长摘要，供表格行内展示。
  * **不下「日均」结论**：采集间隔不规律，除出来的日均是伪精度。只说「N 天内涨了多少」。
  */
-export function growthSummary(trend: CompetitorTrend, key: MetricCountKey = 'views'): string | null {
+export function growthSummary(trend: CompetitorTrend, key: MetricCountKey = 'views', lang?: string): string | null {
   if (trend.sample < 2 || !trend.growth) return null;
   const delta = trend.growth[key] ?? 0;
   if (delta <= 0) return null;
   const span = trend.spanDays ?? 0;
+  if (lang === 'en') {
+    return span > 0 ? `+${delta} in ${span}d` : `+${delta}`;
+  }
   return span > 0 ? `${span} 天内 +${delta}` : `+${delta}`;
 }
 
@@ -158,6 +170,7 @@ export type ObservationRow = {
 export function observationRecords(
   snapshots: CompetitorSnapshotInput[],
   keys: readonly MetricCountKey[],
+  lang?: string,
 ): ObservationRow[] {
   const trend = competitorTrend(snapshots);
   const rows: ObservationRow[] = [];
@@ -170,17 +183,24 @@ export function observationRecords(
       const v = (cur.metrics as Record<string, number | undefined>)[k];
       const pv = prev ? (prev.metrics as Record<string, number | undefined>)[k] : undefined;
       const has = typeof v === 'number' && Number.isFinite(v);
-      if (!prev) return { key: k, value: has ? v! : null, delta: null, note: '首次观测' };
-      if (!has) return { key: k, value: null, delta: null, note: '这次没采到' };
+      if (!prev) return { key: k, value: has ? v! : null, delta: null, note: lang === 'en' ? 'First observation' : '首次观测' };
+      if (!has) return { key: k, value: null, delta: null, note: lang === 'en' ? 'Not collected this time' : '这次没采到' };
       if (typeof pv !== 'number' || !Number.isFinite(pv)) {
-        return { key: k, value: v!, delta: null, note: `上一次从${sourceLabel(prevSrc)}采，没有这一项` };
+        return {
+          key: k,
+          value: v!,
+          delta: null,
+          note: lang === 'en'
+            ? `Prev crawl from ${sourceLabel(prevSrc, lang)}, lacked this metric`
+            : `上一次从${sourceLabel(prevSrc)}采，没有这一项`,
+        };
       }
       return { key: k, value: v!, delta: v! - pv, note: null };
     });
     rows.push({
       takenAt: cur.takenAt,
       source: curSrc,
-      sourceText: sourceLabel(curSrc),
+      sourceText: sourceLabel(curSrc, lang),
       gapDays: cur.gapDays,
       cells,
     });

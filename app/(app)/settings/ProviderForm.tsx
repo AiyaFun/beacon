@@ -2,18 +2,17 @@
 
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
+import { useI18n } from '@/lib/i18n';
 import { actAddProvider } from './actions';
 import { LLM_VENDORS, LLM_VENDOR_KEYS } from '@/lib/constants';
 
-// 供应商白名单来自 lib/constants.ts —— 与服务端校验同一份表（单一事实来源）。
-// 这里**没有「自定义端点」选项**：PRD §10.5 L3「任意端点永不开放」，UI 提供该入口本身就是错的。
-// base_url 与 region 都由供应商预置、不可编辑（F12-1 验收③：UI 与 API 双层锁定）。
-
 export function ProviderForm() {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const router = useRouter();
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState('');
-  const [failed, setFailed] = useState(false); // 拒绝文案不能用成功的绿色
+  const [failed, setFailed] = useState(false);
   const [vendor, setVendor] = useState('deepseek');
   const [label, setLabel] = useState('');
   const [apiKey, setApiKey] = useState('');
@@ -32,14 +31,14 @@ export function ProviderForm() {
     start(async () => {
       const r = await actAddProvider({ label: label || preset.name, vendor, baseUrl: preset.baseUrl, apiKey, model });
       if (r.ok) {
-        setMsg('已添加渠道，请点「连通性测试」验证');
+        setMsg(isEn ? 'Channel added, please click "Test Connection" to verify' : '已添加渠道，请点「连通性测试」验证');
         setLabel('');
         setApiKey('');
         router.refresh();
         setTimeout(() => setMsg(''), 3000);
       } else {
         setFailed(true);
-        setMsg(r.error ?? '添加失败');
+        setMsg(r.error ?? (isEn ? 'Failed to add channel' : '添加失败'));
       }
     });
   }
@@ -50,52 +49,56 @@ export function ProviderForm() {
     <form className="stack" style={{ gap: 12 }} onSubmit={(e) => { e.preventDefault(); submit(); }}>
       <div className="grid grid-2" style={{ gap: 12 }}>
         <div className="field">
-          <label className="field-label">供应商</label>
+          <label className="field-label">{isEn ? 'Vendor / Provider' : '供应商'}</label>
           <select className="select" value={vendor} onChange={(e) => pickVendor(e.target.value)}>
             {LLM_VENDOR_KEYS.map((v) => (
-              <option key={v} value={v}>{LLM_VENDORS[v].name}{LLM_VENDORS[v].region === 'overseas' ? '（海外）' : ''}</option>
+              <option key={v} value={v}>
+                {LLM_VENDORS[v].name}{LLM_VENDORS[v].region === 'overseas' ? (isEn ? ' (Overseas)' : '（海外）') : ''}
+              </option>
             ))}
           </select>
         </div>
         <div className="field">
-          <label className="field-label">渠道名称（自定义标识）</label>
+          <label className="field-label">{isEn ? 'Channel Name (Custom Identifier)' : '渠道名称（自定义标识）'}</label>
           <input className="input" value={label} onChange={(e) => setLabel(e.target.value)} placeholder={preset.name} />
         </div>
       </div>
 
       <div className="field">
-        <label className="field-label">API 端点 base_url（平台锁定·不可改）</label>
+        <label className="field-label">{isEn ? 'API Endpoint base_url (Locked by Platform · Cannot Modify)' : 'API 端点 base_url（平台锁定·不可改）'}</label>
         <input className="input mono" value={preset.baseUrl} readOnly disabled />
         <div className="small" style={{ color: 'var(--muted)', marginTop: 4 }}>
-          端点由平台按供应商白名单预置，不开放自定义端点——防止流量被转去来路不明的中转服务
+          {isEn ? 'Endpoints are preset according to vendor whitelist. Custom endpoints are prohibited to prevent unverified routing.' : '端点由平台按供应商白名单预置，不开放自定义端点——防止流量被转去来路不明的中转服务'}
         </div>
       </div>
 
       <div className="grid grid-2" style={{ gap: 12 }}>
         <div className="field">
-          <label className="field-label">模型名（豆包填接入点 ID）</label>
+          <label className="field-label">{isEn ? 'Model Name (Enter Endpoint ID for Doubao)' : '模型名（豆包填接入点 ID）'}</label>
           <input className="input mono" value={model} onChange={(e) => setModel(e.target.value)} placeholder="deepseek-chat" />
         </div>
         <div className="field">
-          <label className="field-label">合规区域（随供应商，不可选）</label>
-          <input className="input" value={isOverseas ? '海外（限企业版·出海场景）' : '国内已备案'} readOnly disabled />
+          <label className="field-label">{isEn ? 'Compliance Region (Follows Vendor · Read Only)' : '合规区域（随供应商，不可选）'}</label>
+          <input className="input" value={isOverseas ? (isEn ? 'Overseas (Enterprise Edition only)' : '海外（限企业版·出海场景）') : (isEn ? 'Mainland Compliant' : '国内已备案')} readOnly disabled />
         </div>
       </div>
 
       <div className="field">
-        <label className="field-label">API Key（只写不读，入库即加密）</label>
+        <label className="field-label">{isEn ? 'API Key (Write-only, Encrypted on Ingestion)' : 'API Key（只写不读，入库即加密）'}</label>
         <input className="input mono" type="password" autoComplete="off" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-…" />
       </div>
 
       {isOverseas && (
         <div className="small" style={{ color: 'var(--amber)', background: 'var(--surface-2)', padding: '8px 10px', borderRadius: 8 }}>
-          海外模型仅企业版的出海内容场景可启用；发送给模型的内容会先脱敏个人信息，生成结果照常过平台合规检测。
+          {isEn
+            ? 'Overseas models are only enabled for Enterprise cross-border scenarios. Input is de-identified first, and outputs still pass platform compliance checks.'
+            : '海外模型仅企业版的出海内容场景可启用；发送给模型的内容会先脱敏个人信息，生成结果照常过平台合规检测。'}
         </div>
       )}
 
       <div className="row" style={{ gap: 10 }}>
         <button type="submit" className="btn btn-primary btn-sm" disabled={pending || !apiKey}>
-          {pending ? '添加中…' : '添加渠道'}
+          {pending ? (isEn ? 'Adding…' : '添加中…') : (isEn ? 'Add Channel' : '添加渠道')}
         </button>
         {msg && <span className="small" style={{ color: failed ? 'var(--red)' : 'var(--green)' }}>{msg}</span>}
       </div>

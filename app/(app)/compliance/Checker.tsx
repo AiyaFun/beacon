@@ -6,14 +6,16 @@ import { Icon } from '@/components/icons';
 import { PLATFORM_LIST, platformName } from '@/lib/constants';
 import { actCheck, actRewriteSafe, type CheckResult, type SemanticHit } from './actions';
 import type { WordHit } from '@/lib/compliance/engine';
+import { useI18n } from '@/lib/i18n';
 
 const SAMPLE = '这款面膜效果最好，全网第一，100%有效，包治百病，稳赚不赔！加微信私聊拉你进群，还能治愈你的敏感肌。';
+const SAMPLE_EN = 'This face mask works the best, #1 on the entire web, 100% effective, cures all illnesses, guaranteed profit! Add WeChat to DM and join group, cures sensitive skin.';
 
 // 动作 → 高亮底色（block红/warn黄/suggest蓝）
-const ACTION_STYLE: Record<string, { bg: string; label: string; badge: string }> = {
-  block: { bg: 'rgba(220,38,38,0.22)', label: '禁用', badge: 'badge-red' },
-  warn: { bg: 'rgba(234,88,12,0.20)', label: '警告', badge: 'badge-amber' },
-  suggest: { bg: 'rgba(37,99,235,0.18)', label: '建议', badge: 'badge-brand' },
+const ACTION_STYLE: Record<string, { bg: string; label: string; labelEn: string; badge: string }> = {
+  block: { bg: 'rgba(220,38,38,0.22)', label: '禁用', labelEn: 'Block', badge: 'badge-red' },
+  warn: { bg: 'rgba(234,88,12,0.20)', label: '警告', labelEn: 'Warn', badge: 'badge-amber' },
+  suggest: { bg: 'rgba(37,99,235,0.18)', label: '建议', labelEn: 'Suggest', badge: 'badge-brand' },
 };
 
 const SEVERITY: Record<string, number> = { suggest: 1, warn: 2, block: 3 };
@@ -41,16 +43,18 @@ function buildSegments(text: string, hits: WordHit[]) {
   return segs;
 }
 
-const RISK_BADGE: Record<string, { cls: string; label: string }> = {
-  pass: { cls: 'badge-green', label: '通过 · 未发现违规' },
-  warn: { cls: 'badge-amber', label: '警告 · 存在需注意的表达' },
-  block: { cls: 'badge-red', label: '拦截 · 含禁用表达，勿直接发布' },
+const RISK_BADGE: Record<string, { cls: string; label: string; labelEn: string }> = {
+  pass: { cls: 'badge-green', label: '通过 · 未发现违规', labelEn: 'Pass · No violations found' },
+  warn: { cls: 'badge-amber', label: '警告 · 存在需注意的表达', labelEn: 'Warning · Cautionary expressions found' },
+  block: { cls: 'badge-red', label: '拦截 · 含禁用表达，勿直接发布', labelEn: 'Block · Prohibited terms found, do not publish' },
 };
 
 export type DraftOption = { id: string; title: string; content: string };
 
 export function Checker({ drafts = [] }: { drafts?: DraftOption[] }) {
-  const [text, setText] = useState(SAMPLE);
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
+  const [text, setText] = useState(isEn ? SAMPLE_EN : SAMPLE);
   const [platform, setPlatform] = useState<string>(PLATFORM_LIST[0].key);
   const [draftId, setDraftId] = useState('');
   const [result, setResult] = useState<CheckResult | null>(null);
@@ -95,9 +99,9 @@ export function Checker({ drafts = [] }: { drafts?: DraftOption[] }) {
       <div className="row wrap" style={{ gap: 10, alignItems: 'flex-end' }}>
         {drafts.length > 0 && (
           <div className="field" style={{ minWidth: 200 }}>
-            <label className="field-label">从最近的草稿选择</label>
+            <label className="field-label">{isEn ? 'Choose from recent drafts' : '从最近的草稿选择'}</label>
             <select className="select" value={draftId} onChange={(e) => pickDraft(e.target.value)}>
-              <option value="">选一条草稿填进来…</option>
+              <option value="">{isEn ? 'Select a draft to fill…' : '选一条草稿填进来…'}</option>
               {drafts.map((d) => (
                 <option key={d.id} value={d.id}>{d.title}</option>
               ))}
@@ -105,30 +109,30 @@ export function Checker({ drafts = [] }: { drafts?: DraftOption[] }) {
           </div>
         )}
         <div className="field" style={{ minWidth: 160 }}>
-          <label className="field-label">目标平台</label>
+          <label className="field-label">{isEn ? 'Target Platform' : '目标平台'}</label>
           <select className="select" value={platform} onChange={(e) => setPlatform(e.target.value)}>
             {PLATFORM_LIST.map((p) => (
-              <option key={p.key} value={p.key}>{p.name}</option>
+              <option key={p.key} value={p.key}>{platformName(p.key, lang)}</option>
             ))}
           </select>
         </div>
         <div className="spacer" />
         <button className="btn btn-primary" onClick={runCheck} disabled={checking}>
-          {checking ? '检测中…' : '开始检测'}
+          {checking ? (isEn ? 'Checking…' : '检测中…') : (isEn ? 'Run Check' : '开始检测')}
         </button>
       </div>
 
       <div className="field">
-        <label className="field-label">待检测文案</label>
+        <label className="field-label">{isEn ? 'Copy to Inspect' : '待检测文案'}</label>
         <textarea
           className="textarea"
           rows={6}
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="从上方选一条草稿，或直接粘贴要发布的标题、正文…"
+          placeholder={isEn ? 'Select a draft above, or directly paste title and copy to be published…' : '从上方选一条草稿，或直接粘贴要发布的标题、正文…'}
         />
         <div className="small muted" style={{ marginTop: 4 }}>
-          {text.length} 字 · 目标平台「{platformName(platform)}」 · 也可以粘贴站外文案来查
+          {text.length} {isEn ? 'chars · Target platform: ' : '字 · 目标平台「'}{platformName(platform, lang)}{isEn ? ' · External copy can also be checked' : '」 · 也可以粘贴站外文案来查'}
         </div>
       </div>
 
@@ -136,11 +140,13 @@ export function Checker({ drafts = [] }: { drafts?: DraftOption[] }) {
         <>
           {/* 顶部风险条 */}
           <div className="row wrap" style={{ gap: 10, alignItems: 'center' }}>
-            <span className={`badge ${risk!.cls}`} style={{ fontSize: 13, padding: '5px 12px' }}>{risk!.label}</span>
-            <span className="small muted">命中 {result.hits.length} 处</span>
+            <span className={`badge ${risk!.cls}`} style={{ fontSize: 13, padding: '5px 12px' }}>
+              {isEn ? risk!.labelEn : risk!.label}
+            </span>
+            <span className="small muted">{isEn ? `Hit ${result.hits.length} items` : `命中 ${result.hits.length} 处`}</span>
             {result.redline && (
               <span className="badge badge-red" style={{ fontWeight: 600 }}>
-                <Icon.shield size={13} /> 红线命中，禁止导出
+                <Icon.shield size={13} /> {isEn ? 'Redline hit, export blocked' : '红线命中，禁止导出'}
               </span>
             )}
           </div>
@@ -151,17 +157,19 @@ export function Checker({ drafts = [] }: { drafts?: DraftOption[] }) {
               style={{ boxShadow: 'none', border: '1px solid var(--red)', background: 'rgba(220,38,38,0.08)', padding: 14 }}
             >
               <div className="row" style={{ gap: 8, color: 'var(--red)', fontWeight: 600 }}>
-                <Icon.x size={16} /> 已触发法律级红线（极限词／虚假承诺／违规承诺等）
+                <Icon.x size={16} /> {isEn ? 'Statutory redline triggered (absolute superlatives / false claims / illegal promises)' : '已触发法律级红线（极限词／虚假承诺／违规承诺等）'}
               </div>
               <div className="small muted" style={{ marginTop: 6 }}>
-                此类表达涉及广告法等法定红线，系统禁止一键导出或直接发布，请务必先改写规避。
+                {isEn
+                  ? 'These expressions violate advertising laws or statutory rules. One-click export and direct publishing are blocked. Please rewrite and mitigate first.'
+                  : '此类表达涉及广告法等法定红线，系统禁止一键导出或直接发布，请务必先改写规避。'}
               </div>
             </div>
           )}
 
           {/* 正文四色高亮 */}
           <div className="field">
-            <label className="field-label">正文高亮（红=禁用 / 黄=警告 / 蓝=建议）</label>
+            <label className="field-label">{isEn ? 'Copy Highlight (Red=Block / Amber=Warning / Blue=Suggestion)' : '正文高亮（红=禁用 / 黄=警告 / 蓝=建议）'}</label>
             <div
               className="card"
               style={{ boxShadow: 'none', background: 'var(--surface-2)', padding: 14, lineHeight: 1.9, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
@@ -178,9 +186,13 @@ export function Checker({ drafts = [] }: { drafts?: DraftOption[] }) {
 
           {/* 命中列表 */}
           <div className="field">
-            <label className="field-label">命中明细</label>
+            <label className="field-label">{isEn ? 'Hit Details' : '命中明细'}</label>
             {result.hits.length === 0 ? (
-              <div className="small muted">未命中任何敏感词，可以放心发布到「{platformName(platform)}」。</div>
+              <div className="small muted">
+                {isEn
+                  ? `No sensitive terms hit. Safe to publish to "${platformName(platform, lang)}".`
+                  : `未命中任何敏感词，可以放心发布到「${platformName(platform, lang)}」。`}
+              </div>
             ) : (
               <div className="stack" style={{ gap: 8 }}>
                 {result.hits.map((h, i) => {
@@ -188,11 +200,13 @@ export function Checker({ drafts = [] }: { drafts?: DraftOption[] }) {
                   return (
                     <div key={i} className="list-row" style={{ alignItems: 'center' }}>
                       <span className="mono" style={{ minWidth: 90, fontWeight: 600 }}>{h.word}</span>
-                      <TierBadge tier={h.tier} />
-                      <span className={`badge ${st?.badge ?? 'badge-gray'}`}>{st?.label ?? h.action}</span>
+                      <TierBadge tier={h.tier} lang={lang} />
+                      <span className={`badge ${st?.badge ?? 'badge-gray'}`}>{isEn ? (st?.labelEn ?? h.action) : (st?.label ?? h.action)}</span>
                       <span className="small muted" style={{ flex: 1 }}>
-                        {h.suggestion ? `建议改为：${h.suggestion}` : '建议删除或换一种说法'}
-                        {h.platform ? ` · 平台规则：${platformName(h.platform)}` : ''}
+                        {h.suggestion
+                          ? (isEn ? `Suggested: ${h.suggestion}` : `建议改为：${h.suggestion}`)
+                          : (isEn ? 'Consider removing or rephrasing' : '建议删除或换一种说法')}
+                        {h.platform ? ` · ${isEn ? 'Platform rule: ' : '平台规则：'}${platformName(h.platform, lang)}` : ''}
                       </span>
                     </div>
                   );
@@ -205,25 +219,27 @@ export function Checker({ drafts = [] }: { drafts?: DraftOption[] }) {
           {result.semantic && result.semantic.hits.length > 0 && (
             <div className="field">
               <label className="field-label">
-                <Icon.sparkles size={13} /> AI 语义审核
+                <Icon.sparkles size={13} /> {isEn ? 'AI Semantic Review' : 'AI 语义审核'}
                 {result.semantic.mocked && <span className="badge badge-amber" style={{ marginLeft: 8, fontSize: 10 }}>Mock</span>}
                 <span className="badge badge-brand" style={{ marginLeft: 8, fontSize: 10 }}>
-                  发现 {result.semantic.hits.length} 处
+                  {isEn ? `Found ${result.semantic.hits.length}` : `发现 ${result.semantic.hits.length} 处`}
                 </span>
               </label>
               <div className="small muted" style={{ marginBottom: 8 }}>
-                以下问题无法被词库匹配捕获，由 AI 语义分析发现
+                {isEn
+                  ? 'The following issues could not be caught by static lexicons, detected by AI semantic analysis'
+                  : '以下问题无法被词库匹配捕获，由 AI 语义分析发现'}
               </div>
               <div className="stack" style={{ gap: 8 }}>
                 {result.semantic.hits.map((h, i) => (
-                  <SemanticHitRow key={i} hit={h} />
+                  <SemanticHitRow key={i} hit={h} isEn={isEn} />
                 ))}
               </div>
             </div>
           )}
           {result.semantic && result.semantic.hits.length === 0 && (
             <div className="small muted" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-              <Icon.sparkles size={13} /> AI 语义审核未发现额外问题
+              <Icon.sparkles size={13} /> {isEn ? 'AI semantic review found no additional issues' : 'AI 语义审核未发现额外问题'}
               {result.semantic.mocked && <span className="badge badge-amber" style={{ fontSize: 10 }}>Mock</span>}
             </div>
           )}
@@ -231,20 +247,24 @@ export function Checker({ drafts = [] }: { drafts?: DraftOption[] }) {
           {/* 一键 AI 改写规避 */}
           <div className="row wrap" style={{ gap: 10, alignItems: 'center' }}>
             <button className="btn btn-accent" onClick={runRewrite} disabled={rewriting}>
-              <Icon.sparkles size={14} /> {rewriting ? 'AI 改写中…' : '一键 AI 改写规避'}
+              <Icon.sparkles size={14} /> {rewriting ? (isEn ? 'AI Rewriting…' : 'AI 改写中…') : (isEn ? 'One-Click AI Safe Rewrite' : '一键 AI 改写规避')}
             </button>
-            {rewrite?.mocked && <span className="small muted">演示改写：还没接入真实 AI，去「设置」填上你的模型 Key 后生效</span>}
+            {rewrite?.mocked && (
+              <span className="small muted">
+                {isEn ? 'Demo rewrite: Real AI not connected yet. Configure your model API key in Settings.' : '演示改写：还没接入真实 AI，去「设置」填上你的模型 Key 后生效'}
+              </span>
+            )}
           </div>
 
           {rewrite && (
             <div className="field">
               <label className="field-label">
-                AI 合规改写版
+                {isEn ? 'AI Compliant Rewrite' : 'AI 合规改写版'}
                 {rewrite.check.riskLevel === 'pass' ? (
-                  <span className="badge badge-green" style={{ marginLeft: 8 }}>复检通过</span>
+                  <span className="badge badge-green" style={{ marginLeft: 8 }}>{isEn ? 'Recheck Passed' : '复检通过'}</span>
                 ) : (
                   <span className={`badge ${RISK_BADGE[rewrite.check.riskLevel].cls}`} style={{ marginLeft: 8 }}>
-                    复检仍有 {rewrite.check.hits.length} 处，可再改
+                    {isEn ? `Recheck has ${rewrite.check.hits.length} items remaining, can refine further` : `复检仍有 ${rewrite.check.hits.length} 处，可再改`}
                   </span>
                 )}
               </label>
@@ -259,7 +279,7 @@ export function Checker({ drafts = [] }: { drafts?: DraftOption[] }) {
                 style={{ marginTop: 8 }}
                 onClick={() => { setText(rewrite.text); setRewrite(null); setResult(null); }}
               >
-                <Icon.check size={13} /> 采用改写版并回填
+                <Icon.check size={13} /> {isEn ? 'Apply rewritten text' : '采用改写版并回填'}
               </button>
             </div>
           )}
@@ -269,7 +289,7 @@ export function Checker({ drafts = [] }: { drafts?: DraftOption[] }) {
   );
 }
 
-function SemanticHitRow({ hit }: { hit: SemanticHit }) {
+function SemanticHitRow({ hit, isEn }: { hit: SemanticHit; isEn?: boolean }) {
   const isWarn = hit.action === 'warn';
   return (
     <div
@@ -283,14 +303,14 @@ function SemanticHitRow({ hit }: { hit: SemanticHit }) {
     >
       <div className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
         <span className={`badge ${isWarn ? 'badge-amber' : 'badge-brand'}`} style={{ fontSize: 10, flexShrink: 0 }}>
-          {isWarn ? '风险' : '建议'}
+          {isWarn ? (isEn ? 'Risk' : '风险') : (isEn ? 'Suggestion' : '建议')}
         </span>
         <div style={{ flex: 1 }}>
           <span className="mono" style={{ fontWeight: 600, fontSize: 13 }}>"{hit.snippet}"</span>
           <div className="small muted" style={{ marginTop: 4 }}>{hit.reason}</div>
           {hit.suggestion && (
             <div className="small" style={{ marginTop: 4, color: 'var(--brand)' }}>
-              建议改为：{hit.suggestion}
+              {isEn ? 'Suggested: ' : '建议改为：'}{hit.suggestion}
             </div>
           )}
         </div>

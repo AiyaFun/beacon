@@ -57,7 +57,7 @@ function numCell(v: number | undefined | null) {
 export const dynamic = 'force-dynamic';
 
 /** AI 引用回执：取最近 30 条 + 总计。计数与「是我的」分开数，**绝不算比率**。 */
-async function CitationSection() {
+async function CitationSection({ lang }: { lang?: string }) {
   const s = await getSession();
   const [rows, total, mine] = await Promise.all([
     prisma.aiCitation.findMany({
@@ -72,7 +72,7 @@ async function CitationSection() {
     prisma.aiCitation.count({ where: { workspaceId: s.workspaceId } }),
     prisma.aiCitation.count({ where: { workspaceId: s.workspaceId, isMine: true } }),
   ]);
-  return <CitationCard rows={rows} total={total} mine={mine} />;
+  return <CitationCard rows={rows} total={total} mine={mine} lang={lang} />;
 }
 
 const PAGE_SIZE = 50;
@@ -97,13 +97,13 @@ export default async function DataPage({
           tabs={<EffectTabs active={view} inline />}
         />
         {view === 'genes' ? (
-          <GenesPanel />
+          <GenesPanel lang={lang} />
         ) : (
           <>
             <AlgorithmPanel platform={typeof sp.platform === 'string' ? sp.platform : undefined} />
             {/* 【紧挨着放】上面那张是第三方统计口径，这张是用户自己实测到的第一方数据。
                 「评分与真实被引用率零校准」这个病灶，靠的就是这两张并排看 */}
-            <CitationSection />
+            <CitationSection lang={lang} />
           </>
         )}
       </>
@@ -204,8 +204,14 @@ export default async function DataPage({
   // 两条安全线（撞题率 / 合规误报率）现算：都是本工作区内可算的真实数字，
   // 样本不足时返回 insufficient，由 UI 如实说「为什么没有数」而不是显示 0。
   const [clashRate, fpRate] = await Promise.all([
-    topicClashRate(s.workspaceId, s.accountId).catch((): GuardrailValue => ({ state: 'insufficient', note: '统计失败，稍后再看' })),
-    complianceFalsePositiveRate(s.tenantId).catch((): GuardrailValue => ({ state: 'insufficient', note: '统计失败，稍后再看' })),
+    topicClashRate(s.workspaceId, s.accountId).catch((): GuardrailValue => ({
+      state: 'insufficient',
+      note: lang === 'en' ? 'Calculation failed, check back later' : '统计失败，稍后再看',
+    })),
+    complianceFalsePositiveRate(s.tenantId).catch((): GuardrailValue => ({
+      state: 'insufficient',
+      note: lang === 'en' ? 'Calculation failed, check back later' : '统计失败，稍后再看',
+    })),
   ]);
 
   const [followerPoints, audienceBuckets] = await Promise.all([
@@ -238,8 +244,8 @@ export default async function DataPage({
     : [];
   const recordsElsewhere: ElsewhereAccount[] = elsewhereAccounts.map((a) => ({
     id: a.id,
-    name: a.name,
-    platformLabel: platformName(a.platform),
+    name: (lang === 'en' && (a.name === '我的账号' || !a.name)) ? 'My Account' : a.name,
+    platformLabel: platformName(a.platform, lang),
     count: elsewhereRows.find((r) => r.accountId === a.id)?._count._all ?? 0,
   }));
 
@@ -455,7 +461,7 @@ export default async function DataPage({
                 meter={100 - clashRate.pct}
               />
             ) : (
-              <GuardrailPending name={lang === 'en' ? 'Topic Clash Rate' : '撞题率'} note={clashRate.note} />
+              <GuardrailPending name={lang === 'en' ? 'Topic Clash Rate' : '撞题率'} note={clashRate.note} lang={lang} />
             )}
             <Guardrail
               name={lang === 'en' ? 'Above-Baseline Content %' : '超基线内容占比'}
@@ -475,7 +481,7 @@ export default async function DataPage({
                 meter={100 - fpRate.pct}
               />
             ) : (
-              <GuardrailPending name={lang === 'en' ? 'Compliance False Positive Rate' : '合规误报率'} note={fpRate.note} />
+              <GuardrailPending name={lang === 'en' ? 'Compliance False Positive Rate' : '合规误报率'} note={fpRate.note} lang={lang} />
             )}
           </div>
         </Card>
@@ -485,14 +491,14 @@ export default async function DataPage({
           sub={lang === 'en' ? 'Comparing average views to validate AI value' : '用平均播放看 AI 推荐到底值不值'}
         >
           {publishCount === 0 ? (
-            <Empty icon="📊" text="当前筛选下还没有数据，换个时间段或先在下方登记一条" />
+            <Empty icon="📊" text={lang === 'en' ? 'No data under current filter. Change time range or log a post below.' : '当前筛选下还没有数据，换个时间段或先在下方登记一条'} />
           ) : (
             <div className="stack" style={{ gap: 16 }}>
-              <CompareRow label="AI 推荐" count={recommendRecords.length} avg={recAvg} max={maxAvg} color="var(--brand)" />
-              <CompareRow label="自选选题" count={selfRecords.length} avg={selfAvg} max={maxAvg} color="var(--muted, #94a3b8)" />
+              <CompareRow label={lang === 'en' ? 'AI Recommended' : 'AI 推荐'} count={recommendRecords.length} avg={recAvg} max={maxAvg} color="var(--brand)" lang={lang} />
+              <CompareRow label={lang === 'en' ? 'Manual Selection' : '自选选题'} count={selfRecords.length} avg={selfAvg} max={maxAvg} color="var(--muted, #94a3b8)" lang={lang} />
               <div className="divider" />
               <div className="row-between">
-                <span className="small muted">推荐相对自选平均播放</span>
+                <span className="small muted">{lang === 'en' ? 'Recommended vs Manual Avg Views' : '推荐相对自选平均播放'}</span>
                 {liftPositive ? (
                   <span className="badge badge-green" style={{ fontSize: 13 }}>+{lift}%</span>
                 ) : (
@@ -501,10 +507,10 @@ export default async function DataPage({
               </div>
               {liftPositive ? (
                 <div className="small" style={{ color: 'var(--green)' }}>
-                  <Icon.sparkles size={13} /> 推荐组平均播放高出自选组 {lift}%——AI 推荐的选题在你的真实数据里跑赢了。
+                  <Icon.sparkles size={13} /> {lang === 'en' ? `Recommended group avg views are +${lift}% higher than manual selection—AI recommended topics outperform in real data.` : `推荐组平均播放高出自选组 ${lift}%——AI 推荐的选题在你的真实数据里跑赢了。`}
                 </div>
               ) : (
-                <div className="small muted">样本还不够，暂未跑出差异——两边各多发几篇、回填数据后再看。</div>
+                <div className="small muted">{lang === 'en' ? 'Not enough samples to show significant difference—publish more in both groups to review.' : '样本还不够，暂未跑出差异——两边各多发几篇、回填数据后再看。'}</div>
               )}
             </div>
           )}
@@ -579,14 +585,16 @@ export default async function DataPage({
                             // 标题没采到时链接更要给：它是这条记录唯一能被人工核对的抓手
                             <div className="small" style={{ fontWeight: 600, marginBottom: 2 }}>
                               <a href={itemUrl} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--brand)' }} title={itemUrl}>
-                                查看原文 ↗
+                                {lang === 'en' ? 'View Post ↗' : '查看原文 ↗'}
                               </a>
                             </div>
                           ) : null}
                           {fmtDate(r.publishedAt)}
                           {r.needsBackfill && (
                             <div style={{ marginTop: 4 }}>
-                              <span className="badge badge-amber" title="缺发布链接，数据不会自动回流">缺链接</span>
+                              <span className="badge badge-amber" title={lang === 'en' ? 'Missing post URL, data will not auto-sync' : '缺发布链接，数据不会自动回流'}>
+                                {lang === 'en' ? 'Missing URL' : '缺链接'}
+                              </span>
                             </div>
                           )}
                           {(() => {
@@ -605,9 +613,9 @@ export default async function DataPage({
                                     href="?tab=audience#voice"
                                     className="small"
                                     style={{ color: 'var(--text-2)', display: 'block', marginTop: 2 }}
-                                    title="这条作品下采到的读者评论，在本页「读者原声」里可以逐条读"
+                                    title={lang === 'en' ? 'Reader comments collected on this post, readable in Reader Voice' : '这条作品下采到的读者评论，在本页「读者原声」里可以逐条读'}
                                   >
-                                    🗣 {cs.length} 条读者原声
+                                    🗣 {cs.length} {lang === 'en' ? 'reader comments' : '条读者原声'}
                                   </a>
                                 ) : null}
                                 {(qs ?? []).slice(0, 2).map((q) => (
@@ -615,7 +623,7 @@ export default async function DataPage({
                                     key={q.text}
                                     className="small"
                                     style={{ color: 'var(--brand)', marginTop: 2 }}
-                                    title={`读者在这条作品的评论区问到 ${q.count} 次（来自评论采集，已按隐私规则聚合）`}
+                                    title={lang === 'en' ? `Asked by readers ${q.count} times` : `读者在这条作品的评论区问到 ${q.count} 次（来自评论采集，已按隐私规则聚合）`}
                                   >
                                     💬 {q.text}
                                     {q.count > 1 ? <span className="muted"> ×{q.count}</span> : null}
@@ -623,7 +631,7 @@ export default async function DataPage({
                                 ))}
                                 {(qs?.length ?? 0) > 2 && (
                                   <div className="small muted" style={{ marginTop: 2 }}>
-                                    还有 {(qs?.length ?? 0) - 2} 条读者提问，见灵感箱
+                                    {lang === 'en' ? `${(qs?.length ?? 0) - 2} more reader questions in Inspiration Box` : `还有 ${(qs?.length ?? 0) - 2} 条读者提问，见灵感箱`}
                                   </div>
                                 )}
                               </div>
@@ -645,15 +653,15 @@ export default async function DataPage({
                         </td>
                         <td>
                           {r.fromRecommend ? (
-                            <span className="badge badge-brand">AI推荐</span>
+                            <span className="badge badge-brand">{lang === 'en' ? 'AI Rec' : 'AI推荐'}</span>
                           ) : (
-                            <span className="badge badge-gray">自选</span>
+                            <span className="badge badge-gray">{lang === 'en' ? 'Manual' : '自选'}</span>
                           )}
                         </td>
                         <td>
                           <span
                             className={`badge ${tier === 'official' ? 'badge-green' : tier === 'plugin' ? 'badge-brand' : 'badge-gray'}`}
-                            title="数据出处：官方=授权API/适配器，插件=浏览器回传，手填=手动录入"
+                            title={lang === 'en' ? 'Source: official = API, extension = browser sync, manual = user input' : '数据出处：官方=授权API/适配器，插件=浏览器回传，手填=手动录入'}
                           >
                             {SOURCE_TIER_LABEL[tier]}
                           </span>
@@ -678,7 +686,7 @@ export default async function DataPage({
                         </td>
                         <td>
                           {r.contentText ? (
-                            <CopyText text={r.contentText} label="复制" className="btn btn-sm btn-ghost" />
+                            <CopyText text={r.contentText} label={lang === 'en' ? 'Copy' : '复制'} className="btn btn-sm btn-ghost" />
                           ) : (
                             <span className="small muted">—</span>
                           )}
@@ -697,10 +705,12 @@ export default async function DataPage({
             </div>
             {pageCount > 1 && (
               <div className="row-between" style={{ marginTop: 12 }}>
-                <span className="small muted">共 {scoped.length} 条 · 第 {curPage}/{pageCount} 页</span>
+                <span className="small muted">
+                  {lang === 'en' ? `Total ${scoped.length} · Page ${curPage}/${pageCount}` : `共 ${scoped.length} 条 · 第 ${curPage}/${pageCount} 页`}
+                </span>
                 <div className="row" style={{ gap: 8 }}>
-                  {curPage > 1 && <a className="btn btn-sm btn-ghost" href={qs({ page: String(curPage - 1) })}>上一页</a>}
-                  {curPage < pageCount && <a className="btn btn-sm btn-ghost" href={qs({ page: String(curPage + 1) })}>下一页</a>}
+                  {curPage > 1 && <a className="btn btn-sm btn-ghost" href={qs({ page: String(curPage - 1) })}>{lang === 'en' ? 'Previous' : '上一页'}</a>}
+                  {curPage < pageCount && <a className="btn btn-sm btn-ghost" href={qs({ page: String(curPage + 1) })}>{lang === 'en' ? 'Next' : '下一页'}</a>}
                 </div>
               </div>
             )}
@@ -717,14 +727,14 @@ export default async function DataPage({
             node: (
               <>
       {/* 账号级数据：粉丝曲线 + 受众画像（只有创作者后台给得到） */}
-      <AudienceCard platform={audiencePlatform} series={followerPoints} audience={audienceBuckets} />
+      <AudienceCard platform={audiencePlatform} series={followerPoints} audience={audienceBuckets} lang={lang} />
 
       {/* 读者原声：粉丝画像说「他们是谁」，这里说「他们在关心什么、原话怎么说」 */}
       {/* 锚点用兄弟节点，不是 Card 的 prop——Card 不收 id（同 #growth 的写法） */}
       <div id="voice" />
       <Card
-        title="💬 读者原声"
-        sub={`评论区里粉丝在了解什么、关心什么 · 最近 ${voice.total} 条`}
+        title={lang === 'en' ? '💬 Reader Voice' : '💬 读者原声'}
+        sub={lang === 'en' ? `What subscribers care about and ask · Latest ${voice.total} comments` : `评论区里粉丝在了解什么、关心什么 · 最近 ${voice.total} 条`}
         style={{ marginBottom: 16 }}
       >
         <ReaderVoice
@@ -740,7 +750,7 @@ export default async function DataPage({
           topics={voice.concerns}
           kinds={voice.kinds}
           retentionDays={COMMENT_TEXT_PURGE_DAYS}
-          emptyHint="还没采到评论。在插件设置里打开「评论提问采集」，然后到自己的作品详情页点侧栏的「读评论提问」——插件只读当前屏幕上已经显示的评论，不翻页。"
+          emptyHint={lang === 'en' ? 'No comments collected yet. Turn on "Comment question collection" in extension settings, then click "Read Comments & Questions" on your post page—the extension only reads currently displayed comments without turning pages.' : '还没采到评论。在插件设置里打开「评论提问采集」，然后到自己的作品详情页点侧栏的「读评论提问」——插件只读当前屏幕上已经显示的评论，不翻页。'}
         />
       </Card>
               </>
@@ -756,21 +766,25 @@ export default async function DataPage({
       {/* 自有增长。竞对增长在竞对监控页那边（用户 2026-08-10 定的分工：各页只管自己的域）。
           与本页其它卡的分工：它们答「现在是多少」，这里答「这段时间涨了多少、什么时候涨的」。 */}
       <div id="growth" />
-      <Card title="📈 我的增长" sub="账号涨粉与单条作品在同一时间窗下的净增，以及每次采集的时点曲线" style={{ marginBottom: 16 }}>
+      <Card
+        title={lang === 'en' ? '📈 My Growth' : '📈 我的增长'}
+        sub={lang === 'en' ? 'Follower growth and post net gains within the same time window, plus sync timestamp curves' : '账号涨粉与单条作品在同一时间窗下的净增，以及每次采集的时点曲线'}
+        style={{ marginBottom: 16 }}
+      >
         {growthRows.length === 0 ? (
-          <Empty text="还没有可用于算增长的数据——增长需要至少两次采集。用插件在你的作品页点两次「这是我的作品」（或等定时回填跑过两轮）后，这里就会出现曲线。" />
+          <Empty text={lang === 'en' ? 'No growth data available yet—growth tracking requires at least two syncs. Sync your post twice via extension (or wait for scheduled runs) to generate curves.' : '还没有可用于算增长的数据——增长需要至少两次采集。用插件在你的作品页点两次「这是我的作品」（或等定时回填跑过两轮）后，这里就会出现曲线。'} />
         ) : (
           <>
             {!hasGrowth && (
               <div className="small muted" style={{ marginBottom: 10 }}>
-                这个时间窗内还没有回流记录。换一个更长的时间窗，或者去回填一次。
+                {lang === 'en' ? 'No data returned in this time window. Try a longer time window, or sync data now.' : '这个时间窗内还没有回流记录。换一个更长的时间窗，或者去回填一次。'}
               </div>
             )}
             <GrowthBoard
               windowKey={windowKey}
               rows={growthRows}
               windowHrefs={windowHrefs}
-              empty="这个时间窗内没有自有数据回流。"
+              empty={lang === 'en' ? 'No owned data returned in this time window.' : '这个时间窗内没有自有数据回流。'}
             />
           </>
         )}
@@ -788,43 +802,51 @@ export default async function DataPage({
       <WeeklyReviewCard review={weekly} />
 
       {/* 决策质量：AI 的推荐/会诊到底准不准 */}
-      <Card title="🎯 决策质量" sub="AI 的推荐与智囊团会诊到底准不准 · 让决策本身可复盘" style={{ marginBottom: 16 }}>
+      <Card
+        title={lang === 'en' ? '🎯 Decision Quality' : '🎯 决策质量'}
+        sub={lang === 'en' ? 'Audit AI recommendation and advisor accuracy · Make decisions reviewable' : 'AI 的推荐与智囊团会诊到底准不准 · 让决策本身可复盘'}
+        style={{ marginBottom: 16 }}
+      >
         <div className="grid grid-4">
           <Stat
-            label="推荐采纳率"
+            label={lang === 'en' ? 'Rec Adoption' : '推荐采纳率'}
             value={dq.adoptRatePct === null ? '—' : `${dq.adoptRatePct}%`}
-            foot={dq.adoptRatePct === null ? '暂无采纳/拒绝样本' : `采纳 ${dq.recommendAdopted} · 拒绝 ${dq.recommendRejected}`}
+            foot={dq.adoptRatePct === null ? (lang === 'en' ? 'No adoption samples' : '暂无采纳/拒绝样本') : (lang === 'en' ? `Adopted ${dq.recommendAdopted} · Rejected ${dq.recommendRejected}` : `采纳 ${dq.recommendAdopted} · 拒绝 ${dq.recommendRejected}`)}
           />
           <Stat
-            label="智囊团命中率"
+            label={lang === 'en' ? 'Advisor Accuracy' : '智囊团命中率'}
             value={dq.advisorHitRatePct === null ? '—' : `${dq.advisorHitRatePct}%`}
-            foot={dq.advisorHitRatePct === null ? '暂无会诊裁决' : `采纳 ${dq.advisorAdopted} · 否决 ${dq.advisorRejected}`}
+            foot={dq.advisorHitRatePct === null ? (lang === 'en' ? 'No advisor verdicts' : '暂无会诊裁决') : (lang === 'en' ? `Adopted ${dq.advisorAdopted} · Vetoed ${dq.advisorRejected}` : `采纳 ${dq.advisorAdopted} · 否决 ${dq.advisorRejected}`)}
           />
           <Stat
-            label="被验证切入角"
+            label={lang === 'en' ? 'Verified Angles' : '被验证切入角'}
             value={dq.angleProven}
-            foot={<span style={{ color: dq.angleFailed > 0 ? 'var(--red)' : undefined }}>{dq.angleFailed > 0 ? `另有 ${dq.angleFailed} 个已证伪` : '数据验证有效'}</span>}
+            foot={<span style={{ color: dq.angleFailed > 0 ? 'var(--red)' : undefined }}>{dq.angleFailed > 0 ? (lang === 'en' ? `${dq.angleFailed} disproven` : `另有 ${dq.angleFailed} 个已证伪`) : (lang === 'en' ? 'Data verified' : '数据验证有效')}</span>}
           />
-          <Stat label="已复盘选题" value={dq.reviewed} foot="发布后回写 reviewed" />
+          <Stat label={lang === 'en' ? 'Reviewed Topics' : '已复盘选题'} value={dq.reviewed} foot={lang === 'en' ? 'Marked reviewed after post' : '发布后回写 reviewed'} />
         </div>
         <div className="small muted" style={{ marginTop: 10, lineHeight: 1.6 }}>
-          这些数字来自你自己的采纳/拒绝与发布后真实数据——AI 建议准不准，用你的行为和结果说话，而不是我们自说自话。
+          {lang === 'en' ? 'These metrics come from your actual adoption/rejections and verified post metrics—measuring AI accuracy through real actions and results.' : '这些数字来自你自己的采纳/拒绝与发布后真实数据——AI 建议准不准，用你的行为和结果说话，而不是我们自说自话。'}
         </div>
       </Card>
-      <Card title="⏰ 发布时段分析" sub="哪个时段发的内容平均播放更高 · 满 3 条/时段才下结论" style={{ marginBottom: 16 }}>
+      <Card
+        title={lang === 'en' ? '⏰ Publishing Time Analysis' : '⏰ 发布时段分析'}
+        sub={lang === 'en' ? 'Which publishing hours yield higher avg views · Conclusive after 3+ posts per slot' : '哪个时段发的内容平均播放更高 · 满 3 条/时段才下结论'}
+        style={{ marginBottom: 16 }}
+      >
         {!timing.conclusive ? (
-          <Empty icon="⏳" text="样本积累中——同一时段满 3 条发布后，这里给出「几点发效果好」的结论" />
+          <Empty icon="⏳" text={lang === 'en' ? 'Accumulating samples—conclusions appear once 3+ posts are logged in the same time slot.' : '样本积累中——同一时段满 3 条发布后，这里给出「几点发效果好」的结论'} />
         ) : (
           <div className="stack" style={{ gap: 10 }}>
             <div className="small">
-              最佳发布时段：<b style={{ color: 'var(--brand)' }}>{timing.best!.label}</b>
-              <span className="muted">（{timing.best!.sample} 条 · 均播 {fmtNum(timing.best!.avgViews)}，整体均播 {fmtNum(timing.overallAvg)}）</span>
+              {lang === 'en' ? 'Best Publishing Slot: ' : '最佳发布时段：'}<b style={{ color: 'var(--brand)' }}>{timing.best!.label}</b>
+              <span className="muted">（{timing.best!.sample} {lang === 'en' ? 'posts · avg views ' : '条 · 均播 '}{fmtNum(timing.best!.avgViews)}{lang === 'en' ? ', overall avg ' : '，整体均播 '}{fmtNum(timing.overallAvg)}）</span>
             </div>
             <div className="stack" style={{ gap: 8 }}>
               {timing.hourSlots.map((slot) => (
                 <div key={slot.key}>
                   <div className="row-between" style={{ marginBottom: 4 }}>
-                    <span className="small">{slot.label} <span className="muted">· {slot.sample} 条</span></span>
+                    <span className="small">{slot.label} <span className="muted">· {slot.sample} {lang === 'en' ? 'posts' : '条'}</span></span>
                     <span className="small mono">{fmtNum(slot.avgViews)}</span>
                   </div>
                   <Meter value={(slot.avgViews / maxSlotViews) * 100} color={slot.key === timing.best!.key ? 'var(--brand)' : 'var(--text-3)'} />
@@ -836,36 +858,40 @@ export default async function DataPage({
       </Card>
 
       {/* 账号属性画像 */}
-      <Card title="账号属性画像 · 持续学习" sub="每次回填流量，系统都会与账号自身基线对比并沉淀结论" style={{ marginBottom: 16 }}>
+      <Card
+        title={lang === 'en' ? 'Account Profile · Continuous Learning' : '账号属性画像 · 持续学习'}
+        sub={lang === 'en' ? 'Every synced metric is benchmarked against account baselines to crystallize insights' : '每次回填流量，系统都会与账号自身基线对比并沉淀结论'}
+        style={{ marginBottom: 16 }}
+      >
         {profiles.length === 0 && learnedMemories.length === 0 ? (
-          <Empty icon="🧭" text="还没有可学习的数据——发布后回来回填数据，账号画像会自动长出来" />
+          <Empty icon="🧭" text={lang === 'en' ? 'No learning data yet—sync posts after publishing to automatically grow account traits.' : '还没有可学习的数据——发布后回来回填数据，账号画像会自动长出来'} />
         ) : (
           <div className="grid-asym-left grid-align-start">
             <div className="stack" style={{ gap: 10 }}>
-              <div className="small muted">平台算法适配（按你的真实数据）</div>
+              <div className="small muted">{lang === 'en' ? 'Platform Algorithm Adaptation (Based on real data)' : '平台算法适配（按你的真实数据）'}</div>
               {profiles.map((p) => (
                 <div key={p.platform} className="card" style={{ padding: 10, boxShadow: 'none', background: 'var(--surface-2)' }}>
                   <div className="row-between">
                     <span className="badge" style={{ background: 'var(--surface)', color: platformColor(p.platform) }}>
                       {platformName(p.platform)}
                     </span>
-                    <span className="small muted">{p.sample} 条样本</span>
+                    <span className="small muted">{p.sample} {lang === 'en' ? 'samples' : '条样本'}</span>
                   </div>
                   <div className="row wrap small" style={{ gap: 12, marginTop: 6 }}>
-                    <span>均播 <b className="mono">{fmtNum(p.avgViews)}</b></span>
+                    <span>{lang === 'en' ? 'Avg Views ' : '均播 '}<b className="mono">{fmtNum(p.avgViews)}</b></span>
                     {p.engagement !== null && (
-                      <span>互动率 <b className="mono">{(p.engagement * 100).toFixed(1)}%</b></span>
+                      <span>{lang === 'en' ? 'Engagement ' : '互动率 '}<b className="mono">{(p.engagement * 100).toFixed(1)}%</b></span>
                     )}
-                    {p.avgCompletion !== null && <span>完播 <b className="mono">{(p.avgCompletion * 100).toFixed(0)}%</b></span>}
+                    {p.avgCompletion !== null && <span>{lang === 'en' ? 'Completion ' : '完播 '}<b className="mono">{(p.avgCompletion * 100).toFixed(0)}%</b></span>}
                   </div>
                 </div>
               ))}
-              {profiles.length === 0 && <span className="small muted">暂无平台样本</span>}
+              {profiles.length === 0 && <span className="small muted">{lang === 'en' ? 'No platform samples yet' : '暂无平台样本'}</span>}
             </div>
             <div className="stack" style={{ gap: 10 }}>
-              <div className="small muted">学到的账号结论（重复被数据验证会转为「生效」并注入 AI）</div>
+              <div className="small muted">{lang === 'en' ? 'Learned Account Insights (Verified insights become active and are injected into AI)' : '学到的账号结论（重复被数据验证会转为「生效」并注入 AI）'}</div>
               {learnedMemories.length === 0 ? (
-                <span className="small muted">暂无——更新几条发布数据后出现</span>
+                <span className="small muted">{lang === 'en' ? 'None yet—appears after syncing a few post metrics' : '暂无——更新几条发布数据后出现'}</span>
               ) : (
                 <div className="stack" style={{ gap: 6 }}>
                   {learnedMemories.map((m) => (
@@ -873,7 +899,9 @@ export default async function DataPage({
                       <span className={`dot ${m.active ? 'dot-green' : 'dot-amber'}`} style={{ marginTop: 5, flexShrink: 0 }} />
                       <span className="small" style={{ opacity: m.active ? 1 : 0.7 }}>
                         {m.content}
-                        <span className="muted">（命中 {m.hitCount} 次{m.active ? '，已生效' : '，观察中'}）</span>
+                        <span className="muted">
+                          {lang === 'en' ? ` (Hit ${m.hitCount} times${m.active ? ', active' : ', observing'})` : `（命中 ${m.hitCount} 次${m.active ? '，已生效' : '，观察中'}）`}
+                        </span>
                       </span>
                     </div>
                   ))}
@@ -882,7 +910,7 @@ export default async function DataPage({
               {verifiedAngles.length > 0 && (
                 <>
                   <div className="divider" style={{ margin: '4px 0' }} />
-                  <div className="small muted">被数据验证的切入角（已进风格指纹，生成时优先）</div>
+                  <div className="small muted">{lang === 'en' ? 'Verified Angles (Included in style fingerprint for prioritized generation)' : '被数据验证的切入角（已进风格指纹，生成时优先）'}</div>
                   <div className="row wrap" style={{ gap: 6 }}>
                     {verifiedAngles.map((a, i) => (
                       <span key={i} className="badge badge-brand">{a}</span>
@@ -903,54 +931,81 @@ export default async function DataPage({
             hint: lang === 'en' ? 'Data sources: extension sync, post URL linking, CSV import, manual entry' : '数据从哪来：插件一键回填 / 补链接 / 导入历史作品 / 手动登记',
             node: (
               <>
-      <Card title="🔌 插件一键回填" sub="装上「烽火台采集助手」，打开自己的作品页一键回填，省去手动填数" style={{ marginBottom: 16 }}>
+      <Card
+        title={lang === 'en' ? '🔌 Extension One-Click Sync' : '🔌 插件一键回填'}
+        sub={lang === 'en' ? 'Install Beacon Browser Assistant and sync data from your post pages with one click' : '装上「烽火台采集助手」，打开自己的作品页一键回填，省去手动填数'}
+        style={{ marginBottom: 16 }}
+      >
         <div className="small muted" style={{ lineHeight: 1.8 }}>
-          在 B站视频页 / 抖音视频页 / 小红书笔记页打开<b>你自己已发布的作品</b>，点插件里的
-          <b style={{ color: 'var(--text)' }}>「📥 这是我的作品 · 回填数据看板」</b>，
-          插件会把你亲眼可见的公开数据（播放、点赞、评论、收藏等）回传到这里，自动匹配已登记的发布记录、
-          没匹配到的会新建一条。数据即时进入下方「发布效果」与账号画像学习闭环。
-          <br />
-          <b style={{ color: 'var(--text)' }}>创作者后台（推荐）</b>：在<b>你自己</b>的创作者后台
-          <b style={{ color: 'var(--text)' }}>「数据中心 · 作品数据」</b>页点同一个按钮，能拿到公开作品页
-          <b>拿不到的完播率 / 完读率</b>——它是抖音、公众号、B站、视频号算法的第一信号，也是「个性化诊断」
-          此前总说样本不足的原因。支持：视频号、抖音、小红书、B站的创作者后台；
-          公众号后台需要在插件设置页<b>单独授权一次</b>（它不在插件的安装权限里），且仅官方发行版带这个模块。
-          <br />
-          边界写在这里，不藏在协议里：<b>仅在你本人登录态下运行</b>、<b>只读不写</b>（不发布、不修改、不调用平台任何接口）、
-          <b>只读取你自己账号后台已渲染出来的数据</b>、<b>不采集任何他人的数据</b>；插件不持有、不读取、也不上传
-          任何平台的 Cookie 或登录凭证，更不会代你登录。必须由你手动点击触发——这些页面不参与「访问即采」。
-          <br />
-          还没装插件？<a href="/extension" style={{ color: 'var(--brand)', fontWeight: 600 }}>去下载采集助手 →</a>（Chrome / Edge / 360 / Brave）；
-          装好后在 <a href="/settings/keys" style={{ color: 'var(--brand)' }}>接入与密钥 · 插件采集令牌</a> 生成令牌并填入插件（与竞对采集共用同一令牌）。
-          本产品不代发、不托管平台 Cookie，只回传你本人可见的公开数据。
+          {lang === 'en' ? (
+            <>
+              Open <b>your published post</b> on Bilibili, Douyin, or Xiaohongshu, and click{' '}
+              <b style={{ color: 'var(--text)' }}>"📥 This is My Post · Sync Metrics"</b> in the extension. Publicly visible metrics (views, likes, comments, bookmarks) will sync back here, automatically matching logged posts.
+              <br />
+              <b style={{ color: 'var(--text)' }}>Creator Studio (Recommended)</b>: Click the same button in your creator dashboard (e.g. Creator Center · Analytics) to capture <b>completion rates and read-through rates</b> that public post pages cannot access.
+              <br />
+              Boundary commitment: <b>Runs only under your active login session</b>, <b>read-only</b> (never posts, modifies, or calls write APIs), and <b>reads only rendered data on screen</b>. Never stores, reads, or uploads cookies or login tokens.
+              <br />
+              Haven't installed the extension? <a href="/extension" style={{ color: 'var(--brand)', fontWeight: 600 }}>Download Extension Assistant →</a> (Chrome / Edge / Brave); then generate a token in <a href="/settings/keys" style={{ color: 'var(--brand)' }}>Keys & Integrations · Extension Token</a>.
+            </>
+          ) : (
+            <>
+              在 B站视频页 / 抖音视频页 / 小红书笔记页打开<b>你自己已发布的作品</b>，点插件里的
+              <b style={{ color: 'var(--text)' }}>「📥 这是我的作品 · 回填数据看板」</b>，
+              插件会把你亲眼可见的公开数据（播放、点赞、评论、收藏等）回传到这里，自动匹配已登记的发布记录、
+              没匹配到的会新建一条。数据即时进入下方「发布效果」与账号画像学习闭环。
+              <br />
+              <b style={{ color: 'var(--text)' }}>创作者后台（推荐）</b>：在<b>你自己</b>的创作者后台
+              <b style={{ color: 'var(--text)' }}>「数据中心 · 作品数据」</b>页点同一个按钮，能拿到公开作品页
+              <b>拿不到的完播率 / 完读率</b>——它是抖音、公众号、B站、视频号算法的第一信号，也是「个性化诊断」
+              此前总说样本不足的原因。支持：视频号、抖音、小红书、B站的创作者后台；
+              公众号后台需要在插件设置页<b>单独授权一次</b>（它不在插件的安装权限里），且仅官方发行版带这个模块。
+              <br />
+              边界写在这里，不藏在协议里：<b>仅在你本人登录态下运行</b>、<b>只读不写</b>（不发布、不修改、不调用平台任何接口）、
+              <b>只读取你自己账号后台已渲染出来的数据</b>、<b>不采集任何他人的数据</b>；插件不持有、不读取、也不上传
+              任何平台的 Cookie 或登录凭证，更不会代你登录。必须由你手动点击触发——这些页面不参与「访问即采」。
+              <br />
+              还没装插件？<a href="/extension" style={{ color: 'var(--brand)', fontWeight: 600 }}>去下载采集助手 →</a>（Chrome / Edge / 360 / Brave）；
+              装好后在 <a href="/settings/keys" style={{ color: 'var(--brand)' }}>接入与密钥 · 插件采集令牌</a> 生成令牌并填入插件（与竞对采集共用同一令牌）。
+              本产品不代发、不托管平台 Cookie，只回传你本人可见的公开数据。
+            </>
+          )}
         </div>
       </Card>
 
       <Card
-        title="采集记录"
-        sub="每次回填覆盖的时间段 · 最近 30 次"
+        title={lang === 'en' ? 'Sync History' : '采集记录'}
+        sub={lang === 'en' ? 'Time coverage per sync · Latest 30 runs' : '每次回填覆盖的时间段 · 最近 30 次'}
         style={{ marginBottom: 16 }}
       >
         <div className="small muted" style={{ marginBottom: 12, lineHeight: 1.7 }}>
-          插件每次只能采到后台当前页面上那一段（作品数据页通常是最近若干条）。
-          这里记下<b>每一批数据覆盖的发布时间区间</b>，用来判断哪段时间已经采过、哪段还是窟窿；
-          账号名是这批数据<b>记在谁名下</b>——看板按账号分开看，挂错号在上面就找不到它。
+          {lang === 'en'
+            ? 'The extension captures the active page batch in creator studios. This records the publish date range covered by each batch and which account it belongs to.'
+            : '插件每次只能采到后台当前页面上那一段（作品数据页通常是最近若干条）。这里记下每一批数据覆盖的发布时间区间，用来判断哪段时间已经采过、哪段还是窟窿；账号名是这批数据记在谁名下——看板按账号分开看，挂错号在上面就找不到它。'}
         </div>
         <CollectionRuns
           rows={collectionRuns}
-          emptyText="还没有自有数据的采集记录——用插件在你自己的创作者后台点一次回填，这里会记下覆盖的时间段"
+          emptyText={lang === 'en' ? 'No sync records yet—sync once from your creator studio using the extension to record time ranges here' : '还没有自有数据的采集记录——用插件在你自己的创作者后台点一次回填，这里会记下覆盖的时间段'}
+          lang={lang}
         />
       </Card>
 
-      <Card title="历史作品导入" sub="导入已发布作品，充实基线样本" style={{ marginBottom: 16 }}>
+      <Card
+        title={lang === 'en' ? 'Historical Post Import' : '历史作品导入'}
+        sub={lang === 'en' ? 'Import published posts to enrich baseline samples' : '导入已发布作品，充实基线样本'}
+        style={{ marginBottom: 16 }}
+      >
         <ImportPosts />
       </Card>
 
-      <Card title="手动回填" sub="发布登记 + 手动回填，效果追踪就能跑起来">
+      <Card
+        title={lang === 'en' ? 'Manual Post Entry' : '手动回填'}
+        sub={lang === 'en' ? 'Log posts + manually enter metrics to track performance' : '发布登记 + 手动回填，效果追踪就能跑起来'}
+      >
         <div className="small muted" style={{ marginBottom: 14, lineHeight: 1.7 }}>
-          本产品不代发、不托管平台 Cookie。发布后请回这里手动登记内容的真实表现，
-          系统据此把「AI 推荐 → 采纳 → 发布 → 数据」串成完整的效果追踪链路，
-          让核心指标与「推荐 vs 自选」对比都建立在你的真实数据上。
+          {lang === 'en'
+            ? 'This product does not host cookies or publish on your behalf. After publishing, log your post performance manually here to establish full tracking from AI rec to actual results.'
+            : '本产品不代发、不托管平台 Cookie。发布后请回这里手动登记内容的真实表现，系统据此把「AI 推荐 → 采纳 → 发布 → 数据」串成完整的效果追踪链路，让核心指标与「推荐 vs 自选」对比都建立在你的真实数据上。'}
         </div>
         <Backfill />
       </Card>
@@ -976,12 +1031,12 @@ function HealthRow({ issue }: { issue: HealthIssue }) {
   );
 }
 
-function GuardrailPending({ name, note }: { name: string; note: string }) {
+function GuardrailPending({ name, note, lang }: { name: string; note: string; lang?: 'zh' | 'en' }) {
   return (
     <div style={{ opacity: 0.55 }}>
       <div className="row-between" style={{ marginBottom: 6 }}>
         <span className="small">{name}</span>
-        <span className="small muted">暂无数据</span>
+        <span className="small muted">{lang === 'en' ? 'No data' : '暂无数据'}</span>
       </div>
       <Meter value={0} />
       <div className="stat-foot" style={{ marginTop: 4 }}>{note}</div>
@@ -1022,18 +1077,20 @@ function CompareRow({
   avg,
   max,
   color,
+  lang,
 }: {
   label: string;
   count: number;
   avg: number;
   max: number;
   color: string;
+  lang?: 'zh' | 'en';
 }) {
   return (
     <div>
       <div className="row-between" style={{ marginBottom: 6 }}>
-        <span className="small"><b>{label}</b> <span className="muted">· {count} 篇</span></span>
-        <span className="small mono">均 {fmtNum(avg)}</span>
+        <span className="small"><b>{label}</b> <span className="muted">· {count} {lang === 'en' ? 'posts' : '篇'}</span></span>
+        <span className="small mono">{lang === 'en' ? 'Avg ' : '均 '}{fmtNum(avg)}</span>
       </div>
       <Meter value={(avg / max) * 100} color={color} />
     </div>

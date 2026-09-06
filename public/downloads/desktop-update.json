@@ -1,10 +1,14 @@
 {
-  "version": "1.2.6",
-  "pub_date": "2026-09-03T10:40:11.074Z",
+  "version": "1.2.18",
+  "pub_date": "2026-09-06T11:03:28.625Z",
   "platforms": {
     "darwin-aarch64": {
-      "url": "https://beacon.iyunci.cn/downloads/beacon-desktop-1.2.6-mac-aarch64.update.tar.gz",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUdUFpL0lzZXdzcURSMWQxR05ubmMwSHRlb2hJTE1USzJnYksvT2pIODZ1TWdLLytwdXRSZUdTTjd3UlV5Z3phalJ2dk1CbGpiTy8wcy81aWozd1NkQ1Z5V2F5a05sM3dJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4NDMyMDExCWZpbGU6YmVhY29uLWRlc2t0b3AtMS4yLjYtbWFjLWFhcmNoNjQudXBkYXRlLnRhci5negpwUUZEMmQyMVo4bnc5ZG9KLzA2bS85MnlMSFovZ1ZLUFBYWW8yNVlmSmthK1N2ZXRtRWdZQUVWTlV0OU5SWmlrc3RScFB0Vk0waUpCS00ydUxMTzNDUT09Cg=="
+      "url": "https://beacon.iyunci.cn/downloads/beacon-desktop-1.2.18-mac-aarch64.update.tar.gz",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUdUFpL0lzZXdzcUJvblhySG5uLzFnRDhmZE9iOW54cXpxZTBHNVM0YUI5T2ZWMkdrQlVpZFo1K1ZXZVlmK0k5N2ZBWlFwenB4c1Z0Wm9wNHgrZHI3UU5OZGNFdzdlUHdRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4NjkyNjA4CWZpbGU6YmVhY29uLWRlc2t0b3AtMS4yLjE4LW1hYy1hYXJjaDY0LnVwZGF0ZS50YXIuZ3oKRlMzckVmVHhINjU1djcwY2ZqUTJ3M0U5ZXJ0OWFwclg1SURKUVh4dlNkOTkzelo1ZmxldE9XcDdpcm9jRUFNcm5ER1JXTVlZT2NxOUo4eEVRNUFvQkE9PQo="
+    },
+    "windows-x86_64": {
+      "url": "https://beacon.iyunci.cn/downloads/beacon-desktop-1.2.18-win-x64.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUdUFpL0lzZXdzcU9CREFnWExsMXkxdXV2dWV2ZTA5QVFxanZlZEQ4SlBYZEZuS1NrRDFzT2hMQndQZmt6bng4c2Y0MHZOUTdwSWJlL0ZiRm5Md25GUWo0Qlo2T1BnelFRPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4NjkyNjA4CWZpbGU6YmVhY29uLWRlc2t0b3AtMS4yLjE4LXdpbi14NjQuZXhlCmUvSTEyMXF0Y1NwOUhhVUJQM3JZOE5LT1Y4NE9kNS81ZlhuNVpQcXMzeE1rbkVZMnM0RStOdFU3VCtOR3ZwTWplazEva24rbkpXQnBOeGoxOFdRSUF3PT0K"
     }
   }
 }

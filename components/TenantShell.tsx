@@ -8,7 +8,8 @@ import { TaskSidebar } from '@/components/TaskSidebar';
 import { SidebarUser } from '@/components/SidebarUser';
 import { resolvePlatformAdmin } from '@/lib/ops/admin';
 import { actLogout } from '@/app/(app)/actions';
-import { PLAN_LABEL } from '@/lib/plan-label';
+import { getPlanLabel } from '@/lib/plan-label';
+import { getServerLang } from '@/lib/i18n/server';
 import pkg from '@/package.json';
 import { NextSteps } from '@/components/NextSteps';
 import { prisma } from '@/lib/db';
@@ -40,6 +41,7 @@ export async function TenantShell({
   session: SessionContext;
   children: React.ReactNode;
 }) {
+  const lang = await getServerLang();
   const demo = isDemoTenant(session.tenantId);
   // 侧栏下载卡：没打过桌面包（清单读不到）就不给卡，免得点进去是空页面
   const desktopCard = () => {
@@ -59,7 +61,10 @@ export async function TenantShell({
     // 运维台入口跟着账号区走（原来在顶栏）。普通用户连这个链接的存在都看不到
     resolvePlatformAdmin(session.memberId),
   ]);
-  const accountName = account?.name ?? '我的账号';
+  const rawAccountName = account?.name ?? '';
+  const accountName = (lang === 'en' && (rawAccountName === '我的账号' || !rawAccountName))
+    ? 'My Account'
+    : (rawAccountName || '我的账号');
 
   // 单壳化（2026-08-26 用户拍板删工作台）：唯一导航 + 常驻「最近」列表。
   // takePerKind 压到 8：侧栏只显示 6 条（完整清单在 /runs）。
@@ -69,7 +74,7 @@ export async function TenantShell({
   const userFooter = (
     <SidebarUser
       memberName={session.memberName}
-      planLabel={PLAN_LABEL[session.plan ?? 'free'] ?? '免费版'}
+      planLabel={getPlanLabel(session.plan, lang)}
       isPlatformAdmin={platformAdmin !== null}
       settings={settingsGroup}
       logout={actLogout}

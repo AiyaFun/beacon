@@ -3,6 +3,7 @@
 // 与排队那条路（lib/browser-task/index.ts）的分工：payload 形状、三道闸（vet.ts）、落库函数
 // 全都复用，只是执行者从「插件下次醒来」换成「这台机器上的 Chrome 现在就去」。
 // 所以 AI 拿到的是**结果**而不是一张回执——用户不用等插件醒。
+import { beijingDayKey } from '../beijing';
 import { prisma } from '../db';
 import { can as editionCan } from '../edition';
 import { vetCdpUrl, browseLocal } from '../browser/local';
@@ -42,15 +43,15 @@ export async function localBrowserState(workspaceId: string): Promise<LocalBrows
 }
 
 /** 用户能怎么把本机浏览器叫起来——三处（工具回执 / 系统提示 / 设置页）说同一句话。 */
-export const LOCAL_BROWSER_WAKE_HINT = '到「设置 → 本机权限」点一下「开启浏览器操作」（或客户端托盘的「启动采集浏览器」）';
+export const LOCAL_BROWSER_WAKE_HINT = '到「设置 → 本机权限」点一下「开启浏览器操作」（或客户端托盘的「打开采集浏览器（登录用）」）';
 
 export type LocalRunResult =
   | { ok: true; summary: string; data?: Record<string, unknown> }
   | { ok: false; error: string; summary: string };
 
+/** 逻辑日按北京时间（2026-09-04 审计）：生产容器是 UTC，北京 00:00–08:00 的采集会写进前一天的行并盖掉那天的真值。 */
 function todayStr(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return beijingDayKey();
 }
 
 /**
@@ -66,7 +67,7 @@ export async function ingestParsedPage(input: {
   via: string; // 回执里的措辞：「本机浏览器」/「桌面客户端」
 }): Promise<LocalRunResult> {
   const { workspaceId, payload, parsed, channel, via } = input;
-  if (!parsed?.posts?.length) return { ok: false, error: '主页上没读到作品（可能没加载完，或这个号还没发过内容）', summary: '没读到作品' };
+  if (!parsed?.posts?.length) return { ok: false, error: '主页上一条作品都没读到。最常见的原因是**采集浏览器还没登录这个平台**（很多站点未登录时只给一个登录弹层）——去「烽火台采集浏览器」窗口里登录一次再派；也可能是页面没加载完，或这个号确实没发过内容。', summary: '没读到作品' };
 
   if (payload.kind === 'collect_self_profile') {
     // 打开的必须是这个账号自己的主页——解析器认出的 handle 对不上就一条都不写

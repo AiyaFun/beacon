@@ -12,6 +12,7 @@ import { jumpToStudioTab } from './StudioTabs';
 import { parseAltTitles } from '@/lib/studio/alt-titles';
 import { actAdoptTitle } from './actions';
 import { actRunSkill, actSkillSaveVersion, actSkillSaveAsSibling, type RunSkillActionResult } from './actions';
+import { useI18n } from '@/lib/i18n';
 
 // 技能中心（/skills）安装的技能在这里一键运行：正文 → 平台成品（微信排版/小红书图文…）。
 // 列表由服务端（page.tsx → listInstalledSkills）算好传入，本组件只管触发与展示。
@@ -152,6 +153,7 @@ export function SkillPanel({
   /** 本账号素材库（参数卡里勾选「这篇要用哪几条」） */
   materials?: SkillMaterial[];
 }) {
+  const { lang } = useI18n();
   const [pending, start] = useTransition();
   const [runningId, setRunningId] = useState('');
   const [result, setResult] = useState<SkillOutput | null>(null);
@@ -181,8 +183,16 @@ export function SkillPanel({
     return (
       <Empty
         icon="🧩"
-        text="还没有安装技能——去技能中心装上「微信一键排版」「小红书排版」等，就能把正文一键变成平台成品"
-        action={<Link className="btn btn-sm btn-primary" href="/skills">去技能中心安装</Link>}
+        text={
+          lang === 'en'
+            ? 'No skills installed yet — install "WeChat Formatter", "Xiaohongshu Layout", etc. from the Skill Center to transform drafts into platform-ready outputs.'
+            : '还没有安装技能——去技能中心装上「微信一键排版」「小红书排版」等，就能把正文一键变成平台成品'
+        }
+        action={
+          <Link className="btn btn-sm btn-primary" href="/skills">
+            {lang === 'en' ? 'Install from Skill Center' : '去技能中心安装'}
+          </Link>
+        }
       />
     );
   }
@@ -190,11 +200,11 @@ export function SkillPanel({
   function run(skill: SkillMeta) {
     if (!draftId) return;
     // 跨平台运行要确认：把抖音口播丢给「知乎长文排版」是能跑的，跑完才发现不对代价太大
-    // （一次真实 LLM 调用 + 一次配额）。技能标 generic 的不拦。
     if (draftPlatform && skill.platform !== 'generic' && skill.platform !== draftPlatform) {
       const ok = window.confirm(
-        `「${skill.name}」是为${skillPlatformName(skill.platform)}做的，当前草稿是${skillPlatformName(draftPlatform)}。\n` +
-        '继续会把这篇改成另一个平台的形态（会消耗一次 AI 额度）。确定继续吗？',
+        lang === 'en'
+          ? `"${skill.name}" is built for ${skillPlatformName(skill.platform)}, while the current draft is for ${skillPlatformName(draftPlatform)}.\nProceeding will reformat this draft into another platform (consumes 1 AI credit). Continue?`
+          : `「${skill.name}」是为${skillPlatformName(skill.platform)}做的，当前草稿是${skillPlatformName(draftPlatform)}。\n继续会把这篇改成另一个平台的形态（会消耗一次 AI 额度）。确定继续吗？`,
       );
       if (!ok) return;
     }
@@ -226,9 +236,7 @@ export function SkillPanel({
     });
   }
 
-  // 复制富文本（HTML 产出专用）。**消毒是这里的责任，标识与剪贴板交给 lib/clipboard/rich**：
-  // 技能产出是 LLM 生成的不可信 HTML，必须先过白名单；而 AIGC 标识那套（显式文案 + 隐式元数据
-  // + 双 flavor 写入）每个复制出口都一样，抄第二遍就会漏。
+  // 复制富文本（HTML 产出专用）。
   async function copyRich(r: SkillOutput) {
     const html = sanitizeSkillHtml(r.output);
     await copyRichText(html, htmlToPlain(html));
@@ -241,16 +249,15 @@ export function SkillPanel({
     start(async () => {
       const res = await actSkillSaveVersion(draftId, r.output, r.skillName);
       if (res.ok) {
-        setSaved(`已存为第${res.seq}版`);
+        setSaved(lang === 'en' ? `Saved as v${res.seq}` : `已存为第${res.seq}版`);
         router.refresh();
       } else {
-        setErr(res.error ?? '保存失败');
+        setErr(res.error ?? (lang === 'en' ? 'Save failed' : '保存失败'));
       }
     });
   }
 
-  // 「备选标题」块：模板本来就要求模型输出三条，此前只是没人解析，等于生成了但用不上。
-  // 采纳 = 改草稿标题（与标题矩阵的「用这条」同一个 action，口径不分叉）。
+  // 「备选标题」块
   const altTitles = result && result.outputKind !== 'image' ? parseAltTitles(result.output) : [];
 
   function adoptAltTitle(title: string) {
@@ -258,10 +265,10 @@ export function SkillPanel({
     start(async () => {
       const r = await actAdoptTitle(draftId, title);
       if (r.ok) {
-        setSaved(`已把草稿标题改为「${title}」`);
+        setSaved(lang === 'en' ? `Updated draft title to "${title}"` : `已把草稿标题改为「${title}」`);
         router.refresh();
       } else {
-        setErr(r.error ?? '采纳失败');
+        setErr(r.error ?? (lang === 'en' ? 'Failed to adopt' : '采纳失败'));
       }
     });
   }
@@ -271,10 +278,14 @@ export function SkillPanel({
     start(async () => {
       const res = await actSkillSaveAsSibling(draftId, r.output, r.skillName, lastSkill.platform);
       if (res.ok) {
-        setSaved(`已另存为${skillPlatformName(res.platform ?? '')}兄弟稿`);
+        setSaved(
+          lang === 'en'
+            ? `Saved as ${skillPlatformName(res.platform ?? '')} sibling draft`
+            : `已另存为${skillPlatformName(res.platform ?? '')}兄弟稿`,
+        );
         router.refresh();
       } else {
-        setErr(res.error ?? '保存失败');
+        setErr(res.error ?? (lang === 'en' ? 'Save failed' : '保存失败'));
       }
     });
   }
@@ -299,9 +310,9 @@ export function SkillPanel({
       className="btn btn-sm"
       onClick={() => run(sk)}
       disabled={pending || !draftId}
-      title={draftId ? sk.description : '先在左侧选中一份草稿'}
+      title={draftId ? sk.description : (lang === 'en' ? 'Select a draft on the left first' : '先在左侧选中一份草稿')}
     >
-      {sk.emoji} {runningId === sk.id && pending ? '生成中…' : sk.name}
+      {sk.emoji} {runningId === sk.id && pending ? (lang === 'en' ? 'Generating…' : '生成中…') : sk.name}
     </button>
   );
 
@@ -314,22 +325,28 @@ export function SkillPanel({
         {matched.map(renderSkillButton)}
         {matched.length === 0 && (
           <span className="small muted">
-            没有适配{draftPlatform ? skillPlatformName(draftPlatform) : '该平台'}的已装技能——展开下面「其他平台」，或去技能中心装一个。
+            {lang === 'en'
+              ? `No installed skills match ${draftPlatform ? skillPlatformName(draftPlatform) : 'this platform'} — expand "Other Platforms" below or install one from Skill Center.`
+              : `没有适配${draftPlatform ? skillPlatformName(draftPlatform) : '该平台'}的已装技能——展开下面「其他平台」，或去技能中心装一个。`}
           </span>
         )}
       </div>
 
       {hadImageSkill && (
         <div className="small muted">
-          🎨 AI 封面已经搬到「标题与封面」里，不用再从技能列表点：{' '}
-          <button className="btn btn-xs btn-ghost" onClick={() => jumpToStudioTab('title', 'cover-station')}>去出封面</button>
+          {lang === 'en' ? '🎨 AI Cover has moved to "Title & Cover" tab: ' : '🎨 AI 封面已经搬到「标题与封面」里，不用再从技能列表点： '}
+          <button className="btn btn-xs btn-ghost" onClick={() => jumpToStudioTab('title', 'cover-station')}>
+            {lang === 'en' ? 'Open Cover Station' : '去出封面'}
+          </button>
         </div>
       )}
 
       {others.length > 0 && (
         <div className="stack" style={{ gap: 8 }}>
           <button className="btn btn-sm btn-ghost" style={{ alignSelf: 'flex-start' }} onClick={() => setShowOthers((v) => !v)}>
-            {showOthers ? '收起' : `其他平台的技能（${others.length}）`}
+            {showOthers
+              ? (lang === 'en' ? 'Collapse' : '收起')
+              : (lang === 'en' ? `Other Platform Skills (${others.length})` : `其他平台的技能（${others.length}）`)}
           </button>
           {showOthers && (
             <div className="row wrap" style={{ gap: 8 }}>
@@ -342,29 +359,35 @@ export function SkillPanel({
       {/* 参数卡：运行前 3 秒能填完的「这一次想要什么」 */}
       <div className="stack" style={{ gap: 8 }}>
         <button className="btn btn-sm btn-ghost" style={{ alignSelf: 'flex-start' }} onClick={() => setShowParams((v) => !v)}>
-          {showParams ? '收起本次要求' : briefTouched ? '本次要求（已设置）' : '本次要求（篇幅 / 语气 / 指定素材）'}
+          {showParams
+            ? (lang === 'en' ? 'Collapse Run Options' : '收起本次要求')
+            : briefTouched
+              ? (lang === 'en' ? 'Run Options (Configured)' : '本次要求（已设置）')
+              : (lang === 'en' ? 'Run Options (Length / Tone / Focus Materials)' : '本次要求（篇幅 / 语气 / 指定素材）')}
         </button>
         {showParams && (
           <div className="card" style={{ padding: 12, boxShadow: 'none', background: 'var(--surface-2)' }}>
             <div className="row wrap" style={{ gap: 10, alignItems: 'center' }}>
-              <label className="small muted">篇幅</label>
+              <label className="small muted">{lang === 'en' ? 'Length' : '篇幅'}</label>
               <select className="select" style={{ maxWidth: 150 }} value={length} onChange={(e) => setLength(e.target.value as typeof length)}>
-                <option value="keep">不限</option>
-                <option value="short">更短</option>
-                <option value="long">更充分</option>
+                <option value="keep">{lang === 'en' ? 'Default' : '不限'}</option>
+                <option value="short">{lang === 'en' ? 'Concise' : '更短'}</option>
+                <option value="long">{lang === 'en' ? 'Detailed' : '更充分'}</option>
               </select>
-              <label className="small muted">语气</label>
+              <label className="small muted">{lang === 'en' ? 'Tone' : '语气'}</label>
               <select className="select" style={{ maxWidth: 150 }} value={tone} onChange={(e) => setTone(e.target.value as typeof tone)}>
-                <option value="keep">保持人设</option>
-                <option value="calm">更克制</option>
-                <option value="punchy">更冲</option>
+                <option value="keep">{lang === 'en' ? 'Brand Voice' : '保持人设'}</option>
+                <option value="calm">{lang === 'en' ? 'Restrained' : '更克制'}</option>
+                <option value="punchy">{lang === 'en' ? 'High Energy' : '更冲'}</option>
               </select>
             </div>
 
             {materials.length > 0 && (
               <>
                 <div className="small muted" style={{ margin: '10px 0 6px' }}>
-                  这篇要重点用上哪几条素材（不选就按账号整体素材来）
+                  {lang === 'en'
+                    ? 'Materials to emphasize in this article (defaults to all brand materials):'
+                    : '这篇要重点用上哪几条素材（不选就按账号整体素材来）'}
                 </div>
                 <div className="row wrap" style={{ gap: 6 }}>
                   {materials.map((m) => {
@@ -385,24 +408,30 @@ export function SkillPanel({
             )}
 
             <div className="field" style={{ marginTop: 10 }}>
-              <label className="field-label small muted">想突出的关键词（可选，空格分隔）</label>
+              <label className="field-label small muted">
+                {lang === 'en' ? 'Keywords to highlight (optional, space separated)' : '想突出的关键词（可选，空格分隔）'}
+              </label>
               <input
                 className="input"
-                placeholder="比如：新手 预算 避坑"
+                placeholder={lang === 'en' ? 'e.g.: Beginner Budget Tips' : '比如：新手 预算 避坑'}
                 value={keywords}
                 onChange={(e) => setKeywords(e.target.value)}
                 maxLength={80}
               />
               <div className="small muted" style={{ marginTop: 4 }}>
-                搜索流量吃的就是关键词。会要求自然带上，不会硬塞或堆砌。
+                {lang === 'en'
+                  ? 'Search engines prioritize key query words. They will be integrated naturally without keyword stuffing.'
+                  : '搜索流量吃的就是关键词。会要求自然带上，不会硬塞或堆砌。'}
               </div>
             </div>
 
             <div className="field" style={{ marginTop: 10 }}>
-              <label className="field-label small muted">还有什么要求（可选）</label>
+              <label className="field-label small muted">
+                {lang === 'en' ? 'Additional requirements (optional)' : '还有什么要求（可选）'}
+              </label>
               <input
                 className="input"
-                placeholder="比如：结尾别引导关注 / 多举一个具体例子"
+                placeholder={lang === 'en' ? 'e.g.: Omit follow CTA / Include an additional case example' : '比如：结尾别引导关注 / 多举一个具体例子'}
                 value={extra}
                 onChange={(e) => setExtra(e.target.value)}
                 maxLength={200}
@@ -412,7 +441,13 @@ export function SkillPanel({
         )}
       </div>
 
-      {!draftId && <div className="small muted">选中左侧一份草稿后，点技能即可把正文一键变成成品。</div>}
+      {!draftId && (
+        <div className="small muted">
+          {lang === 'en'
+            ? 'Select a draft on the left, then click a skill to generate a finished version.'
+            : '选中左侧一份草稿后，点技能即可把正文一键变成成品。'}
+        </div>
+      )}
       {err && <div className="small" style={{ color: 'var(--red)' }}>{err}</div>}
 
       {result && (
@@ -420,16 +455,29 @@ export function SkillPanel({
           <div className="row-between" style={{ marginBottom: 8 }}>
             <b className="small">{result.skillName}</b>
             <div className="row wrap" style={{ gap: 6 }}>
-              {/* 用的是第几版必须显示：取错版本是不会报错的那种错，用户只会觉得「怎么改的东西没进去」 */}
-              <span className="badge badge-gray" title="技能永远基于最新一版正文运行">
-                基于第 {result.sourceSeq} 版
+              <span
+                className="badge badge-gray"
+                title={lang === 'en' ? 'Skills run on the latest draft revision' : '技能永远基于最新一版正文运行'}
+              >
+                {lang === 'en' ? `Based on v${result.sourceSeq}` : `基于第 ${result.sourceSeq} 版`}
               </span>
               {result.mocked && (
-                <span className="badge badge-amber" title="尚未接入真实模型，这是内置的演示产出，仅用于预览流程">
-                  演示结果（未接入真实 AI）
+                <span
+                  className="badge badge-amber"
+                  title={
+                    lang === 'en'
+                      ? 'AI model not connected, using built-in preview data'
+                      : '尚未接入真实模型，这是内置的演示产出，仅用于预览流程'
+                  }
+                >
+                  {lang === 'en' ? 'Demo Output (AI not connected)' : '演示结果（未接入真实 AI）'}
                 </span>
               )}
-              {risk && <span className={`badge ${risk.cls}`}>{risk.text}</span>}
+              {risk && (
+                <span className={`badge ${risk.cls}`}>
+                  {lang === 'en' ? (result.riskLevel === 'pass' ? 'Compliance Passed' : result.riskLevel === 'warn' ? 'Advisory Warning' : 'Redline Triggered') : risk.text}
+                </span>
+              )}
             </div>
           </div>
 
@@ -437,7 +485,6 @@ export function SkillPanel({
             <div
               className="small"
               style={{ lineHeight: 1.7, background: 'var(--surface)', borderRadius: 8, padding: 12, overflowX: 'auto' }}
-              // 已过 sanitizeSkillHtml（DOMParser 白名单消毒）后才进 innerHTML
               dangerouslySetInnerHTML={{ __html: sanitizeSkillHtml(result.output) }}
             />
           ) : (
@@ -447,16 +494,18 @@ export function SkillPanel({
           {altTitles.length > 0 && (
             <>
               <div className="divider" />
-              <div className="small muted" style={{ marginBottom: 6 }}>产出里的备选标题（可直接用）：</div>
+              <div className="small muted" style={{ marginBottom: 6 }}>
+                {lang === 'en' ? 'Alternative titles from output (click to adopt):' : '产出里的备选标题（可直接用）：'}
+              </div>
               <div className="stack" style={{ gap: 6 }}>
                 {altTitles.map((t, i) => (
                   <div key={i} className="row-between wrap" style={{ gap: 8, alignItems: 'center' }}>
                     <b className="small" style={{ lineHeight: 1.5 }}>{t}</b>
                     <span className="row wrap" style={{ gap: 6 }}>
-                      <CopyText text={t} label="复制" />
+                      <CopyText text={t} label={lang === 'en' ? 'Copy' : '复制'} />
                       {draftId && (
                         <button className="btn btn-xs btn-ghost" onClick={() => adoptAltTitle(t)} disabled={pending}>
-                          当草稿标题
+                          {lang === 'en' ? 'Set as Title' : '当草稿标题'}
                         </button>
                       )}
                     </span>
@@ -469,7 +518,9 @@ export function SkillPanel({
           {result.hits.length > 0 && (
             <>
               <div className="divider" />
-              <div className="small muted" style={{ marginBottom: 6 }}>以下用词发布前建议再斟酌：</div>
+              <div className="small muted" style={{ marginBottom: 6 }}>
+                {lang === 'en' ? 'Consider reviewing these terms before publishing:' : '以下用词发布前建议再斟酌：'}
+              </div>
               <div className="stack" style={{ gap: 6 }}>
                 {result.hits.map((h, i) => (
                   <div key={i} className="row wrap" style={{ gap: 6, alignItems: 'center' }}>
@@ -485,11 +536,20 @@ export function SkillPanel({
           <div className="divider" />
           <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
             {result.outputKind === 'html' ? (
-              <button className="btn btn-sm" onClick={() => copyRich(result)} disabled={pending} title="以富文本复制，可直接粘进公众号等编辑器（自动附带 AI 生成标识）">
-                {copied ? '已复制 ✓' : '复制富文本'}
+              <button
+                className="btn btn-sm"
+                onClick={() => copyRich(result)}
+                disabled={pending}
+                title={
+                  lang === 'en'
+                    ? 'Copy rich formatted text ready for WeChat / Xiaohongshu (includes AI disclosure)'
+                    : '以富文本复制，可直接粘进公众号等编辑器（自动附带 AI 生成标识）'
+                }
+              >
+                {copied ? (lang === 'en' ? 'Copied ✓' : '已复制 ✓') : (lang === 'en' ? 'Copy Rich Text' : '复制富文本')}
               </button>
             ) : (
-              <CopyText text={result.output} label="复制成品" />
+              <CopyText text={result.output} label={lang === 'en' ? 'Copy Output' : '复制成品'} />
             )}
             {draftId && (
               <button
@@ -498,16 +558,20 @@ export function SkillPanel({
                 disabled={pending || crossPlatform}
                 title={
                   crossPlatform
-                    ? `这是${skillPlatformName(lastSkill!.platform)}的成品，存进${skillPlatformName(draftPlatform!)}稿的版本线会覆盖原稿——请用「另存为兄弟稿」`
+                    ? (lang === 'en'
+                        ? `This output is tailored for ${skillPlatformName(lastSkill!.platform)}. Saving into ${skillPlatformName(draftPlatform!)} draft will overwrite the original — use "Save as Sibling Draft" instead`
+                        : `这是${skillPlatformName(lastSkill!.platform)}的成品，存进${skillPlatformName(draftPlatform!)}稿的版本线会覆盖原稿——请用「另存为兄弟稿」`)
                     : undefined
                 }
               >
-                存为新版本
+                {lang === 'en' ? 'Save as Version' : '存为新版本'}
               </button>
             )}
             {draftId && crossPlatform && (
               <button className="btn btn-sm btn-primary" onClick={() => saveAsSibling(result)} disabled={pending}>
-                另存为{skillPlatformName(lastSkill!.platform)}兄弟稿
+                {lang === 'en'
+                  ? `Save as ${skillPlatformName(lastSkill!.platform)} Sibling Draft`
+                  : `另存为${skillPlatformName(lastSkill!.platform)}兄弟稿`}
               </button>
             )}
             {saved && <span className="small" style={{ color: 'var(--green)' }}>{saved}</span>}

@@ -6,7 +6,7 @@
 // 关联就是把这两样直接摆到它眼前，并告诉它该调哪个工具、怎么填参数。
 import { prisma } from '../db';
 import { platformName } from '../constants';
-import { hasCollector, collectorKinds } from '../browser-task';
+import { hasCollector, collectorKinds, collectorAgents } from '../browser-task';
 import { SELF_PROFILE_PLATFORMS } from '../browser-task/kinds';
 import { localBrowserState, LOCAL_BROWSER_WAKE_HINT } from '../browser-task/local-run';
 import { fmtDate } from '../format';
@@ -14,12 +14,16 @@ import { fmtDate } from '../format';
 export type AccountsContext = {
   accounts: { id: string; name: string; platform: string; handle: string | null; current: boolean }[];
   plugin: { installed: boolean; lastSeenAt: Date | null; kinds?: string[] };
+  /** 谁会来领活：浏览器插件、桌面客户端，还是两者都有（2026-09-04）。
+   *  不告诉模型的话，它只看到「采集插件：没装」，于是编出「需要插件、等你下次打开浏览器」——
+   *  而用户登记的正是桌面客户端，它每分钟领一次活。真机撞到过。 */
+  executors?: ('plugin' | 'desktop')[];
   /** off=没开 / ready=此刻能用（采集任务直接当场跑）/ offline=开了但 Chrome 没带端口跑着 */
   localBrowser: 'off' | 'ready' | 'offline';
 };
 
 export async function loadAccountsContext(ctx: { workspaceId: string; accountId: string | null }): Promise<AccountsContext> {
-  const [rows, installed, token, local, caps] = await Promise.all([
+  const [rows, installed, token, local, caps, agents] = await Promise.all([
     prisma.creatorAccount.findMany({
       where: { workspaceId: ctx.workspaceId, status: 'active' },
       select: { id: true, name: true, platform: true, handle: true },
@@ -33,10 +37,12 @@ export async function loadAccountsContext(ctx: { workspaceId: string; accountId:
     }),
     localBrowserState(ctx.workspaceId).catch(() => ({ state: 'off' as const })),
     collectorKinds(ctx.workspaceId).catch(() => new Set<string>()),
+    collectorAgents(ctx.workspaceId),
   ]);
   return {
     accounts: rows.map((r) => ({ ...r, current: r.id === ctx.accountId })),
     plugin: { installed, lastSeenAt: token?.lastUsedAt ?? null, kinds: Array.from(caps) },
+    executors: Array.from(agents),
     localBrowser: local.state,
   };
 }
@@ -49,9 +55,18 @@ export function renderAccountsContext(c: AccountsContext): string {
     ? c.accounts.map((a) => `- ${line(a)}`).join('\n')
     : '- （工作区里还没有账号）';
   const oldPlugin = c.plugin.installed && c.plugin.kinds && !c.plugin.kinds.includes('collect_self_profile');
-  const plugin = c.plugin.installed
-    ? `已连接${c.plugin.lastSeenAt ? `（最近活跃 ${fmtDate(c.plugin.lastSeenAt)}）` : '（还没回传过数据）'}${oldPlugin ? '；**版本旧了，不会回填自己的主页**（派了会被拒，如实告诉用户去更新插件，或在桌面客户端顶部那条「允许这台客户端操作浏览器采集？」点「允许」）' : ''}`
-    : '没装';
+  const hasDesktop = c.executors?.includes('desktop');
+  const hasPluginAgent = c.executors?.includes('plugin');
+  // 【必须说清「谁来领、等多久」】只写「采集插件：没装」的话，模型会自己编出
+  // 「需要浏览器插件，等你下次打开浏览器」——而用户登记的是桌面客户端，它每分钟领一次活。
+  // 2026-09-04 真机撞到：用户没插件、有客户端，模型照样让他去开浏览器等插件。
+  const plugin = hasDesktop && hasPluginAgent
+    ? '桌面客户端（几秒内领走）与浏览器插件都在'
+    : hasDesktop
+      ? '**桌面客户端已登记为采集执行器**（几秒内领走，通常一两分钟内跑完；用户这里没有浏览器插件，别提插件、别让他去开浏览器）'
+      : c.plugin.installed
+        ? `浏览器插件已连接${c.plugin.lastSeenAt ? `（最近活跃 ${fmtDate(c.plugin.lastSeenAt)}）` : '（还没回传过数据）'}${oldPlugin ? '；**版本旧了，不会回填自己的主页**（派了会被拒，如实告诉用户去更新插件，或在桌面客户端顶部那条「允许这台客户端操作浏览器采集？」点「允许」）' : ''}`
+        : '没有任何采集执行器（既没装插件，也没把桌面客户端登记为执行器）——采集任务派不出去，如实告诉用户去登记，别说成「已排队等浏览器」';
   const local = c.localBrowser === 'ready'
     ? '就绪（采集任务会直接用它当场跑完并返回结果，不排队）'
     : c.localBrowser === 'offline'
@@ -61,11 +76,11 @@ export function renderAccountsContext(c: AccountsContext): string {
   return [
     '【你的账号与插件】',
     acct,
-    `采集插件：${plugin}；本机浏览器：${local}`,
+    `采集执行器：${plugin}；本机浏览器：${local}`,
     '怎么用这些信息：',
     `- 用户说「采/抓取/回填我的 X 账号」这类话，指的就是上面对应平台的那条账号，**直接**调 dispatch_browser_task(kind=collect_self_profile, platform=<平台>, wait_for_result=true)，`
       + '不要再问他要主页链接、也不要问采哪个；同平台有多个账号时用 account 参数点名（用户没点名就按「当前」那条）。',
-    '- 走哪条路（本机浏览器还是插件）由系统按上面的状态自动定，**不要问用户选**；本机就绪时工具直接返回结果，拿到就接着答。'
+    '- 走哪条路（本机浏览器 / 桌面客户端 / 插件）由系统按上面的状态自动定，**不要问用户选**；本机就绪时工具直接返回结果，拿到就接着答。'
       + '想让用户看进度时用文字说明，不要把工具调用写成 JSON 块给他看。',
     `- 能派的自有回填只有：${selfProfile}（自己的主页，要有 handle）。别的平台（含公众号）如实说要在创作者后台页点插件侧栏手动回填，公众号连那条路都没有了。`,
     '- 账号没填 handle 时，告诉他去「账号」页填上，不要编一个。',

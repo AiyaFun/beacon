@@ -185,7 +185,15 @@ globalThis.__beaconParse = function () {
   const seen = new Set();
   const posts = [];
   let selfTweets = 0;
-  for (const art of document.querySelectorAll('article[data-testid="tweet"]')) {
+  // 【锚点退化：article[data-testid="tweet"] → 裸 article】2026-09-04 真机（Chrome 152 + x.com）：
+  // 页面上 **一个 data-testid 都没有了**（`document.querySelectorAll('[data-testid]').length === 0`），
+  // 而 <article> 还在、正文与指标也都在里面。X 采集因此对所有人静默返回 0 条——不报错、
+  // 只是「主页上没读到作品」，看起来像「这个号没发过内容」。
+  // 退路只加不减：testid 还在的环境（旧版、灰度）照旧走第一条，取不到才退到裸 article。
+  const withTestid = document.querySelectorAll('article[data-testid="tweet"]');
+  const tweetNodes = withTestid.length ? withTestid : document.querySelectorAll('article');
+  const usingFallback = withTestid.length === 0 && tweetNodes.length > 0;
+  for (const art of tweetNodes) {
     const link = art.querySelector('a[href*="/status/"]');
     const m = link && link.href.match(/(?:x|twitter)\.com\/([^/]+)\/status\/(\d+)/);
     if (!m) continue;
@@ -194,15 +202,31 @@ globalThis.__beaconParse = function () {
     if (author.toLowerCase() !== handle.toLowerCase()) continue; // 非本竞对（转推/回复）跳过
     if (seen.has(id)) continue;
     seen.add(id);
-    const text = (art.querySelector('[data-testid="tweetText"]')?.textContent || '').trim();
+    // 正文同样要有退路：testid 没了之后 tweetText 取不到，退回「article 里最长的那段文字块」——
+    // 比直接用 art.textContent 好，后者会把作者名、时间、指标数字全揉进正文。
+    let text = (art.querySelector('[data-testid="tweetText"]')?.textContent || '').trim();
+    if (!text) {
+      let best = '';
+      for (const el of art.querySelectorAll('div[lang], span[lang]')) {
+        const t = (el.textContent || '').trim();
+        if (t.length > best.length) best = t;
+      }
+      text = best;
+    }
+    const dt = art.querySelector('time[datetime]')?.getAttribute('datetime');
+    if (!text && !usingFallback) {
+      text = xFallbackTitle(art, id, dt);
+    }
+    // 【一条什么都没取到就整条丢掉，绝不入库】2026-09-04：X 把语义锚点全拆了
+    // （没有 data-testid / [lang] / time[datetime] / [role=group]），退到裸 article 之后
+    // 仍然取不到正文与指标。这时**返回空记录比返回 0 条更糟**——库里会多出一批
+    // 没正文、没指标、没发布时间的「作品」，而且它们会进基线、进榜单、喂给模型。
+    // 宁可这一页一条都不采，让上层如实报「解析器过时了」。
+    if (!text) continue;
     // ⚠️ 选 [role=group] 时**不能再要求带 aria-label**：指标现在主要从按钮上读，
     // 而操作栏并不总有 aria-label（X 改版、或本来就没标）。要求它 = 把按钮那一层整个跳过，
     // 退回到「一个指标都读不到」的老毛病上。取不到操作栏就退回整条推文。
     const metrics = xMetricsFromGroup(art.querySelector('[role="group"]') || art, pc);
-    // 发表时间：推文头部的 <time datetime="2026-07-27T…">。不带它的话，自有通道会把
-    // 每条记录的 publishedAt 填成「回填当天」——发布时段分析按小时分组，全是回填那一刻的时辰，
-    // 趋势图的「发布后第 N 天」也跟着全错（见 lib/ingest/own-post.ts 的 fillDate）。
-    const dt = art.querySelector('time[datetime]')?.getAttribute('datetime');
     if (xTweetLooksLikeSelf(art)) selfTweets += 1;
     posts.push({
       platformItemId: id,
@@ -218,6 +242,13 @@ globalThis.__beaconParse = function () {
   // popup / SidePanel 拿它决定「这是我的作品」是直接回填、还是先要用户再点一次确认。
   const isSelf = xLooksLikeSelfProfile() || selfTweets > 0 ? true : undefined;
 
+  // 【找得到推文节点、却一条内容都没解析出来 = 站点改版把锚点拆了】2026-09-04：
+  // X 移除了 data-testid / [lang] / time[datetime] / [role=group]，退到裸 article 之后
+  // 仍取不到正文与指标。这时如实报「解析器过时」，上层才能告诉用户「等解析器更新」，
+  // 而不是含混地说「主页上没读到作品（可能这个号还没发过内容）」——那句话与事实不符。
+  if (usingFallback && posts.length === 0 && tweetNodes.length > 0) {
+    return { error: 'parser_stale' };
+  }
   return {
     platform: 'x',
     handle,

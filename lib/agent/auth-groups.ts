@@ -14,8 +14,10 @@ export type AuthGroup = {
   key: AuthGroupKey;
   /** 组名，就是那句后果 */
   name: string;
+  nameEn: string;
   /** 一句话说清勾了它会发生什么 */
   hint: string;
+  hintEn: string;
   /** 缺省勾不勾 */
   defaultOn: boolean;
 };
@@ -24,20 +26,26 @@ export const AUTH_GROUPS: AuthGroup[] = [
   {
     key: 'content',
     name: '改我的内容',
+    nameEn: 'Modify My Content',
     hint: '建草稿、存新版本、加对标账号、收藏文章。改的都是你自己的内容，可以回退。',
+    hintEn: 'Create drafts, save versions, track competitors, bookmark articles. Only modifies your own content, reversible.',
     defaultOn: true,
   },
   {
     key: 'spend',
     name: '花我的额度',
+    nameEn: 'Consume Quota',
     hint: '跑选题推荐、采数据、跑技能、出封面、开智囊团会诊。这些会消耗 AI 调用额度。',
+    hintEn: 'Topic recommendation, data collection, run skills, generate covers, convene advisors. Consumes AI quota.',
     defaultOn: true,
   },
   {
     key: 'commit',
     // 这一组的共同点是**影响不止这一次任务**
     name: '排任务与签合约',
+    nameEn: 'Schedule Tasks & Sign Contracts',
     hint: '建发布计划、写进长期记忆、配定时、拼新智能体。这些做完之后会一直生效，所以默认仍然逐个问你。',
+    hintEn: 'Create publish plans, write to long-term memory, configure schedules, assemble agents. Persists indefinitely, requires confirmation by default.',
     defaultOn: false,
   },
 ];

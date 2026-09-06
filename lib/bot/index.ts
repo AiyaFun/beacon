@@ -232,9 +232,22 @@ async function sendToChatVia(provider: string, inboundKey: string | null, secret
       const { ilinkSendText } = await import('./wechat-ilink');
       return ilinkSendText(secrets.ilinkBaseUrl, secrets.ilinkBotToken, chatId, secrets.ilinkContextToken, renderPlain(message));
     }
+    case 'wecom_aibot': {
+      // 只答不推：回复只能挂在入站帧上。派活时那条回复刻意没收口（见 wecom-aibot-poller），
+      // 这里把结果续在它后面并收口；没有可续的流（超过 10 分钟 / 断过线）就如实说，结果在任务台。
+      const { finishOpenStream } = await import('./wecom-aibot-poller');
+      const id = inboundKey ? await integrationIdByKey(inboundKey) : '';
+      const ok = !!id && finishOpenStream(id, chatId, renderPlain(message));
+      return ok ? { ok: true } : { ok: false, error: '企微智能机器人只能在对话里回复，那条对话的回复已经收口（超过 10 分钟或连接重连过）；结果在任务台' };
+    }
     default:
       return { ok: false, error: `${provider} 没有会话级发送接口` };
   }
+}
+
+async function integrationIdByKey(inboundKey: string): Promise<string> {
+  const it = await prisma.botIntegration.findFirst({ where: { inboundKey }, select: { id: true } });
+  return it?.id ?? '';
 }
 
 // ── 测试发送：设置页「测试发送」按钮用 ──

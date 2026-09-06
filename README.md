@@ -2,7 +2,9 @@
 
 <h1 align="center">烽火台 Beacon</h1>
 
-<p align="center">「用数据驱动内容决策的跨平台创作者作战室。」</p>
+<p align="center"><b>先知道做什么，再谈怎么写。</b></p>
+
+<p align="center">给持续更新的创作者：每天早上一份带理由的选题推荐，覆盖抖音、小红书、公众号、B 站、视频号。</p>
 
 <p align="center">
   <a href="https://beacon.iyunci.cn">👉 在线体验</a>

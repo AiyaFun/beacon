@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Icon } from '@/components/icons';
 import { actUpdateMetrics } from './actions';
+import { useI18n } from '@/lib/i18n';
 
 type Insight = { kind: string; text: string };
 
@@ -15,6 +16,8 @@ export function MetricsUpdater({
   publishId: string;
   initial: { views?: number; likes?: number; comments?: number; shares?: number; collects?: number; completion?: number };
 }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const [open, setOpen] = useState(false);
   const [pending, start] = useTransition();
   const [err, setErr] = useState('');
@@ -34,7 +37,7 @@ export function MetricsUpdater({
     start(async () => {
       const r = await actUpdateMetrics(publishId, { ...form, completion: form.completion });
       if (!r.ok) {
-        setErr(r.error ?? '更新失败');
+        setErr(r.error ?? (isEn ? 'Update failed' : '更新失败'));
         return;
       }
       setInsights(r.insights ?? []);
@@ -67,27 +70,27 @@ export function MetricsUpdater({
       {!open ? (
         <div className="row" style={{ gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
           <button className="btn btn-sm btn-ghost" onClick={() => { setOpen(true); setInsights(null); }}>
-            <Icon.refresh size={13} /> 更新数据
+            <Icon.refresh size={13} /> {isEn ? 'Update Metrics' : '更新数据'}
           </button>
           {insights && insights.length > 0 && (
-            <span className="small" style={{ color: 'var(--brand)' }} title="本次回流触发的账号学习">
+            <span className="small" style={{ color: 'var(--brand)' }} title={isEn ? 'Account learning triggered by this sync' : '本次回流触发的账号学习'}>
               <Icon.sparkles size={12} /> {insights[0].text}
             </span>
           )}
         </div>
       ) : (
         <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
-          {num('views', '播放')}
-          {num('likes', '赞', 68)}
-          {num('comments', '评', 68)}
-          {num('shares', '转', 68)}
-          {num('collects', '藏', 68)}
-          {num('completion', '完播%', 68)}
+          {num('views', isEn ? 'Views' : '播放')}
+          {num('likes', isEn ? 'Likes' : '赞', 68)}
+          {num('comments', isEn ? 'Comments' : '评', 68)}
+          {num('shares', isEn ? 'Shares' : '转', 68)}
+          {num('collects', isEn ? 'Saves' : '藏', 68)}
+          {num('completion', isEn ? 'Finish%' : '完播%', 68)}
           <button className="btn btn-sm btn-primary" onClick={submit} disabled={pending || !form.views}>
-            {pending ? '学习中…' : '保存并学习'}
+            {pending ? (isEn ? 'Learning…' : '学习中…') : (isEn ? 'Save & Learn' : '保存并学习')}
           </button>
           <button className="btn btn-sm btn-ghost" onClick={() => setOpen(false)} disabled={pending}>
-            取消
+            {isEn ? 'Cancel' : '取消'}
           </button>
           {err && <span className="small" style={{ color: 'var(--red)' }}>{err}</span>}
         </div>

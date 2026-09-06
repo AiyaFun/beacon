@@ -27,7 +27,15 @@ export type CreateScheduleInput = {
   accountId: string;
   memberId: string;
   tenantId: string;
-  templateId: string;
+  /** targetKind='workflow'（缺省）时必填：到点跑哪条流水线模板 */
+  templateId?: string;
+  /**
+   * 到点派什么（2026-09-05 起这里也能建「指一键任务」的定时——此前只有消费端认 task，
+   * 全库没有任何写入路径，等于「定时能指两种东西」只做了一半）。
+   */
+  targetKind?: 'workflow' | 'task';
+  /** targetKind='task' 时必填：哪张一键任务卡 */
+  taskPresetId?: string;
   atHour: number;
   atMinute: number;
   weekdays: number[];
@@ -64,13 +72,28 @@ export async function createSchedule(input: CreateScheduleInput): Promise<Create
     return { ok: false, error: `最多配 ${MAX_SCHEDULES} 条定时计划（每天总共也只跑这么多次）` };
   }
 
-  // 模板必须是这个租户能用的：不校验的话可以把别人的自建模板 id 填进来定时跑。
-  // 这个 OR 谓词与 listTemplates / runWorkflow 是同一份，别在这里另写一种写法
-  const t = await prisma.workflowTemplate.findFirst({
-    where: { id: input.templateId, enabled: true, OR: [{ isBuiltin: true }, { tenantId: input.tenantId }] },
-    select: { id: true },
-  });
-  if (!t) return { ok: false, error: '这个智能体不存在或未启用' };
+  const kind = input.targetKind ?? 'workflow';
+  let templateId: string | null = null;
+  let taskPresetId: string | null = null;
+  if (kind === 'task') {
+    // 一键任务卡必须是这个工作区自己的：不校验的话能把别人的卡 id 填进来到点替别人派活
+    const p = input.taskPresetId
+      ? await prisma.taskPreset.findFirst({ where: { id: input.taskPresetId, workspaceId: input.workspaceId }, select: { id: true } })
+      : null;
+    if (!p) return { ok: false, error: '这张一键任务卡不存在' };
+    taskPresetId = p.id;
+  } else {
+    // 模板必须是这个租户能用的：不校验的话可以把别人的自建模板 id 填进来定时跑。
+    // 这个 OR 谓词与 listTemplates / runWorkflow 是同一份，别在这里另写一种写法
+    const t = input.templateId
+      ? await prisma.workflowTemplate.findFirst({
+          where: { id: input.templateId, enabled: true, OR: [{ isBuiltin: true }, { tenantId: input.tenantId }] },
+          select: { id: true },
+        })
+      : null;
+    if (!t) return { ok: false, error: '这个智能体不存在或未启用' };
+    templateId = t.id;
+  }
 
   const { hour, minute } = clampScheduleTime(input.atHour, input.atMinute);
 
@@ -78,7 +101,9 @@ export async function createSchedule(input: CreateScheduleInput): Promise<Create
     data: {
       workspaceId: input.workspaceId,
       accountId: input.accountId, // 派它在**当前账号**名下干活，跟数据页口径一致
-      templateId: t.id,
+      targetKind: kind,
+      templateId,
+      taskPresetId,
       atHour: hour,
       atMinute: minute,
       weekdays: toJson(normalizeWeekdays(input.weekdays)),

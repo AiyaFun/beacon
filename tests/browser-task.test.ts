@@ -8,6 +8,7 @@ import {
   enqueueBrowserTask, claimNextTask, completeTask, releaseExpiredLeases, expireStaleTasks,
   BROWSER_TASK_KINDS, MAX_ATTEMPTS, retriable,
 } from '@/lib/browser-task';
+import { at, between } from './helpers/anchor';
 
 // 派给浏览器的活。
 //
@@ -26,6 +27,12 @@ beforeEach(async () => {
   const w = await prisma.workspace.create({ data: { tenantId: t.id, name: 'w' } });
   wsId = w.id;
 });
+
+
+/** 把失败退避「拨到过去」：2026-09-04 起失败后要等 10/30 分钟才能再领（防止同一主页被反复打开）。 */
+async function skipBackoff(id: string) {
+  await prisma.browserTask.update({ where: { id }, data: { leaseUntil: new Date(Date.now() - 1000) } });
+}
 
 describe('白名单：没注册的动作就是做不了', () => {
   it('只认注册过的 kind', async () => {
@@ -73,12 +80,12 @@ describe('服务端不许排一个插件不会做的活', () => {
 
   it('插件那张 SELF_COLLECT_URL 真的有 x 与 tiktok——SELF_PROFILE_PLATFORMS 只能是它的子集', async () => {
     const { SELF_PROFILE_PLATFORMS } = await import('@/lib/browser-task/kinds');
-    const block = sw.slice(sw.indexOf('const SELF_COLLECT_URL'), sw.indexOf('function selfCollectUrl'));
+    const block = between(sw, 'const SELF_COLLECT_URL', 'function selfCollectUrl');
     for (const p of SELF_PROFILE_PLATFORMS) expect(block, `插件没有 ${p} 的主页入口`).toMatch(new RegExp(`^\\s{2}${p}:`, 'm'));
   });
 
   it('collect_self_profile 在插件里核对 handle，对不上一条都不回填', () => {
-    const fn = sw.slice(sw.indexOf('async function collectSelfProfileTask'), sw.indexOf('/**\n * 打开一个网页、把正文读回来'));
+    const fn = between(sw, 'async function collectSelfProfileTask', '/**\n * 打开一个网页、把正文读回来');
     expect(fn).toMatch(/norm\(payload\.handle\) !== norm\(handle\)/);
     expect(fn).toContain('accountId: task.accountId || task.payload.accountId');
     expect(fn).toContain('active: false');
@@ -91,14 +98,14 @@ describe('服务端不许排一个插件不会做的活', () => {
   });
 
   it('插件对不认识的 kind 要如实交回失败，不能傻等到超时', () => {
-    const fn = sw.slice(sw.indexOf('async function runBrowserTask'), sw.indexOf('async function drainBrowserTasks'));
+    const fn = between(sw, 'async function runBrowserTask', 'async function drainBrowserTasks');
     expect(fn).toMatch(/还不认识/);
   });
 
   it('每条活都当场交回结果——没有「先报成功、真实结果稍后再说」的分支', () => {
     // 曾经有一条 deferred（公众号后台回填由 finishSelfAuto 收尾）。那条通道删掉之后，
     // 留着 deferred 就是留一条「开了个标签页」会被记成最终结果的路。
-    const drain = sw.slice(sw.indexOf('async function drainBrowserTasks'));
+    const drain = sw.slice(at(sw, 'async function drainBrowserTasks'));
     expect(drain, '还留着 deferred 分支').not.toMatch(/deferred/);
     expect(drain).toMatch(/await reportBrowserTask\(task\.id, outcome\.ok/);
   });
@@ -180,7 +187,10 @@ describe('交活', () => {
     const t = await claimNextTask(wsId, 'A');
     const r = await completeTask(wsId, t!.id, { ok: false, error: '没登录' });
     expect(r.status).toBe('pending');
-    expect(await claimNextTask(wsId, 'B'), '放回池子了却领不到').toBeTruthy();
+    // 退避期内领不到（这正是要防的「下一分钟又被领走」），退避过了才领得到
+    expect(await claimNextTask(wsId, 'B'), '失败后没有退避').toBeNull();
+    await skipBackoff(t!.id);
+    expect(await claimNextTask(wsId, 'B'), '退避过了却领不到').toBeTruthy();
   });
 
   it('重试到上限就判死，别让一个死任务把每一轮都占掉', async () => {
@@ -190,6 +200,7 @@ describe('交活', () => {
       const t = await claimNextTask(wsId, 'A');
       expect(t, `第 ${i + 1} 次应该还能领到`).toBeTruthy();
       last = (await completeTask(wsId, t!.id, { ok: false, error: 'boom' })).status ?? '';
+      if (last === 'pending') await skipBackoff(t!.id);
     }
     expect(last).toBe('failed');
     expect(await claimNextTask(wsId, 'A')).toBeNull();
@@ -255,7 +266,7 @@ describe('没装插件就别排——排了也没人领', () => {
     const { hasCollector } = await import('@/lib/browser-task');
     // memberId 可空（旧的工作区级令牌迁进来时没有签发人可考），这里就不建 Member 了
     const tok = await prisma.ingestToken.create({
-      data: { workspaceId: wsId, token: `tk-${wsId}`, label: '我的电脑' },
+      data: { lastUsedAt: new Date(),  workspaceId: wsId, token: `tk-${wsId}`, label: '我的电脑' },
     });
     expect(await hasCollector(wsId)).toBe(true);
     await prisma.ingestToken.update({ where: { id: tok.id }, data: { revokedAt: new Date() } });
@@ -272,7 +283,7 @@ describe('没装插件就别排——排了也没人领', () => {
     // 2026-08-26 起这道闸收口到 lib/browser-task/vet.ts（对外调用面 /api/v1/browser-tasks
     // 也要走同一份）；派活工具必须调 vet，vet 里必须先查有没有插件
     const src = fs.readFileSync(path.join(ROOT, 'lib/agent/tools.ts'), 'utf8');
-    const fn = src.slice(src.indexOf('const dispatchBrowserTask'), src.indexOf('const listBrowserTasks'));
+    const fn = between(src, 'const dispatchBrowserTask', 'const listBrowserTasks');
     expect(fn, '派活工具没走统一的闸').toMatch(/vetBrowserTaskArgs\(ctx\.workspaceId/);
     const vet = fs.readFileSync(path.join(ROOT, 'lib/browser-task/vet.ts'), 'utf8');
     expect(vet, '派活前没查有没有插件').toMatch(/collectorKinds\(workspaceId\)/);
@@ -308,6 +319,7 @@ describe('干完要说一声——派活到干完中间可能隔了几小时', (
     for (let i = 0; i < MAX_ATTEMPTS; i++) {
       const t = await claimNextTask(wsId, 'A');
       await completeTask(wsId, t!.id, { ok: false, error: '没登录' });
+      await skipBackoff(t!.id);
     }
     const rows = await notes();
     expect(rows).toHaveLength(1);
@@ -336,11 +348,13 @@ describe('列表按紧急度排，不是按字母', () => {
 });
 
 describe('去重与过期', () => {
-  it('一模一样的活不排两遍——AI 一轮里问两次不该跑两次', async () => {
+  it('一模一样的活不跑两遍——再派一次以新为准，旧的标 cancelled（2026-09-04 用户拍板）', async () => {
     const a = await enq({ kind: 'collect_competitor', competitorId: 'c1', limit: 20 });
     const b = await enq({ kind: 'collect_competitor', competitorId: 'c1', limit: 20 });
-    expect((a as { id: string }).id).toBe((b as { id: string }).id);
-    expect(await prisma.browserTask.count({ where: { workspaceId: wsId } })).toBe(1);
+    expect((a as { id: string }).id).not.toBe((b as { id: string }).id);
+    // 池子里真正「在做」的只有一条：旧的已取消，执行器不会把同一页跑两遍
+    expect(await prisma.browserTask.count({ where: { workspaceId: wsId, status: { in: ['pending', 'claimed'] } } })).toBe(1);
+    expect((await prisma.browserTask.findUnique({ where: { id: (a as { id: string }).id } }))?.status).toBe('cancelled');
   });
 
   it('参数不同就是两个活', async () => {

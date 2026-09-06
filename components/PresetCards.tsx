@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Overlay } from './Overlay';
 import { actDispatchPreset } from '@/app/(app)/workflows/preset-actions';
+import { useI18n } from '@/lib/i18n/context';
 
 // ── 一键任务卡：点一下就派 ────────────────────────────────────────────────────
 //
@@ -23,6 +24,8 @@ export type PresetCard = {
 
 export function PresetCards({ presets }: { presets: PresetCard[] }) {
   const router = useRouter();
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const [pending, start] = useTransition();
   const [open, setOpen] = useState<PresetCard | null>(null);
   const [goal, setGoal] = useState('');
@@ -34,7 +37,7 @@ export function PresetCards({ presets }: { presets: PresetCard[] }) {
     setErr('');
     start(async () => {
       const r = await actDispatchPreset(p.id, override);
-      if (!r.ok || !r.turn) { setErr(r.error ?? '没能派出去'); return; }
+      if (!r.ok || !r.turn) { setErr(r.error ?? (isEn ? 'Failed to dispatch' : '没能派出去')); return; }
       setOpen(null);
       // 带上 runId 跳过去看它跑——不带的话用户落到一个空白助手页
       router.push(`/assistant?run=${r.turn.runId}`);
@@ -44,8 +47,8 @@ export function PresetCards({ presets }: { presets: PresetCard[] }) {
   return (
     <div className="card" style={{ padding: 14 }}>
       <div className="row-between" style={{ marginBottom: 8 }}>
-        <strong className="small">一键任务</strong>
-        <a href="/workflows#presets" className="small muted">管理 →</a>
+        <strong className="small">{isEn ? 'One-click Presets' : '一键任务'}</strong>
+        <a href="/workflows#presets" className="small muted">{isEn ? 'Manage →' : '管理 →'}</a>
       </div>
       <div className="row wrap" style={{ gap: 8 }}>
         {presets.map((p) => (
@@ -66,18 +69,18 @@ export function PresetCards({ presets }: { presets: PresetCard[] }) {
 
       {/* 弹层必须走 Overlay（portal）：卡片上的 transform 会把 fixed 遮罩关进卡片里 */}
       {open && (
-        <Overlay label="派这条一键任务" onClose={() => setOpen(null)}>
+        <Overlay label={isEn ? 'Dispatch preset task' : '派这条一键任务'} onClose={() => setOpen(null)}>
           <div className="card" style={{ padding: 20, width: 560, maxWidth: '94vw' }}>
             <div className="row-between" style={{ marginBottom: 12 }}>
               <b>⚡ {open.title}</b>
-              <button className="btn btn-sm btn-ghost" onClick={() => setOpen(null)}>关闭</button>
+              <button className="btn btn-sm btn-ghost" onClick={() => setOpen(null)}>{isEn ? 'Close' : '关闭'}</button>
             </div>
 
             <div className="small muted" style={{ marginBottom: 8 }}>
-              让 {open.agentName ?? '通用助手'} 去做 ·{' '}
+              {isEn ? `Assign to ${open.agentName ?? 'General Assistant'} · ` : `让 ${open.agentName ?? '通用助手'} 去做 · `}
               {open.authorizedCount > 0
-                ? `已提前授权 ${open.authorizedCount} 个动作，这些不会再逐个问你`
-                : '每一步会改数据或花钱的动作都先问你'}
+                ? (isEn ? `${open.authorizedCount} actions preauthorized, will not ask each step` : `已提前授权 ${open.authorizedCount} 个动作，这些不会再逐个问你`)
+                : (isEn ? 'Will ask for confirmation on every data-modifying or quota-consuming step' : '每一步会改数据或花钱的动作都先问你')}
             </div>
 
             <textarea
@@ -89,14 +92,14 @@ export function PresetCards({ presets }: { presets: PresetCard[] }) {
               style={{ width: '100%', marginBottom: 10 }}
             />
             <div className="small muted" style={{ marginBottom: 10 }}>
-              这次想改点什么就直接改，不会动到这张卡本身。
+              {isEn ? 'Edit anything you want for this run; the preset card itself will remain unchanged.' : '这次想改点什么就直接改，不会动到这张卡本身。'}
             </div>
 
             <div className="row wrap" style={{ gap: 8 }}>
               <button className="btn btn-primary" disabled={pending || !goal.trim()} onClick={() => dispatch(open, goal)}>
-                {pending ? '正在派…' : '派出去'}
+                {pending ? (isEn ? 'Dispatching…' : '正在派…') : (isEn ? 'Dispatch' : '派出去')}
               </button>
-              <a href="/workflows#presets" className="btn btn-sm btn-ghost">改这张卡 →</a>
+              <a href="/workflows#presets" className="btn btn-sm btn-ghost">{isEn ? 'Edit this preset →' : '改这张卡 →'}</a>
             </div>
             {err && <div className="small" style={{ marginTop: 10, color: 'var(--red)' }}>{err}</div>}
           </div>

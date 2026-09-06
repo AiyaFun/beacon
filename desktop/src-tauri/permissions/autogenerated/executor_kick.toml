@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-executor-kick"
+description = "Enables the executor_kick command without any pre-configured scope."
+commands.allow = ["executor_kick"]
+
+[[permission]]
+identifier = "deny-executor-kick"
+description = "Denies the executor_kick command without any pre-configured scope."
+commands.deny = ["executor_kick"]

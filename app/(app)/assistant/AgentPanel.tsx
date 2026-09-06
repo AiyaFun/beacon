@@ -1,13 +1,20 @@
 'use client';
 
 import { useEffect, useRef, useState, useTransition } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Icon } from '@/components/icons';
 import { actStartAgent, actDecideAgentStep, actCancelAgent, actGetAgentRun, actAppendNote } from './agent-actions';
-import { DispatchAuth, DEFAULT_AUTH, type DispatchAuthValue } from '@/components/DispatchAuth';
+import { DEFAULT_AUTH } from '@/components/DispatchAuth';
 import type { AgentTurn } from '@/lib/agent/run';
 import { SaveAsSkillButton } from '@/components/SaveAsSkillButton';
+import { useI18n } from '@/lib/i18n';
 
-// 执行面板：一句话 → AI 自己查、自己做，写操作停下来等你点头。
+// 执行面板：看某一次执行的过程，确认、追问、终止、接着跑。
+//
+// 【这里没有派活输入框】（2026-09-06）派活只在首页「今天」的框（components/TaskDeckHome.tsx），
+// 授权卡也钉在那儿。这一面板只在两种情况下开一次执行：深链 ?run= 读回一次已存在的运行，
+// 或者「问一句」那边点了「让它直接去做」（那一下点击就是授权，走缺省档）。
 //
 // 界面上必须让人看清三件事，否则「AI 帮我做了什么」永远是个黑箱：
 //   ① 它调了哪些工具、参数是什么；② 哪一步在等你确认；③ 最后到底做成了什么。
@@ -16,12 +23,6 @@ import { SaveAsSkillButton } from '@/components/SaveAsSkillButton';
 // 「等你确认」之后，刷新浏览器、或者从运行中心点「去 AI 助手」过来，看到的都是
 // 一个空白输入框——那次执行于是**永远确认不了**，而库里它还挂在 awaiting_confirm。
 // 恢复用的 actGetAgentRun 当时就写好了，只是一个调用方都没有（写了没接的老形状）。
-
-const QUICK = [
-  '看看我最近作品数据怎么样，给点建议',
-  '按我的人设生成 6 条选题推荐',
-  '把我最近这篇草稿读一下，帮我改标题',
-];
 
 type ToolInfo = { name: string; label: string; write: boolean; costly: boolean; contract: boolean; description: string };
 
@@ -32,21 +33,18 @@ const ENDED: AgentTurn['status'][] = ['done', 'failed', 'cancelled'];
 export function AgentPanel({
   tools,
   initialRunId,
-  initialGoal,
   handoff,
 }: {
   tools: ToolInfo[];
   /** 深链带来的运行 id：进来就把那次执行读回来 */
   initialRunId?: string | null;
-  /** 从浮标移交过来的那句话：**只填进输入框**，等用户自己按「开始执行」 */
-  initialGoal?: string | null;
   /** 从「问一句」那边交接过来的目标。seq 变化即一次新交接（同一句话也能再来一次） */
   handoff?: { goal: string; seq: number } | null;
 }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
+  const router = useRouter();
   const [pending, start] = useTransition();
-  const [goal, setGoal] = useState('');
-  /** 派发时的授权范围。缺省是「直接跑完，不逐步问我」（2026-09-03 起） */
-  const [auth, setAuth] = useState<DispatchAuthValue>(DEFAULT_AUTH);
   /** 追问 / 确认时的附言。两处共用一个框：同一时刻只会出现其中一个 */
   const [note, setNote] = useState('');
   const [turn, setTurn] = useState<AgentTurn | null>(null);
@@ -59,18 +57,12 @@ export function AgentPanel({
     start(async () => {
       const r = await fn();
       if (!r.ok || !r.turn) {
-        setErr(r.error ?? '执行失败');
+        setErr(r.error ?? (isEn ? 'Execution failed' : '执行失败'));
         return;
       }
       setTurn(r.turn);
     });
   }
-
-  // 浮标移交：把那句话填进输入框就停手。**绝不自动开跑**——
-  // 那样一个链接就能让登录用户发起一次付费执行，刷新一次再来一次
-  useEffect(() => {
-    if (initialGoal) setGoal(initialGoal);
-  }, [initialGoal]);
 
   // 深链恢复：只读，不会触发任何写操作或模型调用
   useEffect(() => {
@@ -79,7 +71,7 @@ export function AgentPanel({
     start(async () => {
       const r = await actGetAgentRun(initialRunId);
       if (!r.ok || !r.turn) {
-        setErr(r.error ?? '这次执行读不回来了');
+        setErr(r.error ?? (isEn ? 'Cannot restore this execution' : '这次执行读不回来了'));
         return;
       }
       setTurn(r.turn);
@@ -88,13 +80,12 @@ export function AgentPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialRunId]);
 
-  // 「问一句」那边点了「让它直接去做」：直接开跑，不再让用户在这儿把同一句话点第二遍。
-  // 那一下点击就是用户的授权；真正会改数据的每一步在下面还要各自确认一次。
+  // 「问一句」那边点了「让它直接去做」：直接开跑，不再让用户把同一句话点第二遍。
+  // 那一下点击就是用户的授权，走缺省档（直接跑完）；合同级工具仍会停下来等确认。
   useEffect(() => {
     if (!handoff || handoff.seq <= doneHandoff.current) return;
     doneHandoff.current = handoff.seq;
-    setGoal(handoff.goal);
-    run(() => actStartAgent(handoff.goal, auth));
+    run(() => actStartAgent(handoff.goal, DEFAULT_AUTH));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handoff]);
 
@@ -111,14 +102,27 @@ export function AgentPanel({
     turn?.status === 'queued' ||
     turn?.status === 'waiting_browser' ||
     turn?.status === 'waiting_quota';
+  // 【派完活立刻叫桌面执行器领】（2026-09-05，用户：「派下去要立刻开始」）
+  // 服务端够不到客户端，只能客户端去领；等它 20 秒轮询在用户眼里就是「没反应」。
+  // 网页与壳在同一个 webview 里：一进入 waiting_browser 就 invoke executor_kick，几秒内领走。
+  // 浏览器里（没有 __TAURI_INTERNALS__）什么都不做——那是插件的场景，只能等它醒来。
+  const inDesktop = typeof window !== 'undefined' && !!(window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  useEffect(() => {
+    if (turn?.status !== 'waiting_browser' || !inDesktop) return;
+    try {
+      void (window as { __TAURI_INTERNALS__?: { invoke: (c: string) => Promise<unknown> } }).__TAURI_INTERNALS__?.invoke('executor_kick');
+    } catch { /* 旧客户端没有这个命令：退回 20 秒轮询 */ }
+  }, [turn?.status, turn?.runId, inDesktop]);
+
   useEffect(() => {
     if (!live || !turn) return;
     // 等浏览器插件可能要等到用户下次打开浏览器（以小时计），一直 5 秒一问没有意义。
     // 等额度更久——要等到北京时间 0 点，慢到一分钟一问都算勤快；留着轮是为了
     // 用户真守着看时能看到它自己活过来。
+    // 桌面客户端里例外：执行器几秒内就领走、一两分钟跑完，8 秒一问才跟得上。
     const everyMs =
       turn.status === 'waiting_quota' ? 60_000
-      : turn.status === 'waiting_browser' ? 30_000
+      : turn.status === 'waiting_browser' ? (inDesktop ? 8_000 : 30_000)
       : turn.status === 'queued' ? 10_000
       : 5_000;
     const timer = setInterval(async () => {
@@ -141,48 +145,35 @@ export function AgentPanel({
       return actDecideAgentStep(runId, approve);
     });
   }
-  // 只有会改数据或花钱的才需要授权；只读工具没什么可授权的，摆上去只是噪音
-  const authorizable = tools.filter((t) => t.write || t.costly);
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>
-      <div className="card" style={{ padding: 16 }}>
-        <div className="row" style={{ gap: 8, marginBottom: 10 }}>
-          <span className="badge badge-brand"><Icon.sparkles size={13} /> 执行模式</span>
-          <span className="small muted">
-            AI 会真的操作这个系统，<strong>默认直接跑完</strong>；建发布计划、写长期记忆、配定时这几样仍会停下来等你点头。想盯着它一步步来，在下方选「每一步都先问我」。
-          </span>
+      {/* 没在看任何一次执行时：指路，不再摆第二个派活框。
+          busy 是「让它直接去做」刚交接过来、第一帧还没回来的那几秒 */}
+      {!turn && (
+        <div className="card" style={{ padding: 16 }}>
+          {busy ? (
+            <div className="row" style={{ gap: 8 }}>
+              <span className="run-live-spinner" aria-hidden />
+              <span className="small">{isEn ? 'Dispatching…' : '派出去了…'}</span>
+            </div>
+          ) : (
+            <>
+              <div className="row" style={{ gap: 8, marginBottom: 8 }}>
+                <span className="badge badge-brand"><Icon.sparkles size={13} /> {isEn ? 'Execution' : '执行过程'}</span>
+              </div>
+              <p className="small muted" style={{ margin: 0, lineHeight: 1.8 }}>
+                {isEn ? (
+                  <>To dispatch a task, say it on <Link href="/">Today</Link>. Or ask in "Ask AI" and hit "Execute Directly" after the answer. Runs show their steps, approvals and follow-ups here.</>
+                ) : (
+                  <>要派活，去<Link href="/">「今天」</Link>说一句；在「问一句」里聊完也可以点「让它直接去做」。这一页看它的每一步、等你确认的动作，和跑完之后的追问。</>
+                )}
+              </p>
+            </>
+          )}
+          {err && <div className="small" style={{ marginTop: 10, color: 'var(--red)' }}>{err}</div>}
         </div>
-
-        <textarea
-          className="textarea"
-          rows={3}
-          value={goal}
-          disabled={busy}
-          placeholder="说清楚你要它做什么，例如：把我监控的对标账号都采一遍最新数据，然后告诉我谁涨得最快"
-          onChange={(e) => setGoal(e.target.value)}
-          style={{ width: '100%', marginBottom: 10 }}
-        />
-
-        <div className="row wrap" style={{ gap: 8 }}>
-          <button
-            className="btn btn-primary"
-            disabled={busy || !goal.trim()}
-            onClick={() => run(() => actStartAgent(goal, auth))}
-          >
-            {busy ? '执行中…' : '开始执行'}
-          </button>
-          {QUICK.map((q) => (
-            <button key={q} className="btn btn-sm btn-ghost" disabled={busy} onClick={() => setGoal(q)}>
-              {q}
-            </button>
-          ))}
-        </div>
-
-        <DispatchAuth tools={authorizable} value={auth} onChange={setAuth} />
-
-        {err && <div className="small" style={{ marginTop: 10, color: 'var(--red)' }}>{err}</div>}
-      </div>
+      )}
 
       {/* 跑起来必须显眼（2026-08-26 用户「开始跑的时候最好显眼点，同时可以在后台慢慢跑，最后提示一个结果」）：
           执行本来就是后台跑的，但界面上没人说——用户以为要守着。这条横幅把三件事说清：
@@ -191,15 +182,16 @@ export function AgentPanel({
         <div className="alert-gradient-brand run-live-banner" style={{ padding: '12px 16px', marginBottom: 12 }}>
           <span className="run-live-spinner" aria-hidden />
           <span className="small" style={{ lineHeight: 1.7 }}>
-            <b>正在后台执行…</b> 可以离开本页去做别的——跑完（或需要你确认时）右上角 🔔 会提醒你，
-            「任务记录」里也随时能看到这一条。
+            <b>{isEn ? 'Running in background…' : '正在后台执行…'}</b> {isEn
+              ? 'You can leave this page to do other tasks — when completed (or when your approval is needed), the 🔔 in the top right will notify you, and you can view it anytime in "Task Runs".'
+              : '可以离开本页去做别的——跑完（或需要你确认时）右上角 🔔 会提醒你，「任务记录」里也随时能看到这一条。'}
           </span>
         </div>
       )}
       {turn && (
         <div className="card" style={{ padding: 16 }}>
           <div className="row-between" style={{ marginBottom: 10 }}>
-            <strong>执行过程</strong>
+            <strong>{isEn ? 'Execution Steps' : '执行过程'}</strong>
             <span className="row" style={{ gap: 8 }}>
               <StatusBadge status={turn.status} mine={turn.mine} />
               {/* 还没结束的都要能终止——等额度那种尤其要：不然一次派错的活会挂到 0 点 */}
@@ -209,13 +201,13 @@ export function AgentPanel({
                 turn.status === 'waiting_browser' ||
                 turn.status === 'waiting_quota') && (
                 <button className="btn btn-sm btn-ghost" disabled={busy} onClick={() => run(() => actCancelAgent(turn.runId))}>
-                  终止
+                  {isEn ? 'Terminate' : '终止'}
                 </button>
               )}
             </span>
           </div>
 
-          {turn.steps.length === 0 && <p className="small muted">还没有步骤。</p>}
+          {turn.steps.length === 0 && <p className="small muted">{isEn ? 'No steps yet.' : '还没有步骤。'}</p>}
 
           <ol style={{ display: 'grid', gap: 8, margin: 0, paddingLeft: 18 }}>
             {turn.steps.map((s) => (
@@ -233,7 +225,9 @@ export function AgentPanel({
               摆一排点了必定报错的按钮，正是 /runs 不放确认按钮所防的事 */}
           {turn.pending && !turn.mine && (
             <div className="small muted" style={{ marginTop: 12 }}>
-              这一步在等发起人确认（这次执行不是你派的，你看得到过程但推不动它）。
+              {isEn
+                ? 'This step is waiting for the task creator\'s approval (you can see the progress, but cannot approve it because you did not start this run).'
+                : '这一步在等发起人确认（这次执行不是你派的，你看得到过程但推不动它）。'}
             </div>
           )}
 
@@ -243,8 +237,8 @@ export function AgentPanel({
               style={{ marginTop: 14, padding: 14, borderColor: 'var(--amber)', background: 'var(--amber-soft)' }}
             >
               <div style={{ fontWeight: 650, marginBottom: 6 }}>
-                需要你确认：{turn.pending.label}
-                {turn.pending.costly && <span className="badge badge-amber" style={{ marginLeft: 8 }}>会消耗额度/产生费用</span>}
+                {isEn ? 'Approval required: ' : '需要你确认：'}{turn.pending.label}
+                {turn.pending.costly && <span className="badge badge-amber" style={{ marginLeft: 8 }}>{isEn ? 'Consumes quota / costs tokens' : '会消耗额度/产生费用'}</span>}
               </div>
               {/* 人话在前、原始参数收进折叠里。
                   这里原来直接渲染 JSON.stringify——对着一段 {"draftId":"cm4x9k…"} 点「确认执行」，
@@ -255,7 +249,7 @@ export function AgentPanel({
                 </div>
               )}
               <details style={{ marginBottom: 10 }}>
-                <summary className="small muted" style={{ cursor: 'pointer' }}>看原始参数</summary>
+                <summary className="small muted" style={{ cursor: 'pointer' }}>{isEn ? 'View raw parameters' : '看原始参数'}</summary>
                 <pre
                   className="small"
                   style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxHeight: 180, overflow: 'auto' }}
@@ -269,16 +263,16 @@ export function AgentPanel({
                 className="input"
                 value={note}
                 disabled={busy}
-                placeholder="想补一句？（可留空，比如：标题往情绪化改）"
+                placeholder={isEn ? "Add a comment? (Optional, e.g.: Make the title more emotional)" : "想补一句？（可留空，比如：标题往情绪化改）"}
                 onChange={(e) => setNote(e.target.value)}
                 style={{ width: '100%', marginBottom: 8 }}
               />
               <div className="row" style={{ gap: 8 }}>
                 <button className="btn btn-sm btn-primary" disabled={busy} onClick={() => decideWithNote(turn.runId, true)}>
-                  确认执行
+                  {isEn ? 'Confirm Execution' : '确认执行'}
                 </button>
                 <button className="btn btn-sm" disabled={busy} onClick={() => decideWithNote(turn.runId, false)}>
-                  不执行这一步
+                  {isEn ? 'Skip this step' : '不执行这一步'}
                 </button>
               </div>
             </div>
@@ -286,12 +280,7 @@ export function AgentPanel({
 
           {turn.waitingFor && (
             <div className="small" style={{ marginTop: 12, color: 'var(--muted)' }}>
-              {/* 这句话曾经只能对「等插件」那种说——浏览器任务有自己的站内通知，
-                  而 AI 执行当时一条通知都不发，照抄给别的挂起态就是让用户
-                  去等一条永远不会来的消息。现在执行本身也会在结束/挂起时通知了，
-                  所以这句对所有挂起态都成立。（守卫 tests/agent/transition.test.ts
-                  盯着这两件事的一致性：通知没接上时不许承诺，接上了就该说回来。） */}
-              {turn.waitingFor}。你可以关掉这一页去做别的，跑完会在通知里告诉你。
+              {turn.waitingFor}{isEn ? '. You can close this page to do other tasks, you will be notified in the notification center once finished.' : '。你可以关掉这一页去做别的，跑完会在通知里告诉你。'}
             </div>
           )}
 
@@ -302,8 +291,8 @@ export function AgentPanel({
               接近上限的对话，单次成本是短调用的十倍量级——只报次数会让人低估。 */}
           {turn.cost && (
             <div className="small muted" style={{ marginTop: 10 }}>
-              这次用了 {turn.cost.calls} 次 AI 调用
-              {turn.cost.tokens > 0 && ` · 约 ${(turn.cost.tokens / 1000).toFixed(1)}k tokens`}
+              {isEn ? `Used ${turn.cost.calls} AI calls` : `这次用了 ${turn.cost.calls} 次 AI 调用`}
+              {turn.cost.tokens > 0 && (isEn ? ` · approx ${(turn.cost.tokens / 1000).toFixed(1)}k tokens` : ` · 约 ${(turn.cost.tokens / 1000).toFixed(1)}k tokens`)}
             </div>
           )}
 
@@ -314,7 +303,7 @@ export function AgentPanel({
           {turn.artifacts && turn.artifacts.length > 0 && (
             <div style={{ marginTop: 14, borderTop: '1px solid var(--line)', paddingTop: 12 }}>
               <div className="small" style={{ marginBottom: 8, fontWeight: 600 }}>
-                这次做出来的东西（{turn.artifacts.length}）
+                {isEn ? `Artifacts produced (${turn.artifacts.length})` : `这次做出来的东西（${turn.artifacts.length}）`}
               </div>
               <div className="stack" style={{ gap: 6 }}>
                 {turn.artifacts.map((a, i) => (
@@ -337,7 +326,7 @@ export function AgentPanel({
           {/* 还没送达的追问：用户打完字就以为生效了，而正在跑的那一轮已经把话说出口了 */}
           {turn.pendingNotes ? (
             <div className="small" style={{ marginTop: 10, color: 'var(--amber-ink, var(--muted))' }}>
-              有 {turn.pendingNotes} 句补充还没送到它那儿，下一轮就会带上。
+              {isEn ? `${turn.pendingNotes} additional note(s) not delivered yet, will be included in the next turn.` : `有 ${turn.pendingNotes} 句补充还没送到它那儿，下一轮就会带上。`}
             </div>
           ) : null}
 
@@ -346,13 +335,15 @@ export function AgentPanel({
               不说清楚用户建立不起预期。 */}
           {ENDED.includes(turn.status) && turn.mine && (
             <div style={{ marginTop: 14, borderTop: '1px solid var(--line)', paddingTop: 12 }}>
-              <div className="small" style={{ marginBottom: 6, fontWeight: 600 }}>还想让它接着做点什么？</div>
+              <div className="small" style={{ marginBottom: 6, fontWeight: 600 }}>
+                {isEn ? 'What else would you like it to do?' : '还想让它接着做点什么？'}
+              </div>
               <textarea
                 className="textarea"
                 rows={2}
                 value={note}
                 disabled={busy}
-                placeholder="例如：第二条标题太平了，换个更有情绪的说法"
+                placeholder={isEn ? "e.g.: The second title is too flat, suggest a more emotional variation" : "例如：第二条标题太平了，换个更有情绪的说法"}
                 onChange={(e) => setNote(e.target.value)}
                 style={{ width: '100%', marginBottom: 8 }}
               />
@@ -361,17 +352,17 @@ export function AgentPanel({
                   className="btn btn-sm btn-primary"
                   disabled={busy || !note.trim()}
                   onClick={() => { const t = note; setNote(''); run(() => actAppendNote(turn.runId, t)); }}
-                  title="继续这条任务，保留已经做过的步骤和产物"
+                  title={isEn ? "Continue this task, keeping previous steps and artifacts" : "继续这条任务，保留已经做过的步骤和产物"}
                 >
-                  接着跑
+                  {isEn ? 'Continue Task' : '接着跑'}
                 </button>
                 <button
                   className="btn btn-sm btn-ghost"
                   disabled={busy}
-                  onClick={() => { setGoal(turn.goal); setTurn(null); setNote(''); }}
-                  title="从头新开一条：把原来那句话填回输入框，你可以改了再派"
+                  onClick={() => router.push(`/?goal=${encodeURIComponent(turn.goal)}`)}
+                  title={isEn ? "Start fresh: prefills the original prompt into the Today box so you can adjust and dispatch" : "从头新开一条：把原来那句话填回首页「今天」的框，你可以改了再派"}
                 >
-                  换个说法重新派
+                  {isEn ? 'Adjust & Redispatch' : '换个说法重新派'}
                 </button>
               </div>
             </div>
@@ -386,21 +377,24 @@ export function AgentPanel({
         </div>
       )}
 
+      {/* 确认/终止/追问失败的红字：以前挂在常驻的输入卡里，输入卡没了要单独放 */}
+      {turn && err && <div className="small" style={{ color: 'var(--red)' }}>{err}</div>}
+
       <details className="card" style={{ padding: 16 }}>
         <summary className="small" style={{ cursor: 'pointer', fontWeight: 600 }}>
-          AI 能调用的系统能力（{tools.length} 项，按你的角色过滤）
+          {isEn ? `System capabilities AI can invoke (${tools.length} available, filtered by your role)` : `AI 能调用的系统能力（${tools.length} 项，按你的角色过滤）`}
         </summary>
         <div className="table-wrap" style={{ marginTop: 10 }}>
           <table className="table">
             {/* 能力列钉住不换行：不钉的话窄屏下「查选题」会断成竖排两行（用户截图） */}
-            <thead><tr><th style={{ whiteSpace: 'nowrap' }}>能力</th><th>说明</th><th style={{ width: 96, whiteSpace: 'nowrap' }}>是否需确认</th></tr></thead>
+            <thead><tr><th style={{ whiteSpace: 'nowrap' }}>{isEn ? 'Capability' : '能力'}</th><th>{isEn ? 'Description' : '说明'}</th><th style={{ width: 96, whiteSpace: 'nowrap' }}>{isEn ? 'Confirmation' : '是否需确认'}</th></tr></thead>
             <tbody>
               {tools.map((t) => (
                 <tr key={t.name}>
                   <td style={{ whiteSpace: 'nowrap', fontWeight: 600 }}>{t.label}</td>
                   <td className="small muted">{t.description}</td>
                   <td className="small">
-                    {t.write || t.costly ? <span className="badge badge-amber">要你点头</span> : <span className="badge badge-gray">只读</span>}
+                    {t.write || t.costly ? <span className="badge badge-amber">{isEn ? 'Requires approval' : '要你点头'}</span> : <span className="badge badge-gray">{isEn ? 'Read-only' : '只读'}</span>}
                   </td>
                 </tr>
               ))}
@@ -408,7 +402,7 @@ export function AgentPanel({
           </table>
         </div>
         <p className="small muted" style={{ marginTop: 8 }}>
-          这张表就是 AI 能做的全部事情——表外的它做不了，也没有「让 AI 写段代码跑一下」的通道。
+          {isEn ? 'This table lists all actions AI can execute — it cannot do anything outside this list and cannot run arbitrary code.' : '这张表就是 AI 能做的全部事情——表外的它做不了，也没有「让 AI 写段代码跑一下」的通道。'}
         </p>
       </details>
     </div>
@@ -416,35 +410,39 @@ export function AgentPanel({
 }
 
 function StatusBadge({ status, mine }: { status: AgentTurn['status']; mine?: boolean }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   // 「等你确认」对**不是发起人的人**是句错话——他推不动它。
   // 下面那行说明虽然补救了，但徽章先入眼，两处口径要一致（同活动条那条）。
   if (status === 'awaiting_confirm' && mine === false) {
-    return <span className="badge badge-gray">等发起人确认</span>;
+    return <span className="badge badge-gray">{isEn ? 'Waiting for creator approval' : '等发起人确认'}</span>;
   }
   const map: Record<string, { cls: string; text: string }> = {
-    running: { cls: 'badge-gray', text: '进行中' },
-    awaiting_confirm: { cls: 'badge-amber', text: '等你确认' },
+    running: { cls: 'badge-gray', text: isEn ? 'In Progress' : '进行中' },
+    awaiting_confirm: { cls: 'badge-amber', text: isEn ? 'Waiting for your approval' : '等你确认' },
     // 与运行中心同一口径：等浏览器**不是**「进行中」——没有任何机器在推进它，
     // 它在等那台浏览器打开。说成进行中会让用户以为等着就行
-    waiting_browser: { cls: 'badge-amber', text: '等浏览器插件' },
+    waiting_browser: { cls: 'badge-amber', text: isEn ? 'Waiting for collector' : '等采集执行器' },
     // 等额度是**机器在等**，用户什么都不用做（0 点重置后自己接着跑）——所以配灰色而不是
     // 琥珀色。琥珀色在这一套里的意思是「该你动手了」，用在这里是叫人去做一件不存在的事。
-    waiting_quota: { cls: 'badge-gray', text: '等额度重置' },
+    waiting_quota: { cls: 'badge-gray', text: isEn ? 'Waiting for quota reset' : '等额度重置' },
     // 排队同理是机器在等：灰色。说「排队中」而不是「进行中」——它一步都还没开始
-    queued: { cls: 'badge-gray', text: '排队中' },
-    done: { cls: 'badge-green', text: '已完成' },
-    failed: { cls: 'badge-red', text: '未完成' },
-    cancelled: { cls: 'badge-gray', text: '已终止' },
+    queued: { cls: 'badge-gray', text: isEn ? 'Queued' : '排队中' },
+    done: { cls: 'badge-green', text: isEn ? 'Completed' : '已完成' },
+    failed: { cls: 'badge-red', text: isEn ? 'Unfinished' : '未完成' },
+    cancelled: { cls: 'badge-gray', text: isEn ? 'Terminated' : '已终止' },
   };
   const m = map[status] ?? map.running;
   return <span className={`badge ${m.cls}`}>{m.text}</span>;
 }
 
 function StepLine({ step }: { step: AgentTurn['steps'][number] }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   if (step.kind === 'tool_call') {
     return (
       <span>
-        <span className="badge badge-gray">调用</span> {step.label}
+        <span className="badge badge-gray">{isEn ? 'Call' : '调用'}</span> {step.label}
         <span className="muted"> {JSON.stringify(step.args).slice(0, 120)}</span>
       </span>
     );
@@ -452,16 +450,16 @@ function StepLine({ step }: { step: AgentTurn['steps'][number] }) {
   if (step.kind === 'tool_result') {
     return (
       <span style={{ color: step.ok ? 'inherit' : 'var(--red)' }}>
-        <span className={`badge ${step.ok ? 'badge-green' : 'badge-red'}`}>{step.ok ? '完成' : '失败'}</span>{' '}
+        <span className={`badge ${step.ok ? 'badge-green' : 'badge-red'}`}>{step.ok ? (isEn ? 'Done' : '完成') : (isEn ? 'Failed' : '失败')}</span>{' '}
         {step.label}
         <span className="muted"> {summaryOf(step.result)}</span>
       </span>
     );
   }
   if (step.kind === 'rejected') {
-    return <span><span className="badge badge-amber">已拒绝</span> {step.label}（你选择了不执行）</span>;
+    return <span><span className="badge badge-amber">{isEn ? 'Rejected' : '已拒绝'}</span> {step.label}{isEn ? ' (You chose not to execute)' : '（你选择了不执行）'}</span>;
   }
-  return <span><span className="badge badge-brand">回答</span> {step.result.slice(0, 100)}</span>;
+  return <span><span className="badge badge-brand">{isEn ? 'Reply' : '回答'}</span> {step.result.slice(0, 100)}</span>;
 }
 
 /** 工具结果是给模型看的 JSON；界面上只展示它的 summary 字段，展不开就截断。 */

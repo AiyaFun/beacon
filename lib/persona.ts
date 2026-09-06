@@ -71,6 +71,17 @@ export const PERSONA_FIELD_LABEL: Record<PersonaFieldKey, string> = {
   platforms: '主战平台',
 };
 
+export const PERSONA_FIELD_LABEL_EN: Record<PersonaFieldKey, string> = {
+  identity: 'Identity',
+  audience: 'Target Audience',
+  valueProp: 'Value Proposition',
+  niche: 'Niche / Industry',
+  tone: 'Tone & Style',
+  canDo: 'Can Do',
+  cantDo: "Can't Do / Guardrails",
+  platforms: 'Core Platforms',
+};
+
 // 追问的 key 是**固定枚举**：LLM 只能从中挑，不能自创。
 // 理由：key 决定「跳过这问 → 哪几个字段降置信度」的映射，自由 key 会让 AC③ 的标注失灵。
 export const PERSONA_QUESTION_KEYS = ['what', 'who', 'why', 'edge', 'platform'] as const;

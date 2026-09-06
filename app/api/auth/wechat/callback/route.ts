@@ -4,9 +4,13 @@ import { AUTH_COOKIE_MAX_AGE_S, authCookieSecure } from '@/lib/auth-constants';
 import { isDemoTenant } from '@/lib/demo/guard';
 import { exchangeCodeForToken, getWechatUserInfo } from '@/lib/wechat-auth';
 import { log } from '@/lib/logger';
+import { safeNextPath } from '@/lib/auth/safe-next';
+import { normalizeReferralCode } from '@/lib/growth/referral';
 
 const STATE_COOKIE = 'beacon_wx_state';
 const MODE_COOKIE = 'beacon_wx_mode';
+const REF_COOKIE = 'beacon_wx_ref';
+const NEXT_COOKIE = 'beacon_wx_next';
 
 // 反代后 req.nextUrl 是容器内部地址（0.0.0.0:3000），跳转必须用站点外部地址。
 function siteBase(req: NextRequest): string {
@@ -44,13 +48,17 @@ export async function GET(req: NextRequest) {
     const userInfo = await getWechatUserInfo(tokenResult.access_token, tokenResult.openid);
 
     const ua = req.headers.get('user-agent') ?? undefined;
-    const result = await loginByWechat(tokenResult.openid, userInfo.nickname, ua, true);
+    const ref = normalizeReferralCode(req.cookies.get(REF_COOKIE)?.value);
+    const result = await loginByWechat(tokenResult.openid, userInfo.nickname, ua, true, ref);
 
     if (!result.ok || !result.token) {
       return redirectToLogin(req, result.message ?? '登录失败');
     }
 
-    const res = NextResponse.redirect(new URL('/', siteBase(req)));
+    // 落点：游客接力带来的「刚才那一页」优先；首次注册去冷启动向导；其余回首页
+    const next = safeNextPath(req.cookies.get(NEXT_COOKIE)?.value);
+    const target = next ?? (result.isNew ? '/onboarding' : '/');
+    const res = NextResponse.redirect(new URL(target, siteBase(req)));
 
     res.cookies.set(AUTH_COOKIE, result.token, {
       httpOnly: true,
@@ -73,6 +81,8 @@ export async function GET(req: NextRequest) {
 function clearFlowCookies(res: NextResponse) {
   res.cookies.delete(STATE_COOKIE);
   res.cookies.delete(MODE_COOKIE);
+  res.cookies.delete(REF_COOKIE);
+  res.cookies.delete(NEXT_COOKIE);
 }
 
 function redirectToLogin(req: NextRequest, message: string) {

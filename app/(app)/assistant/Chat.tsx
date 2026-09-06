@@ -6,6 +6,7 @@ import { looksActionable, wantsExecution } from '@/lib/agent/intent';
 import { prepareReferenceImage } from '@/lib/cover/client-image';
 import { ModelPicker, readPickedModel } from './ModelPicker';
 import type { SelectableModel } from '@/lib/llm/selectable';
+import { useI18n } from '@/lib/i18n';
 
 /**
  * 一次最多带几张图。
@@ -46,6 +47,7 @@ export function Chat({
   /** 「让它直接去做」：把这句话交给执行那一侧。不传 = 不显示那个按钮 */
   onHandoff?: (goal: string) => void;
 }) {
+  const { lang } = useI18n();
   // 空态不放开场白气泡（豆包式：留白+大标题就是欢迎）。第一句欢迎信息在 hero 副标题里。
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
@@ -84,7 +86,7 @@ export function Chat({
     if ((!q && pics.length === 0) || streaming) return;
 
     // 「帮我去执行/执行一下」这种明说要执行的话，不再先答一篇计划再给按钮——
-    // 直接带到「让它去做」预填（用户按开始才真跑；2026-08-26 用户原话「并没办法去执行」）
+    // 直接交给执行那一侧开跑（2026-08-26 用户原话「并没办法去执行」；这一下发送就是授权）
     if (onHandoff && wantsExecution(q)) {
       setInput('');
       onHandoff(q);
@@ -97,7 +99,7 @@ export function Chat({
 
     setMessages((prev) => [
       ...prev,
-      { role: 'user', content: q || `（发了 ${pics.length} 张图）` },
+      { role: 'user', content: q || (lang === 'en' ? `(Sent ${pics.length} image${pics.length > 1 ? 's' : ''})` : `（发了 ${pics.length} 张图）`) },
     ]);
     setInput('');
     const sending = pics;
@@ -120,7 +122,7 @@ export function Chat({
 
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-        setMessages((prev) => [...prev, { role: 'assistant', content: errBody.error || `请求失败 (${res.status})`, error: true }]);
+        setMessages((prev) => [...prev, { role: 'assistant', content: errBody.error || (lang === 'en' ? `Request failed (${res.status})` : `请求失败 (${res.status})`), error: true }]);
         return;
       }
 
@@ -176,7 +178,7 @@ export function Chat({
       if ((e as Error).name === 'AbortError') return;
       setMessages((prev) => [
         ...prev,
-        { role: 'assistant', content: '出了点问题：' + (e as Error).message.slice(0, 60), error: true },
+        { role: 'assistant', content: (lang === 'en' ? 'Something went wrong: ' : '出了点问题：') + (e as Error).message.slice(0, 60), error: true },
       ]);
     } finally {
       setStreaming(false);
@@ -186,13 +188,13 @@ export function Chat({
     // 表现为「传了图但发出去的还是没有图」——不报错，只是图白传了
   // modelId 必须在依赖里：useCallback 的闭包否则永远捕获首次那个值，
   // 表现为「下拉选了别的模型，发出去的还是自动档」——选项形同虚设。
-  }, [messages, streaming, pics, modelId]);
+  }, [messages, streaming, pics, modelId, lang]);
 
   /** 选了图：客户端先压一遍再入队。压缩复用封面工位那一份，不另写第二套。 */
   async function addPics(files: File[]) {
     setPicErr('');
     const room = MAX_PICS - pics.length;
-    if (room <= 0) { setPicErr(`最多 ${MAX_PICS} 张`); return; }
+    if (room <= 0) { setPicErr(lang === 'en' ? `Up to ${MAX_PICS} images` : `最多 ${MAX_PICS} 张`); return; }
     const next: string[] = [];
     for (const f of files.slice(0, room)) {
       try {
@@ -204,7 +206,7 @@ export function Chat({
       }
     }
     if (next.length) setPics((list) => [...list, ...next]);
-    if (files.length > room) setPicErr(`最多 ${MAX_PICS} 张，多出来的没有加进来`);
+    if (files.length > room) setPicErr(lang === 'en' ? `Up to ${MAX_PICS} images, excess images ignored` : `最多 ${MAX_PICS} 张，多出来的没有加进来`);
   }
 
   function onKey(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -222,12 +224,28 @@ export function Chat({
         <div className="chat-hero chat-hero-doubao">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/logo.png" alt="" width={64} height={64} style={{ borderRadius: 16, marginBottom: 18 }} />
-          <h2 className="chat-hero-title">今天要做什么，{accountName}？</h2>
+          <h2 className="chat-hero-title">
+            {lang === 'en'
+              ? `What are you working on today, ${accountName === '我的账号' || !accountName ? 'My Account' : accountName}?`
+              : `今天要做什么，${accountName}？`}
+          </h2>
           <p className="small muted chat-hero-sub">
-            说一句话就行。选题、写稿、看同行、看数据都可以问；需要动手做的，答完会问你要不要去做。
+            {lang === 'en'
+              ? 'Just say a word. Brainstorm topics, write drafts, check rivals, or inspect analytics. If an action is required, AI will ask to execute.'
+              : '说一句话就行。选题、写稿、看同行、看数据都可以问；需要动手做的，答完会问你要不要去做。'}
           </p>
           <div className="chat-hero-cards">
-            {QUICK.map((q) => {
+            {(lang === 'en' ? [
+              { icon: 'bulb' as const, color: 'var(--amber)', label: 'Pick Topic', seed: 'Based on my persona, propose 3 content topics for this week with rationale' },
+              { icon: 'pen' as const, color: 'var(--brand)', label: 'Write Copy', seed: 'Help me write a draft based on this topic: ' },
+              { icon: 'radar' as const, color: 'var(--accent)', label: 'Rival Intel', seed: 'What have my benchmark accounts posted recently? Anything I should follow?' },
+              { icon: 'chart' as const, color: 'var(--green)', label: 'Analytics', seed: 'Which of my recent posts performed best and why?' },
+            ] : [
+              { icon: 'bulb' as const, color: 'var(--amber)', label: '定选题', seed: '结合我的账号人设，帮我想 3 个本周能做的选题，说清为什么适合我' },
+              { icon: 'pen' as const, color: 'var(--brand)', label: '写内容', seed: '帮我把这条选题写成一篇初稿：' },
+              { icon: 'radar' as const, color: 'var(--accent)', label: '看同行', seed: '我的对标账号最近在发什么？有什么是我该跟的' },
+              { icon: 'chart' as const, color: 'var(--green)', label: '看数据', seed: '我最近哪几条跑得好、哪几条不行？原因可能是什么' },
+            ]).map((q) => {
               const IconCmp = Icon[q.icon];
               return (
                 <button
@@ -235,10 +253,9 @@ export function Chat({
                   type="button"
                   className="chat-hero-card"
                   disabled={streaming}
-                  // 填进输入框而不是直接发：让用户还能接着改（豆包那四张卡也是这个行为）
                   onClick={() => setInput(q.seed)}
                 >
-                  <IconCmp size={15} />
+                  <span style={{ color: q.color, display: 'flex' }}><IconCmp size={15} /></span>
                   <span>{q.label}</span>
                 </button>
               );
@@ -259,7 +276,7 @@ export function Chat({
               <Icon.chat size={15} />
             </span>
             <div className="card" style={{ padding: '10px 14px', boxShadow: 'none', background: 'var(--surface-2)' }}>
-              <span className="small muted">思考中…</span>
+              <span className="small muted">{lang === 'en' ? 'Thinking…' : '思考中…'}</span>
             </div>
           </div>
         )}
@@ -269,7 +286,9 @@ export function Chat({
           放在输入框上方、紧贴刚读完的那段回答——放页面底部等于要用户先滚过输入框 */}
       {handoffGoal && onHandoff && !streaming && (
         <div className="handoff-bar">
-          <span className="small muted handoff-why">这件事我可以直接去做（写操作默认仍会逐条问你）</span>
+          <span className="small muted handoff-why">
+            {lang === 'en' ? 'I can execute this directly (write operations still confirm with you)' : '这件事我可以直接去做（写操作默认仍会逐条问你）'}
+          </span>
           <button
             className="btn btn-sm btn-primary"
             onClick={() => {
@@ -278,95 +297,137 @@ export function Chat({
               onHandoff(goal);
             }}
           >
-            <Icon.sparkles size={13} /> 让它直接去做
+            <Icon.sparkles size={13} /> {lang === 'en' ? 'Execute Directly' : '让它直接去做'}
           </button>
         </div>
       )}
 
       <div className="divider" />
 
-      {/* 参考图：给「问一句」补上看图的能力。
-          出图工位与封面工位早就能传参考图，唯独对话不行——而对话恰恰是
-          用户最想说「你看看这张」的地方。 */}
-      {(pics.length > 0 || picErr) && (
-        <div className="row wrap" style={{ gap: 6, marginBottom: 8, alignItems: 'center' }}>
-          {/* 【为什么外层必须是 inline-block 且给死宽高】globals.css 有一条
-              `.card img { max-width: 100% }`，而这个包裹层如果是普通 inline span，
-              它的宽度由内容（也就是这张图）决定——两者互相依赖，浏览器解出来是 2px。
-              真机上看到的就是一条 2×52 的竖线，而图片本身 400×300 且已经加载完。
-              给外层一个确定的尺寸，这个循环就断了。 */}
-          {pics.map((src, i) => (
-            <span key={i} style={{ position: 'relative', display: 'inline-block', width: 52, height: 52, flexShrink: 0 }}>
-              <img
-                src={src}
-                alt={`参考图 ${i + 1}`}
-                style={{ width: 52, height: 52, maxWidth: 52, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--border)', display: 'block' }}
-              />
-              <button
-                className="btn btn-sm btn-ghost"
-                aria-label="移除这张图"
-                onClick={() => setPics((list) => list.filter((_, j) => j !== i))}
-                style={{ position: 'absolute', top: -6, right: -6, padding: '0 6px', lineHeight: 1.4 }}
-              >
-                ×
-              </button>
-            </span>
-          ))}
-          {picErr && <span className="small" style={{ color: 'var(--red)' }}>{picErr}</span>}
-        </div>
-      )}
       <div className="chat-input-box">
-      <div className="row" style={{ gap: 8, alignItems: 'flex-end' }}>
+        {/* 参考图待发送预览：内嵌在输入盒内部上方 */}
+        {(pics.length > 0 || picErr) && (
+          <div className="row wrap" style={{ gap: 8, paddingBottom: 8, marginBottom: 8, borderBottom: '1px dashed var(--border)', alignItems: 'center' }}>
+            {pics.map((src, i) => (
+              <span key={i} style={{ position: 'relative', display: 'inline-block', width: 52, height: 52, flexShrink: 0 }}>
+                <img
+                  src={src}
+                  alt={lang === 'en' ? `Reference image ${i + 1}` : `参考图 ${i + 1}`}
+                  style={{ width: 52, height: 52, maxWidth: 52, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--border)', display: 'block' }}
+                />
+                <button
+                  type="button"
+                  aria-label={lang === 'en' ? 'Remove this image' : '移除这张图'}
+                  onClick={() => setPics((list) => list.filter((_, j) => j !== i))}
+                  style={{
+                    position: 'absolute',
+                    top: -6,
+                    right: -6,
+                    width: 18,
+                    height: 18,
+                    borderRadius: '50%',
+                    background: 'var(--surface)',
+                    border: '1px solid var(--border)',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+                    display: 'grid',
+                    placeItems: 'center',
+                    cursor: 'pointer',
+                    fontSize: 11,
+                    lineHeight: 1,
+                  }}
+                >
+                  ✕
+                </button>
+              </span>
+            ))}
+            {picErr && <span className="small" style={{ color: 'var(--red)', fontWeight: 600 }}>{picErr}</span>}
+          </div>
+        )}
 
+        {/* 沉浸式多行文本输入区 */}
         <textarea
           className="textarea"
-          style={{ flex: 1, minHeight: 52, resize: 'none' }}
-          placeholder="问点什么…（Enter 发送，Shift+Enter 换行）"
+          style={{ width: '100%', minHeight: 64, maxHeight: 220, resize: 'none', border: 'none', background: 'transparent' }}
+          placeholder={lang === 'en' ? 'Ask anything... (Enter to send, Shift+Enter for new line)' : '问点什么…（Enter 发送，Shift+Enter 换行）'}
           value={input}
           disabled={streaming}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKey}
         />
-        <label
-          className="btn"
-          title={pics.length >= MAX_PICS ? `最多 ${MAX_PICS} 张` : '带一张参考图问'}
-          style={{ cursor: streaming || pics.length >= MAX_PICS ? 'not-allowed' : 'pointer' }}
-        >
-          <Icon.upload size={13} /> 图
-          <input
-            type="file"
-            accept="image/*"
-            multiple
-            hidden
-            disabled={streaming || pics.length >= MAX_PICS}
-            onChange={(e) => {
-              const files = Array.from(e.target.files ?? []);
-              e.target.value = ''; // 允许连着选同一张
-              void addPics(files);
-            }}
-          />
-        </label>
-        <button className="btn btn-primary" disabled={streaming || (!input.trim() && pics.length === 0)} onClick={() => send(input)}>
-          {streaming ? '生成中…' : '发送'}
-        </button>
-      </div>
 
-      {/* 输入框下的工具条：用哪个模型摆在这儿（照用户给的豆包工作那个位置），
-          而不是顶栏——顶栏那个是**只读状态**，这里是这次派活真正要用的那个。 */}
-      {models.length > 1 && (
-        <div className="row wrap chat-toolbar" style={{ gap: 8, alignItems: 'center', marginTop: 8 }}>
-          <ModelPicker models={models} value={modelId} onChange={setModelId} />
-          {pics.length > 0 && (
-            <span className="small muted">带图时自动用支持看图的模型</span>
-          )}
+        {/* 底部一体化动作栏 */}
+        <div className="chat-bottom-bar">
+          {/* 左侧：模型选择器 + 图片附件 */}
+          <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+            {models.length > 1 && (
+              <ModelPicker models={models} value={modelId} onChange={setModelId} />
+            )}
+
+            <label
+              className="chat-action-btn"
+              title={pics.length >= MAX_PICS ? (lang === 'en' ? `Up to ${MAX_PICS} images` : `最多 ${MAX_PICS} 张`) : (lang === 'en' ? 'Attach reference image' : '带一张参考图问')}
+              style={{ cursor: streaming || pics.length >= MAX_PICS ? 'not-allowed' : 'pointer' }}
+            >
+              <Icon.image size={14} />
+              <span>{lang === 'en' ? 'Image' : '图片'}{pics.length > 0 ? ` (${pics.length})` : ''}</span>
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                hidden
+                disabled={streaming || pics.length >= MAX_PICS}
+                onChange={(e) => {
+                  const files = Array.from(e.target.files ?? []);
+                  e.target.value = '';
+                  void addPics(files);
+                }}
+              />
+            </label>
+
+            {pics.length > 0 && (
+              <span className="small muted hide-mobile" style={{ fontSize: 11.5 }}>
+                {lang === 'en' ? 'Vision-capable model active' : '已就绪看图模型'}
+              </span>
+            )}
+          </div>
+
+          {/* 右侧：快捷键说明 + 发送按钮 */}
+          <div className="row" style={{ gap: 10, alignItems: 'center' }}>
+            <span className="small muted hide-mobile" style={{ fontSize: 11, opacity: 0.65 }}>
+              {streaming ? (lang === 'en' ? 'Thinking…' : '正在回答…') : (lang === 'en' ? 'Enter ↵ to send' : 'Enter ↵ 发送')}
+            </span>
+
+            <button
+              type="button"
+              className={`chat-send-btn ${!streaming && (input.trim() || pics.length > 0) ? 'active' : ''}`}
+              disabled={streaming || (!input.trim() && pics.length === 0)}
+              onClick={() => send(input)}
+              title={lang === 'en' ? 'Send' : '发送'}
+            >
+              {streaming ? (
+                <span className="row" style={{ gap: 4, alignItems: 'center' }}>
+                  <Icon.refresh size={13} className="spin" />
+                  <span>{lang === 'en' ? 'Stop' : '中止'}</span>
+                </span>
+              ) : (
+                <span className="row" style={{ gap: 4, alignItems: 'center' }}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="12" y1="19" x2="12" y2="5"></line>
+                    <polyline points="5 12 12 5 19 12"></polyline>
+                  </svg>
+                  <span>{lang === 'en' ? 'Send' : '发送'}</span>
+                </span>
+              )}
+            </button>
+          </div>
         </div>
-      )}
       </div>
     </div>
   );
 }
 
 function Bubble({ msg }: { msg: Msg }) {
+  const { lang } = useI18n();
   const isUser = msg.role === 'user';
   const isError = !isUser && !!msg.error;
   return (
@@ -389,7 +450,7 @@ function Bubble({ msg }: { msg: Msg }) {
         }}
       >
         {isError && (
-          <span className="badge badge-red" style={{ marginBottom: 6, display: 'inline-block' }}>暂时没能回答</span>
+          <span className="badge badge-red" style={{ marginBottom: 6, display: 'inline-block' }}>{lang === 'en' ? 'Unable to respond' : '暂时没能回答'}</span>
         )}
         {!isUser && msg.mocked && (
           <span className="badge badge-amber" style={{ marginBottom: 6, display: 'inline-block' }}>Mock</span>

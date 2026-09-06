@@ -7,9 +7,13 @@ import { Overlay } from '@/components/Overlay';
 import { PRICING, type PaidPlan, type PeriodMonths } from '@/lib/pay/pricing';
 import { fmtDateFull, fmtTime } from '@/lib/format';
 
+import { useI18n } from '@/lib/i18n';
+
 // 购买时长文案：1=月付，12=年付，1188=永久买断。
-function periodLabel(periodMonths: PeriodMonths): string {
-  return periodMonths === 1188 ? '永久买断' : periodMonths === 12 ? '年付' : '月付';
+function periodLabel(periodMonths: PeriodMonths, lang: string): string {
+  if (periodMonths === 1188) return lang === 'en' ? 'Lifetime' : '永久买断';
+  if (periodMonths === 12) return lang === 'en' ? 'Annual' : '年付';
+  return lang === 'en' ? 'Monthly' : '月付';
 }
 
 // 扫码弹窗 + 支付后轮询。
@@ -40,6 +44,7 @@ export function Checkout({
   variant?: 'gradient' | 'primary' | 'secondary';
 }) {
   const router = useRouter();
+  const { lang } = useI18n();
   const [pending, start] = useTransition();
   const [order, setOrder] = useState<Order | null>(null);
   const [error, setError] = useState('');
@@ -65,12 +70,12 @@ export function Checkout({
       }
       if (r.status === 'closed' || r.status === 'failed') {
         stop();
-        setError(r.failReason ?? '订单已关闭，请重新下单');
+        setError(r.failReason ?? (lang === 'en' ? 'Order closed, please place a new order' : '订单已关闭，请重新下单'));
         return;
       }
       timer.current = setTimeout(() => void poll(outTradeNo), POLL_MS);
     },
-    [router, stop],
+    [lang, router, stop],
   );
 
   function open() {
@@ -79,7 +84,7 @@ export function Checkout({
     start(async () => {
       const r = await actCreateOrder({ plan, periodMonths });
       if (!r.ok) {
-        setError(r.error ?? '下单失败');
+        setError(r.error ?? (lang === 'en' ? 'Failed to create order' : '下单失败'));
         return;
       }
       setOrder({ outTradeNo: r.outTradeNo, amountFen: r.amountFen, qrSvg: r.qrSvg, codeExpiresAt: r.codeExpiresAt, mocked: r.mocked });
@@ -97,7 +102,7 @@ export function Checkout({
     if (!order) return;
     start(async () => {
       const r = await actMockPay(order.outTradeNo);
-      if (!r.ok) setError(r.error ?? '模拟支付失败');
+      if (!r.ok) setError(r.error ?? (lang === 'en' ? 'Simulated payment failed' : '模拟支付失败'));
       else void poll(order.outTradeNo); // 立刻查一次，不等下个轮询周期
     });
   }
@@ -109,10 +114,17 @@ export function Checkout({
       ? 'btn btn-sm'
       : 'btn btn-primary btn-sm';
 
+  const planNameEn: Record<PaidPlan, string> = {
+    personal: 'Pro Plan',
+    byok: 'BYOK Plan',
+  };
+  const planName = lang === 'en' ? (planNameEn[plan] ?? PRICING[plan].name) : PRICING[plan].name;
+  const payTitle = lang === 'en' ? 'WeChat Pay (Scan QR)' : '微信扫码支付';
+
   return (
     <>
       <button className={btnClass} onClick={open} disabled={disabled || pending}>
-        {pending && !order ? '下单中…' : label}
+        {pending && !order ? (lang === 'en' ? 'Ordering…' : '下单中…') : label}
       </button>
       {error && !order && <div className="small" style={{ color: 'var(--red)', marginTop: 8 }}>{error}</div>}
 
@@ -124,26 +136,32 @@ export function Checkout({
           用户是从卡片里的按钮点进来的，指针必然停在卡片上，所以这条路必现。
           见 components/Overlay.tsx 的长注释（工坊那一处已经踩过同一个坑）。 */}
       {order && (
-        <Overlay onClose={close} label="微信扫码支付">
+        <Overlay onClose={close} label={payTitle}>
           <div className="card" style={{ maxWidth: 380, width: '100%' }}>
             <div className="row-between" style={{ marginBottom: 12 }}>
               <div className="card-title">
-                微信扫码支付 <span className="card-sub">{PRICING[plan].name} · {periodLabel(periodMonths)}</span>
+                {payTitle} <span className="card-sub">{planName} · {periodLabel(periodMonths, lang)}</span>
               </div>
-              <button className="btn btn-sm" onClick={close}>关闭</button>
+              <button className="btn btn-sm" onClick={close}>{lang === 'en' ? 'Close' : '关闭'}</button>
             </div>
 
             {paid ? (
               <div className="stack" style={{ gap: 10, textAlign: 'center', padding: '16px 0' }}>
                 <div style={{ fontSize: 40 }}>✅</div>
-                <b>支付成功，套餐已生效</b>
+                <b>{lang === 'en' ? 'Payment successful, plan activated' : '支付成功，套餐已生效'}</b>
                 {/* 口径见 lib/pay/plan.ts:GrantResult.grantedDays —— 升档时是「换来多少天新档」，
                     不是「延长多少天」（升档可能让到期日提前，措辞不能撒谎） */}
-                {paid.grantedDays !== null && <div className="small muted">本单发放 {paid.grantedDays} 天</div>}
-                {paid.newPlanExpiresAt && (
-                  <div className="small muted">有效期至 {fmtDateFull(paid.newPlanExpiresAt)}</div>
+                {paid.grantedDays !== null && (
+                  <div className="small muted">
+                    {lang === 'en' ? `Granted ${paid.grantedDays} days this order` : `本单发放 ${paid.grantedDays} 天`}
+                  </div>
                 )}
-                <button className="btn btn-primary btn-sm" onClick={close}>完成</button>
+                {paid.newPlanExpiresAt && (
+                  <div className="small muted">
+                    {lang === 'en' ? `Valid through ${fmtDateFull(paid.newPlanExpiresAt)}` : `有效期至 ${fmtDateFull(paid.newPlanExpiresAt)}`}
+                  </div>
+                )}
+                <button className="btn btn-primary btn-sm" onClick={close}>{lang === 'en' ? 'Done' : '完成'}</button>
               </div>
             ) : (
               <div className="stack" style={{ gap: 12, alignItems: 'center' }}>
@@ -154,9 +172,10 @@ export function Checkout({
                     className="small"
                     style={{ color: 'var(--amber)', background: 'var(--surface-2)', padding: '8px 10px', borderRadius: 8, textAlign: 'center' }}
                   >
-                    <b>模拟支付通道</b><br />
-                    未配置微信支付凭证，这个二维码扫了不会真的跳转微信。<br />
-                    点下方按钮模拟支付成功（走的是与生产完全相同的兑现代码）。
+                    <b>{lang === 'en' ? 'Simulated Payment Channel' : '模拟支付通道'}</b><br />
+                    {lang === 'en'
+                      ? 'WeChat Pay credentials not configured. Scanning this QR will not trigger actual payment. Click below to simulate success (uses identical fulfillment code).'
+                      : '未配置微信支付凭证，这个二维码扫了不会真的跳转微信。点下方按钮模拟支付成功（走的是与生产完全相同的兑现代码）。'}
                   </div>
                 )}
 
@@ -167,18 +186,20 @@ export function Checkout({
                 />
 
                 <div className="small muted" style={{ textAlign: 'center' }}>
-                  用微信「扫一扫」完成支付，支付后本页自动跳转
+                  {lang === 'en' ? 'Scan with WeChat to pay; page updates automatically' : '用微信「扫一扫」完成支付，支付后本页自动跳转'}
                   <br />
-                  二维码 {fmtTime(order.codeExpiresAt)} 前有效
+                  {lang === 'en' ? `QR code valid until ${fmtTime(order.codeExpiresAt)}` : `二维码 ${fmtTime(order.codeExpiresAt)} 前有效`}
                 </div>
 
                 {order.mocked && (
                   <button className="btn btn-primary btn-sm" onClick={mockPay} disabled={pending}>
-                    {pending ? '处理中…' : '模拟支付成功'}
+                    {pending ? (lang === 'en' ? 'Processing…' : '处理中…') : (lang === 'en' ? 'Simulate Payment Success' : '模拟支付成功')}
                   </button>
                 )}
 
-                <div className="small muted mono" style={{ wordBreak: 'break-all' }}>单号 {order.outTradeNo}</div>
+                <div className="small muted mono" style={{ wordBreak: 'break-all' }}>
+                  {lang === 'en' ? 'Order' : '单号'} {order.outTradeNo}
+                </div>
                 {error && <div className="small" style={{ color: 'var(--red)' }}>{error}</div>}
               </div>
             )}

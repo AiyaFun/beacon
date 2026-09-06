@@ -1,9 +1,56 @@
 import Link from 'next/link';
 import { DataRequestForm } from './DataRequestForm';
+import { getServerLang } from '@/lib/i18n/server';
 
-export const metadata = { title: '被监控账号移除申请 — 烽火台' };
+export async function generateMetadata() {
+  const lang = await getServerLang();
+  return {
+    title: lang === 'en' ? 'Data Removal Request — Beacon' : '被监控账号移除申请 — 烽火台',
+  };
+}
 
-export default function DataRequestPage() {
+export default async function DataRequestPage() {
+  const lang = await getServerLang();
+  const isEn = lang === 'en';
+
+  if (isEn) {
+    return (
+      <article className="legal-article">
+        <h1>Data Removal Request</h1>
+        <p className="small muted">Pursuant to Personal Information Protection Law · Right to Refuse</p>
+
+        <h2>About Our Data Sources</h2>
+        <p>
+          Beacon&apos;s competitor monitoring features only collect <b>publicly published</b> profile information and post metadata
+          (such as public handle, bio, post titles, and engagement stats) to provide content benchmarking for our users.
+          In addition, users may manually extract <b>displayed</b> comment text from public comment sections (excluding any commenter identity data).
+          This content has two purposes: <b>comment text</b> is stored for up to 90 days for user reading and word frequency analysis before <b>automatic physical deletion</b>;
+          questions asked by <b>two or more</b> individuals may be retained as topic inspirations. Neither enters AI training corpora, nor are they exported.
+          We do not collect private messages, drafts, backend data, or store any third-party platform credentials.
+        </p>
+
+        <h2>Your Rights</h2>
+        <p>
+          If you are the owner or authorized representative of a monitored account or website, you have the right to request that we stop collecting and remove previously collected public information
+          (including <b>comment text and topic questions</b> extracted from your posts—both will be deleted together).
+          Please fill out the form below. We will verify and process your request, during which new data collection for the target will be paused.
+        </p>
+
+        <DataRequestForm />
+
+        <p className="small muted" style={{ marginTop: 16 }}>
+          By submitting, you confirm that you hold legitimate rights to the specified account or website. We may request further verification to prevent misuse.
+        </p>
+
+        <div className="legal-nav">
+          <Link href="/legal/privacy">Privacy Policy →</Link>
+          <span style={{ margin: '0 8px', color: 'var(--muted, #94a3b8)' }}>·</span>
+          <Link href="/legal/terms">Terms of Service →</Link>
+        </div>
+      </article>
+    );
+  }
+
   return (
     <article className="legal-article">
       <h1>被监控账号移除申请</h1>
@@ -40,3 +87,4 @@ export default function DataRequestPage() {
     </article>
   );
 }
+

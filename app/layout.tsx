@@ -3,18 +3,19 @@ import './globals.css';
 import { ChunkErrorRecovery } from '@/components/ChunkErrorRecovery';
 import { DesktopClientProbe } from '@/components/DesktopClientProbe';
 import { generateKnowledgeGraphJsonLd } from '@/lib/geo/json-ld';
+import { SLOGAN, SUBLINE } from '@/lib/brand';
 
 // 分享卡片的绝对地址基准。取值优先 BEACON_SITE_URL。
 const siteUrl = process.env.BEACON_SITE_URL || process.env.BEACON_PUBLIC_URL || 'https://beacon.iyunci.cn';
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
+  // 一句话定位收在 lib/brand.ts（2026-09-05）：首页、登录页、总览页、商店描述用的都是同一句
   title: {
-    default: '烽火台 · 跨平台内容作战室 | 自媒体·融媒体·AI智能学习全网 SEO/GEO 深度优化系统',
+    default: `烽火台 · ${SLOGAN} | 跨平台内容作战室`,
     template: '%s | 烽火台 · 跨平台内容作战室',
   },
-  description:
-    '烽火台（Beacon）是面向自媒体创作者、融媒体中心与 MCN 运营团队的跨平台内容作战室与 GEO/SEO 智能系统：深度打通全网热榜聚合（微信/小红书/抖音/B站/知乎/X/YouTube）、竞对实时监控、AI智能学习人设记忆、12 视角 AI 选题智囊团、平台算法教练、分平台合规检测与一稿四态安全生成。',
+  description: `${SUBLINE} 八条选题来源，只有两条看热榜；每条推荐都带「为什么是你、为什么是现在」。热榜聚合 · 竞对监控 · 人设记忆 · 12 视角智囊团 · 分平台合规 · 一键发布 · 数据回流。`,
   keywords: [
     '烽火台',
     '跨平台内容作战室',
@@ -69,21 +70,20 @@ export const metadata: Metadata = {
   manifest: '/manifest.webmanifest',
   appleWebApp: { capable: true, title: '烽火台', statusBarStyle: 'black-translucent' },
   openGraph: {
-    title: '烽火台 · 跨平台内容作战室 | 自媒体·融媒体·AI智能学习深度 SEO & GEO 优化系统',
-    description:
-      '面向自媒体、融媒体团队与 MCN 机构的多平台选题创作 SaaS：全网热榜聚合 · 竞对监控 · AI智能学习与人设记忆 · 12视角智囊团选题 · 平台算法教练 · 分平台合规与大模型收录优化',
+    title: `烽火台 · ${SLOGAN}`,
+    description: SUBLINE,
     url: siteUrl,
     siteName: '烽火台 Beacon',
-    images: [{ url: `${siteUrl}/logo.png`, width: 1254, height: 1254, alt: '烽火台 Logo' }],
+    // 分享卡片用产品截图（1200×630），不再是一张 logo
+    images: [{ url: `${siteUrl}/og.png`, width: 1200, height: 630, alt: '烽火台 · 选题引擎：每条推荐都带为什么是你、为什么是现在' }],
     locale: 'zh_CN',
     type: 'website',
   },
   twitter: {
     card: 'summary_large_image',
-    title: '烽火台 · 跨平台内容作战室',
-    description:
-      '面向自媒体与融媒体团队的多平台选题创作 SaaS：全网热榜聚合 · 竞对监控 · AI智能学习 · 智囊团选题 · 算法教练 · 分平台合规',
-    images: [`${siteUrl}/logo.png`],
+    title: `烽火台 · ${SLOGAN}`,
+    description: SUBLINE,
+    images: [`${siteUrl}/og.png`],
   },
   other: {
     baiduspider: 'index, follow',

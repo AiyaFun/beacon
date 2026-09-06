@@ -1,4 +1,31 @@
+'use client';
+
 import type { ReactNode } from 'react';
+import { useI18n } from '@/lib/i18n';
+
+const HUB_TITLES_EN: Record<string, string> = {
+  '看情报': 'Intelligence',
+  '做内容': 'Create',
+  '看效果': 'Analytics',
+  '记忆与素材': 'Assets & Memory',
+  '技能 · 连接器': 'Skills & Connectors',
+  '智能体 · 工作流': 'Agents & Workflows',
+  '挑选题': 'Topics',
+  '成员与权限': 'Members & Roles',
+  '账号设置': 'Account Settings',
+  'API 与集成': 'API & Keys',
+  '对战雷达': 'Trend Radar',
+  '通知中心': 'Notifications',
+  '帮助中心': 'Help Center',
+  '意见与反馈': 'Feedback',
+  '套餐与用量': 'Billing & Usage',
+  '本周作战': 'Weekly Battle',
+  '问题反馈与社群支持': 'Feedback & Support',
+  '今日选题榜': 'Today’s Topics',
+  '桌面客户端与整机版': 'Desktop Client & Appliance',
+  '下载采集助手': 'Download Ingest Assistant',
+  '系统偏好与设置': 'System Preferences & Settings',
+};
 
 // 合并页组的紧凑页头（2026-08-26 用户「占用了比较大的篇幅」）。
 //
@@ -18,7 +45,7 @@ export function HubHeader({
   meta,
 }: {
   /** 组名（与侧栏那一条同名：看情报 / 做内容 / 技能 · 连接器 / 记忆与素材…） */
-  title: string;
+  title: ReactNode;
   /** 原副标题：收进悬停，不再常驻占行 */
   hint?: string;
   /** 页签条（IntelTabs / MakeTabs / … 以 inline 模式传入）。没有页签组的页可省 */
@@ -28,9 +55,12 @@ export function HubHeader({
   /** 操作左侧的小徽章（数据新鲜度等），手机上可被挤换行 */
   meta?: ReactNode;
 }) {
+  const { lang } = useI18n();
+  const displayTitle = typeof title === 'string' && lang === 'en' ? (HUB_TITLES_EN[title] ?? title) : title;
+
   return (
     <div className="hub-head" title={hint}>
-      <h1 className="hub-head-title">{title}</h1>
+      <h1 className="hub-head-title">{displayTitle}</h1>
       {tabs}
       <span className="hub-head-right">
         {meta}

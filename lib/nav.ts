@@ -85,8 +85,8 @@ export const NAV: NavGroup[] = [
     icon: 'chat',
     purpose: '每天就这四件事：看今天做什么、说一句话派活、管好班底、回看跑过的',
     items: [
-      { href: '/', label: '今天', icon: 'home', hint: '本周作战报告 · 今天该做什么，每条后面就是起稿入口', covers: ['/battle'] },
-      { href: '/assistant', label: '新任务', icon: 'chat', hint: 'AI 助手 · 说一句话让它去做' },
+      { href: '/', label: '今天', icon: 'home', hint: '本周作战报告 · 今天该做什么，每条后面就是起稿入口', covers: ['/battle', '/onboarding'] },
+      { href: '/assistant', label: '问 AI', icon: 'chat', hint: 'AI 助手 · 问问题、看某次执行的过程；要派活去「今天」说一句' },
       // 「班底」→「技能 · 连接器」（用户指定）：与 Doubao「技能·连接器·伙伴」同一说法。
       // 页顶 RoleTabs 切技能/智能体/能力，所以它 covers 掉 /workflows。
       { href: '/skills', label: '技能 · 连接器', icon: 'sparkles', hint: `${AGENT_ROLES.skill.name} / ${AGENT_ROLES.agent.name} / ${AGENT_ROLES.ability.name} · 能重复用的干活单位，页顶标签互切；定时任务也在这里`, covers: ['/workflows'] },
@@ -215,6 +215,8 @@ export function stageHref(group: NavGroup): string {
  */
 export const COVERED_PAGE_NAMES: Record<string, string> = {
   '/battle': '本周作战',
+  // 冷启动向导（2026-09-05）：首页人设空白时的醒目引导卡直通它，跑完回首页
+  '/onboarding': '十分钟开场',
   '/competitors': '看同行',
   '/library': '我存的资料',
   '/workflows': '智能体',

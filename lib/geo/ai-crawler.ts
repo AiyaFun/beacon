@@ -51,6 +51,12 @@ export const PURPOSE_LABEL: Record<AiAgentPurpose, string> = {
   user_fetch: '用户当场提问时实时取回这一页',
 };
 
+export const PURPOSE_LABEL_EN: Record<AiAgentPurpose, string> = {
+  training: 'Model training',
+  search: 'Search indexing (blocking prevents citation)',
+  user_fetch: 'Live user fetch during prompt querying',
+};
+
 export type AiAgent = {
   /** robots.txt 里写的那个名字。crawler 与 robots_token 都用它。 */
   token: string;

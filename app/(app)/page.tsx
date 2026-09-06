@@ -1,6 +1,9 @@
 import Link from 'next/link';
 import { prisma } from '@/lib/db';
-import { getSession } from '@/lib/session';
+import { getSession, getSessionOrNull } from '@/lib/session';
+import { redirect } from 'next/navigation';
+import { edition } from '@/lib/edition';
+import { Landing } from '@/components/landing/Landing';
 import { parseJson } from '@/lib/json';
 import { readPersona, isPersonaBlank } from '@/lib/persona';
 import { fmtDateLong } from '@/lib/format';
@@ -23,11 +26,26 @@ import { BattleReport } from '@/components/BattleReport';
 import { actGenerateRecommendations, actCrawlCompetitors } from './actions';
 import { WeekBattleHeader } from '@/components/WeekBattleHeader';
 import { PersonaGuideBanner } from '@/components/PersonaGuideBanner';
+import { getServerLang } from '@/lib/i18n/server';
 
 export const dynamic = 'force-dynamic';
 
-export default async function Dashboard() {
-  const s = await getSession();
+export default async function Dashboard({
+  searchParams,
+}: {
+  searchParams: Promise<{ goal?: string }>;
+}) {
+  // 公开首页（2026-09-05）：未登录的 SaaS 访客看到的是营销落地页，不再是登录框。
+  // 布局层已对 `/` 放行游客（app/(app)/layout.tsx），这里只决定「给他看什么」。
+  // 整机/私有化没有对外营销面：布局在那一步已经把游客送去 /login，这里再兜一次。
+  const { goal } = await searchParams;
+  const guest = await getSessionOrNull();
+  if (!guest) {
+    if (edition() !== 'saas') redirect('/login');
+    return <Landing />;
+  }
+  const [s, lang] = await Promise.all([getSession(), getServerLang()]);
+  const isEn = lang === 'en';
   const [account, topics, tasks, publishRecords, competitors, memories, sensitiveCount, readiness, tenant, newMemories, recommendedCount] = await Promise.all([
     prisma.creatorAccount.findUnique({ where: { id: s.accountId } }),
     prisma.topicIdea.findMany({ where: { accountId: s.accountId, state: 'recommended' }, orderBy: { totalScore: 'desc' }, take: 3 }),
@@ -84,7 +102,7 @@ export default async function Dashboard() {
         id: r.id,
         title: r.title,
         goal: r.goal,
-        agentName: r.agentTemplateId ? (nameOf.get(r.agentTemplateId) ?? '（智能体已删除）') : null,
+        agentName: r.agentTemplateId ? (nameOf.get(r.agentTemplateId) ?? (isEn ? '(Agent deleted)' : '（智能体已删除）')) : null,
         authorizedCount: parseJson<string[]>(r.preauthorizedTools, []).length,
       }));
     })(),
@@ -117,11 +135,14 @@ export default async function Dashboard() {
   return (
     <>
       {/* 任务台：说一句话就能派活的输入框必须是**上屏第一眼**，而不是四张统计卡之后。
-          下面「今日概览」那一整套一个板块都没少——只是排在派活之后（首页形态差异，
-          不是功能差异；两种外壳的**路由级功能**仍然完全对等）。 */}
-      {(
-        <TaskDeckHome memberName={s.memberName} initialActive={activeRuns} authorizableTools={authTools} />
-      )}
+          这一框就是全站唯一的派活入口（2026-09-06 起就地开跑，/assistant 不再有第二个框）。
+          ?goal= 只预填不开跑——浮标助手的「让它直接去做」把话带到这儿，用户按了才真跑。 */}
+      <TaskDeckHome
+        memberName={s.memberName}
+        initialActive={activeRuns}
+        authorizableTools={authTools}
+        initialGoal={goal ? goal.slice(0, 2000) : null}
+      />
       {presetCards.length > 0 && (
         <div style={{ marginBottom: 16 }}>
           <PresetCards presets={presetCards} />
@@ -142,10 +163,54 @@ export default async function Dashboard() {
       {/* 待办清单收进折叠（2026-08-26 单壳化）：工作台删了，它不能跟着消失——
           这是手动待办的唯一入口。快速入口没保：那四个格子与侧栏/页签重复。 */}
       {tasks.length > 0 && (
-        <Fold title="待办清单" sub="自己加，做完打勾" note={<span className="small muted">{tasks.filter((t) => !t.done).length} 条未完成</span>}>
+        <Fold
+          title={isEn ? 'To-Do List' : '待办清单'}
+          sub={isEn ? 'Add items, check when done' : '自己加，做完打勾'}
+          note={<span className="small muted">{tasks.filter((t) => !t.done).length} {isEn ? 'unfinished' : '条未完成'}</span>}
+        >
           <TaskList tasks={tasks} />
         </Fold>
       )}
+      <Fold
+        title={isEn ? "What's New" : '最近更新'}
+        sub={isEn ? 'v1.3.52 → v1.3.55' : 'v1.3.52 → v1.3.55'}
+        defaultOpen
+      >
+        <div className="stack" style={{ gap: 12, fontSize: 13, lineHeight: 1.7 }}>
+          <div>
+            <b>v1.3.55</b> —— {isEn ? 'Visual overhaul' : '全站视觉升级'}
+            <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+              <li>{isEn ? 'Account switcher: custom dropdown with platform color dots (replaced native select)' : '账号切换器：带平台色标的自定义下拉浮层，告别原生 select'}</li>
+              <li>{isEn ? 'Onboarding wizard: redesigned with progress bar, real-time URL parsing, better validation' : '开场向导：步骤进度条、链接实时解析、表单校验更友好'}</li>
+              <li>{isEn ? 'Account manager: structured card form layout' : '账号管理：结构化卡片表单'}</li>
+              <li>{isEn ? 'Chat input: focus glow, image preview inside box, colored quick-action icons' : '对话输入框：聚焦发光、参考图内嵌、快捷卡片带彩色图标'}</li>
+              <li>{isEn ? 'English labels for model picker and account placeholder name' : '模型选择器与「我的账号」占位名英文补齐'}</li>
+            </ul>
+          </div>
+          <div>
+            <b>v1.3.54</b> —— {isEn ? 'Onboarding creates your own account' : '开场向导真的建「自己的账号」了'}
+            <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+              <li>{isEn ? 'Paste your profile URL → placeholder becomes "X @yourID"' : '贴主页链接 → 占位行升级为「X @你的ID」'}</li>
+              <li>{isEn ? 'No URL + single platform → platform set, says "haven\'t saved your profile yet"' : '没贴链接、只选了一个平台 → 落平台，明说「还没记下主页」'}</li>
+            </ul>
+          </div>
+          <div>
+            <b>v1.3.53</b> —— {isEn ? 'Single dispatch box' : '派活只剩一个框'}
+            <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+              <li>{isEn ? 'Home input runs tasks directly; "Ask AI" page is for chat & execution history only' : '首页框就地开跑；「问 AI」只做对话与执行过程查看'}</li>
+            </ul>
+          </div>
+          <div>
+            <b>v1.3.52</b> —— {isEn ? 'Growth & public surface' : '增长缺口整改'}
+            <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+              <li>{isEn ? 'Public landing page, download/extension/pricing pages visible without login' : '公开首页、下载页/插件页/价格页免登录可看'}</li>
+              <li>{isEn ? '10-min onboarding wizard for new users' : '新用户十分钟开场向导'}</li>
+              <li>{isEn ? 'Invite a creator → both get 7 days Standard' : '邀请创作者，双方各得 7 天标准版'}</li>
+              <li>{isEn ? 'Funnel analytics from landing to first data sync' : '从首页到首次数据回流的漏斗埋点'}</li>
+            </ul>
+          </div>
+        </div>
+      </Fold>
     </>
   );
 }

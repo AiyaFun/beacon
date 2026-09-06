@@ -3,12 +3,16 @@ import { PageHead, Card, Stat, Empty } from '@/components/ui';
 import { fmtDateTime } from '@/lib/format';
 import { parseJson } from '@/lib/json';
 import { platformName } from '@/lib/constants';
+import { getServerLang } from '@/lib/i18n/server';
 import { ParserPanel } from './ParserPanel';
 
 export const dynamic = 'force-dynamic';
 
 // 采集自学习的审核台：疑似改版事件 → 让模型推断候选锚点 → 人工采纳 → 下发规则包 → 可回滚。
 export default async function OpsParserPage() {
+  const lang = await getServerLang();
+  const isEn = lang === 'en';
+
   const [incidents, rules] = await Promise.all([
     prisma.parserIncident.findMany({
       where: { status: { in: ['open', 'proposed'] } },
@@ -24,22 +28,42 @@ export default async function OpsParserPage() {
   return (
     <>
       <PageHead
-        title="采集自学习"
-        desc="平台改版 → 留脱敏结构样本 → 模型推断新锚点 → 你点头才下发 · 插件当天生效，不必发版"
+        title={isEn ? 'Parser Self-Learning' : '采集自学习'}
+        desc={
+          isEn
+            ? 'Platform redesigns → Redacted DOM samples → Model proposes anchors → Manual review & dispatch · Active same-day without release'
+            : '平台改版 → 留脱敏结构样本 → 模型推断新锚点 → 你点头才下发 · 插件当天生效，不必发版'
+        }
       />
 
       <div className="grid grid-4" style={{ marginBottom: 16 }}>
-        <Stat label="待处理事件" value={incidents.filter((i) => i.status === 'open').length} foot="同一改版会合并计数" />
-        <Stat label="待审候选" value={candidates.length} foot="模型产出，未上线" />
-        <Stat label="生效规则" value={active.length} foot="插件正在用的那一版" />
-        <Stat label="累计样本" value={incidents.reduce((a, i) => a + i.samples, 0)} foot="脱敏结构骨架" />
+        <Stat
+          label={isEn ? 'Open Incidents' : '待处理事件'}
+          value={incidents.filter((i) => i.status === 'open').length}
+          foot={isEn ? 'Aggregated by redesign event' : '同一改版会合并计数'}
+        />
+        <Stat
+          label={isEn ? 'Pending Candidates' : '待审候选'}
+          value={candidates.length}
+          foot={isEn ? 'Model-generated, unreleased' : '模型产出，未上线'}
+        />
+        <Stat
+          label={isEn ? 'Active Rules' : '生效规则'}
+          value={active.length}
+          foot={isEn ? 'Currently in use by extension' : '插件正在用的那一版'}
+        />
+        <Stat
+          label={isEn ? 'Total Samples' : '累计样本'}
+          value={incidents.reduce((a, i) => a + i.samples, 0)}
+          foot={isEn ? 'Redacted structural skeletons' : '脱敏结构骨架'}
+        />
       </div>
 
       <ParserPanel
         incidents={incidents.map((i) => ({
           id: i.id,
           platform: i.platform,
-          platformLabel: platformName(i.platform) || i.platform,
+          platformLabel: platformName(i.platform, lang) || i.platform,
           scope: i.scope,
           field: i.field,
           status: i.status,
@@ -52,7 +76,7 @@ export default async function OpsParserPage() {
         rules={rules.map((r) => ({
           id: r.id,
           platform: r.platform,
-          platformLabel: platformName(r.platform) || r.platform,
+          platformLabel: platformName(r.platform, lang) || r.platform,
           field: r.field,
           status: r.status,
           version: r.version,

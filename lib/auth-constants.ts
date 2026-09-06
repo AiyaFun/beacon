@@ -8,6 +8,23 @@ export const ACCOUNT_COOKIE = 'beacon_account';
 export const AUTH_COOKIE_MAX_AGE_S = 90 * 24 * 3600;
 
 /**
+ * 中间件把**规范化后的请求路径**写进这个请求头，交给服务端布局读（2026-09-05）。
+ *
+ * 【为什么需要它】(app)/layout 是受保护页的唯一登录闸，但 `/`、`/desktop`、`/extension`
+ * 三页要对陌生人开放只读版（公开首页 / 下载页不该先要手机号）。服务端布局拿不到 pathname，
+ * 只能由中间件带进来。中间件用 `set` 覆盖（不是 append），客户端自己伪造这个头没有意义：
+ * 未登录访问非公开路径在中间件那一步就已经 307 到 /login，根本到不了布局。
+ */
+export const PATHNAME_HEADER = 'x-beacon-pathname';
+
+/**
+ * (app) 组里**允许未登录只读浏览**的那几页。
+ * 页面自己要用 getSessionOrNull 并渲染游客分支——布局只负责「不跳登录」。
+ * 同一份清单也是 middleware PUBLIC_PATHS 的一部分（那边逐条写死，tests/launch 守着一致）。
+ */
+export const GUEST_READABLE_APP_PATHS: readonly string[] = ['/', '/desktop', '/extension'];
+
+/**
  * 登录 cookie 要不要带 Secure。
  *
  * SaaS 上 = 生产即 true（与改造前逐字等价：生产必然是 https）。

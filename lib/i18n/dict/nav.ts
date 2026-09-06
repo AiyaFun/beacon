@@ -12,7 +12,7 @@ export const navDict = {
     },
     items: {
       '/': { label: '今天', hint: '本周作战报告 · 今天该做什么，每条后面就是起稿入口' },
-      '/assistant': { label: '新任务', hint: 'AI 助手 · 说一句话让它去做' },
+      '/assistant': { label: '问 AI', hint: 'AI 助手 · 问问题、看某次执行的过程；要派活去「今天」说一句' },
       '/skills': { label: '技能 · 连接器', hint: '技能 / 智能体 / 能力 · 能重复用的干活单位，页顶标签互切；定时任务也在这里' },
       '/runs': { label: '任务记录', hint: '运行中心 · 所有跑过和在等你处理的' },
       '/hotlists': { label: '看情报', hint: '看热点 / 看同行 / 我存的资料 · 页顶标签互切' },
@@ -61,7 +61,7 @@ export const navDict = {
     },
     items: {
       '/': { label: 'Today', hint: 'Weekly Battle Report · Actionable tasks with instant drafting' },
-      '/assistant': { label: 'New Task', hint: 'AI Assistant · Natural language dispatch' },
+      '/assistant': { label: 'Ask AI', hint: 'AI Assistant · ask questions, follow a run; dispatch from Today' },
       '/skills': { label: 'Skills & Agents', hint: 'Skills / Agents / Abilities · Reusable units and scheduled jobs' },
       '/runs': { label: 'Task Records', hint: 'Execution Center · Active tasks and history' },
       '/hotlists': { label: 'Intelligence', hint: 'Hot Trends / Competitors / Library · Top tab switch' },

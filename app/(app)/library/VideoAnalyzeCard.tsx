@@ -4,6 +4,7 @@ import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Card } from '@/components/ui';
 import { Icon } from '@/components/icons';
+import { useI18n } from '@/lib/i18n';
 
 // 视频拆解入口：选一个本地视频（或贴一条能直接播放的直链）→ 拆出钩子、节奏时间线、爆点。
 //
@@ -18,6 +19,8 @@ type Phase = { kind: 'idle' } | { kind: 'running'; hint: string; secs: number } 
 
 export function VideoAnalyzeCard({ hasArkChannel }: { hasArkChannel: boolean }) {
   const router = useRouter();
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const fileRef = useRef<HTMLInputElement>(null);
   const [mode, setMode] = useState<'rival' | 'self'>('rival');
   const [inputTab, setInputTab] = useState<'file' | 'url'>('file');
@@ -29,7 +32,7 @@ export function VideoAnalyzeCard({ hasArkChannel }: { hasArkChannel: boolean }) 
   const running = phase.kind === 'running';
 
   async function run(body: FormData | string) {
-    setPhase({ kind: 'running', hint: '正在提交…', secs: 0 });
+    setPhase({ kind: 'running', hint: isEn ? 'Submitting…' : '正在提交…', secs: 0 });
     const started = Date.now();
     const tick = setInterval(
       () =>
@@ -44,8 +47,8 @@ export function VideoAnalyzeCard({ hasArkChannel }: { hasArkChannel: boolean }) 
           : { body }),
       });
       if (!res.ok || !res.body) {
-        const j = await res.json().catch(() => ({ error: '请求失败' }));
-        throw new Error(j.error ?? '请求失败');
+        const j = await res.json().catch(() => ({ error: isEn ? 'Request failed' : '请求失败' }));
+        throw new Error(j.error ?? (isEn ? 'Request failed' : '请求失败'));
       }
       // SSE 逐块读。事件之间用空行分隔，跨块切割要靠 buffer 累积
       const reader = res.body.getReader();
@@ -63,7 +66,7 @@ export function VideoAnalyzeCard({ hasArkChannel }: { hasArkChannel: boolean }) 
           if (!ev || !dataLine) continue;
           const data = JSON.parse(dataLine) as Record<string, unknown>;
           if (ev === 'start') setPhase((p) => (p.kind === 'running' ? { ...p, hint: String(data.hint ?? '') } : p));
-          if (ev === 'failed') throw new Error(String(data.error ?? '分析失败'));
+          if (ev === 'failed') throw new Error(String(data.error ?? (isEn ? 'Analysis failed' : '分析失败')));
           if (ev === 'done') {
             clearInterval(tick);
             setPhase({ kind: 'idle' });
@@ -76,7 +79,7 @@ export function VideoAnalyzeCard({ hasArkChannel }: { hasArkChannel: boolean }) 
           }
         }
       }
-      throw new Error('连接中断，分析可能仍在服务端跑完并入库——刷新页面看看。');
+      throw new Error(isEn ? 'Connection interrupted. Analysis may still complete in background and save to library — refresh to check.' : '连接中断，分析可能仍在服务端跑完并入库——刷新页面看看。');
     } catch (e) {
       setPhase({ kind: 'error', msg: (e as Error).message });
     } finally {
@@ -96,12 +99,14 @@ export function VideoAnalyzeCard({ hasArkChannel }: { hasArkChannel: boolean }) 
 
   function submitFile() {
     const f = fileRef.current?.files?.[0];
-    if (!f) return setPhase({ kind: 'error', msg: '请先选择或拖入一个视频文件' });
+    if (!f) return setPhase({ kind: 'error', msg: isEn ? 'Please select or drag a video file first' : '请先选择或拖入一个视频文件' });
     if (f.size > MAX_MB * 1024 * 1024) {
       const mb = (f.size / 1024 / 1024).toFixed(1);
       return setPhase({
         kind: 'error',
-        msg: `当前视频大小为 ${mb}MB，超过网页直接上传上限（${MAX_MB}MB）。建议：① 用剪映/Handbrake 导出为 720p 码率轻松压至 10MB 内（AI 抽帧不影响分析）；② 或上传至阿里云/腾讯云 OSS / 对象存储获取直链，切至右侧「视频直链 URL」解析。`,
+        msg: isEn
+          ? `Current video size is ${mb}MB, exceeding web direct upload limit (${MAX_MB}MB). Suggestions: ① Export at 720p using Handbrake/CapCut to compress under 10MB (frame extraction preserves analysis quality); ② Or upload to cloud object storage (OSS/S3) for a direct link and parse via "Direct Video URL" on the right.`
+          : `当前视频大小为 ${mb}MB，超过网页直接上传上限（${MAX_MB}MB）。建议：① 用剪映/Handbrake 导出为 720p 码率轻松压至 10MB 内（AI 抽帧不影响分析）；② 或上传至阿里云/腾讯云 OSS / 对象存储获取直链，切至右侧「视频直链 URL」解析。`,
       });
     }
     const fd = new FormData();
@@ -112,7 +117,7 @@ export function VideoAnalyzeCard({ hasArkChannel }: { hasArkChannel: boolean }) 
   }
 
   function submitUrl() {
-    if (!url.trim()) return setPhase({ kind: 'error', msg: '请先输入有效的视频直链 URL' });
+    if (!url.trim()) return setPhase({ kind: 'error', msg: isEn ? 'Please enter a valid direct video URL' : '请先输入有效的视频直链 URL' });
     void run(JSON.stringify({ url: url.trim(), mode, note: note || undefined }));
   }
 
@@ -121,10 +126,10 @@ export function VideoAnalyzeCard({ hasArkChannel }: { hasArkChannel: boolean }) 
       title={
         <div className="row" style={{ gap: 8, alignItems: 'center' }}>
           <Icon.video size={20} style={{ color: 'var(--primary)' }} />
-          <span>AI 视频画面级深度拆解</span>
+          <span>{isEn ? 'AI Video Frame-Level Deep Breakdown' : 'AI 视频画面级深度拆解'}</span>
         </div>
       }
-      sub="逐帧理解视觉画面：自动提炼开篇钩子、高光时刻、叙事节奏时间轴"
+      sub={isEn ? 'Frame-by-frame visual comprehension: extract opening hooks, highlights, and narrative pacing timeline' : '逐帧理解视觉画面：自动提炼开篇钩子、高光时刻、叙事节奏时间轴'}
       style={{ marginBottom: 16 }}
     >
       {/* 校验通道提醒 */}
@@ -134,16 +139,32 @@ export function VideoAnalyzeCard({ hasArkChannel }: { hasArkChannel: boolean }) 
             <div className="row" style={{ gap: 8, alignItems: 'center' }}>
               <Icon.info size={18} style={{ flexShrink: 0 }} />
               <span>
-                视频拆解需使用<b>你自己配置的火山方舟 API Key</b>（画面推理消耗较大，平台不统一垫付）。
+                {isEn ? (
+                  <>
+                    Video analysis requires your own <b>Volcengine Ark API Key</b> (vision inference is resource-intensive and not prepaid by the platform).
+                  </>
+                ) : (
+                  <>
+                    视频拆解需使用<b>你自己配置的火山方舟 API Key</b>（画面推理消耗较大，平台不统一垫付）。
+                  </>
+                )}
               </span>
             </div>
             <a href="/settings/keys" className="btn btn-sm" style={{ padding: '2px 10px' }}>
-              去配渠道 →
+              {isEn ? 'Configure Channel →' : '去配渠道 →'}
             </a>
           </div>
           <div style={{ marginTop: 8, fontSize: '0.85rem', lineHeight: 1.6 }} className="muted">
-            到 <a href="/settings/keys">接入与密钥</a> 添加「火山引擎 豆包」渠道。推荐模型名填{' '}
-            <code className="mono">doubao-seed-evolving</code>，并在方舟控制台开通接入点。
+            {isEn ? (
+              <>
+                Go to <a href="/settings/keys">Keys & Access</a> to add "Volcengine Doubao" channel. Recommended model name <code className="mono">doubao-seed-evolving</code>, and activate the endpoint in your Ark console.
+              </>
+            ) : (
+              <>
+                到 <a href="/settings/keys">接入与密钥</a> 添加「火山引擎 豆包」渠道。推荐模型名填{' '}
+                <code className="mono">doubao-seed-evolving</code>，并在方舟控制台开通接入点。
+              </>
+            )}
           </div>
         </div>
       )}
@@ -151,7 +172,7 @@ export function VideoAnalyzeCard({ hasArkChannel }: { hasArkChannel: boolean }) 
       {/* 拆解目标模式 Segmented Control */}
       <div className="stack" style={{ gap: 14 }}>
         <div className="row wrap" style={{ gap: 10, alignItems: 'center' }}>
-          <span className="small muted" style={{ fontWeight: 600 }}>拆解目标：</span>
+          <span className="small muted" style={{ fontWeight: 600 }}>{isEn ? 'Analysis Target:' : '拆解目标：'}</span>
           <div className="row" style={{ gap: 6, background: 'var(--surface-2)', padding: 3, borderRadius: 8, border: '1px solid var(--border)' }}>
             <button
               className={`btn btn-sm ${mode === 'rival' ? 'btn-primary' : 'btn-ghost'}`}
@@ -159,7 +180,7 @@ export function VideoAnalyzeCard({ hasArkChannel }: { hasArkChannel: boolean }) 
               onClick={() => setMode('rival')}
               disabled={running}
             >
-              🎯 别人的作品（拆解解法 / 爆款逻辑）
+              {isEn ? '🎯 Peer Post (Dissect tactics / viral logic)' : '🎯 别人的作品（拆解解法 / 爆款逻辑）'}
             </button>
             <button
               className={`btn btn-sm ${mode === 'self' ? 'btn-primary' : 'btn-ghost'}`}
@@ -167,7 +188,7 @@ export function VideoAnalyzeCard({ hasArkChannel }: { hasArkChannel: boolean }) 
               onClick={() => setMode('self')}
               disabled={running}
             >
-              🛠️ 我自己的作品（诊断复盘 / 找改进点）
+              {isEn ? '🛠️ My Own Post (Diagnosis & review / find improvements)' : '🛠️ 我自己的作品（诊断复盘 / 找改进点）'}
             </button>
           </div>
         </div>
@@ -181,7 +202,7 @@ export function VideoAnalyzeCard({ hasArkChannel }: { hasArkChannel: boolean }) 
               disabled={running}
             >
               <Icon.upload size={14} />
-              上传本地视频文件 (≤{MAX_MB}MB)
+              {isEn ? `Upload Local Video (≤${MAX_MB}MB)` : `上传本地视频文件 (≤${MAX_MB}MB)`}
             </button>
             <button
               className={`btn btn-sm ${inputTab === 'url' ? 'btn-primary' : 'btn-ghost'}`}
@@ -189,7 +210,7 @@ export function VideoAnalyzeCard({ hasArkChannel }: { hasArkChannel: boolean }) 
               disabled={running}
             >
               <Icon.link size={14} />
-              视频直链 URL 解析
+              {isEn ? 'Direct Video URL' : '视频直链 URL 解析'}
             </button>
             <button
               className="btn btn-sm btn-ghost small muted"
@@ -197,14 +218,22 @@ export function VideoAnalyzeCard({ hasArkChannel }: { hasArkChannel: boolean }) 
               onClick={() => setShowTips(!showTips)}
             >
               <Icon.help size={14} />
-              {showTips ? '收起拆解说明' : '拆解说明'}
+              {showTips ? (isEn ? 'Hide Tips' : '收起拆解说明') : (isEn ? 'Dissection Tips' : '拆解说明')}
             </button>
           </div>
 
           {showTips && (
             <div className="small muted" style={{ padding: 10, borderRadius: 8, background: 'var(--surface-2)', marginBottom: 12, lineHeight: 1.65 }}>
-              💡 <b>提示：</b>豆包视频模型通过<b>图像抽帧</b>阅读视觉内容。
-              具有硬字幕的视频能顺带解析字幕口播；若需要完整的平台原文字幕与音轨时间戳，建议使用浏览器插件在作品页上右键点击<b>「一键拆解」</b>。
+              {isEn ? (
+                <>
+                  💡 <b>Tip:</b> Doubao video model reads visual content through <b>frame sampling</b>. Videos with burnt-in subtitles will extract spoken transcripts; for complete original platform subtitles and audio timestamps, use the browser extension and right-click <b>"One-Click Breakdown"</b> on the post page.
+                </>
+              ) : (
+                <>
+                  💡 <b>提示：</b>豆包视频模型通过<b>图像抽帧</b>阅读视觉内容。
+                  具有硬字幕的视频能顺带解析字幕口播；若需要完整的平台原文字幕与音轨时间戳，建议使用浏览器插件在作品页上右键点击<b>「一键拆解」</b>。
+                </>
+              )}
             </div>
           )}
 
@@ -237,17 +266,19 @@ export function VideoAnalyzeCard({ hasArkChannel }: { hasArkChannel: boolean }) 
                     <div style={{ textAlign: 'left' }}>
                       <div style={{ fontWeight: 600, color: 'var(--fg)' }}>{selectedFile.name}</div>
                       <div className="small muted">
-                        {(selectedFile.size / (1024 * 1024)).toFixed(2)} MB · 点击可更换文件
+                        {(selectedFile.size / (1024 * 1024)).toFixed(2)} MB · {isEn ? 'Click to replace file' : '点击可更换文件'}
                       </div>
                     </div>
-                    <span className="badge badge-green" style={{ marginLeft: 8 }}>已就绪</span>
+                    <span className="badge badge-green" style={{ marginLeft: 8 }}>{isEn ? 'Ready' : '已就绪'}</span>
                   </div>
                 ) : (
                   <div className="stack" style={{ gap: 6, alignItems: 'center' }}>
                     <Icon.upload size={28} style={{ color: 'var(--muted)' }} />
-                    <div style={{ fontWeight: 500 }}>点击选择或拖拽视频文件至此处</div>
+                    <div style={{ fontWeight: 500 }}>{isEn ? 'Click or drag video file here' : '点击选择或拖拽视频文件至此处'}</div>
                     <div className="small muted">
-                      支持 <code className="mono">.mp4</code> <code className="mono">.mov</code> <code className="mono">.webm</code> <code className="mono">.mkv</code>（文件上限 {MAX_MB}MB）
+                      {isEn
+                        ? `Supports .mp4 .mov .webm .mkv (Max ${MAX_MB}MB)`
+                        : `支持 .mp4 .mov .webm .mkv（文件上限 ${MAX_MB}MB）`}
                     </div>
                   </div>
                 )}
@@ -257,7 +288,7 @@ export function VideoAnalyzeCard({ hasArkChannel }: { hasArkChannel: boolean }) 
                 <input
                   className="input"
                   style={{ flex: 1, minWidth: 240 }}
-                  placeholder="你想重点关注哪些细节？（选填，如：前 3 秒留人钩子、情绪转折）"
+                  placeholder={isEn ? 'What details to focus on? (Optional, e.g. first 3s hook, emotional turn)' : '你想重点关注哪些细节？（选填，如：前 3 秒留人钩子、情绪转折）'}
                   value={note}
                   onChange={(e) => setNote(e.target.value)}
                   disabled={running}
@@ -268,7 +299,7 @@ export function VideoAnalyzeCard({ hasArkChannel }: { hasArkChannel: boolean }) 
                   disabled={running || !selectedFile || !hasArkChannel}
                 >
                   <Icon.sparkles size={16} />
-                  开始分析视频
+                  {isEn ? 'Start Video Analysis' : '开始分析视频'}
                 </button>
               </div>
             </div>
@@ -281,7 +312,7 @@ export function VideoAnalyzeCard({ hasArkChannel }: { hasArkChannel: boolean }) 
                 <input
                   className="input"
                   style={{ flex: 1, minWidth: 260 }}
-                  placeholder="粘贴可以直接播放的视频文件 URL（以 .mp4 / .mov 等结尾）"
+                  placeholder={isEn ? 'Paste direct playable video URL (ending in .mp4 / .mov etc.)' : '粘贴可以直接播放的视频文件 URL（以 .mp4 / .mov 等结尾）'}
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                   disabled={running}
@@ -292,18 +323,26 @@ export function VideoAnalyzeCard({ hasArkChannel }: { hasArkChannel: boolean }) 
                   disabled={running || !url.trim() || !hasArkChannel}
                 >
                   <Icon.sparkles size={16} />
-                  解析直链
+                  {isEn ? 'Analyze Direct URL' : '解析直链'}
                 </button>
               </div>
               <input
                 className="input"
-                placeholder="你想重点关注哪些细节？（选填，如：视觉镜头转换、文案排版）"
+                placeholder={isEn ? 'What details to focus on? (Optional, e.g. visual camera cuts, copywriting)' : '你想重点关注哪些细节？（选填，如：视觉镜头转换、文案排版）'}
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
                 disabled={running}
               />
               <div className="small muted" style={{ lineHeight: 1.6 }}>
-                ⚠️ 抖音/小红书/B站/YouTube 的<b>作品网页链接不可用</b>（受防盗链鉴权限制）。此类作品请下载视频文件后使用左侧「上传本地视频」。
+                {isEn ? (
+                  <>
+                    ⚠️ <b>Post webpage links</b> on Douyin/Xiaohongshu/Bilibili/YouTube are not directly playable (due to anti-hotlinking auth). For these posts, download the video file first and use "Upload Local Video" on the left.
+                  </>
+                ) : (
+                  <>
+                    ⚠️ 抖音/小红书/B站/YouTube 的<b>作品网页链接不可用</b>（受防盗链鉴权限制）。此类作品请下载视频文件后使用左侧「上传本地视频」。
+                  </>
+                )}
               </div>
             </div>
           )}
@@ -333,9 +372,11 @@ export function VideoAnalyzeCard({ hasArkChannel }: { hasArkChannel: boolean }) 
               }}
             />
             <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 600 }}>{phase.hint || 'AI 多模态画面推理中'}…</div>
+              <div style={{ fontWeight: 600 }}>{phase.hint || (isEn ? 'AI multimodal video reasoning in progress' : 'AI 多模态画面推理中')}…</div>
               <div className="muted" style={{ marginTop: 2 }}>
-                已处理 {phase.secs} 秒 · 视频推理通常需 2–4 分钟（请保持此页面打开）
+                {isEn
+                  ? `Processed ${phase.secs}s · Video reasoning typically takes 2–4 mins (please keep this page open)`
+                  : `已处理 ${phase.secs} 秒 · 视频推理通常需 2–4 分钟（请保持此页面打开）`}
               </div>
             </div>
           </div>

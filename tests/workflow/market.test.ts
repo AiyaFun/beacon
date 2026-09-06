@@ -78,6 +78,8 @@ describe('内置模板', () => {
 
   it('内置模板的步骤全部合法（写错了会在市场里变成空模板）', () => {
     for (const w of BUILTIN_WORKFLOWS) {
+      // 职能型 bot 是自主型（2026-09-05）：没有步骤，靠 agentConfig 定边界；只对流水线型验步骤
+      if (w.mode === 'autonomous') continue;
       expect(stepsSchema.safeParse(w.steps).success, `${w.slug} 步骤不合法`).toBe(true);
     }
   });

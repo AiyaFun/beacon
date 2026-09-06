@@ -22,7 +22,7 @@ export function PersonaGuideBanner() {
             </div>
           </div>
         </div>
-        <Link href="/persona" className="btn btn-primary" style={{ fontSize: 14, padding: '8px 18px' }}>
+        <Link href="/onboarding" className="btn btn-primary" style={{ fontSize: 14, padding: '8px 18px' }}>
           {dict.today.createPersonaBtn}
         </Link>
       </div>

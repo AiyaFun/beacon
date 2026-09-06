@@ -111,14 +111,26 @@ export function BattleReport({ report, personaBlank }: { report: BattleReportDat
                   <div className="battle-row-body">
                     <div className="battle-tt">{it.title}</div>
                     <div className="row wrap" style={{ gap: 6, marginTop: 8 }}>
-                      {it.personaFit !== null && <span className="badge badge-green">✓ 人设匹配 {it.personaFit}</span>}
-                      {it.blueSeaPct !== null && <span className="badge badge-brand">🔥 蓝海度 {it.blueSeaPct}%</span>}
+                      {it.personaFit !== null && (
+                        <span className="badge badge-green">
+                          {lang === 'en' ? `✓ Persona Fit ${it.personaFit}` : `✓ 人设匹配 ${it.personaFit}`}
+                        </span>
+                      )}
+                      {it.blueSeaPct !== null && (
+                        <span className="badge badge-brand">
+                          {lang === 'en' ? `🔥 Blue Ocean ${it.blueSeaPct}%` : `🔥 蓝海度 ${it.blueSeaPct}%`}
+                        </span>
+                      )}
                       {it.windowHint && <span className="badge badge-amber">⏳ {it.windowHint}</span>}
-                      {!it.windowHint && it.queue === 'today' && <span className="badge badge-amber">今日窗口</span>}
+                      {!it.windowHint && it.queue === 'today' && (
+                        <span className="badge badge-amber">
+                          {lang === 'en' ? 'Today Window' : '今日窗口'}
+                        </span>
+                      )}
                     </div>
                     <div className="battle-why">
-                      <b>切入角：</b>{it.angle}
-                      {it.reason && <><br /><b>为什么给你：</b>{it.reason}</>}
+                      <b>{lang === 'en' ? 'Angle: ' : '切入角：'}</b>{it.angle}
+                      {it.reason && <><br /><b>{lang === 'en' ? 'Why for you: ' : '为什么给你：'}</b>{it.reason}</>}
                     </div>
                   </div>
                   <div className="battle-acts">
@@ -132,8 +144,8 @@ export function BattleReport({ report, personaBlank }: { report: BattleReportDat
           {/* 第二步 · 拉回低表现作品 */}
           {report.fixes.length > 0 && (
             <Card
-              title={<span><span className="battle-step b">2</span> 顺手优化 · 拉回低表现作品</span>}
-              sub="完播/互动偏低但还有救的"
+              title={<span><span className="battle-step b">2</span> {lang === 'en' ? 'Quick Fix · Revive Low-Performing Posts' : '顺手优化 · 拉回低表现作品'}</span>}
+              sub={lang === 'en' ? 'Low completion or engagement but salvageable' : '完播/互动偏低但还有救的'}
               style={{ marginTop: 16 }}
             >
               <div className="stack" style={{ gap: 12 }}>
@@ -142,14 +154,28 @@ export function BattleReport({ report, personaBlank }: { report: BattleReportDat
                     <div className="battle-row-body">
                       <div className="battle-tt">{PLAT_ICON[f.platform] ?? '•'} {f.title}</div>
                       <div className="row wrap" style={{ gap: 6, marginTop: 8 }}>
-                        {f.completion !== null && <span className="badge badge-red">完播 {(f.completion * 100).toFixed(0)}%</span>}
-                        {f.engagement !== null && <span className="badge badge-gray">互动率 {(f.engagement * 100).toFixed(2)}%</span>}
+                        {f.completion !== null && (
+                          <span className="badge badge-red">
+                            {lang === 'en' ? `Completion ${(f.completion * 100).toFixed(0)}%` : `完播 ${(f.completion * 100).toFixed(0)}%`}
+                          </span>
+                        )}
+                        {f.engagement !== null && (
+                          <span className="badge badge-gray">
+                            {lang === 'en' ? `Engagement ${(f.engagement * 100).toFixed(2)}%` : `互动率 ${(f.engagement * 100).toFixed(2)}%`}
+                          </span>
+                        )}
                       </div>
-                      <div className="battle-why"><b>诊断：</b>{f.diagnosis}</div>
+                      <div className="battle-why">
+                        <b>{lang === 'en' ? 'Diagnosis: ' : '诊断：'}</b>{f.diagnosis}
+                      </div>
                     </div>
                     <div className="battle-acts">
-                      <Link href="/studio" className="btn btn-sm btn-primary" style={{ width: '100%' }}>✎ 去改稿</Link>
-                      <Link href="/data" className="btn btn-sm">看数据</Link>
+                      <Link href="/studio" className="btn btn-sm btn-primary" style={{ width: '100%' }}>
+                        {lang === 'en' ? '✎ Revise Draft' : '✎ 去改稿'}
+                      </Link>
+                      <Link href="/data" className="btn btn-sm">
+                        {lang === 'en' ? 'View Analytics' : '看数据'}
+                      </Link>
                     </div>
                   </div>
                 ))}
@@ -160,9 +186,16 @@ export function BattleReport({ report, personaBlank }: { report: BattleReportDat
 
         {/* 侧栏 */}
         <div className="battle-aside">
-          <Card title="对标本周动向" sub={`盯着 ${report.counts.watchedRivals} 个`}>
+          <Card
+            title={lang === 'en' ? 'Competitor Moves This Week' : '对标本周动向'}
+            sub={lang === 'en' ? `Tracking ${report.counts.watchedRivals}` : `盯着 ${report.counts.watchedRivals} 个`}
+          >
             {report.rivals.length === 0 ? (
-              <Empty icon="◇" text="还没采到对标数据。去竞对监控加账号、跑一次采集。" action={<Link href="/competitors" className="btn btn-sm">去竞对监控</Link>} />
+              <Empty
+                icon="◇"
+                text={lang === 'en' ? 'No competitor data collected yet. Add accounts in Competitor Monitor and run a crawl.' : '还没采到对标数据。去竞对监控加账号、跑一次采集。'}
+                action={<Link href="/competitors" className="btn btn-sm">{lang === 'en' ? 'Go to Competitors' : '去竞对监控'}</Link>}
+              />
             ) : (
               <div className="stack" style={{ gap: 0 }}>
                 {report.rivals.map((r, i) => (
@@ -179,9 +212,17 @@ export function BattleReport({ report, personaBlank }: { report: BattleReportDat
             )}
           </Card>
 
-          <Card title="本周新作" sub={`${report.counts.ownWorks7d} 条`} style={{ marginTop: 16 }}>
+          <Card
+            title={lang === 'en' ? 'Recent Posts This Week' : '本周新作'}
+            sub={lang === 'en' ? `${report.counts.ownWorks7d} posts` : `${report.counts.ownWorks7d} 条`}
+            style={{ marginTop: 16 }}
+          >
             {report.recentWorks.length === 0 ? (
-              <Empty icon="📝" text="近 7 天还没登记发布。发完到「发布中心」登记，表现会回填到这里。" action={<Link href="/publish" className="btn btn-sm">去发布中心</Link>} />
+              <Empty
+                icon="📝"
+                text={lang === 'en' ? 'No posts recorded in last 7 days. Record posts in Publish Center, performance will fill here.' : '近 7 天还没登记发布。发完到「发布中心」登记，表现会回填到这里。'}
+                action={<Link href="/publish" className="btn btn-sm">{lang === 'en' ? 'Go to Publish Center' : '去发布中心'}</Link>}
+              />
             ) : (
               <div className="stack" style={{ gap: 0 }}>
                 {report.recentWorks.map((w, i) => (
@@ -201,8 +242,12 @@ export function BattleReport({ report, personaBlank }: { report: BattleReportDat
       </div>
 
       <p className="small muted" style={{ marginTop: 16, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        <span className="badge badge-gray">建议基于你的公开数据</span>
-        执行前请自行判断 · 数据源与口径见 <Link href="/runs">运行中心</Link> · 缺播放量的作品一律显示「—」，不按 0 计
+        <span className="badge badge-gray">{lang === 'en' ? 'Suggestions based on public data' : '建议基于你的公开数据'}</span>
+        {lang === 'en' ? (
+          <>Please exercise your own judgment · See data sources in <Link href="/runs">Runs Center</Link> · Posts missing views are shown as "—", not 0</>
+        ) : (
+          <>执行前请自行判断 · 数据源与口径见 <Link href="/runs">运行中心</Link> · 缺播放量的作品一律显示「—」，不按 0 计</>
+        )}
       </p>
     </>
   );

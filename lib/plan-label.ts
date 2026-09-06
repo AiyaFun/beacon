@@ -10,3 +10,18 @@ export const PLAN_LABEL: Record<string, string> = {
   team: '团队版', // 已下线，存量租户显示用
   enterprise: '企业版',
 };
+
+export const PLAN_LABEL_EN: Record<string, string> = {
+  free: 'Free Tier',
+  trial: 'Trial',
+  personal: 'Pro Plan',
+  byok: 'BYOK Plan',
+  team: 'Team Plan',
+  enterprise: 'Enterprise',
+};
+
+export function getPlanLabel(plan: string | null | undefined, lang?: string): string {
+  const p = plan ?? 'free';
+  if (lang === 'en') return PLAN_LABEL_EN[p] ?? p;
+  return PLAN_LABEL[p] ?? '免费版';
+}

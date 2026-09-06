@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { detectDesktopClient, type DesktopClientInfo } from '@/lib/desktop-client';
 import { compareVersion } from '@/lib/version';
+import { useI18n } from '@/lib/i18n';
 
 /** 桌面壳从这一版起内置 Tauri updater（能自己弹更新框、原地升级）。更早的版本只能手动覆盖安装。 */
 const SELF_UPDATE_SINCE = '1.2.5';
@@ -74,6 +75,9 @@ export function DesktopDownloadCard({ version, platforms }: { version: string; p
     }
   }, []);
 
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
+
   if (!mounted) return null;
 
   // 已经在客户端里跑：只可能是「什么都不显示」或「提醒更新」，绝不再劝下载
@@ -89,18 +93,18 @@ export function DesktopDownloadCard({ version, platforms }: { version: string; p
     if (selfUpdating) {
       return (
         <div className="desktop-card">
-          <div className="desktop-card-main" title={`当前 v${client.version}，最新 v${version}`}>
-            <span className="desktop-card-title">客户端有新版 v{version}</span>
-            <span className="desktop-card-sub">客户端会自己提示更新，点一下即可</span>
+          <div className="desktop-card-main" title={client.version ? (isEn ? `Current v${client.version}, latest v${version}` : `当前 v${client.version}，最新 v${version}`) : (isEn ? `Latest v${version}` : `最新 v${version}`)}>
+            <span className="desktop-card-title">{isEn ? `New client version v${version}` : `客户端有新版 v${version}`}</span>
+            <span className="desktop-card-sub">{isEn ? 'Client will prompt to update, click once to upgrade' : '客户端会自己提示更新，点一下即可'}</span>
           </div>
         </div>
       );
     }
     return (
       <div className="desktop-card">
-        <Link href="/desktop" className="desktop-card-main" title={client.version ? `当前 v${client.version}，最新 v${version}` : `最新 v${version}`}>
-          <span className="desktop-card-title">客户端有新版 v{version}</span>
-          <span className="desktop-card-sub">这次要手动装一下，之后就能自动更新了</span>
+        <Link href="/desktop" className="desktop-card-main" title={client.version ? (isEn ? `Current v${client.version}, latest v${version}` : `当前 v${client.version}，最新 v${version}`) : (isEn ? `Latest v${version}` : `最新 v${version}`)}>
+          <span className="desktop-card-title">{isEn ? `New client version v${version}` : `客户端有新版 v${version}`}</span>
+          <span className="desktop-card-sub">{isEn ? 'Please install manually this time, updates will be automatic afterwards' : '这次要手动装一下，之后就能自动更新了'}</span>
         </Link>
       </div>
     );
@@ -113,15 +117,15 @@ export function DesktopDownloadCard({ version, platforms }: { version: string; p
 
   return (
     <div className="desktop-card">
-      <Link href="/desktop" className="desktop-card-main" title={`桌面客户端 v${version}`}>
-        <span className="desktop-card-title">下载桌面客户端</span>
+      <Link href="/desktop" className="desktop-card-main" title={isEn ? `Desktop client v${version}` : `桌面客户端 v${version}`}>
+        <span className="desktop-card-title">{isEn ? 'Download Desktop App' : '下载桌面客户端'}</span>
         <span className="desktop-card-sub">{label}</span>
       </Link>
       <button
         type="button"
         className="desktop-card-close"
-        aria-label="不再显示"
-        title="不再显示"
+        aria-label={isEn ? 'Do not show again' : '不再显示'}
+        title={isEn ? 'Do not show again' : '不再显示'}
         onClick={() => {
           try { localStorage.setItem(KEY, '1'); } catch { /* 关不掉就只是关不掉，不报错 */ }
           setShow(false);

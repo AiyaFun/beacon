@@ -1,5 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from './db';
+import { recordFunnelOnce } from './growth/funnel';
+import { canUseWechatPlatformSource, wechatPlatformKeyConfigured } from './pay/datasource-quota';
 import { toJson, parseJson, type Metrics } from './json';
 import { heatForSort, normalizedHeat } from './insight/heat';
 import { isRemovalRequested } from './legal/removal';
@@ -186,6 +188,22 @@ export async function crawlOneCompetitor(
     }
     return { posts: 0, degraded: false };
   }
+  // 平台代付的公众号通道按套餐限次（lib/pay/datasource-quota.ts，2026-09-05）：超了如实记台账、不拉数
+  if (competitor.platform === 'wechat' && ledger && wechatPlatformKeyConfigured()) {
+    const gate = await canUseWechatPlatformSource(ledger.workspaceId);
+    if (!gate.ok) {
+      await recordCollectionRun({
+        ...ledger,
+        scope: 'rival',
+        platform: competitor.platform,
+        targetId: competitor.id,
+        targetName: competitor.name,
+        items: 0,
+        note: gate.reason,
+      });
+      return { posts: 0, degraded: true };
+    }
+  }
   const res = await fetchCompetitorPosts(competitor.platform, competitor.handle);
   // Mock 绝不落库。真机 2026-07-29：用户加「人民日报」时，添加动作自带的那次试采因为
   // 公众号没有服务端通道而落到 Mock，往库里写了 7 条假文章（标题是「为什么你的完播率一直上不去」
@@ -229,7 +247,12 @@ export async function crawlOneCompetitor(
         // 且与展示值四舍五入叠加后，大号可能几个月写不出一条快照。
         // 这条是服务端通道（RSS/定时抓取），与插件在页面上采的不是一回事，来源要分开标
         await prisma.postMetricSnapshot.create({ data: { postId: existing.id, metrics: toJson(p.metrics), source: 'server' } });
-        await prisma.crawledPost.update({ where: { id: existing.id }, data: { metrics: toJson(p.metrics), hotScore } });
+        // 【合并而非覆盖】（2026-09-04 审计）服务端数据源给不了的字段（如 X 的 collects 书签数是插件/桌面通道采到的）
+        // 整包替换会被抹掉。规则与 lib/ingest/competitor.ts 同：新包里有的键以新值为准，没有的键保留旧值。
+        const prev = parseJson<Record<string, number>>(existing.metrics, {});
+        const merged = { ...prev, ...p.metrics };
+        const mergedHot = Math.round((((merged as Record<string, number>).views ?? 0) / 20000) * 10) / 10;
+        await prisma.crawledPost.update({ where: { id: existing.id }, data: { metrics: toJson(merged), hotScore: mergedHot } });
       }
       updCount++;
     } else {
@@ -558,6 +581,8 @@ export async function generateRecommendations(accountId: string, workspaceId: st
   } catch (err) {
     console.warn('[pipeline] 探索位生成失败（配额/异常），已跳过，不影响本次已产出的推荐:', (err as Error).message);
   }
+  // 漏斗第六步「首次出推荐」：这个租户第一次真的生成出推荐时记一次（增长，2026-09-05）
+  if (tenantId && created > 0) void recordFunnelOnce({ name: 'first_recommendation', tenantId }).catch(() => undefined);
   return { created };
 }
 

@@ -2,7 +2,9 @@
 
 <h1 align="center">Beacon</h1>
 
-<p align="center">A data-driven, cross-platform command center for content creators.</p>
+<p align="center"><b>Know what to make before you write.</b></p>
+
+<p align="center">For creators who publish every week: a daily topic brief with reasons, across Douyin, Xiaohongshu, WeChat, Bilibili and Channels.</p>
 
 <p align="center">
   <a href="https://beacon.iyunci.cn">👉 Live Demo</a>

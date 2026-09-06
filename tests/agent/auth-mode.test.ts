@@ -347,25 +347,29 @@ describe('派发卡：按后果分组，而不是摆 14 行工具名', () => {
     expect(needsConfirm(toolByName('write_memory')!, { authMode: 'preauthorized', preauthorizedTools: names })).toBe(true);
   });
 
-  it('🔒 派活只有一处入口，且那一处必须挂授权卡', async () => {
-    // 【守的性质变强了，不是变松】原来是「两个壳各挂一张授权卡」。
-    // 2026-08-26 查出首页那个框与「新任务」是**行为分歧**：两处标题都写「今天要做什么」，
-    // 但首页回车直接 actStartAgent（立刻花配额），新任务页回车是先答话、答完才问你要不要做。
-    // 于是首页改成把这句话交给 /assistant 预填（?goal=，只预填不自动跑）。
-    // 现在只剩一个真正开跑的地方，授权卡就钉在那儿——
-    // **再出现第二个绕过授权卡的派活入口，这条会红**。
+  it('🔒 派活只有一处入口（首页「今天」的框），且那一处必须挂授权卡', async () => {
+    // 【这条守卫的历史】08-26 查出首页那个框与「新任务」是行为分歧（首页回车直接开跑、
+    // 新任务页先答话），于是首页改成跳过去预填；09-05 改成写一次性 cookie 跳过去自动跑。
+    // 两版的结果一样：用户面前两个一字不差的框，一个是另一个的遥控器，他三次问「是不是重复了」。
+    // 2026-09-06 收成一个：**首页就地开跑，授权卡也挂在首页；/assistant 不再有派活输入框。**
+    // 再出现第二个带输入框的派活入口，或者首页开跑却没带授权，这条会红。
     const fs = await import('node:fs');
     const path = await import('node:path');
     const read = (p: string) => fs.readFileSync(path.join(process.cwd(), p), 'utf8');
+    const home = read('components/TaskDeckHome.tsx');
+    expect(home, '唯一的派活入口没挂授权卡').toMatch(/<DispatchAuth/);
+    expect(home, '授权没带给 server action，勾了等于没勾').toMatch(/actStartAgent\(goal, auth\)/);
+    // 助手页不许再长出第二个派活框：它只看执行、接对话的移交
     const panel = read('app/(app)/assistant/AgentPanel.tsx');
-    expect(panel, '唯一的派活入口没挂授权卡').toMatch(/<DispatchAuth/);
-    expect(panel, '授权没带给 server action，勾了等于没勾').toMatch(/actStartAgent\(goal, auth\)/);
-    // 首页那个框不许自己开跑——它一开跑就绕过了授权卡
-    expect(read('components/TaskDeckHome.tsx'), '首页又自己派活了，授权卡被绕过')
-      .not.toMatch(/actStartAgent\(/);
-    // 而它必须真的把话交出去，不能变成一个打了字没反应的框
-    expect(read('components/TaskDeckHome.tsx'), '首页的框没把话交给助手页')
-      .toMatch(/\/assistant\?goal=/);
+    expect(panel, '助手页又摆了一张授权卡——说明派活框回来了').not.toMatch(/<DispatchAuth/);
+    expect(panel, '助手页又有了自己的目标输入框').not.toMatch(/setGoal\(/);
+    // 对话移交那一下开跑只认缺省档，不许在这儿偷偷放宽
+    expect(panel).toMatch(/actStartAgent\(handoff\.goal, DEFAULT_AUTH\)/);
+    // 移交槽整条链路已删：cookie、读槽、清槽都不该再有
+    expect(fs.existsSync(path.join(process.cwd(), 'lib/agent/handoff.ts')), '移交槽文件还在').toBe(false);
+    const actions = read('app/(app)/assistant/agent-actions.ts');
+    expect(actions).not.toMatch(/actHandoffGoal|actClearHandoff|HANDOFF_COOKIE/);
+    expect(home).not.toMatch(/actHandoffGoal|router\.push\('\/assistant'\)/);
   });
 
   it('contract 标记要一路带到界面，否则派发卡会把签合约的归错组', async () => {

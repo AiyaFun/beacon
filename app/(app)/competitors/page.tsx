@@ -9,6 +9,7 @@ import { Card, Stat, Fold, Empty } from '@/components/ui';
 import { ActionButton } from '@/components/ActionButton';
 import { actCrawlCompetitors } from './actions';
 import { AddCompetitorForm } from './AddCompetitorForm';
+import { WechatQuotaNote } from '@/components/WechatQuotaNote';
 import { competitorSourceStatus } from '@/lib/adapters/registry';
 import { BatchCollectButton } from './BatchCollectButton';
 import { CompetitorTopPosts } from './CompetitorTopPosts';
@@ -17,7 +18,7 @@ import { MonitorStat } from './MonitorStat';
 import { ImportWechatArticles } from './ImportWechatArticles';
 import { GrowthBoard } from '@/components/GrowthBoard';
 import { loadRivalGrowth, WINDOW_KEYS } from '@/lib/insight/growth-rows';
-import { growthOverWindow, windowRange, WINDOW_LABEL, type WindowKey } from '@/lib/insight/growth';
+import { growthOverWindow, windowRange, WINDOW_LABEL, windowLabel, type WindowKey } from '@/lib/insight/growth';
 import type { PostGrowth } from './CompetitorTopPosts';
 import { CollectionRuns } from '@/components/CollectionRuns';
 import { listCollectionRuns } from '@/lib/ingest/collection-run';
@@ -188,7 +189,11 @@ export default async function CompetitorsPage({
     rosterRows.length === 0 ? (
       <Empty
         icon="🎯"
-        text="还没有对标账号——贴一个同行主页链接就能建档，B站/抖音/小红书/YouTube/X/TikTok 都支持；公众号没有公开主页，插件采不到，只能用导出文件导入"
+        text={
+          lang === 'en'
+            ? 'No benchmark accounts yet — paste a profile link to create one. Bilibili, Douyin, Xiaohongshu, YouTube, X, and TikTok supported. WeChat accounts require exported files.'
+            : '还没有对标账号——贴一个同行主页链接就能建档，B站/抖音/小红书/YouTube/X/TikTok 都支持；公众号没有公开主页，插件采不到，只能用导出文件导入'
+        }
       />
     ) : (
       <CompetitorRoster rows={rosterRows} />
@@ -244,7 +249,9 @@ export default async function CompetitorsPage({
 
       {droppedFilter && (
         <div className="small muted" style={{ marginBottom: 12 }}>
-          「{platformName(droppedFilter)}」下已经没有对标账号了，已切回「全部」。
+          {lang === 'en'
+            ? `No benchmark accounts found under "${platformName(droppedFilter)}", switched back to "All".`
+            : `「${platformName(droppedFilter)}」下已经没有对标账号了，已切回「全部」。`}
         </div>
       )}
 
@@ -262,6 +269,7 @@ export default async function CompetitorsPage({
           sub={lang === 'en' ? `Paste profile link · Supports ${PLATFORM_LIST.length} platforms` : `粘主页链接自动识别 · 支持 ${PLATFORM_LIST.length} 个平台`}
           defaultOpen={allWatchlist.length === 0}
         >
+          <WechatQuotaNote workspaceId={s.workspaceId} lang={lang} />
           <AddCompetitorForm
             sourceStatus={Object.fromEntries(
               PLATFORM_LIST.map((p) => [p.key, competitorSourceStatus(p.key)]),
@@ -314,6 +322,7 @@ export default async function CompetitorsPage({
           <CollectionRuns
             rows={runs}
             emptyText={lang === 'en' ? 'No crawl records yet — click "Crawl Competitors" above or run extension.' : '还没有采集记录——点右上角「采集竞对」，或用插件采一次，这里会记下每批数据覆盖的时间段'}
+            lang={lang}
           />
         </Fold>
 
@@ -324,7 +333,7 @@ export default async function CompetitorsPage({
             带了 window 参数就说明他正在看增长，那就保持展开。 */}
         <Fold
           title={lang === 'en' ? 'Competitor Growth' : '竞对增长'}
-          sub={lang === 'en' ? `${WINDOW_LABEL[windowKey]} net growth · One snapshot per crawl` : `${WINDOW_LABEL[windowKey]}净增 · 每次采集一个时点`}
+          sub={lang === 'en' ? `${windowLabel(windowKey, lang)} net growth · One snapshot per crawl` : `${WINDOW_LABEL[windowKey]}净增 · 每次采集一个时点`}
           note={growthRows.length > 0 ? <span className="small muted hide-mobile">{growthRows.length} {lang === 'en' ? 'accounts' : '个账号'}</span> : undefined}
           defaultOpen={!!sp.window}
         >
@@ -350,7 +359,7 @@ export default async function CompetitorsPage({
 
       <Card
         title={dict.competitors.topPostsTitle}
-        sub={lang === 'en' ? `TOP ${topPosts.length} by engagement · ${WINDOW_LABEL[windowKey]} delta` : `按互动量取 TOP ${topPosts.length} · 每行带 ${WINDOW_LABEL[windowKey]}增长`}
+        sub={lang === 'en' ? `TOP ${topPosts.length} by engagement · ${windowLabel(windowKey, lang)} delta` : `按互动量取 TOP ${topPosts.length} · 每行带 ${WINDOW_LABEL[windowKey]}增长`}
       >
         <CompetitorTopPosts
           topPosts={topPosts}
@@ -361,7 +370,7 @@ export default async function CompetitorsPage({
             ])
           )}
           postGrowth={postGrowth}
-          windowLabel={WINDOW_LABEL[windowKey]}
+          windowLabel={windowLabel(windowKey, lang)}
         />
       </Card>
 

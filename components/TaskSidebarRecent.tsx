@@ -29,7 +29,7 @@ export function TaskSidebarRecent({ rows }: { rows: { row: RunEntry; times: numb
       <div className="nav-group-title">{dict.shell.recentTasks}</div>
       {rows.length === 0 ? (
         <p className="small muted" style={{ padding: '2px 10px' }}>
-          {lang === 'en' ? 'No tasks yet. Try dispatching from New Task.' : '还没有任务。去「新任务」说一句话试试。'}
+          {lang === 'en' ? 'No tasks yet. Try dispatching from Today.' : '还没有任务。去「今天」说一句话试试。'}
         </p>
       ) : (
         rows.map(({ row: r, times }) => {

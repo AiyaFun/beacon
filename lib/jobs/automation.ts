@@ -20,21 +20,23 @@ export type AutomationConfig = Record<AutomationKey, boolean>;
 export const AUTOMATION_ITEMS: {
   key: AutomationKey;
   label: string;
+  labelEn?: string;
   desc: string;
+  descEn?: string;
   job: JobName | null; // 「立即运行」对应的任务；null=事件驱动
   default: boolean;
   advanced?: boolean;
 }[] = [
-  { key: 'dailyRecommend', label: '每日选题推荐', desc: '每天清晨为账号生成今日选题推荐并推送', job: 'daily_recommend', default: true },
-  { key: 'autoBackfill', label: '数据自动同步', desc: '按里程碑自动回流已发布内容前 7 天的真实表现（需商业数据源或插件）', job: 'backfill_metrics', default: true },
-  { key: 'autoReview', label: '自动复盘', desc: '内容发布满 7 天、数据齐全时自动生成 AI 复盘', job: 'generate_reviews', default: true },
-  { key: 'weeklyReview', label: '周度运营复盘', desc: '每周一自动生成本周运营复盘并推送', job: 'weekly_review', default: true },
-  { key: 'alerts', label: '爆款/异常预警', desc: '发布后数据增速显著偏离基线时提醒（默认关，避免打扰）', job: null, default: false },
-  { key: 'optimizeMemory', label: '记忆自动优化', desc: '定期对长期记忆去重、生效与遗忘', job: 'optimize_memory', default: true, advanced: true },
+  { key: 'dailyRecommend', label: '每日选题推荐', labelEn: 'Daily Topic Recommendations', desc: '每天清晨为账号生成今日选题推荐并推送', descEn: 'Generate and push daily topic picks every morning', job: 'daily_recommend', default: true },
+  { key: 'autoBackfill', label: '数据自动同步', labelEn: 'Automatic Data Sync', desc: '按里程碑自动回流已发布内容前 7 天的真实表现（需商业数据源或插件）', descEn: 'Automatically backfill 7-day performance metrics via milestones (requires commercial source or extension)', job: 'backfill_metrics', default: true },
+  { key: 'autoReview', label: '自动复盘', labelEn: 'Automatic Post Review', desc: '内容发布满 7 天、数据齐全时自动生成 AI 复盘', descEn: 'Generate AI reviews once content reaches 7 days and metrics are collected', job: 'generate_reviews', default: true },
+  { key: 'weeklyReview', label: '周度运营复盘', labelEn: 'Weekly Operations Review', desc: '每周一自动生成本周运营复盘并推送', descEn: 'Generate and push weekly operations review every Monday', job: 'weekly_review', default: true },
+  { key: 'alerts', label: '爆款/异常预警', labelEn: 'Hit / Anomaly Alerts', desc: '发布后数据增速显著偏离基线时提醒（默认关，避免打扰）', descEn: 'Notify when growth rate significantly diverges from baseline (off by default)', job: null, default: false },
+  { key: 'optimizeMemory', label: '记忆自动优化', labelEn: 'Memory Auto-Optimization', desc: '定期对长期记忆去重、生效与遗忘', descEn: 'Periodically deduplicate, promote, and decay long-term memory', job: 'optimize_memory', default: true, advanced: true },
   // 插件「边逛边建档」。默认开＝保持既有行为（用户要的是「最傻瓜、全程不用太多操作」）。
   // 之所以要有这个开关：CompetitorAccount 是**全局共享表**，浏览即写入是个有产品影响的语义，
   // 以前它只写死在 zod 的 .default(true) 里，用户既看不见也关不掉。
-  { key: 'pluginAutoSubscribe', label: '插件边逛边建档', desc: '用插件打开某个创作者主页时，自动把他建档并加入本工作区竞对监控（关掉后只补充已订阅对象的数据）', job: null, default: true, advanced: true },
+  { key: 'pluginAutoSubscribe', label: '插件边逛边建档', labelEn: 'Extension Auto-Profile while Browsing', desc: '用插件打开某个创作者主页时，自动把他建档并加入本工作区竞对监控（关掉后只补充已订阅对象的数据）', descEn: 'Auto-profile creators and add to monitoring when viewing profiles with the extension (when off, only syncs existing subscriptions)', job: null, default: true, advanced: true },
 ];
 
 const DEFAULTS: AutomationConfig = AUTOMATION_ITEMS.reduce(

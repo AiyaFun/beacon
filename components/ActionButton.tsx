@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
+import { useI18n } from '@/lib/i18n';
 
 // 通用异步动作按钮：调用 server action，带 loading 与结果提示。
 // 成功提示绿色、2.5s 自动消失；失败提示红色、完整展示可换行（配额/权限文案里
@@ -11,7 +12,7 @@ export function ActionButton({
   children,
   primary,
   className,
-  loadingText = '处理中…',
+  loadingText,
   confirmText,
 }: {
   action: () => Promise<unknown>;
@@ -21,6 +22,9 @@ export function ActionButton({
   loadingText?: string | string[];
   confirmText?: string;
 }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
+  const resolvedLoadingText = loadingText ?? (isEn ? 'Processing…' : '处理中…');
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<string>('');
   const [failed, setFailed] = useState(false);
@@ -29,17 +33,17 @@ export function ActionButton({
   const router = useRouter();
 
   useEffect(() => {
-    if (!pending || !Array.isArray(loadingText) || loadingText.length <= 1) {
+    if (!pending || !Array.isArray(resolvedLoadingText) || resolvedLoadingText.length <= 1) {
       setLoadingIdx(0);
       return;
     }
     const timer = setInterval(() => {
-      setLoadingIdx((i) => (i + 1) % loadingText.length);
+      setLoadingIdx((i) => (i + 1) % resolvedLoadingText.length);
     }, 8000);
     return () => clearInterval(timer);
-  }, [pending, loadingText]);
+  }, [pending, resolvedLoadingText]);
 
-  const displayLoading = Array.isArray(loadingText) ? loadingText[loadingIdx] || loadingText[0] : loadingText;
+  const displayLoading = Array.isArray(resolvedLoadingText) ? resolvedLoadingText[loadingIdx] || resolvedLoadingText[0] : resolvedLoadingText;
 
   function show(text: string, isFail: boolean) {
     const id = ++seq.current;
@@ -60,17 +64,17 @@ export function ActionButton({
         const r = (await action()) as Record<string, unknown> | undefined;
         if (r && typeof r === 'object') {
           if (r.ok === false) {
-            show(typeof r.error === 'string' && r.error ? r.error : '没成功，请稍后重试', true);
+            show(typeof r.error === 'string' && r.error ? r.error : (isEn ? 'Failed, please retry later' : '没成功，请稍后重试'), true);
             return;
           }
-          if ('created' in r) show(`已生成 ${r.created} 条`, false);
-          else if ('inserted' in r) show(`已更新 ${r.inserted} 条`, false);
-          else if ('posts' in r) show(`已采集 ${r.posts} 条`, false);
-          else show('完成', false);
-        } else show('完成', false);
+          if ('created' in r) show(isEn ? `Generated ${r.created} items` : `已生成 ${r.created} 条`, false);
+          else if ('inserted' in r) show(isEn ? `Updated ${r.inserted} items` : `已更新 ${r.inserted} 条`, false);
+          else if ('posts' in r) show(isEn ? `Fetched ${r.posts} items` : `已采集 ${r.posts} 条`, false);
+          else show(isEn ? 'Done' : '完成', false);
+        } else show(isEn ? 'Done' : '完成', false);
         router.refresh();
       } catch (e) {
-        show((e as Error).message || '没成功，请稍后重试', true);
+        show((e as Error).message || (isEn ? 'Failed, please retry later' : '没成功，请稍后重试'), true);
       }
     });
   }
@@ -101,7 +105,7 @@ export function ActionButton({
             {msg}
             <button
               onClick={() => setMsg('')}
-              aria-label="关闭提示"
+              aria-label={isEn ? 'Close notice' : '关闭提示'}
               style={{
                 background: 'none',
                 border: 'none',

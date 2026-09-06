@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Icon } from '@/components/icons';
 import type { SelectableModel } from '@/lib/llm/selectable';
+import { useI18n } from '@/lib/i18n';
 
 // 输入框上的「用哪个模型」下拉（2026-08-26，照用户给的豆包工作那个位置放）。
 //
@@ -20,6 +21,8 @@ export function ModelPicker({
   value: string;
   onChange: (id: string) => void;
 }) {
+  const { lang } = useI18n();
+  const isEn = lang === 'en';
   const [open, setOpen] = useState(false);
   const boxRef = useRef<HTMLDivElement>(null);
 
@@ -36,10 +39,27 @@ export function ModelPicker({
   const current = models.find((m) => m.id === value) ?? models[0];
   if (!current) return null;
 
+  const getModelLabel = (m: SelectableModel) => {
+    if (isEn) {
+      if (m.id === 'auto' || m.kind === 'auto' || m.label === '自动') return 'Auto';
+      if (m.id === 'platform' || m.kind === 'platform' || m.label === '平台默认模型') return 'Platform Default Model';
+    }
+    return m.label;
+  };
+
+  const getModelNote = (m: SelectableModel) => {
+    if (isEn) {
+      if (m.id === 'auto' || m.kind === 'auto') return 'Routes automatically by function; uses default provider if unconfigured';
+      if (m.id === 'platform' || m.kind === 'platform') return 'Platform covered · billed by plan tier, no key needed';
+      if (m.kind === 'byok') return m.note.includes('默认') ? 'Your default channel · Uses your quota' : 'Custom connected · Uses your quota';
+    }
+    return m.note;
+  };
+
   const groups: { title: string; items: SelectableModel[] }[] = [
     { title: '', items: models.filter((m) => m.kind === 'auto') },
-    { title: '自接入（你自己的 Key）', items: models.filter((m) => m.kind === 'byok') },
-    { title: '外接入（平台垫付）', items: models.filter((m) => m.kind === 'platform') },
+    { title: isEn ? 'Custom (Your Key)' : '自接入（你自己的 Key）', items: models.filter((m) => m.kind === 'byok') },
+    { title: isEn ? 'Platform (Covered)' : '外接入（平台垫付）', items: models.filter((m) => m.kind === 'platform') },
   ].filter((g) => g.items.length > 0);
 
   return (
@@ -49,10 +69,10 @@ export function ModelPicker({
         className="btn btn-sm btn-ghost model-picker-trigger"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        title={current.note}
+        title={getModelNote(current)}
       >
         <Icon.cpu size={13} />
-        <span>{current.label}</span>
+        <span>{getModelLabel(current)}</span>
         <Icon.chevron size={12} />
       </button>
       {open && (
@@ -72,12 +92,12 @@ export function ModelPicker({
                   }}
                 >
                   <span className="row" style={{ gap: 6, alignItems: 'center' }}>
-                    <b className="small">{m.label}</b>
+                    <b className="small">{getModelLabel(m)}</b>
                     {m.model && <span className="mono small muted">{m.model}</span>}
-                    {m.overseas && <span className="badge badge-amber">境外</span>}
+                    {m.overseas && <span className="badge badge-amber">{isEn ? 'Overseas' : '境外'}</span>}
                     {m.id === value && <Icon.check size={12} />}
                   </span>
-                  <span className="small muted">{m.note}</span>
+                  <span className="small muted">{getModelNote(m)}</span>
                 </button>
               ))}
             </div>
@@ -86,8 +106,10 @@ export function ModelPicker({
               不知道原来可以填自己的 Key */}
           {!models.some((m) => m.kind === 'byok') && (
             <a href="/settings/keys" className="model-picker-item">
-              <b className="small">+ 接入我自己的模型</b>
-              <span className="small muted">在「接入与密钥」填 Key 后这里就能选</span>
+              <b className="small">{isEn ? '+ Connect My Own Model' : '+ 接入我自己的模型'}</b>
+              <span className="small muted">
+                {isEn ? 'Configure key in "Keys & Credentials" to select here' : '在「接入与密钥」填 Key 后这里就能选'}
+              </span>
             </a>
           )}
         </div>

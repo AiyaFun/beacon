@@ -48,6 +48,8 @@ export async function actSaveBot(data: SaveInput) {
   if (!SUPPORTED.has(provider)) return { ok: false, error: '暂不支持该平台机器人' };
   // 微信（iLink）：凭据只来自扫码（actWechatIlinkStatus 落库），这条通用保存路只改名称/智能体/指令白名单
   if (provider === 'wechat') return saveWechatIlinkMeta(s, data);
+  // 企微智能机器人：凭据只有 BotID + Secret，没有 webhook、没有回调地址
+  if (provider === 'wecom_aibot') return saveWecomAibot(s, data);
 
   // 两种接入模式互斥：选了自建应用就不留 webhook，反之亦然。
   // 不这么收口的话，编辑态会把旧值原样带回来，库里两种并存，推送选路只能靠优先级去赌。
@@ -161,6 +163,58 @@ export async function actSaveBot(data: SaveInput) {
   return { ok: true };
 }
 
+/**
+ * 企微智能机器人（长连接）的保存：BotID 进 inboundKey（wxaibot_<BotID>，全局唯一，同一个机器人不许配两条——
+ * 协议只许一条活连接，两条记录会互相踢），Secret 进 secrets。绑定成员 = 配置它的管理员（体检/派活的身份仍走企微 OA 身份）。
+ */
+async function saveWecomAibot(s: Awaited<ReturnType<typeof getSession>>, data: SaveInput) {
+  const botId = String(data.appId ?? '').trim().replace(/^wxaibot_/, '');
+  const secretIn = String(data.appSecret ?? '').trim();
+  const existing = data.id
+    ? await prisma.botIntegration.findFirst({ where: { id: data.id, workspaceId: s.workspaceId, provider: 'wecom_aibot' } })
+    : null;
+  if (data.id && !existing) return { ok: false, error: '集成不存在' };
+  const prev: BotSecrets = existing ? readBotSecrets(existing.secretsEnc) : {};
+  const aibotId = botId || prev.aibotId;
+  const aibotSecret = secretIn || prev.aibotSecret;
+  if (!aibotId) return { ok: false, error: '填企微智能机器人的 BotID（管理后台「智能机器人 → API 模式 → 长连接」）' };
+  if (!aibotSecret) return { ok: false, error: '填 Secret（与 BotID 同一处复制）' };
+  const inboundKey = `wxaibot_${aibotId}`;
+  const dup = await prisma.botIntegration.findFirst({ where: { inboundKey, ...(existing ? { id: { not: existing.id } } : {}) }, select: { id: true } });
+  if (dup) return { ok: false, error: '这个 BotID 已经接在别的记录上了——同一个机器人只能有一条连接' };
+  let agentTemplateId: string | null | undefined = undefined;
+  if (data.agentTemplateId !== undefined) {
+    const clean = data.agentTemplateId.trim();
+    if (!clean) agentTemplateId = null;
+    else {
+      const tpl = await prisma.workflowTemplate.findFirst({ where: { id: clean, OR: [{ isBuiltin: true }, { tenantId: s.tenantId }] }, select: { id: true } });
+      if (!tpl) return { ok: false, error: '选的智能体不存在或不属于当前工作区' };
+      agentTemplateId = clean;
+    }
+  }
+  const allowCommands = data.allowCommands === undefined ? undefined : [...new Set([...sanitizeAllowCommands(data.allowCommands), 'help'])];
+  const secretsEnc = writeBotSecrets({ ...prev, aibotId, aibotSecret, boundMemberId: prev.boundMemberId ?? s.memberId });
+  const base = {
+    label: String(data.label ?? '').trim() || existing?.label || '企微智能机器人',
+    webhookUrl: null,
+    inboundKey,
+    secretsEnc,
+    pushEvents: toJson([]), // 只答不推
+    ...(allowCommands ? { allowCommands: toJson(allowCommands) } : {}),
+    ...(agentTemplateId !== undefined ? { agentTemplateId } : {}),
+  };
+  if (existing) {
+    await prisma.botIntegration.update({ where: { id: existing.id }, data: { ...base, lastError: null } });
+  } else {
+    await prisma.botIntegration.create({
+      data: { workspaceId: s.workspaceId, provider: 'wecom_aibot', enabled: true, ...base, allowCommands: toJson(allowCommands ?? ['help']) },
+    });
+  }
+  revalidatePath('/settings/keys');
+  revalidatePath('/notifications');
+  return { ok: true };
+}
+
 /** 微信 iLink 机器人的可编辑部分：名称 / 渠道默认智能体 / 指令白名单。凭据与绑定动不了——那是扫码的事。 */
 async function saveWechatIlinkMeta(s: Awaited<ReturnType<typeof getSession>>, data: SaveInput) {
   if (!data.id) return { ok: false, error: '微信机器人要先扫码绑定（在渠道卡点「接入」）' };
@@ -218,7 +272,7 @@ export async function actDiagnoseBot(id: string) {
   const it = await prisma.botIntegration.findFirst({ where: { id, workspaceId: s.workspaceId } });
   if (!it) return { ok: false as const, error: '集成不存在' };
   const { diagnoseBot } = await import('@/lib/bot/diagnose');
-  const r = await diagnoseBot(it.provider, it.webhookUrl, it.inboundKey, readBotSecrets(it.secretsEnc), { lastInboundAt: it.lastInboundAt });
+  const r = await diagnoseBot(it.provider, it.webhookUrl, it.inboundKey, readBotSecrets(it.secretsEnc), { lastInboundAt: it.lastInboundAt, integrationId: it.id });
   return { ok: true as const, ...r };
 }
 

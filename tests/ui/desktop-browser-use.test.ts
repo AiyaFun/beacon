@@ -18,7 +18,8 @@ describe('🔒 桌面壳的「允许浏览器操作」提示', () => {
 
   it('提示走的是与设置页那张卡同一条登记链路（签令牌 → invoke 交给壳），令牌不落页面存储', () => {
     const src = code('components/DesktopBrowserUsePrompt.tsx');
-    expect(src).toMatch(/actIssueIngestToken\(false, \{ agent: 'desktop' \}\)/);
+    // 2026-09-05 起带机器名（审计 #29）：同账号两台电脑的令牌标签才分得开
+    expect(src).toMatch(/actIssueIngestToken\(false, \{ agent: 'desktop', host: status\?\.host \}\)/);
     expect(src).toMatch(/invoke\('register_executor'/);
     expect(src).toMatch(/invoke\('executor_status'/);
     // 令牌绝不进 localStorage/sessionStorage/cookie（只有推迟时间戳可以进 localStorage）

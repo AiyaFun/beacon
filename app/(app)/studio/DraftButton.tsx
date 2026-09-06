@@ -4,6 +4,7 @@ import { useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Icon } from '@/components/icons';
 import { actDraft } from './actions';
+import { useI18n } from '@/lib/i18n';
 
 // 「AI 生成初稿」+ 深度模式开关。
 //
@@ -18,6 +19,7 @@ import { actDraft } from './actions';
 // 流式失败（网关不支持 SSE、反代缓冲、模型不支持流）**自动回落**到 action，
 // 用户最多是少了逐字效果，不会因此起不了稿。
 export function DraftButton({ draftId, topicId }: { draftId: string | null; topicId?: string }) {
+  const { lang } = useI18n();
   const [deep, setDeep] = useState(false);
   const [pending, start] = useTransition();
   const [streaming, setStreaming] = useState(false);
@@ -139,14 +141,20 @@ export function DraftButton({ draftId, topicId }: { draftId: string | null; topi
         <label
           className="row small muted"
           style={{ gap: 4, alignItems: 'center', cursor: 'pointer', whiteSpace: 'nowrap' }}
-          title="两段式生成：先只想清楚说什么，再照着你自己的原句样本写成稿。去 AI 味效果最好，代价是两次调用。"
+          title={lang === 'en' ? 'Two-stage drafting: structure key points first, then write matching your style. Minimizes AI cliches at the cost of two API calls.' : '两段式生成：先只想清楚说什么，再照着你自己的原句样本写成稿。去 AI 味效果最好，代价是两次调用。'}
         >
           <input type="checkbox" checked={deep} onChange={(e) => setDeep(e.target.checked)} disabled={busy} />
-          深度模式<span style={{ fontSize: 11 }}>（2 次额度）</span>
+          {lang === 'en' ? 'Deep Mode' : '深度模式'}<span style={{ fontSize: 11 }}>{lang === 'en' ? ' (2 credits)' : '（2 次额度）'}</span>
         </label>
         <button className="btn btn-primary btn-sm" onClick={run} disabled={busy}>
           <Icon.sparkles size={14} />
-          {busy ? (deep ? '深度起草中（两步）…' : streaming ? '正在写…' : 'AI 起草中…') : 'AI 生成初稿'}
+          {busy
+            ? (deep
+                ? (lang === 'en' ? 'Deep drafting (2 steps)…' : '深度起草中（两步）…')
+                : streaming
+                  ? (lang === 'en' ? 'Writing…' : '正在写…')
+                  : (lang === 'en' ? 'Drafting…' : 'AI 起草中…'))
+            : (lang === 'en' ? 'AI Draft' : 'AI 生成初稿')}
         </button>
         {msg && <span className="small" style={{ color: 'var(--green)' }}>{msg}</span>}
         {err && <span className="small" style={{ color: 'var(--red)' }}>{err}</span>}

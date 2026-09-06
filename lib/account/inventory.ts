@@ -81,6 +81,7 @@ export async function dataInventory(scope: TenantScope): Promise<InventoryRow[]>
     taskPresets,
     coverStyles,
     browserTasks,
+    agentLedgers,
   ] = await Promise.all([
     prisma.member.count({ where: { tenantId } }),
     prisma.creatorAccount.count({ where: byWorkspace }),
@@ -121,6 +122,7 @@ export async function dataInventory(scope: TenantScope): Promise<InventoryRow[]>
     prisma.taskPreset.count({ where: byWorkspace }),
     prisma.coverStylePreset.count({ where: byWorkspace }),
     prisma.browserTask.count({ where: byWorkspace }),
+    prisma.agentLedger.count({ where: { ...byWorkspace, kind: 'kv' } }),
   ]);
 
   const rows: InventoryRow[] = [
@@ -160,6 +162,7 @@ export async function dataInventory(scope: TenantScope): Promise<InventoryRow[]>
     { key: 'taskPresets', label: '一键任务卡', count: taskPresets },
     { key: 'coverStyles', label: '封面风格库', count: coverStyles },
     { key: 'browserTasks', label: '派给插件的任务', count: browserTasks },
+    { key: 'agentLedgers', label: '智能体台账（bot 自己记的盯单与进度）', count: agentLedgers },
     { key: 'orders', label: '支付订单', count: orders },
     { key: 'llmLogs', label: 'AI 调用日志', count: llmLogs },
   ];
