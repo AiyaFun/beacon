@@ -183,6 +183,54 @@ const ROLE_BOTS: BuiltinWorkflow[] = [
 
 export const ROLE_BOT_SLUGS = ROLE_BOTS.map((b) => b.slug);
 
+// ── 固定角色接力（2026-09-11 P2）：三条定死顺序的接力，不是任意画布 ──────────────
+//
+// 每一跳：派哪个职能 bot、要交出什么、最多烧多少。上一跳没交出合格产物下一跳不启动。
+// 「发布」刻意不进任何接力：建发布计划是签合约类动作，无人值守也会停下来等人——
+// 接力在后台跑没人在场，把它排进去只会在第一跳就停住。真正发出去永远要人点。
+const HANDOFFS: BuiltinWorkflow[] = [
+  {
+    slug: 'relay-intel-topic',
+    name: '情报 → 选题接力',
+    description: '情报员先看热榜和我盯的同行，整理成一段情报简报；选题官接着按简报给出 6 条选题和理由。',
+    emoji: '🔭➡️💡',
+    category: 'relay',
+    persona: '想让「先看看外面发生了什么，再决定写什么」一次跑完时派我。用户说「先摸情报再出选题」「按最近热点给我选题」都算。我是两跳接力：情报员 → 选题官。',
+    steps: [
+      { kind: 'handoff', bot: 'bot-scout', goal: '看一遍热榜和我盯的同行最近 3 天发了什么，整理成一段情报简报：3–5 条值得关注的动向，每条一句话说清为什么值得看。只读不写。', deliverable: 'answer', maxCalls: 12, timeoutMinutes: 15 },
+      { kind: 'handoff', bot: 'bot-topic', goal: '根据上一跳的情报简报，结合我的人设，给出 6 条选题候选（用 propose 类工具登记进选题库），每条写明角度与理由。', deliverable: 'topic', maxCalls: 12, timeoutMinutes: 15 },
+    ],
+  },
+  {
+    slug: 'relay-topic-draft-review',
+    name: '选题 → 写稿 → 审校接力',
+    description: '选题官定一条最值得写的题；写手按它起稿；合规官过一遍红线并给出修改意见。三跳都留痕，改稿由人决定。',
+    emoji: '💡➡️✍️➡️🛡️',
+    category: 'relay',
+    persona: '要「从定题到有一篇过了红线的初稿」一口气跑完时派我。用户说「帮我出一篇稿到审校」「选个题写好再查一遍」都算。我是三跳接力：选题官 → 写手 → 合规官；不发布。',
+    requires: '写手起稿要有人设（去「记忆与人设」页写一份），否则稿子没有你的味道。',
+    steps: [
+      { kind: 'handoff', bot: 'bot-topic', goal: '从现有选题里挑一条最值得现在写的（没有就先给出 3 条并登记），说明为什么是它、切入角是什么。', deliverable: 'topic', maxCalls: 10, timeoutMinutes: 15 },
+      { kind: 'handoff', bot: 'bot-writer', goal: '按上一跳定下的选题和角度起一篇初稿（建成草稿）。用我的素材和口头禅，不要大模型套话。', deliverable: 'draft', maxCalls: 15, timeoutMinutes: 20 },
+      { kind: 'handoff', bot: 'bot-compliance', goal: '读上一跳的草稿，按目标平台查一遍红线，给出逐条修改意见（只给意见，不改稿、不发布）。', deliverable: 'answer', maxCalls: 8, timeoutMinutes: 10 },
+    ],
+  },
+  {
+    slug: 'relay-data-retro-topic',
+    name: '数据 → 复盘 → 下周选题接力',
+    description: '复盘官先看最近 7 天数据说清哪条好哪条差、为什么；再写成一段复盘并记住结论；选题官按复盘给出下周选题。',
+    emoji: '📈➡️📝➡️💡',
+    category: 'relay',
+    persona: '发完一批内容想「看数据、写复盘、顺便定下周写什么」时派我。用户说「给我做个周复盘顺便定下周选题」都算。我是三跳接力：复盘官 → 复盘官 → 选题官；不采集、不发布。',
+    requires: '要有近 7 天的作品数据（自有后台回填过，或登记过发布）。',
+    steps: [
+      { kind: 'handoff', bot: 'bot-analyst', goal: '看最近 7 天我的作品数据：哪 3 条表现最好、哪 3 条最差，各给一句原因判断。只分析，不采集。', deliverable: 'answer', maxCalls: 10, timeoutMinutes: 15 },
+      { kind: 'handoff', bot: 'bot-analyst', goal: '把上一跳的分析写成一段 300 字以内的周复盘，提炼 2–3 条可以记住的结论（用记忆工具记下来）。', deliverable: 'answer', maxCalls: 8, timeoutMinutes: 10 },
+      { kind: 'handoff', bot: 'bot-topic', goal: '按上一跳的复盘结论，给出下周 5 条选题候选并登记，每条说明它对应复盘里的哪条结论。', deliverable: 'topic', maxCalls: 12, timeoutMinutes: 15 },
+    ],
+  },
+];
+
 export const BUILTIN_WORKFLOWS: BuiltinWorkflow[] = [
   {
     slug: 'daily-xhs',
@@ -230,5 +278,6 @@ export const BUILTIN_WORKFLOWS: BuiltinWorkflow[] = [
       { kind: 'illustration', count: 4 },
     ],
   },
+  ...HANDOFFS,
   ...ROLE_BOTS,
 ];

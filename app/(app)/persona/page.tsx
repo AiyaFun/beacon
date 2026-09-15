@@ -40,8 +40,15 @@ export default async function PersonaPage({
   const sp = await searchParams;
   const lang = await getServerLang();
   const dict = getDictionary(lang);
-  const [account, memories, allAccounts] = await Promise.all([
-    s.accountId ? prisma.creatorAccount.findUnique({ where: { id: s.accountId } }) : null,
+  // ── 本页取数：一次并发 ──
+  //
+  // 【为什么合并】原来是四段首尾相接：①账号/记忆/全部账号 → ②注入明细 → ③人设版本 → ④四项统计。
+  // 逐条核过，②③④ 只吃 s.accountId / s.workspaceId，**没有一条要等①的结果**。
+  // 生产库跨区、一跳 32ms，白等三跳 ≈ 96ms。带条件的分支用
+  // `s.accountId ? 查询 : Promise.resolve(默认值)` 原样保留空账号时的取值。
+  const weekAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000);
+  const [account, memories, allAccounts, injection, versionRaw, stats] = await Promise.all([
+    s.accountId ? prisma.creatorAccount.findUnique({ where: { id: s.accountId } }) : Promise.resolve(null),
     // 记忆按账号隔离：当前账号的记忆 + 工作区级共享记忆（accountId 为空）
     prisma.memoryEntry.findMany({
       where: {
@@ -55,49 +62,46 @@ export default async function PersonaPage({
       orderBy: { createdAt: 'asc' },
       include: { _count: { select: { drafts: true, publishRecords: true } } },
     }),
-  ]);
-
-  const persona = readPersona(account?.personaCard ?? '{}');
-  const completeness = personaCompleteness(persona);
-
-  // 注入明细：哪些条目**真的**在每次生成里被带上。「已生效」≠「在用」——active 超过注入位时
-  // 第 13 条起根本没进提示；被守卫（像注入的句子）跳过的也不进。页面必须把这三态分开说。
-  const injection = await recallForInjectionDetailed(s.workspaceId, s.accountId || undefined);
-  const injectedIds = new Set(injection.injected.map((e) => e.id));
-  const skippedReason = new Map(injection.skipped.map((x) => [x.id, x.reason]));
-
-  // 人设版本历史：PersonaVersion 此前只写不读，快照白存了一堆、回滚功能不存在。
-  const versionRows: VersionRow[] = s.accountId
-    ? (
-        await prisma.personaVersion.findMany({
+    // 注入明细：哪些条目**真的**在每次生成里被带上。「已生效」≠「在用」——active 超过注入位时
+    // 第 13 条起根本没进提示；被守卫（像注入的句子）跳过的也不进。页面必须把这三态分开说。
+    recallForInjectionDetailed(s.workspaceId, s.accountId || undefined),
+    // 人设版本历史：PersonaVersion 此前只写不读，快照白存了一堆、回滚功能不存在。
+    s.accountId
+      ? prisma.personaVersion.findMany({
           where: { accountId: s.accountId },
           orderBy: { version: 'desc' },
           take: 20,
         })
-      ).map((v) => {
-        const snap = readPersona(v.snapshot);
-        return {
-          id: v.id,
-          version: v.version,
-          editedBy: v.editedBy,
-          createdAt: v.createdAt.toISOString(),
-          identity: snap.identity ?? '',
-          audience: snap.audience ?? '',
-        };
-      })
-    : [];
-  const fingerprint = readFingerprint(account?.styleFingerprint ?? '{}');
+      : Promise.resolve([]),
+    // F3-9 账号成长小结（规则聚合，零 LLM）：行为统计 + 生效偏好 + 完善度
+    s.accountId
+      ? Promise.all([
+          prisma.topicIdea.findMany({ where: { accountId: s.accountId }, select: { state: true } }),
+          prisma.draft.count({ where: { accountId: s.accountId } }),
+          prisma.publishRecord.count({ where: { accountId: s.accountId } }),
+          prisma.material.count({ where: { accountId: s.accountId } }),
+        ])
+      : Promise.resolve([[] as { state: string }[], 0, 0, 0] as const),
+  ]);
 
-  // F3-9 账号成长小结（规则聚合，零 LLM）：行为统计 + 生效偏好 + 完善度
-  const weekAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000);
-  const [topicRows, draftCount, publishCount, materialCount] = s.accountId
-    ? await Promise.all([
-        prisma.topicIdea.findMany({ where: { accountId: s.accountId }, select: { state: true } }),
-        prisma.draft.count({ where: { accountId: s.accountId } }),
-        prisma.publishRecord.count({ where: { accountId: s.accountId } }),
-        prisma.material.count({ where: { accountId: s.accountId } }),
-      ])
-    : [[] as { state: string }[], 0, 0, 0];
+  const persona = readPersona(account?.personaCard ?? '{}');
+  const completeness = personaCompleteness(persona);
+  const injectedIds = new Set(injection.injected.map((e) => e.id));
+  const skippedReason = new Map(injection.skipped.map((x) => [x.id, x.reason]));
+  // 快照转展示行是纯 JS，搬到 await 之后做
+  const versionRows: VersionRow[] = versionRaw.map((v) => {
+    const snap = readPersona(v.snapshot);
+    return {
+      id: v.id,
+      version: v.version,
+      editedBy: v.editedBy,
+      createdAt: v.createdAt.toISOString(),
+      identity: snap.identity ?? '',
+      audience: snap.audience ?? '',
+    };
+  });
+  const fingerprint = readFingerprint(account?.styleFingerprint ?? '{}');
+  const [topicRows, draftCount, publishCount, materialCount] = stats;
   const topicAccepted = topicRows.filter((t) => ['accepted', 'drafting', 'published'].includes(t.state)).length;
   const topicRejected = topicRows.filter((t) => t.state === 'rejected').length;
   const activePrefs = memories.filter((m) => m.active && (m.type === 'preference' || m.type === 'performance'));
@@ -296,13 +300,13 @@ export default async function PersonaPage({
         sub={lang === 'en' ? `${memThisWeek} new memories learned this week · Rule-based aggregation, zero AI cost` : `本周系统新记住 ${memThisWeek} 件事 · 规则聚合，不烧 AI 额度`}
         style={{ marginBottom: 16 }}
       >
-        <div className="grid grid-4" style={{ gap: 12, marginBottom: 12 }}>
+        <div className="grid-stats">
           <Stat label={lang === 'en' ? 'Persona Completeness' : '人设完善度'} value={`${completeness}%`} foot={completeness >= 75 ? (lang === 'en' ? 'Qualified' : '已达标') : (lang === 'en' ? 'Keep refining' : '继续完善')} />
           <Stat label={lang === 'en' ? 'In-Use Memories' : '在用记忆'} value={injection.injected.length} foot={lang === 'en' ? `${injection.limit} slots · ${activeCount} active` : `注入位 ${injection.limit} · 已生效 ${activeCount}`} />
           <Stat label={lang === 'en' ? 'Long-term Memory' : '长期记忆'} value={memories.length} foot={lang === 'en' ? `+${memThisWeek} this week` : `本周 +${memThisWeek}`} />
           <Stat label={lang === 'en' ? 'Material Library' : '素材库'} value={materialCount} foot={lang === 'en' ? 'Distinctive materials' : '差异化原料'} href="/material" />
         </div>
-        <div className="grid grid-4" style={{ gap: 12, marginBottom: 14 }}>
+        <div className="grid-stats">
           <Stat label={lang === 'en' ? 'Adopted Topics' : '采纳选题'} value={topicAccepted} foot={lang === 'en' ? 'Drafting / Published' : '含创作中/已发布'} href="/topics" />
           <Stat label={lang === 'en' ? 'Rejected Topics' : '拒绝选题'} value={topicRejected} foot={lang === 'en' ? 'Taste negative feedback' : '口味负反馈'} href="/topics" />
           <Stat label={lang === 'en' ? 'Drafts' : '草稿'} value={draftCount} foot={lang === 'en' ? 'Creative output' : '创作产出'} href="/studio" />

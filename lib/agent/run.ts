@@ -4,6 +4,8 @@ import { parseJson, toJson } from '../json';
 import { llmComplete } from '../llm/gateway';
 import { readPersona, personaPromptBlock } from '../persona';
 import { accountsContextBlock } from './context-accounts';
+import { lessonsBlock } from './lessons';
+import { aiToolsForRun } from './ai-tools/store';
 import { buildMemoryContext } from '../memory/core';
 import { can } from '../rbac';
 import { createLogger } from '../logger';
@@ -23,6 +25,9 @@ import { decideQueue, promoteQueued, queuePositionOf } from './queue';
 import { budgetForTenant, callsUsed, toolCapReason } from './budget';
 import { drainNotes, appendNote, pendingNoteCount } from './notes';
 import { recordArtifacts, listArtifacts, type ArtifactView } from './artifacts';
+import { runEconomics } from './economics';
+import { loadKnowledgeScope, knowledgeBlockFor, recordCitations, listCitations, type CitationView } from './knowledge';
+import { providerLabel } from '../llm/selectable';
 
 const log = createLogger({ module: 'agent' });
 
@@ -141,7 +146,29 @@ export type AgentTurn = {
    * 单次成本是短调用的十倍量级。只报「调了 N 次」会让用户以为
    * 「10 次的任务只有 1 次的十倍贵」——实际差得远。
    */
-  cost?: { calls: number; tokens: number };
+  cost?: {
+    calls: number;
+    tokens: number;
+    /** 估算美元（lib/llm/pricing 口径） */
+    costUsd: number;
+    /** 落到 Mock 的次数——这些产物是编的，不能当交付 */
+    mockedCalls: number;
+    /** 接了真模型但失败被兜底的次数 */
+    degradedCalls: number;
+    /** 这次最多能烧多少次调用，以及用掉几成（预算数的是次数） */
+    budget: number;
+    budgetUsedPct: number | null;
+    toolCalls: number;
+    rejected: number;
+    /** 钱是谁出的（真实调用次数） */
+    bySource: { platform: number; byok: number; mock: number; unknown: number };
+  };
+  /** 哪个自主智能体在跑（null = 通用助手）。界面据此一键跳到它的档案 */
+  agent?: { id: string; name: string; emoji: string };
+  /** 这次执行引用了哪些源对象（只有有知识范围的员工才记） */
+  citations?: CitationView[];
+  /** 这次走的模型渠道（给人看的名字；没指定就是「自动」） */
+  model?: string;
 };
 
 /** 跟着状态一起写的那些列。刻意列全而不用 any：漏写一列是静默的，写错一列 tsc 会说。 */
@@ -227,6 +254,9 @@ async function afterTransition(runId: string, from: readonly AgentRunStatus[], t
   if (TERMINAL.includes(to)) {
     const { wakeParentIfChild } = await import('./child-run');
     await wakeParentIfChild(runId).catch(() => {});
+    // 接力：有流水线持久等着我（WorkflowRun.waitingOn = run:<我>）就叫它接着跑
+    const { resumeWorkflowAfterChild } = await import('../workflow/resume');
+    await resumeWorkflowAfterChild(runId).catch(() => {});
 
     // 定时派出来的：把成败回写到那条计划上（连败三次自动停用靠它）。
     // **同样挂在这里而不是各个终态写点**——异步派发那一刻拿不到结局，
@@ -275,7 +305,7 @@ function writeConfirmLine(authMode: string): string {
   return '- 写操作（建草稿、加对标、采数据、生成选题）会先弹给用户确认，用户同意后才真正执行。';
 }
 
-function systemPrompt(personaBlock: string, memoryBlock: string, toolNames: string[], authMode: string, accountsBlock = ''): string {
+function systemPrompt(personaBlock: string, memoryBlock: string, toolNames: string[], authMode: string, accountsBlock = '', lessonsBlock = ''): string {
   return [
     '你是「烽火台」内容创作 SaaS 里的 AI 助手，除了回答问题，你还能**直接操作这个系统**。',
     '',
@@ -336,21 +366,35 @@ function systemPrompt(personaBlock: string, memoryBlock: string, toolNames: stri
     '  想让用户看进度就用中文说明，**不要把工具名（如 list_browser_tasks）当命令写给他看**——那是给你调的，不是给他敲的。',
     '- 手上的数据够回答问题时就直接回答，不要每次都派活——那只会让用户等一个他不需要的采集。',
     '',
+    // 用户的原话：「我希望每一次对话都可以驱动软件上的每次运行」「做不到的时候直接优化能力」。
+    // 没有这一段时模型遇到缺口只会说「抱歉我没有这个工具」——那句话对谁都没用。
+    '做不到的时候（没有对应的工具）：',
+    '- 先想现有工具能不能拼出来（比如「加我的账号」就是 add_account，「改账号」是 update_account，先 list_accounts 看一眼）。',
+    '- 能靠配方 / 技能当场解决的（create_recipe、run_skill）就直接做。',
+    '- 都不行，调 report_capability_gap 把缺口记下来：用户想做什么、缺哪一步、建议什么工具和参数、页面上现在在哪手动做。',
+    '  记完**仍然要**告诉用户：已记下、开发会补上，以及现在的手动路径。绝不要只回一句抱歉就停。',
+    '- 能用现有工具**拼**出来、而且这种拼法以后还会反复用的，用 author_tool 给自己起草一个新工具（不支持的版本它会如实说不提供）。',
+    '  起草只是草稿，这一次用不上；告诉用户到技能中心看代码并启用。',
+    '',
     personaBlock,
     // 账号清单 + 插件状态：用户说「我的 X 账号」时它得知道那是哪一条、能不能派（2026-09-03）
     accountsBlock ? '\n' + accountsBlock : '',
     memoryBlock ? '\n' + memoryBlock : '',
+    // 教训放最后：它是对上面所有规则的「本地修正」，离模型开口最近
+    lessonsBlock ? '\n' + lessonsBlock : '',
   ].join('\n');
 }
 
-async function loadContext(ctx: ToolContext): Promise<{ persona: string; memory: string; accounts: string }> {
+async function loadContext(ctx: ToolContext): Promise<{ persona: string; memory: string; accounts: string; lessons: string }> {
   const account = await prisma.creatorAccount.findUnique({ where: { id: ctx.accountId } });
   const persona = readPersona(account?.personaCard ?? '{}');
-  const [memory, accounts] = await Promise.all([
+  const [memory, accounts, lessons] = await Promise.all([
     buildMemoryContext(ctx.workspaceId, ctx.accountId).catch(() => ''),
     accountsContextBlock({ workspaceId: ctx.workspaceId, accountId: ctx.accountId }),
+    // 偏好回路：这个工作区最近的拒绝/打回/失败/追问算成几句教训带上（lib/agent/lessons.ts）
+    lessonsBlock(ctx.workspaceId),
   ]);
-  return { persona: personaPromptBlock(persona), memory, accounts };
+  return { persona: personaPromptBlock(persona), memory, accounts, lessons };
 }
 
 type RunRow = {
@@ -366,6 +410,7 @@ type RunRow = {
   rounds: number;
   callBudget: number;
   toolAllowlist: string;
+  providerId: string | null;
 };
 
 /**
@@ -451,6 +496,12 @@ async function viewOf(runId: string, viewerId?: string): Promise<AgentTurn> {
   const notesPending = await pendingNoteCount(runId);
   const artifacts = await listArtifacts(runId);
   const cost = await runCost(runId);
+  const agentTpl = run.agentTemplateId
+    ? await prisma.workflowTemplate.findUnique({ where: { id: run.agentTemplateId }, select: { id: true, name: true, emoji: true } })
+    : null;
+  const citations = run.agentTemplateId ? await listCitations(runId).catch(() => []) : [];
+  const tenantForLabel = run.providerId ? await prisma.workspace.findUnique({ where: { id: run.workspaceId }, select: { tenantId: true } }) : null;
+  const modelLabel = run.providerId && tenantForLabel ? await providerLabel(tenantForLabel.tenantId, run.providerId).catch(() => undefined) : undefined;
   const pendingCall = run.pending ? parseJson<ToolCall | null>(run.pending, null) : null;
   const pendingTool = pendingCall ? toolByName(pendingCall.name) : null;
   // pending 这一列身兼两职（等你点头 / 等浏览器回来），但界面上只有前者该出确认卡。
@@ -466,8 +517,13 @@ async function viewOf(runId: string, viewerId?: string): Promise<AgentTurn> {
     waitingFor: waitingText(run.status as AgentRunStatus, run.quotaResumeAt, queuePosition, run.waitingOn),
     pendingNotes: notesPending || undefined,
     artifacts: artifacts.length ? artifacts : undefined,
-    cost: cost.calls > 0 ? cost : undefined,
-    steps: run.agentSteps.map((s) => ({
+    // 有 Mock 调用也要给：那正是「产物是编的」需要被看见的时候
+    cost: cost.calls > 0 || cost.mockedCalls > 0 ? cost : undefined,
+    agent: agentTpl ?? undefined,
+    citations: citations.length ? citations : undefined,
+    model: modelLabel,
+    // 引用（kind=citation, seq=0）不是执行步骤：混进来会重复出现，且 seq 全是 0 撞 React key
+    steps: run.agentSteps.filter((s) => s.kind !== 'citation').map((s) => ({
       seq: s.seq,
       kind: s.kind,
       tool: s.tool,
@@ -507,7 +563,7 @@ export type StartRunOptions = {
    * 谁发起的。api 那种在下面被**强制**回 confirm_each，见注释。
    * bot = 群机器人里派的（/执行、自然语言）：与页面同权，缺省直接跑完。
    */
-  origin?: 'manual' | 'preset' | 'schedule' | 'api' | 'bot';
+  origin?: 'manual' | 'preset' | 'schedule' | 'api' | 'bot' | 'workflow';
   /** 授权档。不传按 DEFAULT_AUTH_MODE（直接跑完）；对外 API 例外，见 resolveAuth。 */
   authMode?: AuthMode;
   /** 预授权勾定的工具名。**只在 authMode=preauthorized 时有意义**。 */
@@ -529,6 +585,8 @@ export type StartRunOptions = {
    * 不传 = 用户有权用的全都能用。
    */
   toolAllowlist?: readonly string[];
+  /** 走哪条模型渠道（已由 normalizeProviderChoice 归一；null/undefined = 按功能路由） */
+  providerId?: string | null;
 };
 
 export async function startAgentRun(ctx: ToolContext, goal: string, opts: StartRunOptions = {}): Promise<AgentTurn> {
@@ -543,7 +601,11 @@ export async function startAgentRun(ctx: ToolContext, goal: string, opts: StartR
   // 拼错了就是让模型替我们对用户撒谎（预授权的运行里说「这一步我会先问你」然后直接做了）。
   const auth = resolveAuth(opts);
 
-  const { persona, memory, accounts } = await loadContext(ctx);
+  const { persona, memory: memoryRaw, accounts, lessons } = await loadContext(ctx);
+  // 知识范围（2026-09-11）：有绑定的员工只读绑定的资料；记忆不在范围内时系统提示里也不带记忆块
+  const knowledge = await loadKnowledgeScope(ctx.workspaceId, opts.agentTemplateId);
+  const memory = knowledge && !knowledge.memory ? '' : memoryRaw;
+  const knowledgeBlock = await knowledgeBlockFor(ctx.workspaceId, knowledge);
   // 职能 bot 专属的两段（技能「什么时候用」+ 自己的台账）：只看模板，四个派发入口都不用改
   const bot = await loadBotIdentity(opts.agentTemplateId);
   const botBlocks = await botContextBlocks(ctx.tenantId, ctx.workspaceId, bot);
@@ -551,10 +613,11 @@ export async function startAgentRun(ctx: ToolContext, goal: string, opts: StartR
     {
       role: 'system',
       content:
-        systemPrompt(persona, memory, tools.map((t) => `${t.name}(${t.label})`), auth.authMode, accounts)
+        systemPrompt(persona, memory, tools.map((t) => `${t.name}(${t.label})`), auth.authMode, accounts, lessons)
         // 智能体的人设拼在最后：它是对通用助手的**补充**，不是替换——
         // 替换掉的话那几条硬规矩（不许编数据、Mock 不许假装执行）就随人设一起丢了
         + (opts.agentSystemPrompt ? `\n\n【你这次的角色】\n${opts.agentSystemPrompt}` : '')
+        + (knowledgeBlock ? `\n\n${knowledgeBlock}` : '')
         + botBlocks,
     },
     { role: 'user', content: trimmed },
@@ -580,6 +643,7 @@ export async function startAgentRun(ctx: ToolContext, goal: string, opts: StartR
       scheduledAgentId: opts.scheduledAgentId ?? null,
       botChatRef: opts.botChatRef ?? null,
       toolAllowlist: toJson([...(opts.toolAllowlist ?? [])]),
+      providerId: opts.providerId ?? null,
     },
   });
   // 排队的不踢：它要等前面的让位（transition 里的提拔会来叫它）。
@@ -1006,7 +1070,7 @@ type CallOutcome = {
 
 /** 真正执行一次工具调用。权限与开关在这里**再查一次**——列表给了什么不算数，执行时的判定才算。 */
 async function executeCall(ctx: ToolContext, call: ToolCall): Promise<CallOutcome> {
-  const tool = toolByName(call.name);
+  const tool = await resolveTool(ctx, call.name);
   if (!tool) {
     return { message: toJson({ ok: false, error: `没有名为 ${call.name} 的工具` }), ok: false };
   }
@@ -1037,6 +1101,8 @@ async function executeCall(ctx: ToolContext, call: ToolCall): Promise<CallOutcom
     // 产物登记挂在**这一个咽喉**上：所有工具执行都过 executeCall，
     // 挂在这里就不会出现「新加的工具忘了登记产物」——它只要在 ToolResult 里报，就一定被记下
     if (result.artifacts?.length && ctx.runId) await recordArtifacts(ctx.runId, result.artifacts);
+    // 引用只在有知识范围的执行里记：通用助手读整库，逐条记引用只是噪音
+    if (result.citations?.length && ctx.runId && ctx.knowledge) await recordCitations(ctx.runId, result.citations);
     return { message: resultForModel(result), ok: result.ok, waitFor: result.waitFor };
   } catch (err) {
     // 工具自己炸了不能把整次运行带走：如实回灌错误，让模型换个做法或告诉用户。
@@ -1144,6 +1210,8 @@ async function contextForRun(runId: string): Promise<ToolContext | null> {
     // 带上自己的 id：工具报出来的产物要挂到这次执行头上
     runId: run.id,
     ...(tpl?.slug ? { botSlug: tpl.slug } : {}),
+    // 每次载入现算：绑定被禁用/删除，正在跑的这次下一步就不再读它
+    knowledge: await loadKnowledgeScope(run.workspaceId, run.agentTemplateId),
   };
 }
 
@@ -1226,6 +1294,8 @@ async function loop(ctx: ToolContext, runId: string): Promise<void> {
       // 改了会让只配 chat 路由的存量租户静默换渠道甚至落 Mock（执行器里 Mock 是硬停）。
       // preferFn 只增不减：配了就用，没配完全照旧。
       preferFn: 'agent',
+      // 按任务选模型（2026-09-11）：这次执行指定了渠道就每一轮都走它，没指定完全照旧
+      ...(run.providerId ? { providerId: run.providerId } : {}),
       temperature: 0.3,
       // 收尾轮不带工具，模型只能说话
       ...(wrapUp ? {} : { tools }),
@@ -1317,7 +1387,26 @@ async function loop(ctx: ToolContext, runId: string): Promise<void> {
       // 上面那道闸只认「写成正文的工具调用」，这种连调用形状都没有的纯编造它看不见。
       // 判据与处置见 looksLikeFabricatedCompletion；叫不回来就判 failed——没做就是没做，
       // 一句「示例数据」标注挡不住用户把 10,000 当成真播放量。
-      const fab = looksLikeFabricatedCompletion(answer, tools);
+      // 【它说做不到，却没记缺口】只打回一次；再不记就照常收工（如实说做不到不是谎报，不判失败）
+      if (looksLikeGaveUp(answer, tools, messages)) {
+        const gapNudged = messages.filter((m) => m.role === 'user' && typeof m.content === 'string'
+          && m.content.startsWith(GAP_NUDGE)).length;
+        if (gapNudged < MAX_GAP_NUDGES) {
+          await appendStep(runId, ++seq, { kind: 'tool_result', tool: '', args: toJson({}), ok: false, result: GAP_STEP_NOTE });
+          messages.push(
+            { role: 'assistant', content: answer },
+            { role: 'user', content: GAP_NUDGE + gapNudgeText(tools) },
+          );
+          await patchRun(runId, 'running', { messages: capMessages(messages), steps: seq, rounds: run.rounds + 1 });
+          continue;
+        }
+      }
+
+      // 【只判零工具调用的最终回答】这道闸的三种形状（见函数注释）都是「一个工具都没调却宣称做完了」。
+      // 2026-09-10 真机：模型先真调了自写工具拿到数据，收尾时提了一句「示例」，被当成编数据打回——
+      // 打回之后它反而改口说「我没有调用任何工具」，把真结果否认掉了。调过工具的运行不走这道闸。
+      const calledAnyTool = messages.some((m) => m.role === 'assistant' && (m.toolCalls?.length ?? 0) > 0);
+      const fab = calledAnyTool ? null : looksLikeFabricatedCompletion(answer, tools);
       if (fab) {
         const factNudged = messages.filter((m) => m.role === 'user' && typeof m.content === 'string'
           && m.content.startsWith(FACT_NUDGE)).length;
@@ -1349,6 +1438,10 @@ async function loop(ctx: ToolContext, runId: string): Promise<void> {
         steps: seq,
         messages: capMessages([...messages, { role: 'assistant', content: answer }]),
       });
+      // 技能回路：跑完立刻看这种做法是不是第三次了，是就提醒「存成技能」（refId+once，不会刷屏）。
+      // 此前只在每日 05:30 的 optimize_memory 里算一次，用户第二天才收到，早忘了是哪件事。
+      // 动态 import：distill.ts 反过来 import 本文件（replayProcedure → startAgentRun），静态引会成环。
+      void import('../skill/distill').then((m) => m.suggestProcedures(run.workspaceId)).catch(() => {});
       return;
     }
 
@@ -1359,7 +1452,7 @@ async function loop(ctx: ToolContext, runId: string): Promise<void> {
     let paused = false;
     for (let i = 0; i < calls.length; i++) {
       const call = calls[i];
-      const tool = toolByName(call.name);
+      const tool = await resolveTool(ctx, call.name);
       await appendStep(runId, ++seq, { kind: 'tool_call', tool: call.name, args: parseJson(call.arguments, {}) });
 
       // 单个工具在这次任务里的次数上限（run_advisor 一次就是十几次模型调用，
@@ -1453,15 +1546,13 @@ async function loop(ctx: ToolContext, runId: string): Promise<void> {
 }
 
 /** 这次执行烧了多少：真实调用次数与 token 总量（Mock 不算，它不花钱）。 */
-async function runCost(runId: string): Promise<{ calls: number; tokens: number }> {
-  const agg = await prisma.llmCallLog.aggregate({
-    where: { runId, mocked: false },
-    _count: { _all: true },
-    _sum: { promptTokens: true, completionTokens: true },
-  });
+async function runCost(runId: string): Promise<NonNullable<AgentTurn['cost']>> {
+  // 账从 lib/agent/economics.ts 一处算：账本 + 步骤表 + 预算，界面上的数字都能回到原始行核对
+  const e = await runEconomics(runId);
+  if (!e) return { calls: 0, tokens: 0, costUsd: 0, mockedCalls: 0, degradedCalls: 0, budget: 0, budgetUsedPct: null, toolCalls: 0, rejected: 0, bySource: { platform: 0, byok: 0, mock: 0, unknown: 0 } };
   return {
-    calls: agg._count._all,
-    tokens: (agg._sum.promptTokens ?? 0) + (agg._sum.completionTokens ?? 0),
+    calls: e.calls, tokens: e.tokens, costUsd: e.costUsd, mockedCalls: e.mockedCalls, degradedCalls: e.degradedCalls,
+    budget: e.budget, budgetUsedPct: e.budgetUsedPct, toolCalls: e.toolCalls, rejected: e.rejected, bySource: e.bySource,
   };
 }
 
@@ -1473,8 +1564,17 @@ async function runCost(runId: string): Promise<{ calls: number; tokens: number }
  *   ① 角色的 RBAC 权限     ② 工作区关掉的     ③ 这次执行的白名单（自主智能体配的）
  * 白名单**只能收不能放**：它先与①②求交集，配了个用户没权限的工具也拿不到。
  */
+/** 按名字找工具：先静态注册表，找不到再看这个工作区启用了的 AI 自写工具。 */
+async function resolveTool(ctx: ToolContext, name: string): Promise<AgentTool | null> {
+  const t = toolByName(name);
+  if (t) return t;
+  const ai = await aiToolsForRun(ctx);
+  return ai.find((x) => x.name === name) ?? null;
+}
+
 async function toolsForRun(ctx: ToolContext, allowlist?: readonly string[]): Promise<AgentTool[]> {
-  const tools = toolsFor(ctx.role, await offTools(ctx.workspaceId));
+  // 静态注册表 + 这个工作区里人启用过的 AI 自写工具（形态不支持时后者恒空）
+  const tools = [...toolsFor(ctx.role, await offTools(ctx.workspaceId)), ...(await aiToolsForRun(ctx))];
   if (!allowlist || allowlist.length === 0) return tools;
   const allow = new Set(allowlist);
   return tools.filter((t) => allow.has(t.name));
@@ -1547,6 +1647,43 @@ export function looksLikeFabricatedCompletion(
 
 const FACT_NUDGE = '【系统·不许谎报】';
 const MAX_FACT_NUDGES = 2;
+
+/**
+ * 「摊手」：最终回答说做不到 / 没有工具 / 让用户自己去页面做，却没有调 report_capability_gap。
+ *
+ * 【为什么要单独一道闸】2026-09-09 真机：「把成员小王升级成管理员」→ 模型零工具调用，
+ * 回了一段「抱歉，我无法直接执行…建议您 1. 登录系统 2. 进入管理页面…」。系统提示里
+ * 明明白白写着「做不到就调 report_capability_gap 记缺口」，它照样只说抱歉——提示是软的，
+ * 这道闸是硬的：打回一次，让它先查有没有工具能做、再记缺口。
+ *
+ * 【与 looksLikeFabricatedCompletion 的区别】那三种是谎报（说做了其实没做），叫不回来要判 failed；
+ * 这一种是如实说做不到，只是没记账——所以只打回**一次**，还是不记就照常收工，绝不判失败。
+ *
+ * 只在这次运行有 report_capability_gap 可调、且它还没被调过时判；纯问答（没有工具）不判。
+ */
+export function looksLikeGaveUp(
+  text: string,
+  tools: readonly { name: string }[],
+  messages: readonly { role: string; toolCalls?: { name: string }[] }[],
+): boolean {
+  if (!text || !tools.some((t) => t.name === 'report_capability_gap')) return false;
+  if (messages.some((m) => m.role === 'assistant' && m.toolCalls?.some((c) => c.name === 'report_capability_gap'))) return false;
+  return (
+    /(无法|没法|做不到|不能)(直接)?(执行|完成|帮|操作|进行|做|处理|添加|修改|删除)/.test(text)
+    || /没有(这个|相应|对应|相关|此|这样的)?(的)?(工具|权限|能力|接口|API)/.test(text)
+    || /(需要|请)(您|你)?(自己|手动|前往|进入|登录|到).{0,20}(页面|界面|后台|管理|设置)/.test(text)
+  );
+}
+
+const GAP_NUDGE = '【系统·做不到要记缺口】';
+const MAX_GAP_NUDGES = 1;
+const GAP_STEP_NOTE = '模型说做不到，却没有先查工具、也没记下缺口，已打回一次让它记缺口。';
+function gapNudgeText(tools: readonly { name: string }[]): string {
+  const names = tools.map((t) => t.name).filter((n) => n !== 'report_capability_gap').join('、');
+  return `你说做不到，但没有按规矩处理。先对照可用工具清单看看有没有能做这件事的（${names}）；有就现在调用去做。`
+    + '真的没有，就调用 report_capability_gap 把缺口记下来（need / missing / tool / params / manual 都填），'
+    + '然后再告诉用户：已记下、开发会补上，以及现在在页面上怎么手动做。不要只回一句抱歉。';
+}
 
 const FAB_STEP_NOTE: Record<NonNullable<ReturnType<typeof looksLikeFabricatedCompletion>>, string> = {
   sample: '模型没有调用任何工具，却给出了「示例数据」冒充结果，已打回让它真的去做。',

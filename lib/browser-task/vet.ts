@@ -208,7 +208,8 @@ export async function resolveSelfAccount(
   if (rows.length === 0) {
     return {
       ok: false,
-      error: `工作区里还没有 ${pname} 账号。先到「账号」页加一个（填上主页 handle），再来派回填。`,
+      // 这句是给模型看的：它自己就有 add_account，别再把用户支到页面上去（2026-09-09 真机：模型照抄了这句去回用户）
+      error: `工作区里还没有 ${pname} 账号。直接用 add_account 工具加一条（platform=${platform}，handle=主页 ID），加好再派回填；用户也可以到「账号」页手动加。`,
       summary: `没有 ${pname} 账号`,
     };
   }

@@ -58,6 +58,10 @@ export function platformColor(key: string): string {
 
 // 热榜源。已移除小红书/X 趋势（无任何可用数据源：小红书本身无公开热榜、X 需登录token且被禁）。
 // YouTube 保留但当前国内服务器够不到 Google（GFW），显示示例，接代理后可转真数据。
+// 热榜采集间隔（分钟）。worker 的 cron（lib/jobs/schedule-config.ts）与面向用户的
+// 「每 N 分钟更新」文案都从这里派生——此前文案写「60 秒更新」而 cron 是 30 分钟一次。
+export const HOT_INGEST_INTERVAL_MINUTES = 30;
+
 export const HOT_SOURCES = [
   { key: 'douyin', name: '抖音热榜', beta: false },
   { key: 'weibo', name: '微博热搜', beta: false },

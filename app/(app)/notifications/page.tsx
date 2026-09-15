@@ -89,7 +89,7 @@ export default async function NotificationsPage() {
         }
       />
 
-      <div className="grid grid-4" style={{ marginBottom: 16 }}>
+      <div className="grid-stats">
         <Stat label={isEn ? 'Configured Bots' : '已配置机器人'} value={botRows.length} foot={isEn ? 'Multi-group support' : '支持多群配置'} />
         <Stat label={isEn ? 'Active Bots' : '启用中机器人'} value={activeCount} foot={isEn ? 'Real-time monitoring' : '实时在线监测'} />
         <Stat label={isEn ? 'Outbound Push' : '出站推送通道'} value={isEn ? 'Supported' : '已支持'} foot={isEn ? 'Custom Webhook' : '自定义 Webhook'} />

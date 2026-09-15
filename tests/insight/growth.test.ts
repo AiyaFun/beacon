@@ -168,12 +168,18 @@ describe('🔒 增长追踪：没有独立页，且两页各管一侧', () => {
   it('🔒 竞对页只取竞对增长，不许掺自有', () => {
     // 断在调用上：只验名字的话 import 那一行就够绿了（否定的那条断名字是对的——
     // 连 import 都不该有）
-    expect(COMP, '只 import 了没调用').toMatch(/await loadRivalGrowth\(/);
+    // 与下面 /data 那条同一口径：断在调用上，但**不写死 `await ` 前缀**。
+    // 2026-09-12 把它挪进本页第一波 Promise.all（台账与增长吊在串行链尾巴上白等 128ms），
+    // 那仍然是一次真调用；写死前缀会让「并发化」这种纯提速改动误红。
+    expect(COMP.replace(/^import .*$/gm, ''), '只 import 了没调用').toMatch(/loadRivalGrowth\(/);
     expect(COMP).not.toContain('loadSelfGrowth');
   });
 
   it('🔒 数据看板只取自有增长，不许掺竞对', () => {
-    expect(DATA, '只 import 了没调用').toMatch(/await loadSelfGrowth\(/);
+    // 断在调用上。**不写死 `await ` 前缀**：它现在和本页其余取数一起排在 Promise.all 里
+    // （2026-09-12 把八段串行合成一次并发），那仍然是一次真调用。
+    // 判据是「去掉 import 行之后还找得到调用」，仍然抓得住「只 import 没调用」。
+    expect(DATA.replace(/^import .*$/gm, ''), '只 import 了没调用').toMatch(/loadSelfGrowth\(/);
     expect(DATA).not.toContain('loadRivalGrowth');
   });
 

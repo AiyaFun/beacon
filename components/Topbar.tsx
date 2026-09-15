@@ -1,4 +1,3 @@
-import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { getSessionOrNull } from '@/lib/session';
 import { platformName } from '@/lib/constants';
@@ -49,7 +48,7 @@ export async function Topbar() {
   return (
     <div className="topbar">
       <MobileNav nav={visibleNav()} />
-      <div className="row" style={{ gap: 10 }}>
+      <div className="row topbar-account" style={{ gap: 10 }}>
         {session && (
           <AccountSwitcher
             currentId={session.accountId}

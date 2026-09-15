@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
-import { parseJson, toJson, type Metrics } from '@/lib/json';
+import { parseJson, toJson, type Metrics, hasViews } from '@/lib/json';
 import { platformName, platformColor } from '@/lib/constants';
 import { fmtNum, fmtDate } from '@/lib/format';
 import { Card, Stat, Meter, Empty } from '@/components/ui';
@@ -11,6 +11,7 @@ import { MetricsUpdater } from './MetricsUpdater';
 import { AttachUrl } from './AttachUrl';
 import { ImportPosts } from './ImportPosts';
 import { DataFilters } from './DataFilters';
+import { PerformanceChart } from './PerformanceChart';
 import { ExportButton } from './ExportButton';
 import { TrendCell } from './TrendCell';
 import { ReviewCell } from './ReviewCell';
@@ -135,24 +136,104 @@ export default async function DataPage({
     prisma.creatorAccount.findUnique({ where: { id: s.accountId } }),
   ]);
 
-  // 采集台账（自有）：每次回填覆盖了哪几天。按工作区取而不是按当前账号——
-  // 「数据记到别的号名下了」正是这页最常见的困惑，台账里把账号名摆出来才答得了它。
-  const collectionRuns = await listCollectionRuns(s.workspaceId, { scope: 'self', take: 30 });
+  // ── 本页余下的取数：一次并发，不再首尾相接 ──
+  //
+  // 【为什么改】这一段原本是**八段串行 await**：台账 → 读者提问 → 读者原声 → 自有增长 →
+  // 决策质量 → 周报 → 单篇复盘 → 两条安全线 → 粉丝曲线 → 别的号名下的条数。
+  // 它们彼此不依赖，谁也不用等谁的结果，可每一次都要等上一次回来才发下一次。
+  // 本机 SQLite 上看不出（每跳 1ms），生产是托管 Postgres，每跳都是一次真实往返。
+  // 上面那个 Promise.all 已经把第一批并发了，这一段是漏网的尾巴（首页 2026-08-29
+  // 修过同样的毛病）。
+  //
+  // 真依赖的三处留在原位：articleReviewRows 要 records 的 id（第一批的产物，可以同批）；
+  // audiencePlatform 要 profiles/records 先算出来（所以提到并发之前）；
+  // elsewhereAccounts 要 elsewhereRows 的结果（所以留在并发之后）。
+  const verifiedAngles = parseJson<{ topic?: string[] }>(account?.styleFingerprint ?? '{}', {}).topic ?? [];
+  const availablePlatforms = [...new Set(records.map((r) => r.platform))];
+  // 账号级数据（粉丝曲线 + 受众画像）。平台跟随当前筛选：账号可能同时经营多个平台，
+  // 把不同平台的粉丝混在一条曲线上没有意义。未筛选时取该账号发得最多的那个平台。
+  const audiencePlatform =
+    platformFilter !== 'all'
+      ? platformFilter
+      : (profiles[0]?.platform ?? availablePlatforms[0] ?? 'douyin');
 
-  // 每条作品下「读者在问什么」（评论采集的提问，按 platformItemId 挂回作品行）。
-  // 指标 × 提问并排看才有诊断价值：完读率低+评论区在问概念 = 没讲清；
-  // 点赞高+催更 = 系列化信号。取数与口径见 lib/insight/reader-questions.ts。
-  const readerQs = await readerQuestionsByWork(s.workspaceId, s.accountId);
-
-  // 读者原声（评论正文，与上面的提问是两条链路）。提问回答「他们卡在哪」，
-  // 原声回答「他们原话是怎么说的」——后者是任何聚合都会压缩掉的东西。
-  const [voice, commentsByWork] = await Promise.all([
+  const [
+    collectionRuns,
+    readerQs,
+    voice,
+    commentsByWork,
+    selfGrowth,
+    dq,
+    weeklyRow,
+    articleReviewRows,
+    clashRate,
+    fpRate,
+    followerPoints,
+    audienceBuckets,
+    elsewhereRows,
+  ] = await Promise.all([
+    // 采集台账（自有）：每次回填覆盖了哪几天。按工作区取而不是按当前账号——
+    // 「数据记到别的号名下了」正是这页最常见的困惑，台账里把账号名摆出来才答得了它。
+    listCollectionRuns(s.workspaceId, { scope: 'self', take: 30 }),
+    // 每条作品下「读者在问什么」（评论采集的提问，按 platformItemId 挂回作品行）。
+    // 指标 × 提问并排看才有诊断价值：完读率低+评论区在问概念 = 没讲清；
+    // 点赞高+催更 = 系列化信号。取数与口径见 lib/insight/reader-questions.ts。
+    readerQuestionsByWork(s.workspaceId, s.accountId),
+    // 读者原声（评论正文，与上面的提问是两条链路）。提问回答「他们卡在哪」，
+    // 原声回答「他们原话是怎么说的」——后者是任何聚合都会压缩掉的东西。
     readerVoice(s.workspaceId, { scope: 'own', accountId: s.accountId }),
     readerCommentsByWork(s.workspaceId, s.accountId),
+    // 自有增长（账号涨粉 + 单条作品）。竞对增长在竞对监控页。
+    loadSelfGrowth(s.accountId, windowKey),
+    decisionQuality(s.accountId, s.workspaceId),
+    // 最近一份周报（周任务生成，此前在 app 里没有任何入口——通知点进来找不到本体）
+    prisma.reviewReport.findFirst({
+      where: { accountId: s.accountId, kind: 'weekly' },
+      orderBy: { createdAt: 'desc' },
+      select: { content: true },
+    }),
+    // 已存的单篇复盘：此前生成后落了库却**从不再读**——组件只把当次返回值放在 useState 里，
+    // 刷新页面就退回「🔮 AI 复盘」按钮，用户以为没生成过，再点一次又烧一份额度。
+    // 这里按 refId 取回来，让存量复盘直接可看。
+    prisma.reviewReport.findMany({
+      where: { accountId: s.accountId, kind: 'article', refId: { in: records.map((r) => r.id) } },
+      orderBy: { createdAt: 'desc' },
+      select: { refId: true, content: true },
+    }),
+    // 两条安全线（撞题率 / 合规误报率）现算：都是本工作区内可算的真实数字，
+    // 样本不足时返回 insufficient，由 UI 如实说「为什么没有数」而不是显示 0。
+    topicClashRate(s.workspaceId, s.accountId).catch((): GuardrailValue => ({
+      state: 'insufficient',
+      note: lang === 'en' ? 'Calculation failed, check back later' : '统计失败，稍后再看',
+    })),
+    complianceFalsePositiveRate(s.tenantId).catch((): GuardrailValue => ({
+      state: 'insufficient',
+      note: lang === 'en' ? 'Calculation failed, check back later' : '统计失败，稍后再看',
+    })),
+    followerSeries(s.accountId, audiencePlatform),
+    readAudience(s.accountId, audiencePlatform),
+    // 记在**本工作区其它账号**名下的作品数。本页所有查询都按 accountId 过滤，
+    // 挂错账号 = 这页永远看不见（2026-07-25 与 07-27 两次真机事故都是这个），
+    // 而插件在没有对应平台账号时会自动建号，新数据自然落在那个新号名下。
+    // 只查数量与账号名，不把别人账号的内容读进来。
+    prisma.publishRecord.groupBy({
+      by: ['accountId'],
+      where: { accountId: { not: s.accountId }, account: { workspaceId: s.workspaceId } },
+      _count: { _all: true },
+    }),
   ]);
 
-  // 自有增长（账号涨粉 + 单条作品）。竞对增长在竞对监控页。
-  const { rows: growthRows, hasAny: hasGrowth } = await loadSelfGrowth(s.accountId, windowKey);
+  const { rows: growthRows, hasAny: hasGrowth } = selfGrowth;
+  const weekly = weeklyRow ? parseJson<WeeklyReview | null>(weeklyRow.content, null) : null;
+  // 同一篇可能有多份（重新生成过），orderBy desc + 首次写入优先 = 保留最新那份
+  const storedReviews = new Map<string, ArticleReview>();
+  for (const row of articleReviewRows) {
+    if (!row.refId || storedReviews.has(row.refId)) continue;
+    const parsed = parseJson<ArticleReview | null>(row.content, null);
+    if (parsed) storedReviews.set(row.refId, parsed);
+  }
+  const now = Date.now();
+
   // 切时间窗时要带上本页既有的筛选，否则一点就把用户的时间段/平台筛选清掉了
   const qsBase = [
     typeof sp.range === 'string' ? `range=${encodeURIComponent(sp.range)}` : '',
@@ -166,59 +247,6 @@ export default async function DataPage({
     WINDOW_KEYS.map((k) => [k, `/data?${qsBase ? qsBase + '&' : ''}window=${k}&tab=growth#growth`]),
   );
 
-  const dq = await decisionQuality(s.accountId, s.workspaceId);
-  // 最近一份周报（周任务生成，此前在 app 里没有任何入口——通知点进来找不到本体）
-  const weeklyRow = await prisma.reviewReport.findFirst({
-    where: { accountId: s.accountId, kind: 'weekly' },
-    orderBy: { createdAt: 'desc' },
-    select: { content: true },
-  });
-  const weekly = weeklyRow ? parseJson<WeeklyReview | null>(weeklyRow.content, null) : null;
-
-  // 已存的单篇复盘：此前生成后落了库却**从不再读**——组件只把当次返回值放在 useState 里，
-  // 刷新页面就退回「🔮 AI 复盘」按钮，用户以为没生成过，再点一次又烧一份额度。
-  // 这里按 refId 取回来，让存量复盘直接可看。
-  const articleReviewRows = await prisma.reviewReport.findMany({
-    where: { accountId: s.accountId, kind: 'article', refId: { in: records.map((r) => r.id) } },
-    orderBy: { createdAt: 'desc' },
-    select: { refId: true, content: true },
-  });
-  // 同一篇可能有多份（重新生成过），orderBy desc + 首次写入优先 = 保留最新那份
-  const storedReviews = new Map<string, ArticleReview>();
-  for (const row of articleReviewRows) {
-    if (!row.refId || storedReviews.has(row.refId)) continue;
-    const parsed = parseJson<ArticleReview | null>(row.content, null);
-    if (parsed) storedReviews.set(row.refId, parsed);
-  }
-
-  const now = Date.now();
-  const verifiedAngles = parseJson<{ topic?: string[] }>(account?.styleFingerprint ?? '{}', {}).topic ?? [];
-  const availablePlatforms = [...new Set(records.map((r) => r.platform))];
-
-  // 账号级数据（粉丝曲线 + 受众画像）。平台跟随当前筛选：账号可能同时经营多个平台，
-  // 把不同平台的粉丝混在一条曲线上没有意义。未筛选时取该账号发得最多的那个平台。
-  const audiencePlatform =
-    platformFilter !== 'all'
-      ? platformFilter
-      : (profiles[0]?.platform ?? availablePlatforms[0] ?? 'douyin');
-  // 两条安全线（撞题率 / 合规误报率）现算：都是本工作区内可算的真实数字，
-  // 样本不足时返回 insufficient，由 UI 如实说「为什么没有数」而不是显示 0。
-  const [clashRate, fpRate] = await Promise.all([
-    topicClashRate(s.workspaceId, s.accountId).catch((): GuardrailValue => ({
-      state: 'insufficient',
-      note: lang === 'en' ? 'Calculation failed, check back later' : '统计失败，稍后再看',
-    })),
-    complianceFalsePositiveRate(s.tenantId).catch((): GuardrailValue => ({
-      state: 'insufficient',
-      note: lang === 'en' ? 'Calculation failed, check back later' : '统计失败，稍后再看',
-    })),
-  ]);
-
-  const [followerPoints, audienceBuckets] = await Promise.all([
-    followerSeries(s.accountId, audiencePlatform),
-    readAudience(s.accountId, audiencePlatform),
-  ]);
-
   // 数据体检在全量记录上做（数据质量与时间段无关）。
   // 【没有发布时间的不进体检】它判的是「发了这么久还没数据」这类陈旧问题，
   // 而「这么久」需要发布时间；缺了它按今天算，会把老作品判成刚发的。
@@ -227,15 +255,6 @@ export default async function DataPage({
     now,
   );
 
-  // 记在**本工作区其它账号**名下的作品数。本页所有查询都按 accountId 过滤，
-  // 挂错账号 = 这页永远看不见（2026-07-25 与 07-27 两次真机事故都是这个），
-  // 而插件在没有对应平台账号时会自动建号，新数据自然落在那个新号名下。
-  // 只查数量与账号名，不把别人账号的内容读进来。
-  const elsewhereRows = await prisma.publishRecord.groupBy({
-    by: ['accountId'],
-    where: { accountId: { not: s.accountId }, account: { workspaceId: s.workspaceId } },
-    _count: { _all: true },
-  });
   const elsewhereAccounts = elsewhereRows.length
     ? await prisma.creatorAccount.findMany({
         where: { id: { in: elsewhereRows.map((r) => r.accountId) } },
@@ -321,6 +340,51 @@ export default async function DataPage({
     return `?${p.toString()}`;
   };
 
+  const avgEngagementRate = totalViews > 0 ? (totalInteractions / totalViews) * 100 : null;
+  const sortedByViews = [...scoped].sort((a, b) => (metricsOf(b).views ?? 0) - (metricsOf(a).views ?? 0));
+  const topPerformer = sortedByViews[0];
+  const topPostTitle = topPerformer?.title
+    ? (topPerformer.title.length > 8 ? topPerformer.title.slice(0, 8) + '...' : topPerformer.title)
+    : (lang === 'en' ? 'No data' : '暂无数据');
+
+  const sortedByCollects = [...scoped].sort((a, b) => (metricsOf(b).collects ?? 0) - (metricsOf(a).collects ?? 0));
+  const topCollect = sortedByCollects[0];
+  const highCollectTopic = topCollect?.title
+    ? (topCollect.title.length > 8 ? topCollect.title.slice(0, 8) + '...' : topCollect.title)
+    : (lang === 'en' ? 'No data' : '暂无数据');
+
+  const chartPoints = [...scoped]
+    .filter((record) => record.publishedAt !== null)
+    .sort((a, b) => a.publishedAt!.getTime() - b.publishedAt!.getTime())
+    .slice(-5)
+    .map((record) => {
+      const metrics = metricsOf(record);
+      const counts = [metrics.likes, metrics.comments, metrics.collects, metrics.shares]
+        .filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0);
+      const date = record.publishedAt!;
+      return {
+        id: record.id,
+        title: record.title || (lang === 'en' ? 'Untitled post' : '未命名作品'),
+        date: `${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}`,
+        views: hasViews(metrics) ? metrics.views! : null,
+        engagements: counts.length ? counts.reduce((sum, value) => sum + value, 0) : null,
+      };
+    });
+
+  const displayRecords = scoped.slice(0, 5).map((record) => {
+    const metrics = metricsOf(record);
+    const hasInteractions = [metrics.likes, metrics.comments, metrics.collects, metrics.shares]
+      .some((value) => typeof value === 'number' && Number.isFinite(value));
+    const views = hasViews(metrics) ? metrics.views! : null;
+    return {
+      id: record.id,
+      title: record.title || (lang === 'en' ? 'Untitled post' : '未命名作品'),
+      views: views === null ? '—' : fmtNum(views),
+      rate: views !== null && hasInteractions ? `${(interactionsOf(record) / views * 100).toFixed(1)}%` : '—',
+      synced: views !== null || hasInteractions,
+    };
+  });
+
   return (
     <>
       <HubHeader
@@ -332,6 +396,76 @@ export default async function DataPage({
 
       <div style={{ marginBottom: 16 }}>
         <DataFilters platforms={availablePlatforms} range={range} platform={platformFilter} />
+      </div>
+
+      {/* 💡 顶部洞察提示条 */}
+      <div className="insight-strip" style={{ marginBottom: 12 }}>
+        <div>
+          <strong>
+            {scoped.length === 0
+              ? (lang === 'en' ? 'No posts match these filters' : '当前筛选下暂无作品')
+              : (lang === 'en' ? `${scoped.length} posts recorded` : `已收录 ${scoped.length} 篇作品`)}
+          </strong>
+          <div className="small muted">
+            {scoped.length === 0 && records.length > 0
+              ? (lang === 'en'
+                  ? `${records.length} posts are available under this account. Try changing the date range or platform.`
+                  : `账号下还有 ${records.length} 篇作品，可调整时间范围或平台查看。`)
+              : (lang === 'en'
+                  ? (avgEngagementRate === null ? 'Sync views to calculate engagement rate.' : `Average engagement rate is ${avgEngagementRate.toFixed(1)}%. Continuous sync refines persona style.`)
+                  : (avgEngagementRate === null ? '回流播放数据后可计算互动率。' : `所选作品平均互动率为 ${avgEngagementRate.toFixed(1)}%，持续回填将自动校准创作偏好。`))}
+          </div>
+        </div>
+        <a href={qs({ range: 'all' })} className="btn small">
+          {lang === 'en' ? 'View All Time' : '查看全部时间'}
+        </a>
+      </div>
+
+      {/* 📊 核心分析两列网格 */}
+      <div className="analytics-grid" style={{ marginBottom: 12 }}>
+        <PerformanceChart points={chartPoints} />
+
+        <aside className="surface insights">
+          <span className="meta">{lang === 'en' ? 'Highlight' : '最值得关注'}</span>
+          <div className="big-number">{avgEngagementRate === null ? '—' : `${avgEngagementRate.toFixed(1)}%`}</div>
+          <div className="muted">{lang === 'en' ? 'Average post engagement rate' : `${platformFilter !== 'all' ? platformName(platformFilter, lang) : '所选'}作品平均互动率`}</div>
+          <div className="stat-line">
+            <span>{lang === 'en' ? 'Top Performer' : '表现最好'}</span>
+            <strong>{topPostTitle}</strong>
+          </div>
+          <div className="stat-line">
+            <span>{lang === 'en' ? 'High Collects' : '收藏更强'}</span>
+            <strong>{highCollectTopic}</strong>
+          </div>
+          <div className="stat-line">
+            <span>{lang === 'en' ? 'Next Action' : '下一步'}</span>
+            <strong>{lang === 'en' ? 'Reuse Structure' : '复用结构'}</strong>
+          </div>
+          <a href="/data?view=genes" className="btn primary" style={{ textAlign: 'center', textDecoration: 'none' }}>
+            {lang === 'en' ? 'Generate Retrospective' : '生成复盘'}
+          </a>
+        </aside>
+      </div>
+
+      {/* 📋 作品表现简表 */}
+      <div className="surface records" style={{ marginBottom: 16 }}>
+        <div className="record-row header">
+          <span>{lang === 'en' ? 'Post' : '作品'}</span>
+          <span className="record-number">{lang === 'en' ? 'Views' : '播放'}</span>
+          <span className="record-number">{lang === 'en' ? 'Engagement Rate' : '互动率'}</span>
+          <span>{lang === 'en' ? 'Status' : '状态'}</span>
+        </div>
+        {displayRecords.map((r) => (
+          <div key={r.id} className="record-row">
+            <strong className="record-title" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.title}>
+              {r.title}
+            </strong>
+            <span className="record-number" data-label={lang === 'en' ? 'Views' : '播放'}>{r.views}</span>
+            <span className="record-number" data-label={lang === 'en' ? 'Engagement' : '互动率'}>{r.rate}</span>
+            <span className={`record-status${r.synced ? '' : ' pending'}`}>{r.synced ? (lang === 'en' ? 'Synced' : '已回流') : (lang === 'en' ? 'Pending' : '待回流')}</span>
+          </div>
+        ))}
+        {displayRecords.length === 0 && <div className="performance-empty">{lang === 'en' ? 'No posts match these filters.' : '当前筛选下暂无作品。'}</div>}
       </div>
 
       {/* 数据点亮进度：四个真实数据源信号，未全亮时引导用户去点亮（全亮自动隐藏） */}
@@ -364,13 +498,6 @@ export default async function DataPage({
         ] satisfies IlluminationSignal[]}
       />
 
-      {/* ⚠️ 「回填成功，但看板上什么都没有」——真机 2026-07-27 又撞到一次。
-          本页有两道**完全静默**的过滤，任何一道命中都长这个样：
-            ① accountId：记录压根不查出来（数据挂在别的账号名下，这页永远看不见）；
-            ② 时间范围：默认只看近 30 天，而插件现在能读到作品的**真实发表时间**了——
-               回填一批半年前的老作品，条条都在窗口外，表格就是空的。
-          数据在库里躺着，用户却只看到一句「已回填 N 条」和一个空页面，无从判断是哪一种。
-          所以这里把两种情况都说破，并给出可点的下一步。 */}
       <OffscreenDataHint
         totalForAccount={records.length}
         visible={scoped.length}
@@ -390,7 +517,7 @@ export default async function DataPage({
         </Card>
       )}
 
-      <div className="grid grid-4" style={{ marginBottom: 16 }}>
+      <div className="grid-stats">
         <Stat
           label={lang === 'en' ? 'Total Views' : '总播放'}
           value={fmtNum(totalViews)}
@@ -438,7 +565,7 @@ export default async function DataPage({
           title={lang === 'en' ? 'Core Metrics & Guardrails' : '核心指标与安全线'}
           sub={lang === 'en' ? 'One North Star metric + three critical guardrails' : '一个核心指标 + 三条不能踩的安全线'}
         >
-          <div className="stat" style={{ background: 'var(--surface-2)', borderRadius: 10, padding: 14 }}>
+          <div className="stat">
             <div className="stat-label">
               {lang === 'en' ? 'North Star · Weekly adopted & published topics / active accounts' : '核心指标 · 周均采纳并发布选题数 / 活跃账号'}
             </div>
@@ -807,7 +934,7 @@ export default async function DataPage({
         sub={lang === 'en' ? 'Audit AI recommendation and advisor accuracy · Make decisions reviewable' : 'AI 的推荐与智囊团会诊到底准不准 · 让决策本身可复盘'}
         style={{ marginBottom: 16 }}
       >
-        <div className="grid grid-4">
+        <div className="grid-stats">
           <Stat
             label={lang === 'en' ? 'Rec Adoption' : '推荐采纳率'}
             value={dq.adoptRatePct === null ? '—' : `${dq.adoptRatePct}%`}

@@ -9,7 +9,7 @@ import type { NavGroup } from '@/lib/nav';
 
 import { useI18n } from '@/lib/i18n';
 
-// 720px 以下的抽屉式导航：汉堡按钮 + 遮罩 + 左滑入侧栏。
+// 768px 及以下的抽屉式导航：汉堡按钮 + 遮罩 + 左滑入侧栏。
 // 桌面端三个元素都被 CSS 默认隐藏（.nav-burger/.drawer/.drawer-overlay），不参与布局。
 export function MobileNav({ nav }: { nav: NavGroup[] }) {
   const [open, setOpen] = useState(false);
@@ -21,9 +21,9 @@ export function MobileNav({ nav }: { nav: NavGroup[] }) {
     setOpen(false);
   }, [pathname]);
 
-  // 视口拉回桌面宽度时自动收起，避免遮罩和滚动锁遗留（断点与 globals.css 的 720px 一致）
+  // 视口拉回桌面宽度时自动收起，避免遮罩和滚动锁遗留（与 CSS 断点一致）
   useEffect(() => {
-    const mq = window.matchMedia('(min-width: 721px)');
+    const mq = window.matchMedia('(min-width: 769px)');
     const onChange = () => {
       if (mq.matches) setOpen(false);
     };
@@ -63,7 +63,7 @@ export function MobileNav({ nav }: { nav: NavGroup[] }) {
           </svg>
         )}
       </button>
-      <div className="drawer-overlay" style={{ display: open ? 'block' : 'none' }} onClick={() => setOpen(false)} aria-hidden="true" />
+      <div className={`drawer-overlay${open ? ' open' : ''}`} onClick={() => setOpen(false)} aria-hidden="true" />
       <aside
         className={`drawer${open ? ' open' : ''}`}
         aria-hidden={!open}

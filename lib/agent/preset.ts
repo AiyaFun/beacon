@@ -26,6 +26,8 @@ export type DispatchPresetInput = {
   goalOverride?: string;
   /** 群机器人派的话记下回哪儿——终态回执发回那个群 */
   botChatRef?: string;
+  /** 定时上指定的模型渠道，覆盖卡上的选择（null/undefined = 用卡上的） */
+  providerIdOverride?: string | null;
 };
 
 export type DispatchResult =
@@ -99,6 +101,8 @@ export async function dispatchPreset(ctx: ToolContext, input: DispatchPresetInpu
     toolAllowlist,
     scheduledAgentId: input.scheduledAgentId,
     botChatRef: input.botChatRef,
+    // 按任务选模型：定时上的覆盖 > 卡上的 > 自动
+    providerId: input.providerIdOverride ?? preset.providerId ?? null,
   });
 
   log.info('派出一键任务', {

@@ -100,7 +100,7 @@ export function Stat({ label, value, foot, href }: { label: string; value: React
 
   if (href) {
     return (
-      <Link href={href} style={{ textDecoration: 'none', color: 'inherit', display: 'block' }}>
+      <Link href={href} className="stat-link">
         {content}
       </Link>
     );

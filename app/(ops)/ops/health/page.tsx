@@ -187,7 +187,7 @@ export default async function OpsHealthPage() {
         </p>
       </Card>
 
-      <div className="grid grid-4" style={{ marginBottom: 16, marginTop: 16 }}>
+      <div className="grid-stats" style={{ marginTop: 16 }}>
         <Stat label={isEn ? 'Ingest Batches' : '采集批次'} value={fmtNum(runCount)} foot={isEn ? 'Last 7d across platforms' : '近 7 天全平台'} />
         <Stat label={isEn ? 'Degraded Batches' : '异常批次'} value={fmtNum(notedRuns.length)} foot={isEn ? 'Degraded / Throttled / Empty' : '降级 / 节流 / 空批'} />
         <Stat label={isEn ? 'Failed Jobs' : '失败任务'} value={fmtNum(failedJobs.length)} foot={isEn ? 'Cron and background jobs' : '定时与后台任务'} />

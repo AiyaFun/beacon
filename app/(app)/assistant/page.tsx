@@ -6,6 +6,7 @@ import { AgentPanel } from './AgentPanel';
 import { availableTools } from '@/lib/agent/run';
 import { disabledTools } from '@/lib/agent/tool-config';
 import { RoleLadder } from '@/components/RoleLadder';
+import { HubHeader } from '@/components/HubHeader';
 import { getServerLang } from '@/lib/i18n/server';
 import { Icon } from '@/components/icons';
 
@@ -43,20 +44,18 @@ export default async function AssistantPage({
 
   return (
     <div className="assistant-page-container">
-      <div className="row-between wrap" style={{ gap: 10, marginBottom: 12 }}>
-        <div>
-          <h1 style={{ fontSize: 20, margin: 0 }}>{isEn ? 'Execution View' : '执行过程'}</h1>
-          <p className="small muted" style={{ margin: '4px 0 0' }}>
-            {isEn
-              ? 'Follow one run: what it called, where it is waiting for you, what it finished. To start or ask something, use the box on Today.'
-              : '看某一次执行：它调了什么、停在哪等你、最后做成了什么。要派活或问一句，回「今天」那个框。'}
-          </p>
-        </div>
-        <span className="row" style={{ gap: 8 }}>
-          <Link href="/" className="btn btn-sm btn-primary"><Icon.home size={13} /> {isEn ? 'Today' : '回「今天」'}</Link>
-          <Link href="/runs" className="btn btn-sm">{isEn ? 'All runs' : '全部记录'}</Link>
-        </span>
-      </div>
+      <HubHeader
+        title={isEn ? 'Execution View' : '执行过程'}
+        hint={isEn
+          ? 'Follow one run: what it called, where it is waiting for you, what it finished. To start or ask something, use the box on Today.'
+          : '看某一次执行：它调了什么、停在哪等你、最后做成了什么。要派活或问一句，回「今天」那个框。'}
+        action={
+          <span className="row" style={{ gap: 8 }}>
+            <Link href="/" className="btn btn-sm btn-primary"><Icon.home size={13} /> {isEn ? 'Today' : '回「今天」'}</Link>
+            <Link href="/runs" className="btn btn-sm">{isEn ? 'All runs' : '全部记录'}</Link>
+          </span>
+        }
+      />
 
       {resume && (
         <div className="alert-gradient-amber assistant-resume-banner">

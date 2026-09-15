@@ -170,13 +170,19 @@ export type PlanSummary = {
  */
 export async function listPlans(
   scope: { workspaceId: string; accountId: string },
-  opts: { status?: string; take?: number } = {},
+  opts: { status?: string; take?: number; includeId?: string } = {},
 ): Promise<PlanSummary[]> {
   const plans = await prisma.publishPlan.findMany({
     where: {
       workspaceId: scope.workspaceId,
       accountId: scope.accountId,
-      ...(opts.status ? { status: opts.status } : {}),
+      // includeId：点着 /publish?plan=<id> 进来的那一条必须在名单里。
+      // 【为什么需要它】lib/agent/artifacts.ts:21 把这个地址写进运行产物，机器人回执会把它
+      // 发出去；而本页原来只取「最近 8 条 open 计划」，那条具体计划很可能根本不在这 8 条里
+      //（已经 done、或排在第 9 条之后）。用户点进来看不到自己那条，链接等于坏的。
+      ...(opts.includeId
+        ? { OR: [{ id: opts.includeId }, ...(opts.status ? [{ status: opts.status }] : [{}])] }
+        : (opts.status ? { status: opts.status } : {})),
     },
     orderBy: { createdAt: 'desc' },
     take: opts.take ?? 10,

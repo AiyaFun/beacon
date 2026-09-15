@@ -13,7 +13,7 @@ const FORMATS = [
 const BETA_HINT = '本地排版新功能，尚未经过大量真实稿件验证。导出后请先打开看一眼版面，遇到异常欢迎反馈。';
 
 // 导出成交付物并下载。
-export function ExportButtons({ draftId }: { draftId: string }) {
+export function ExportButtons({ draftId, compact = false }: { draftId: string; compact?: boolean }) {
   const { lang } = useI18n();
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState('');
@@ -47,7 +47,9 @@ export function ExportButtons({ draftId }: { draftId: string }) {
         const displayLabel = lang === 'en' ? f.enLabel : f.label;
         const btnText = pending
           ? (lang === 'en' ? 'Exporting…' : '导出中…')
-          : (lang === 'en' ? `Export ${displayLabel}` : `导出${f.label}`);
+          : compact
+            ? displayLabel
+            : (lang === 'en' ? `Export ${displayLabel}` : `导出${f.label}`);
         return (
           <span key={f.key} className="row" style={{ gap: 4 }}>
             <button

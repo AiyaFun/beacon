@@ -3,32 +3,18 @@ import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { platformName, platformColor } from '@/lib/constants';
 import { relTime } from '@/lib/format';
-import { Card, Empty } from '@/components/ui';
-import { Icon } from '@/components/icons';
 import { listInstalledSkills } from '@/lib/skills';
 import { Rewriter } from './Rewriter';
-import { ExportButtons } from './ExportButtons';
-import { CardExport } from './CardExport';
-import { SkillPanel } from './SkillPanel';
-import { CopyText } from '@/components/CopyText';
-import { PublishForm } from './PublishForm';
-import { PublishPlanPanel } from './PublishPlanPanel';
-import { DraftAdvisorCard } from './DraftAdvisorCard';
 import { NewDraftDialog } from './NewDraftDialog';
 import { DraftButton } from './DraftButton';
-import { TitleCoverPanel } from './TitleCoverPanel';
-import { IllustrationPanel } from './IllustrationPanel';
-import { CoverJumpButton } from './CoverJumpButton';
 import type { CoverQuota } from './CoverStation';
 import { imageConfigured, imageSource } from '@/lib/llm/image';
 import { listLibrary, listDraftCovers, listDraftIllustrations, coverCountsByDraft } from '@/lib/media/store';
 import { COVER_STYLES } from '@/lib/cover/styles';
 import { getImageQuotaStatus } from '@/lib/quota';
 import { readPersona } from '@/lib/persona';
-import { DeriveCard } from './DeriveCard';
 import { DraftList, type DraftRow } from './DraftList';
-import { StudioTabs, type StudioTab } from './StudioTabs';
-import { VersionCompare } from './VersionCompare';
+import { AssistPane } from './AssistPane';
 import { draftFamily } from '@/lib/studio/family';
 import { shouldHintWechatAiSource } from '@/lib/algorithm/ai-source';
 import { MakeTabs } from '@/components/MakeTabs';
@@ -64,14 +50,25 @@ export default async function StudioPage({
 
   // 技能列表在 server 端算好再传下去：客户端只拿列表，不碰 prisma
   // （导出不再需要「有没有 Claude Key」这个布尔——两种格式都有本地渲染器，永远可点）
-  const [drafts, skills, materials, ownedAccounts] = await Promise.all([
+  // 【并进这一波的三样（2026-09-12）】fromTopic 与封面工位那三条原本各自单独 await，
+  // 排在第 2 波和第 10 波上，可它们的入参只有 sp.topicId / s.tenantId / s.accountId
+  //（第 52~53 行就已就绪），跟 drafts 没有任何数据依赖。生产库跨区一跳 32ms，
+  // 白等两跳。并发从 4 涨到 8，离池子 15 还远。
+  const [drafts, skills, materials, ownedAccounts, fromTopic, coverConfigured, coverSource, coverAccount] = await Promise.all([
+    // 【只取列表要用的字段，正文不进这一份】原来是 `include: { topic:true, versions:{全量} }`：
+    // 把**每篇草稿的每一版正文**都拉回服务端再塞进 RSC 流，而列表上只显示标题、状态、
+    // 版本数和「最近一版是谁改的」。一份 30 版的稿子几百 KB，稿子一多就是几 MB。
+    // topic 关系对象也从来没被读过（页面用的是标量 d.topicId）。
+    // 选中那一篇的正文另外取（见下方 selectedVersions），不多一波。
     prisma.draft.findMany({
       where: { accountId: s.accountId },
-      include: {
-        topic: true,
-        versions: { orderBy: { seq: 'desc' } },
-      },
       orderBy: { updatedAt: 'desc' },
+      select: {
+        id: true, title: true, status: true, platform: true,
+        topicId: true, parentDraftId: true, coverAssetId: true, updatedAt: true,
+        _count: { select: { versions: true } },
+        versions: { orderBy: { seq: 'desc' }, take: 1, select: { seq: true, authorType: true, createdAt: true } },
+      },
     }),
     listInstalledSkills(s.tenantId),
     // 技能参数卡里「这篇要用哪几条素材」的候选。只取内容类（口头禅是语气资产、文风样本是给
@@ -88,16 +85,20 @@ export default async function StudioPage({
       where: { workspaceId: s.workspaceId },
       select: { platform: true },
     }),
+    // 从选题引擎「去工坊起这篇稿」带过来的选题。此前这个参数没人接：点过来只是跳到工坊首页，
+    // 选题上下文当场丢掉，用户得自己回想刚才采纳的是哪条。
+    sp.topicId
+      ? prisma.topicIdea.findFirst({
+          where: { id: sp.topicId, accountId: s.accountId },
+          select: { id: true, title: true, angle: true },
+        })
+      : Promise.resolve(null),
+    // 封面工位要的三样：能不能生图 / 今日还能出几张 / 人设赛道（给风格排序）。
+    // 都在服务端算好传下去——客户端组件不碰 prisma，也别让「今日剩余」靠前端猜。
+    imageConfigured(s.tenantId),
+    imageSource(s.tenantId),
+    prisma.creatorAccount.findUnique({ where: { id: s.accountId }, select: { personaCard: true } }),
   ]);
-
-  // 从选题引擎「去工坊起这篇稿」带过来的选题。此前这个参数没人接：点过来只是跳到工坊首页，
-  // 选题上下文当场丢掉，用户得自己回想刚才采纳的是哪条。
-  const fromTopic = sp.topicId
-    ? await prisma.topicIdea.findFirst({
-        where: { id: sp.topicId, accountId: s.accountId },
-        select: { id: true, title: true, angle: true },
-      })
-    : null;
   // 已经起过稿就直接定位过去；还没有就把 topicId 交给「AI 生成初稿」按钮。
   // **不在页面加载时替他生成**——那是一次真实调用要花额度，必须他自己点。
   const topicDraft = fromTopic ? drafts.find((d) => d.topicId === fromTopic.id) : undefined;
@@ -106,32 +107,44 @@ export default async function StudioPage({
   const selectedId = sp.draft && drafts.some((d) => d.id === sp.draft)
     ? sp.draft
     : (topicDraft?.id ?? drafts[0]?.id);
-  // W-6：这篇草稿的会诊场次与其中已采纳的意见数（决定「按已采纳意见改一版」是否可点）
-  const [draftSessionCount, draftAdoptedCount] = selectedId
-    ? await Promise.all([
-        prisma.advisorSession.count({ where: { accountId: s.accountId, draftRef: selectedId } }),
-        prisma.advisorOpinion.count({
-          where: { adopted: true, session: { accountId: s.accountId, draftRef: selectedId } },
-        }),
-      ])
-    : [0, 0];
   const selected = drafts.find((d) => d.id === selectedId) ?? null;
-  // 同源稿件家族（一稿多平台）：只有选中草稿时才查
-  const family = selectedId ? await draftFamily(s.accountId, selectedId) : [];
 
-  // 封面工位要的三样：能不能生图 / 今日还能出几张 / 人设赛道（给风格排序）。
-  // 都在服务端算好传下去——客户端组件不碰 prisma，也别让「今日剩余」靠前端猜。
-  const [coverConfigured, coverSource, coverAccount] = await Promise.all([
-    imageConfigured(s.tenantId),
-    imageSource(s.tenantId),
-    prisma.creatorAccount.findUnique({ where: { id: s.accountId }, select: { personaCard: true } }),
-  ]);
-  const imageQuota = coverConfigured && coverSource ? await getImageQuotaStatus(s.tenantId, coverSource) : null;
-  // 形象库 / 本稿封面 / 家族里每篇出没出过封面：都在服务端算好传下去（客户端组件不碰 prisma）
-  const [coverLibrary, draftCovers, familyCoverCounts, stylePresets, illustrations] = await Promise.all([
+  // ── 第二波：所有「知道选中哪一篇之后才能查」的东西，一次发完 ──
+  //
+  // 【原来这里是四波串行】会诊计数 → 稿件家族 → 出图配额 → 形象库那五样。
+  // 逐条核过：前三者只依赖 selectedId / coverSource（都在上一波就有了），
+  // 只有「家族里每篇出没出过封面」真的要等 family 的结果，留到第三波。
+  // 生产库跨区一跳 32ms，白等两跳。
+  const COMPARE_LIMIT = 10;
+  const [
+    draftSessionCount, draftAdoptedCount, family, imageQuota,
+    selectedVersions, coverLibrary, draftCovers, stylePresets, illustrations,
+  ] = await Promise.all([
+    // W-6：这篇草稿的会诊场次与其中已采纳的意见数（决定「按已采纳意见改一版」是否可点）
+    selectedId
+      ? prisma.advisorSession.count({ where: { accountId: s.accountId, draftRef: selectedId } })
+      : Promise.resolve(0),
+    selectedId
+      ? prisma.advisorOpinion.count({
+          where: { adopted: true, session: { accountId: s.accountId, draftRef: selectedId } },
+        })
+      : Promise.resolve(0),
+    // 同源稿件家族（一稿多平台）：只有选中草稿时才查
+    selectedId ? draftFamily(s.accountId, selectedId) : Promise.resolve([]),
+    coverConfigured && coverSource ? getImageQuotaStatus(s.tenantId, coverSource) : Promise.resolve(null),
+    // 选中这一篇的正文：版本对比要拿全文（diff 在浏览器里算），所以**只取最近 10 版**，
+    // 而且只取这一篇的——列表那一份已经不带正文了。
+    selectedId
+      ? prisma.draftVersion.findMany({
+          where: { draftId: selectedId },
+          orderBy: { seq: 'desc' },
+          take: COMPARE_LIMIT,
+          select: { seq: true, authorType: true, content: true, createdAt: true },
+        })
+      : Promise.resolve([]),
+    // 形象库 / 本稿封面 / 风格预设 / 本稿配图：都在服务端算好传下去（客户端组件不碰 prisma）
     listLibrary(s.workspaceId, s.accountId),
     selectedId ? listDraftCovers(s.workspaceId, selectedId) : Promise.resolve([]),
-    coverCountsByDraft(s.workspaceId, family.map((f) => f.draftId)),
     prisma.coverStylePreset.findMany({
       where: { workspaceId: s.workspaceId },
       orderBy: { createdAt: 'desc' },
@@ -140,6 +153,8 @@ export default async function StudioPage({
     }),
     selectedId ? listDraftIllustrations(s.workspaceId, selectedId) : Promise.resolve([]),
   ]);
+  // 第三波：唯一真的要等 family 的一条
+  const familyCoverCounts = await coverCountsByDraft(s.workspaceId, family.map((f) => f.draftId));
   // 配图卡片只要展示用的几项，meta 里的提示词不往客户端传（那是给模型看的，且很长）
   const draftIllustrations = illustrations.map((i) => ({
     id: i.id,
@@ -158,14 +173,12 @@ export default async function StudioPage({
   const personaForCover = [coverPersona.niche, coverPersona.tone, coverPersona.identity, coverPersona.audience]
     .filter(Boolean)
     .join(' ');
-  const versionsAsc = selected ? [...selected.versions].sort((a, b) => a.seq - b.seq) : [];
-  const latest = selected?.versions[0]; // versions 已按 seq desc
+  // selectedVersions 已按 seq desc 取回最近 10 版；这里翻成升序给对比用
+  const versionsAsc = [...selectedVersions].sort((a, b) => a.seq - b.seq);
+  const latest = selectedVersions[0]; // 已按 seq desc
   const selectedStatus = selected ? statusOf(selected.status) : null;
 
-  // 版本对比要拿全文（diff 在浏览器里算），所以只下发最近 10 版——正文动辄几千字，
-  // 一份 30 版的稿子全下发就是几百 KB 的 RSC 载荷，而没人会去比第 1 版和第 27 版。
-  const COMPARE_LIMIT = 10;
-  const compareVersions = versionsAsc.slice(-COMPARE_LIMIT).map((v) => ({
+  const compareVersions = versionsAsc.map((v) => ({
     seq: v.seq,
     authorType: v.authorType,
     content: v.content,
@@ -176,6 +189,7 @@ export default async function StudioPage({
   // 相对时间也必须在这里算好（客户端读 Date.now() 会 hydration 不一致）。
   const draftRows: DraftRow[] = drafts.map((d) => {
     const st = statusOf(d.status);
+    const latestVer = d.versions[0];
     return {
       id: d.id,
       title: d.title,
@@ -184,123 +198,25 @@ export default async function StudioPage({
       statusCls: st.cls,
       platformName: platformName(d.platform),
       platformColor: platformColor(d.platform),
-      versionCount: d.versions.length,
-      lastLabel: d.versions[0] ? relTime(d.versions[0].createdAt) : '—',
+      versionCount: d._count.versions,
+      lastLabel: latestVer ? relTime(latestVer.createdAt) : '—',
+      latestVersion: latestVer
+        ? {
+            seq: latestVer.seq,
+            authorType: latestVer.authorType === 'ai' ? (lang === 'en' ? 'AI Draft' : 'AI 初稿') : (lang === 'en' ? 'Human Edit' : '人工终稿'),
+            timeLabel: relTime(latestVer.createdAt),
+          }
+        : undefined,
     };
   });
 
   // 下半区四件事：互斥，做完一件再做下一件，所以是标签页而不是四张常驻卡片。
-  const tabs: StudioTab[] = [
-    {
-      key: 'skill',
-      label: lang === 'en' ? 'Formatted Output' : '技能出成品',
-      hint: lang === 'en' ? (
-        <>
-          Format the draft text into platform-ready layouts (WeChat articles, Xiaohongshu cards, etc.).
-          Skills always run on the <b>latest version</b>. Expand &quot;Requirements&quot; to customize tone and materials.
-        </>
-      ) : (
-        <>
-          点技能，把当前草稿正文变成对应平台的排版成品（公众号排版、小红书图文卡…）。
-          技能永远基于<b>最新一版</b>正文运行；展开「本次要求」可指定篇幅、语气和这篇要用上的素材。
-        </>
-      ),
-      node: (
-        <SkillPanel
-          draftId={selected?.id}
-          skills={skills}
-          draftPlatform={selected?.platform}
-          materials={materials}
-        />
-      ),
-    },
-    {
-      key: 'title',
-      label: lang === 'en' ? 'Title & Cover' : '标题与封面',
-      hint: lang === 'en' ? (
-        <>
-          <b>Cover</b>: Auto aspect ratio by platform. Generates AI-badged covers with consistent subjects.
-          <b> Title Matrix</b>: 6 angles with guardrail checks. Any title can be applied to the cover image.
-        </>
-      ) : (
-        <>
-          <b>封面</b>：比例按草稿平台自动定，大字默认用你采纳的标题（留空则从正文提炼），可上传自己的照片「主体保真」，出图即带 AI 生成标识。
-          <b>标题矩阵</b>：一次给 6 个<b>角度互不相同</b>的标题，每条附诊断，命中红线的直接拦下；任一条可一键作封面大字。
-        </>
-      ),
-      node: (
-        <TitleCoverPanel
-          draftId={selected?.id}
-          platform={selected?.platform}
-          draftTitle={selected?.title}
-          hasContent={!!latest?.content?.trim()}
-          personaText={personaForCover}
-          defaultStyleKey={coverPersona.coverStyle}
-          defaultFontKey={coverPersona.coverFont}
-          quota={coverQuota}
-          library={coverLibrary}
-          covers={draftCovers}
-          coverAssetId={selected?.coverAssetId ?? null}
-          stylePresets={stylePresets}
-        />
-      ),
-    },
-    {
-      key: 'illustration',
-      label: lang === 'en' ? 'Illustrations' : '正文配图',
-      hint: lang === 'en' ? (
-        <>
-          Extract a set of visual scenes from the article to generate cohesive illustrations.
-          Review scenes before generating. For standalone images, visit <Link href="/images">AI Images</Link>.
-        </>
-      ) : (
-        <>
-          从正文拆出一组画面，风格统一地出图——小红书组图、公众号内页插图都用它。
-          先拆画面给你改，确认后再出图（出图按张计费）。配图<b>不上字</b>，文字排版走「标题与封面」。
-          手头没有稿子、就是想要几张图，去 <Link href="/images">AI 出图</Link>（同一套额度与保留期）。
-        </>
-      ),
-      node: (
-        <IllustrationPanel
-          draftId={selected?.id}
-          platform={selected?.platform}
-          styles={COVER_STYLES.map((st) => ({ key: st.key, name: st.name, hint: st.hint }))}
-          existing={draftIllustrations}
-        />
-      ),
-    },
-    {
-      key: 'derive',
-      label: lang === 'en' ? 'Multi-Platform' : '一稿多平台',
-      badge: family.length > 1 ? family.length : undefined,
-      hint: lang === 'en'
-        ? 'Derive variants for each platform to publish and compare tracking data independently.'
-        : '同一篇内容派生出各平台版本，各自独立发布与回流，之后就能比较谁跑得好。',
-      node: (
-        <DeriveCard
-          draftId={selected?.id}
-          currentPlatform={selected?.platform}
-          family={family}
-          coverCounts={familyCoverCounts}
-          wechatHint={shouldHintWechatAiSource(ownedAccounts.map((a) => a.platform))}
-        />
-      ),
-    },
-  ];
-  if (selected) {
-    tabs.push({
-      key: 'advisor',
-      label: lang === 'en' ? 'Draft Review' : '草稿会诊',
-      badge: draftAdoptedCount || undefined,
-      node: (
-        <DraftAdvisorCard
-          draftId={selected.id}
-          adoptedCount={draftAdoptedCount}
-          sessionCount={draftSessionCount}
-        />
-      ),
-    });
-  }
+  // 【删掉了一个从没被渲染过的 tabs 数组】它构造了 技能/标题/封面/正文配图/一稿多平台/草稿会诊
+  // 六个面板，然后**一次都没进过 return** —— 第 311 行那个 `tabs={<MakeTabs/>}` 是 HubHeader 的同名
+  // 属性，不是它。于是「正文配图」在工坊里没有任何入口，而 /images 页至今写着
+  //「创作工坊 · 正文配图：按某一篇的正文自动拆成一组画面」——照着那句话来找的人什么也找不到。
+  // 2026-09-12：配图入口已接进 AssistPane（「标题封面」页签下的「给正文配图」），
+  // 其余五个面板 AssistPane 本来就有，这个数组整段删除。
 
   return (
     <>
@@ -309,9 +225,11 @@ export default async function StudioPage({
         hint={lang === 'en' ? 'AI drafting · Version history · Multi-platform rewriter · Pre-publish compliance checks' : 'AI 起草 · 版本留痕 · 多平台改写 · 发布前合规。AI 初稿和你改后终稿的差异，系统会从中学你的口味。'}
         tabs={<MakeTabs active="write" inline />}
         action={
-          <span className="row wrap" style={{ gap: 8, justifyContent: 'flex-end' }}>
+          <span className="row wrap" style={{ gap: 8, justifyContent: 'flex-end', alignItems: 'center' }}>
             <NewDraftDialog defaultPlatform={selected?.platform} />
-            {!pendingTopic && <DraftButton draftId={selectedId ?? null} />}
+            <Link href="/publish" className="btn primary">
+              {lang === 'en' ? 'Publish' : '去发布'}
+            </Link>
           </span>
         }
       />
@@ -320,8 +238,8 @@ export default async function StudioPage({
         <div
           className="card"
           style={{
-            marginBottom: 16,
-            padding: '12px 16px',
+            marginBottom: 12,
+            padding: '10px 16px',
             background: 'var(--surface-2)',
             boxShadow: 'none',
             borderLeft: '3px solid var(--brand)',
@@ -343,173 +261,55 @@ export default async function StudioPage({
         </div>
       )}
 
-      <div className="grid-asym-left grid-align-start" style={{ gap: 20 }}>
-        <div className="stack" style={{ gap: 16 }}>
-          <Card title={dict.studio.draftListTitle} sub={lang === 'en' ? `${drafts.length} drafts` : `${drafts.length} 篇`}>
-            <DraftList
-              drafts={draftRows}
-              selectedId={selectedId}
-              emptyText={
-                pendingTopic
-                  ? (lang === 'en' ? 'No drafts yet — click "AI Generate Draft" above to start.' : '还没有草稿——点上面那条横幅里的「AI 生成初稿」，就按带过来的这条选题起一版')
-                  : (lang === 'en' ? 'No drafts yet — click "AI Generate Draft" in the top right to start from an accepted topic.' : '还没有草稿——点右上角「AI 生成初稿」，基于已采纳的选题起一版')
-              }
-            />
-          </Card>
-
-          <Card
-            title={lang === 'en' ? 'Version Timeline' : '版本时间线'}
-            sub={selected ? selected.title : undefined}
-            action={
-              latest ? (
-                <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
-                  <span className="small muted">{lang === 'en' ? `${selected!.versions.length} versions total` : `共 ${selected!.versions.length} 版`}</span>
-                  <VersionCompare versions={compareVersions} draftId={selected?.id} />
-                </div>
-              ) : undefined
+      <div className="work-grid">
+        {/* 左栏（草稿与版本 258px） */}
+        <aside className="surface draft-pane">
+          <DraftList
+            drafts={draftRows}
+            selectedId={selectedId}
+            emptyText={
+              pendingTopic
+                ? (lang === 'en' ? 'No drafts yet — click "AI Generate Draft" above to start.' : '还没有草稿——点上面那条横幅里的「AI 生成初稿」，就按带过来的这条选题起一版')
+                : (lang === 'en' ? 'No drafts yet — click "New Draft" in the top right to start.' : '还没有草稿——点右上角「新建草稿」，开启你的创作')
             }
-          >
-            {!selected ? (
-              <Empty icon="🕮" text={lang === 'en' ? 'Select a draft to view version history' : '选中草稿查看版本演进'} />
-            ) : versionsAsc.length === 0 ? (
-              <Empty icon="🕮" text={lang === 'en' ? 'No versions yet. Click "AI Draft" to create the first version' : '还没有版本，点「AI 生成初稿」生成第一版'} />
-            ) : (
-              <div className="stack" style={{ gap: 0 }}>
-                {versionsAsc.map((v, i) => {
-                  const isAi = v.authorType === 'ai';
-                  const prev = i > 0 ? versionsAsc[i - 1] : null;
-                  const isLast = i === versionsAsc.length - 1;
-                  return (
-                    <div key={v.id} className="row" style={{ gap: 10, alignItems: 'stretch' }}>
-                      {/* 时间轴竖线 */}
-                      <div className="col" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 16 }}>
-                        <span className={`dot ${isAi ? 'dot-amber' : 'dot-green'}`} style={{ marginTop: 6 }} />
-                        {!isLast && <span style={{ flex: 1, width: 2, background: 'var(--border)' }} />}
-                      </div>
-                      <div style={{ flex: 1, minWidth: 0, paddingBottom: isLast ? 0 : 14 }}>
-                        <div className="row wrap" style={{ gap: 6, alignItems: 'center' }}>
-                          <span className="badge badge-gray">v{v.seq}</span>
-                          <span className={`badge ${isAi ? 'badge-amber' : 'badge-green'}`}>
-                            {isAi ? (lang === 'en' ? 'AI Draft' : 'AI 初稿') : (lang === 'en' ? 'Human Edit' : '人工终稿')}
-                          </span>
-                          <span className="small muted" style={{ fontSize: 11 }}>{relTime(v.createdAt)}</span>
-                        </div>
-                        {v.diffFromPrev && (
-                          <div className="small" style={{ marginTop: 4, fontSize: 11, color: prev && prev.authorType !== v.authorType ? 'var(--brand)' : 'var(--muted)' }}>
-                            <Icon.arrow size={11} /> {v.diffFromPrev}
-                            {prev && prev.authorType === 'ai' && v.authorType === 'human' && (
-                              <span className="badge badge-brand" style={{ marginLeft: 4, fontSize: 10 }} title={lang === 'en' ? 'Learned preference from human edits over AI draft' : '系统对比 AI 初稿与改后终稿学习偏好'}>
-                                {lang === 'en' ? 'Learned' : '已学偏好'}
-                              </span>
-                            )}
-                          </div>
-                        )}
-                        {/* 正文预览默认只展开最新一版：每条 160 字的预览块约 80px，
-                            十几版之后这一栏就是一条几百像素长、谁也不看的灰带。
-                            用原生 details 折叠，不引入 JS，也不影响服务端渲染。 */}
-                        <details open={isLast} style={{ marginTop: 6 }}>
-                          <summary className="small muted ver-toggle" style={{ fontSize: 11 }}>
-                            {lang === 'en' ? 'Preview' : '正文预览'}
-                          </summary>
-                          <div
-                            className="small muted"
-                            style={{
-                              marginTop: 4,
-                              whiteSpace: 'pre-wrap',
-                              maxHeight: 96,
-                              overflow: 'hidden',
-                              padding: '8px 10px',
-                              background: 'var(--surface-2)',
-                              borderRadius: 6,
-                              lineHeight: 1.5,
-                              fontSize: 12,
-                            }}
-                          >
-                            {v.content.slice(0, 160)}
-                            {v.content.length > 160 ? '…' : ''}
-                          </div>
-                        </details>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </Card>
-        </div>
+            versions={compareVersions}
+          />
+        </aside>
 
-        {/* 右栏（1fr，约 70% 宽主工作台）：当前草稿 → 写 → 出成品 */}
-        <div className="stack" style={{ gap: 20 }}>
-          {/* 当前草稿条：正在编辑哪一篇 + 这篇写完之后的全部出口。
-              这些动作原来全挤在页头，跟「新建 / 起草」混在一排 8 个同权重按钮里；
-              它们其实都属于某一份草稿，放在草稿身份旁边才对得上号。 */}
-          {selected ? (
-            <div className="card" style={{ padding: '14px 18px' }}>
-              <div className="row wrap" style={{ gap: 8, alignItems: 'center', minWidth: 0 }}>
-                <span className="badge" style={{ background: 'var(--surface-2)', color: platformColor(selected.platform) }}>
-                  {platformName(selected.platform)}
-                </span>
-                <b style={{ fontSize: 14.5, letterSpacing: '-0.2px' }}>{selected.title}</b>
-                {selectedStatus && <span className={`badge ${selectedStatus.cls}`}>{selectedStatus.text}</span>}
-                <span className="small muted">
-                  {lang === 'en' ? `${selected.versions.length} versions · Updated ${relTime(selected.updatedAt)}` : `共 ${selected.versions.length} 版 · 更新 ${relTime(selected.updatedAt)}`}
-                </span>
-              </div>
-              <div className="divider" style={{ margin: '12px 0 10px' }} />
-              <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
-                <span className="small muted" style={{ marginRight: 2 }}>{lang === 'en' ? 'Next Actions' : '写完之后'}</span>
-                {latest?.content && (
-                  <>
-                    <CopyText text={`${selected.title}\n\n${latest.content}`} label={lang === 'en' ? 'Copy Package' : '复制发布包'} />
-                    <CopyText text={latest.content} label={lang === 'en' ? 'Copy Body' : '复制正文'} />
-                  </>
-                )}
-                <PublishPlanPanel draftId={selected.id} />
-                <PublishForm draftId={selected.id} />
-                <ExportButtons draftId={selected.id} />
-                <CardExport draftId={selected.id} />
-                <CoverJumpButton />
-              </div>
-            </div>
-          ) : (
-            <div className="card" style={{ padding: '14px 18px' }}>
-              <div className="small muted">
-                {lang === 'en'
-                  ? 'No draft selected. Select one from the left or create one using "New Draft / AI Draft" in the top right — copy, export, and publish options will appear here.'
-                  : '还没有选中草稿。左边点一篇，或用右上角「新建草稿 / AI 生成初稿」开一篇新的——复制、导出、登记发布都会出现在这里。'}
-              </div>
-            </div>
-          )}
+        {/* 中栏（正文编辑区 1fr） */}
+        <Rewriter
+          key={selected?.id ?? 'new'}
+          draftId={selected?.id}
+          initialText={latest?.content ?? ''}
+          draftTitle={selected?.title}
+          initialPlatform={selected?.platform}
+          versionSeq={latest?.seq ?? selected?._count.versions ?? 1}
+        />
 
-          <Card
-            title={lang === 'en' ? 'Editor · Algorithm Coach' : '正文编辑 · 算法教练'}
-            sub={lang === 'en' ? 'Diagnose as you write, optimize for platform algorithms' : '边写边诊断，按平台算法实时优化'}
-            action={
-              <span className="small muted">
-                {lang === 'en' ? 'Real-time hook, structure, and engagement check with zero AI credits' : '实时诊断开头钩子 / 篇幅 / 结构 / 互动引导，结合账号真实回流数据；零 AI 额度'}
-              </span>
-            }
-          >
-            {/* key 必须绑草稿：不绑的话切换草稿只换 props，Rewriter 的 text state 原样留着
-                ——左边点开 B 稿，编辑框里还是 A 稿的正文，此时点「保存我的修改」
-                就把 A 的内容写成了 B 的新版本。这是不会报错、只会悄悄写坏数据的那种 bug。
-                重挂也正好让本地暂存的恢复检查按新草稿重跑一次。 */}
-            <Rewriter
-              key={selected?.id ?? 'none'}
-              draftId={selected?.id}
-              initialText={latest?.content ?? ''}
-              draftTitle={selected?.title}
-              initialPlatform={selected?.platform}
-            />
-          </Card>
-
-          <Card
-            title={lang === 'en' ? 'Polish & Finalize' : '出成品 · 打磨'}
-            sub={lang === 'en' ? 'Next steps once draft is locked, one at a time' : '正文定了之后的四件事，一次做一件'}
-          >
-            <StudioTabs tabs={tabs} initialTab={sp.tab} />
-          </Card>
-        </div>
+        {/* 右栏（AI 与成品 318px） */}
+        <AssistPane
+          draftId={selected?.id}
+          platform={selected?.platform}
+          draftTitle={selected?.title}
+          hasContent={!!latest?.content?.trim()}
+          personaText={personaForCover}
+          defaultStyleKey={coverPersona.coverStyle}
+          defaultFontKey={coverPersona.coverFont}
+          coverQuota={coverQuota}
+          coverLibrary={coverLibrary}
+          draftCovers={draftCovers}
+          coverAssetId={selected?.coverAssetId ?? null}
+          stylePresets={stylePresets}
+          family={family}
+          familyCoverCounts={familyCoverCounts}
+          wechatAiHint={shouldHintWechatAiSource(ownedAccounts.map((a) => a.platform))}
+          draftSessionCount={draftSessionCount}
+          draftAdoptedCount={draftAdoptedCount}
+          skills={skills}
+          materials={materials}
+          draftIllustrations={draftIllustrations}
+          illustrationStyles={COVER_STYLES.map((st) => ({ key: st.key, name: st.name, hint: st.hint }))}
+        />
       </div>
     </>
   );

@@ -38,6 +38,8 @@ export type StepLog = {
   message: string;
   at: string;
   code?: 'QUOTA_EXCEEDED';
+  /** 这一步交出的说明（analyze / handoff）。**落进日志**是为了接力续跑时能从库里重建上一跳的交付 */
+  brief?: { title: string; text: string };
 };
 
 /** 谁把这次运行发起的。运行中心据此告诉用户「这条要不要管、去哪儿管」。 */
@@ -50,6 +52,8 @@ export type WorkflowContext = {
   memberId: string;
   /** 从哪篇草稿接着做；没有就由 draft 步新建 */
   draftId?: string | null;
+  /** 每一步的模型调用走哪条渠道（2026-09-11 定时/手点可选；null = 按功能路由） */
+  providerId?: string | null;
   /**
    * 触发来源，缺省 manual。
    *
@@ -94,7 +98,7 @@ async function runStep(
   ctx: WorkflowContext,
   step: WorkflowStep,
   state: StepState,
-): Promise<{ ok: boolean; message: string }> {
+): Promise<{ ok: boolean; message: string; waitFor?: string; brief?: { title: string; text: string } }> {
   switch (step.kind) {
     case 'topic': {
       const r = await generateRecommendations(ctx.accountId, ctx.workspaceId, step.count);
@@ -129,7 +133,7 @@ async function runStep(
 
       const dctx = await loadDraftContext({ workspaceId: ctx.workspaceId, accountId: ctx.accountId, target: target.target });
       const { messages, temperature } = buildDraftMessages(target.target, dctx);
-      const res = await llmComplete(ctx.tenantId, 'generation', messages, { temperature });
+      const res = await llmComplete(ctx.tenantId, 'generation', messages, { temperature, ...(ctx.providerId ? { providerId: ctx.providerId } : {}) });
       if (res.mocked) {
         // Mock 的初稿是示例文案。写进草稿会让后面每一步都围着假内容转，且用户很可能直接拿去发。
         return { ok: false, message: '还没接入真实模型（这一步只会产出示例内容），已停在这里' };
@@ -155,7 +159,7 @@ async function runStep(
       });
       if (!skill) return { ok: false, message: `找不到技能「${step.slug}」（可能没安装或已下架）` };
 
-      const r = await runSkill({ tenantId: ctx.tenantId, skillId: skill.id, content: draft.content, title: draft.title });
+      const r = await runSkill({ tenantId: ctx.tenantId, skillId: skill.id, content: draft.content, title: draft.title, providerId: ctx.providerId ?? undefined });
       if (!r.ok) return { ok: false, message: r.error };
       if (r.mocked) return { ok: false, message: `技能「${skill.name}」这次只拿到示例内容（未接真实模型），没有写进草稿` };
 
@@ -233,7 +237,7 @@ async function runStep(
       // 只读库里已有的数据出一份人话简报。**刻意不去采新数据**——
       // 要新数据是采集那条链的事，混进来会让「看一眼」变成几分钟的采集
       const r = await buildBrief(
-        { tenantId: ctx.tenantId, workspaceId: ctx.workspaceId, accountId: ctx.accountId },
+        { tenantId: ctx.tenantId, workspaceId: ctx.workspaceId, accountId: ctx.accountId, providerId: ctx.providerId ?? undefined },
         step.target,
       );
       if (!r.ok) return { ok: false, message: r.error };
@@ -244,9 +248,17 @@ async function runStep(
       }
       // 存进资讯库，下一步 notify 才有东西可推；也让用户事后能翻回来看
       state.briefs.push({ title: r.title, text: r.text });
-      return { ok: true, message: `${r.title}：简报已生成（${r.text.length} 字）` };
+      return { ok: true, message: `${r.title}：简报已生成（${r.text.length} 字）`, brief: { title: r.title, text: r.text } };
     }
 
+    case 'handoff': {
+      // 接力一跳（2026-09-11 P2）：只派出子运行，返回 waitFor；等待由 executeWorkflowRun 持久化。
+      // **动态 import**：agent/run 静态引 tools、tools 引本文件，静态引回去就成环。
+      const { startHandoffStep } = await import('./handoff');
+      const r = await startHandoffStep(ctx, step, state);
+      if (!r.ok) return { ok: false, message: r.message };
+      return { ok: true, message: r.message, waitFor: `run:${r.wait}` };
+    }
     case 'notify': {
       const briefs = state.briefs;
       const draftTitle = state.draftId
@@ -320,6 +332,9 @@ export async function createWorkflowRun(ctx: WorkflowContext, templateId: string
       draftId: ctx.draftId ?? null,
       status: 'running',
       trigger: ctx.trigger ?? 'manual',
+      // 续跑（接力持久等待）要按发起人的权限、原来选的模型渠道接着跑，所以都落库
+      memberId: ctx.memberId,
+      providerId: ctx.providerId ?? null,
     },
   });
   return run.id;
@@ -332,31 +347,64 @@ export async function runWorkflow(ctx: WorkflowContext, templateId: string): Pro
 }
 
 /** 跑一条已经建好的运行记录。 */
-export async function executeWorkflowRun(ctx: WorkflowContext, runId: string): Promise<WorkflowRunView> {
+export type ResumeInfo = {
+  /** 等的那次子运行到终态了：从当前 stepIndex 那一步把交付验一遍再往下走 */
+  childRunId: string;
+};
+
+/**
+ * 跑一条已经建好的运行记录。**可续跑**：从 run.stepIndex 开始，之前的日志与草稿从库里读回。
+ *
+ * 接力一跳返回 waitFor 时：把 `waitingOn` 写进行里就返回（status 仍是 running），
+ * 不在进程里等——子运行到终态由终态钩子叫醒（lib/workflow/resume.ts）再调本函数并带 resume。
+ */
+export async function executeWorkflowRun(ctx: WorkflowContext, runId: string, resume?: ResumeInfo): Promise<WorkflowRunView> {
   const run = await prisma.workflowRun.findUnique({ where: { id: runId } });
   if (!run) throw new Error('运行记录不存在');
+  if (run.status !== 'running') {
+    return { runId: run.id, status: run.status as WorkflowRunView['status'], draftId: run.draftId, stepIndex: run.stepIndex, logs: parseJson<StepLog[]>(run.log, []), error: run.error ?? undefined };
+  }
   const template = await prisma.workflowTemplate.findUnique({ where: { id: run.templateId } });
   if (!template) throw new Error('模板不存在');
   const steps = parseSteps(template.steps);
 
-  const state: StepState = { draftId: run.draftId ?? null, briefs: [] };
-  const logs: StepLog[] = [];
+  // 续跑：日志与上一跳的交付都从库里重建，不依赖任何进程内状态
+  const logs: StepLog[] = parseJson<StepLog[]>(run.log, []);
+  const state: StepState = { draftId: run.draftId ?? null, briefs: logs.filter((l) => l.ok && l.brief).map((l) => l.brief!) };
   let failed: string | null = null;
+  let waiting: string | null = null;
+  const startAt = Math.min(run.stepIndex, steps.length);
 
-  for (const [i, step] of steps.entries()) {
-    let result: { ok: boolean; message: string; code?: StepLog['code'] };
+  for (let i = startAt; i < steps.length; i += 1) {
+    const step = steps[i];
+    let result: { ok: boolean; message: string; code?: StepLog['code']; waitFor?: string; brief?: { title: string; text: string } };
     try {
-      result = await runStep(ctx, step, state);
+      if (i === startAt && resume && step.kind === 'handoff' && run.waitingOn === `run:${resume.childRunId}`) {
+        // 等的那一跳回来了：验交付，不再派一次
+        const { settleHandoffStep } = await import('./handoff');
+        const r = await settleHandoffStep(step, resume.childRunId);
+        if (r.ok && r.draftId) state.draftId = r.draftId;
+        if (r.ok && r.brief) state.briefs.push(r.brief);
+        result = { ok: r.ok, message: r.message, brief: r.brief };
+      } else {
+        result = await runStep(ctx, step, state);
+      }
     } catch (err) {
-      // 配额/预算这类「按设计拒绝」的错误也走这里：它们的 message 本身就是给用户的指引，
-      // 原样记进日志比吞掉换一句「执行失败」有用得多。
-      // 额外记 code：定时智能体要靠它把「配额用完」与「模板坏了」分开处置。
       log.warn('工作流步骤抛错', { kind: step.kind, error: (err as Error).message });
       result = {
         ok: false,
         message: (err as Error).message.slice(0, 300),
         code: err instanceof QuotaExceededError ? 'QUOTA_EXCEEDED' : undefined,
       };
+    }
+    if (result.ok && result.waitFor) {
+      // 持久等待：stepIndex 停在这一步，waitingOn 记下在等谁；本进程到此为止
+      waiting = result.waitFor;
+      await prisma.workflowRun.updateMany({
+        where: { id: run.id, status: 'running' },
+        data: { stepIndex: i, waitingOn: waiting, draftId: state.draftId, log: toJson(logs) },
+      });
+      break;
     }
     logs.push({
       kind: step.kind,
@@ -365,10 +413,11 @@ export async function executeWorkflowRun(ctx: WorkflowContext, runId: string): P
       message: result.message,
       at: new Date().toISOString(),
       ...(result.code ? { code: result.code } : {}),
+      ...(result.brief ? { brief: { title: result.brief.title, text: result.brief.text.slice(0, 6000) } } : {}),
     });
-    await prisma.workflowRun.update({
-      where: { id: run.id },
-      data: { stepIndex: i + 1, log: toJson(logs), draftId: state.draftId },
+    await prisma.workflowRun.updateMany({
+      where: { id: run.id, status: 'running' },
+      data: { stepIndex: i + 1, waitingOn: null, log: toJson(logs), draftId: state.draftId },
     });
     if (!result.ok) {
       failed = `第 ${i + 1} 步「${stepLabel(step)}」没过：${result.message}`;
@@ -376,15 +425,16 @@ export async function executeWorkflowRun(ctx: WorkflowContext, runId: string): P
     }
   }
 
+  if (waiting) {
+    return { runId: run.id, status: 'running', draftId: state.draftId, stepIndex: startAt, logs, error: undefined };
+  }
+
   const status = failed ? 'failed' : 'done';
-  await prisma.workflowRun.update({
-    where: { id: run.id },
-    data: { status, error: failed, log: toJson(logs), draftId: state.draftId },
+  await prisma.workflowRun.updateMany({
+    where: { id: run.id, status: 'running' },
+    data: { status, error: failed, log: toJson(logs), draftId: state.draftId, waitingOn: null },
   });
 
-  // 【有 AI 执行正挂在这条工作流上等结果的话，叫醒它】
-  // 动态 import：workflow 是底层模块，静态引 agent 会绕成环（同 browser-task 那边的做法）。
-  // 不叫的话，派了智能体的那次执行会一直停在「等它跑完」——而它其实早跑完了。
   try {
     const { wakeRunsWaitingOn, workflowWaitToken } = await import('../agent/wake');
     await wakeRunsWaitingOn(workflowWaitToken(run.id), {
@@ -393,8 +443,6 @@ export async function executeWorkflowRun(ctx: WorkflowContext, runId: string): P
       data: { runId: run.id, status, steps: logs.map((l) => ({ label: l.label, ok: l.ok, message: l.message })) },
     });
   } catch (err) {
-    // 叫醒失败不能把这次工作流带走：它自己已经跑完并落库了。
-    // 挂着的那条运行还有读路径自愈（settleIfResolved）与 24 小时到期兜底。
     log.warn('叫醒等待这条工作流的 AI 执行失败', { runId: run.id, error: (err as Error).message });
   }
 

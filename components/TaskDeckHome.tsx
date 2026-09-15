@@ -6,7 +6,8 @@ import { Icon } from './icons';
 import { activeBadge } from '@/lib/runs/badge';
 import { DispatchAuth, DEFAULT_AUTH, type DispatchAuthValue, type ToolBrief } from './DispatchAuth';
 import { useI18n } from '@/lib/i18n';
-import { actStartAgent } from '@/app/(app)/assistant/agent-actions';
+import { actStartAgent, actCancelAgent } from '@/app/(app)/assistant/agent-actions';
+import { useImeGuard } from '@/lib/ime';
 import { ModelPicker } from '@/app/(app)/assistant/ModelPicker';
 import { wantsExecution } from '@/lib/agent/intent';
 import { useAskStream, MAX_PICS } from './ask/useAskStream';
@@ -78,7 +79,12 @@ export function TaskDeckHome({
   /** 刚从这个框派出去的那一条：给一句「已经开始了」和去看过程的链接 */
   const [started, setStarted] = useState<AgentTurn | null>(null);
   const [pending, start] = useTransition();
+  /** 正在终止的那条 runId：按钮转圈用，也防连点 */
+  const [cancelling, setCancelling] = useState<string | null>(null);
   const ask = useAskStream({ models, lang });
+  // 中文输入法组字时的回车是「上屏」，不是「派活」。少了这道守卫，
+  // 想打一串英文按回车让字母上屏，任务就已经派出去了（见 lib/ime.ts）
+  const ime = useImeGuard();
 
   // 浮标移交：把那句话填进输入框就停手。**绝不自动开跑**
   useEffect(() => {
@@ -114,7 +120,8 @@ export function TaskDeckHome({
     setErr('');
     ask.setHandoffGoal(null);
     start(async () => {
-      const r = await actStartAgent(goal, auth);
+      // 派活也带上模型选择：同一个选择器，问一句和直接去做走同一条渠道
+      const r = await actStartAgent(goal, auth, ask.modelId);
       if (!r.ok || !r.turn) {
         setErr(r.error ?? (lang === 'en' ? 'Failed to start' : '没派出去'));
         return;
@@ -123,6 +130,32 @@ export function TaskDeckHome({
       setGoal('');
       // 立刻把它摆进「正在办的事」，别让用户等 15 秒才看见自己刚派的活
       await refreshActive();
+    });
+  }
+
+  /**
+   * 手动终止一条正在跑的活。派错了、或者按回车误发了，得能当场收回来。
+   *
+   * 服务端 cancelAgentRun 已经把难的部分做完了：乐观锁（跑完的不会被拉回来）、
+   * 连带终止它派出去的子运行、清租约。这里只负责发起与刷新列表。
+   */
+  function cancelRun(runId: string) {
+    if (cancelling) return;
+    setErr('');
+    setCancelling(runId);
+    start(async () => {
+      try {
+        const r = await actCancelAgent(runId);
+        if (!r.ok) {
+          setErr(r.error ?? dict.today.cancelFailed);
+        } else if (started?.runId === runId) {
+          // 刚派出去那条被收回来了，「已经开始」那条横幅就不该再挂着
+          setStarted(null);
+        }
+        await refreshActive();
+      } finally {
+        setCancelling(null);
+      }
     });
   }
 
@@ -137,107 +170,170 @@ export function TaskDeckHome({
   }
 
   return (
-    <div style={{ display: 'grid', gap: 16, marginBottom: 16 }}>
-      <div className="card" style={{ padding: 18 }}>
-        <div className="row wrap" style={{ gap: 8, alignItems: 'baseline', marginBottom: 12 }}>
-          <h1 style={{ fontSize: 20, margin: 0 }}>
-            {dict.today.greeting.replace('{name}', memberName || (lang === 'en' ? 'Creator' : '创作者'))}
-          </h1>
+    <div className="taskdeck-home-wrapper" style={{ display: 'grid', gap: 16, marginBottom: 16 }}>
+      <div className="card taskdeck-card">
+        <div className="taskdeck-header">
+          <div className="taskdeck-title-row">
+            <span className="taskdeck-icon-badge">
+              <Icon.fire size={18} />
+            </span>
+            <h1 className="taskdeck-title">
+              {dict.today.greeting.replace('{name}', memberName || (lang === 'en' ? 'Creator' : '创作者'))}
+            </h1>
+          </div>
         </div>
 
-        {/* 待发的参考图：只跟「先问问」走，问完即清 */}
-        {(ask.pics.length > 0 || ask.picErr) && (
-          <div className="row wrap" style={{ gap: 8, marginBottom: 8, alignItems: 'center' }}>
-            {ask.pics.map((src, i) => (
-              <span key={i} style={{ position: 'relative', display: 'inline-block', width: 52, height: 52, flexShrink: 0 }}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={src}
-                  alt={lang === 'en' ? `Reference image ${i + 1}` : `参考图 ${i + 1}`}
-                  style={{ width: 52, height: 52, maxWidth: 52, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--border)', display: 'block' }}
+        {/* 沉浸式一体化指挥输入舱 */}
+        <div className="taskdeck-input-container">
+          {/* 待发的参考图：只跟「先问问」走，问完即清 */}
+          {(ask.pics.length > 0 || ask.picErr) && (
+            <div className="row wrap taskdeck-pics-preview">
+              {ask.pics.map((src, i) => (
+                <span key={i} style={{ position: 'relative', display: 'inline-block', width: 52, height: 52, flexShrink: 0 }}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={src}
+                    alt={lang === 'en' ? `Reference image ${i + 1}` : `参考图 ${i + 1}`}
+                    style={{ width: 52, height: 52, maxWidth: 52, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--border)', display: 'block' }}
+                  />
+                  <button
+                    type="button"
+                    className="ask-pic-remove"
+                    aria-label={lang === 'en' ? 'Remove this image' : '移除这张图'}
+                    onClick={() => ask.removePic(i)}
+                  >
+                    ✕
+                  </button>
+                </span>
+              ))}
+              {ask.picErr && <span className="small" style={{ color: 'var(--red)', fontWeight: 600 }}>{ask.picErr}</span>}
+            </div>
+          )}
+
+          <textarea
+            data-flow="派活"
+            className="taskdeck-textarea"
+            rows={3}
+            value={goal}
+            disabled={busy}
+            placeholder={dict.today.placeholder}
+            onChange={(e) => setGoal(e.target.value)}
+            {...ime.composition}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter') return;
+              // 输入法还在组字：这一下回车是选词/让英文字母上屏，不是发送。
+              // **必须早于 preventDefault**，否则字上不了屏
+              if (ime.isComposing(e)) return;
+              // Shift+Enter 换行；⌘/Ctrl+Enter 先问问；Enter 直接派活——这一框绝大多数时候只写一行
+              if (e.shiftKey) return;
+              e.preventDefault();
+              if (e.metaKey || e.ctrlKey) askIt(goal);
+              else dispatch(goal);
+            }}
+          />
+
+          {/* 输入舱内嵌一体化工具与操作条 */}
+          <div className="taskdeck-toolbar">
+            {/* 左侧：模型选择 + 参考图 */}
+            <div className="taskdeck-toolbar-left">
+              {models.length > 1 && (
+                <ModelPicker models={models} value={ask.modelId} onChange={ask.setModelId} />
+              )}
+
+              <label
+                className="taskdeck-tool-btn"
+                title={ask.pics.length >= MAX_PICS ? (lang === 'en' ? `Up to ${MAX_PICS} images` : `最多 ${MAX_PICS} 张`) : dict.today.attachImageTip}
+                style={{ cursor: busy || ask.pics.length >= MAX_PICS ? 'not-allowed' : 'pointer' }}
+              >
+                <Icon.image size={13} />
+                <span>{dict.today.attachImage}{ask.pics.length > 0 ? ` (${ask.pics.length})` : ''}</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  hidden
+                  disabled={busy || ask.pics.length >= MAX_PICS}
+                  onChange={(e) => {
+                    const files = Array.from(e.target.files ?? []);
+                    e.target.value = '';
+                    void ask.addPics(files);
+                  }}
                 />
+              </label>
+            </div>
+
+            {/* 右侧：先问问 + 授权范围 + 开始执行 */}
+            <div className="taskdeck-toolbar-right">
+              {ask.streaming ? (
                 <button
                   type="button"
-                  className="ask-pic-remove"
-                  aria-label={lang === 'en' ? 'Remove this image' : '移除这张图'}
-                  onClick={() => ask.removePic(i)}
+                  className="taskdeck-btn-ask active"
+                  onClick={() => ask.stop()}
+                  title={dict.today.stopBtn}
                 >
-                  ✕
+                  <Icon.refresh size={13} className="spin" />
+                  <span>{dict.today.stopBtn}</span>
                 </button>
-              </span>
-            ))}
-            {ask.picErr && <span className="small" style={{ color: 'var(--red)', fontWeight: 600 }}>{ask.picErr}</span>}
-          </div>
-        )}
+              ) : (
+                <button
+                  type="button"
+                  className="taskdeck-btn-ask"
+                  disabled={busy || (!goal.trim() && ask.pics.length === 0)}
+                  onClick={() => askIt(goal)}
+                  title={lang === 'en' ? 'Just ask AI (⌘/Ctrl+Enter)' : '先问问（⌘/Ctrl+Enter）'}
+                >
+                  <Icon.chat size={14} />
+                  <span>{dict.today.askBtn}</span>
+                  <kbd className="taskdeck-kbd hide-mobile">⌘↵</kbd>
+                </button>
+              )}
 
-        <textarea
-          data-flow="派活"
-          className="textarea"
-          rows={3}
-          value={goal}
-          disabled={busy}
-          placeholder={dict.today.placeholder}
-          onChange={(e) => setGoal(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key !== 'Enter') return;
-            // Shift+Enter 换行；⌘/Ctrl+Enter 先问问；Enter 直接派活——这一框绝大多数时候只写一行
-            if (e.shiftKey) return;
-            e.preventDefault();
-            if (e.metaKey || e.ctrlKey) askIt(goal);
-            else dispatch(goal);
-          }}
-          style={{ width: '100%', marginBottom: 10 }}
-        />
+              <DispatchAuth tools={authorizableTools} value={auth} onChange={setAuth} />
 
-        <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
-          <button className="btn btn-primary" disabled={busy || !goal.trim()} onClick={() => dispatch(goal)}>
-            {pending ? dict.today.dispatching : dict.today.dispatchBtn}
-          </button>
-          {ask.streaming ? (
-            <button className="btn" onClick={() => ask.stop()}>
-              <Icon.refresh size={13} className="spin" /> {dict.today.stopBtn}
-            </button>
-          ) : (
-            <button className="btn" disabled={busy || (!goal.trim() && ask.pics.length === 0)} onClick={() => askIt(goal)}>
-              <Icon.chat size={13} /> {dict.today.askBtn}
-            </button>
-          )}
-          <span className="row wrap" style={{ gap: 4 }}>
-            {dict.today.quick.map((q) => (
-              <button key={q} className="btn btn-sm btn-ghost" disabled={busy} onClick={() => setGoal(q)}>
-                {q}
+              <button
+                type="button"
+                className={`taskdeck-btn-dispatch ${!busy && goal.trim() ? 'active' : ''}`}
+                disabled={busy || !goal.trim()}
+                onClick={() => dispatch(goal)}
+                title={lang === 'en' ? 'Start execution (Enter)' : '开始执行（Enter）'}
+              >
+                {pending ? (
+                  <span className="row" style={{ gap: 5, alignItems: 'center' }}>
+                    <Icon.refresh size={13} className="spin" />
+                    <span>{dict.today.dispatching}</span>
+                  </span>
+                ) : (
+                  <span className="row" style={{ gap: 5, alignItems: 'center' }}>
+                    <Icon.sparkles size={14} />
+                    <span>{dict.today.dispatchBtn}</span>
+                    <kbd className="taskdeck-kbd-primary hide-mobile">↵</kbd>
+                  </span>
+                )}
               </button>
-            ))}
-          </span>
+            </div>
+          </div>
         </div>
 
-        {/* 第二行：授权范围（管派活）· 模型与图片（管问答）· 快捷键 */}
-        <div className="row wrap" style={{ gap: 10, alignItems: 'center', marginTop: 4 }}>
-          <DispatchAuth tools={authorizableTools} value={auth} onChange={setAuth} />
-          <span className="row" style={{ gap: 8, alignItems: 'center', marginTop: 8 }}>
-            {models.length > 1 && <ModelPicker models={models} value={ask.modelId} onChange={ask.setModelId} />}
-            <label
-              className="btn btn-sm btn-ghost"
-              title={ask.pics.length >= MAX_PICS ? (lang === 'en' ? `Up to ${MAX_PICS} images` : `最多 ${MAX_PICS} 张`) : dict.today.attachImageTip}
-              style={{ cursor: busy || ask.pics.length >= MAX_PICS ? 'not-allowed' : 'pointer' }}
-            >
-              <Icon.image size={13} />
-              <span>{dict.today.attachImage}{ask.pics.length > 0 ? ` (${ask.pics.length})` : ''}</span>
-              <input
-                type="file"
-                accept="image/*"
-                multiple
-                hidden
-                disabled={busy || ask.pics.length >= MAX_PICS}
-                onChange={(e) => {
-                  const files = Array.from(e.target.files ?? []);
-                  e.target.value = '';
-                  void ask.addPics(files);
-                }}
-              />
-            </label>
-          </span>
-          <span className="small muted hide-mobile" style={{ marginLeft: 'auto', marginTop: 8, opacity: 0.7 }}>
+        {/* 快捷指令胶囊行 */}
+        <div className="taskdeck-quick-row">
+          <div className="taskdeck-quick-chips">
+            <span className="taskdeck-quick-badge">
+              <Icon.bulb size={12} />
+              <span>{lang === 'en' ? 'Suggestions' : '快捷指令'}</span>
+            </span>
+            {dict.today.quick.map((q) => (
+              <button
+                key={q}
+                type="button"
+                className="taskdeck-chip"
+                disabled={busy}
+                onClick={() => setGoal(q)}
+              >
+                <span>{q}</span>
+              </button>
+            ))}
+          </div>
+          <span className="taskdeck-shortcuts-hint hide-mobile">
             {dict.today.askKeyHint}
           </span>
         </div>
@@ -247,12 +343,24 @@ export function TaskDeckHome({
         {/* 派出去之后：执行本来就是后台跑的，但界面上得有人说，否则用户以为要守着。
             过程与追问在 /assistant?run=，这里只给一句话和一个去处 */}
         {started && !err && (
-          <div className="alert-gradient-brand" style={{ padding: '10px 14px', marginTop: 12 }}>
+          <div className="alert-gradient-brand taskdeck-started-banner">
+            <span className="run-live-spinner" aria-hidden />
             <span className="small" style={{ lineHeight: 1.7 }}>
               <b>{dict.today.startedTitle}</b> {dict.today.startedHint}{' '}
-              <Link href={`/assistant?run=${started.runId}`} className="btn btn-sm" style={{ marginLeft: 8 }}>
+              <Link href={`/assistant?run=${started.runId}`} className="btn btn-sm btn-primary" style={{ marginLeft: 8 }}>
                 {dict.today.startedLink}
               </Link>
+              {/* 派错了要能当场收回来——尤其是回车误发的那种。不跳页，就在这儿终止 */}
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
+                style={{ marginLeft: 6 }}
+                disabled={cancelling === started.runId}
+                onClick={() => cancelRun(started.runId)}
+                title={dict.today.cancelTip}
+              >
+                {cancelling === started.runId ? dict.today.cancelling : dict.today.cancelBtn}
+              </button>
             </span>
           </div>
         )}
@@ -294,7 +402,10 @@ export function TaskDeckHome({
           </div>
           <div className="stack" style={{ gap: 6 }}>
             {active.map((r) => (
-              <Link key={`${r.kind}-${r.id}`} href={r.href} className="row-between" style={{ gap: 10, textDecoration: 'none' }}>
+              // 整行原来就是一个 <Link>。终止按钮不能放进去：<a> 里套 <button> 既不合法，
+              // 点一下还会顺带跳走。所以外面包一层 div，按钮与链接并排
+              <div key={`${r.kind}-${r.id}`} className="row-between" style={{ gap: 8 }}>
+              <Link href={r.href} className="row-between" style={{ gap: 10, textDecoration: 'none', flex: 1, minWidth: 0 }}>
                 <span className="row" style={{ gap: 8, minWidth: 0 }}>
                   {/* 徽章文案与配色是纯函数算的（lib/runs 的 activeBadge）：
                       「等你处理」只对**自己发起的**那条说——同事的运行也在这个列表里
@@ -317,6 +428,21 @@ export function TaskDeckHome({
                   <Icon.chevron size={13} />
                 </span>
               </Link>
+              {/* 只给 AI 执行这一类：终止走的是 cancelAgentRun，只认 AgentRun。
+                  采集/发布/浏览器任务各有自己的收口，仍在运行中心里 */}
+              {r.kind === 'agent' && (
+                <button
+                  type="button"
+                  className="btn btn-sm btn-ghost"
+                  style={{ flexShrink: 0 }}
+                  disabled={cancelling === r.id}
+                  onClick={() => cancelRun(r.id)}
+                  title={dict.today.cancelTip}
+                >
+                  {cancelling === r.id ? dict.today.cancelling : dict.today.cancelBtn}
+                </button>
+              )}
+              </div>
             ))}
           </div>
         </div>

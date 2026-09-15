@@ -3,7 +3,6 @@ import { AUTH_COOKIE, AUTH_COOKIE_MAX_AGE_S, authCookieSecure } from '@/lib/auth
 import { consumeLocalLoginTicket } from '@/lib/auth/local-link';
 import { edition } from '@/lib/edition';
 import { checkRateLimit, getClientIp, ipKey } from '@/lib/ratelimit';
-import { siteUrl } from '@/lib/site-url';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';

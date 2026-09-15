@@ -25,6 +25,12 @@ const HUB_TITLES_EN: Record<string, string> = {
   '桌面客户端与整机版': 'Desktop Client & Appliance',
   '下载采集助手': 'Download Ingest Assistant',
   '系统偏好与设置': 'System Preferences & Settings',
+  '执行记录': 'Execution Runs',
+  '任务记录': 'Task Records',
+  '内容工单': 'Content Work Items',
+  '执行过程': 'Execution View',
+  '消息渠道': 'Notification Channels',
+  '十分钟开场': 'Ten-Minute Start',
 };
 
 // 合并页组的紧凑页头（2026-08-26 用户「占用了比较大的篇幅」）。
@@ -59,13 +65,13 @@ export function HubHeader({
   const displayTitle = typeof title === 'string' && lang === 'en' ? (HUB_TITLES_EN[title] ?? title) : title;
 
   return (
-    <div className="hub-head" title={hint}>
+    <header className="hub-head" title={hint}>
       <h1 className="hub-head-title">{displayTitle}</h1>
       {tabs}
-      <span className="hub-head-right">
+      <div className="hub-head-right">
         {meta}
         {action}
-      </span>
-    </div>
+      </div>
+    </header>
   );
 }

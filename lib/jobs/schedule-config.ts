@@ -1,5 +1,6 @@
 import type { JobName } from './types';
 import { PUSH_TICK_MINUTES } from '../bot/push-window';
+import { HOT_INGEST_INTERVAL_MINUTES, HOT_SOURCES } from '../constants';
 
 // 所有 cron 的时区口径。**必须显式指定**：容器（node:20-slim）里没有 TZ，系统时间是 UTC，
 // 不传 tz 的话下面每一行都会晚 8 小时打在北京时间上——「每日 05:00 生成推荐」实际是北京 13:00，
@@ -15,7 +16,7 @@ export const AGENT_TICK_MINUTES = 10;
 // 三轨定时表（生产 worker 注册）。cron 语法：分 时 日 月 周，时区见 SCHEDULE_TZ（北京时间）。
 export const SCHEDULES: { name: JobName; cron: string; note: string }[] = [
   // 广播型：热榜高频采集（成本不随租户涨）
-  { name: 'ingest_hot', cron: '*/30 * * * *', note: '每 30 分钟采集 9 源热榜' },
+  { name: 'ingest_hot', cron: `*/${HOT_INGEST_INTERVAL_MINUTES} * * * *`, note: `每 ${HOT_INGEST_INTERVAL_MINUTES} 分钟采集 ${HOT_SOURCES.length} 源热榜` },
   { name: 'cluster_topics', cron: '5,35 * * * *', note: '采集后 5 分钟做跨源聚类' },
   { name: 'crawl_competitors', cron: '0 */2 * * *', note: '每 2 小时采集竞对作品' },
   // 批租户型：夜间为所有活跃账号生成今日推荐

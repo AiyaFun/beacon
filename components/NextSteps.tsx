@@ -35,6 +35,8 @@ const WHY_EN: Record<string, string> = {
 export function NextSteps({ nav }: { nav: NavGroup[] }) {
   const pathname = usePathname();
   const { lang, dict } = useI18n();
+  // 写稿工位 (/studio) 为全屏专注写作区，去除底部跳转条
+  if (pathname === '/studio' || pathname?.startsWith('/studio/')) return null;
   const steps = nextSteps(activeHref(nav, pathname) ?? '');
   if (steps.length === 0) return null;
 

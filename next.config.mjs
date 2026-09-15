@@ -17,6 +17,8 @@ const nextConfig = {
     return [
       { source: '/inspiration', destination: '/topics?view=inspiration', permanent: false },
       { source: '/advisor', destination: '/topics?view=advisor', permanent: false },
+      // /genes 已并入「看效果」页的一个标签（components/insight/GenesPanel.tsx），帮助页/书签里的旧地址靠这条接住
+      { source: '/genes', destination: '/data?view=genes', permanent: false },
     ];
   },
   eslint: { ignoreDuringBuilds: true },

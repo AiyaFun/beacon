@@ -39,6 +39,8 @@ export type CreateScheduleInput = {
   atHour: number;
   atMinute: number;
   weekdays: number[];
+  /** 到点跑时走哪条模型渠道（已归一；null = 自动 / 用卡上的） */
+  providerId?: string | null;
 };
 
 /**
@@ -107,6 +109,7 @@ export async function createSchedule(input: CreateScheduleInput): Promise<Create
       atHour: hour,
       atMinute: minute,
       weekdays: toJson(normalizeWeekdays(input.weekdays)),
+      providerId: input.providerId ?? null,
       createdBy: input.memberId,
     },
   });

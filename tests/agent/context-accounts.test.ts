@@ -84,7 +84,8 @@ describe('🔒 真的拼进了系统提示', () => {
     const src = read('lib/agent/run.ts').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
     expect(src).toContain("import { accountsContextBlock } from './context-accounts';");
     expect(src).toContain('accountsContextBlock({ workspaceId: ctx.workspaceId, accountId: ctx.accountId })');
-    expect(src).toContain('auth.authMode, accounts)');
+    // 2026-09-09 起 systemPrompt 末尾还多了 lessons（偏好回路），这里只钉「accounts 确实传进去了」
+    expect(src).toMatch(/auth\.authMode, accounts[,)]/);
   });
 });
 

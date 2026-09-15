@@ -252,7 +252,9 @@ export async function suggestProcedures(
       title: '这件事你做过好几次了，要存成技能吗',
       body: `最近做了 ${g.runIds.length} 次「${g.goal.slice(0, 40)}」，每次都是同一串做法`
         + `（${g.trace.join(' → ')}）。存成技能以后一句话就能重放。`,
-      link: '/runs',
+      // 直接落到最近那次执行的过程页：那页上就有「把这次的做法存成技能」按钮，一步到位。
+      // 此前链到 /runs，用户还得自己从列表里猜是哪一次
+      link: `/assistant?run=${g.runIds[0]}`,
     });
     suggested += 1;
     // 一轮最多提醒 3 条：一次弹七八条通知，用户只会全部划掉

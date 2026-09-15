@@ -16,7 +16,9 @@ const read = (p: string) => readFileSync(join(process.cwd(), p), 'utf8');
 describe('数据源状态：说了就要显示', () => {
   it('🔒 设置页真的渲染了 competitor 那一半（此前只渲染 hot）', () => {
     const page = read('app/(app)/settings/page.tsx');
-    expect(page).toContain('board.competitor.map');
+    // 竞对那半是纯计算（读适配器链，0 次网络），2026-09-12 起直接同步取，不跟探测一起等
+    expect(page, '没取').toContain('competitorSourceBoard()');
+    expect(page, '取了没渲染').toContain('competitorBoard.map');
     expect(page).toContain('竞对数据源');
   });
 

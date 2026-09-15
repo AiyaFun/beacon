@@ -189,7 +189,7 @@ async function listRunsUncached(workspaceId: string, take: number): Promise<RunE
       orderBy: { updatedAt: 'desc' },
       take,
       select: {
-        id: true, goal: true, status: true, error: true, steps: true, updatedAt: true, accountId: true,
+        id: true, goal: true, status: true, error: true, steps: true, updatedAt: true, createdAt: true, accountId: true,
         // memberId：这一页是工作区级的，同事的运行也在列。而「等你确认」只有发起人点得动，
         // 界面要据此把第二人称收回去（否则同事看到的是一个点了必定报错的按钮）
         memberId: true,
@@ -208,7 +208,7 @@ async function listRunsUncached(workspaceId: string, take: number): Promise<RunE
       orderBy: { updatedAt: 'desc' },
       take,
       select: {
-        id: true, status: true, stepIndex: true, error: true, updatedAt: true, accountId: true, trigger: true,
+        id: true, status: true, stepIndex: true, error: true, updatedAt: true, createdAt: true, accountId: true, trigger: true,
         template: { select: { name: true, emoji: true } },
       },
     }),
@@ -240,7 +240,7 @@ async function listRunsUncached(workspaceId: string, take: number): Promise<RunE
       where: { workspaceId },
       orderBy: { updatedAt: 'desc' },
       take,
-      select: { id: true, kind: true, status: true, result: true, error: true, updatedAt: true, accountId: true, origin: true },
+      select: { id: true, kind: true, status: true, result: true, error: true, updatedAt: true, createdAt: true, accountId: true, origin: true },
     }),
   ]);
 
@@ -259,6 +259,7 @@ async function listRunsUncached(workspaceId: string, take: number): Promise<RunE
       title: r.goal,
       status: agentStatus(r.status),
       at: r.updatedAt,
+      startedAt: r.createdAt,
       // 「等浏览器」要说清楚在等谁：只写「已执行 N 步」的话，用户看到的是一条
       // 停着不动的任务，既不知道卡在哪，也不知道该做什么（答案是：把浏览器打开）
       detail: agentDetail(r),
@@ -286,6 +287,7 @@ async function listRunsUncached(workspaceId: string, take: number): Promise<RunE
       title: r.template ? `${r.template.emoji} ${r.template.name}` : '（这个智能体已经被删了）',
       status: workflowStatus(r.status),
       at: r.updatedAt,
+      startedAt: r.createdAt,
       // 来源要写在脸上：定时跑失败意味着「那条计划可能正在连续失败、快被自动停用」，
       // 手点失败只是这一次的事——同一个红字，用户该做的事完全不同
       detail: [TRIGGER_LABEL[r.trigger] ?? null, r.error ?? `跑到第 ${r.stepIndex + 1} 步`]
@@ -326,6 +328,7 @@ async function listRunsUncached(workspaceId: string, take: number): Promise<RunE
       title: BROWSER_KIND_LABEL[r.kind as keyof typeof BROWSER_KIND_LABEL] ?? r.kind,
       status: browserTaskStatus(r.status),
       at: r.updatedAt,
+      startedAt: r.createdAt,
       // pending 时要说清「在等什么」——用户看到「等你处理」却不知道自己该干嘛最糟
       detail: [
         r.origin === 'agent' ? 'AI 派的' : r.origin === 'schedule' ? '定时派的' : r.origin === 'api' ? '外部程序派的（对外调用令牌）' : null,

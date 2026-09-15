@@ -11,8 +11,8 @@ import { ACCOUNT_COOKIE } from '@/lib/auth-constants';
 import { toJson } from '@/lib/json';
 import { emptyPersona } from '@/lib/persona';
 import { ingestHot, crawlCompetitors, generateRecommendations, clusterHotTopics } from '@/lib/pipeline';
-import { writeMemory } from '@/lib/memory/core';
 import { analyzeHotFit, type HotFitAnalysis } from '@/lib/topic/combine';
+import { issueHotFitToken, verifyHotFitToken } from '@/lib/topic/adopt-token';
 import { requireRole, RbacError } from '@/lib/rbac';
 import { QuotaExceededError } from '@/lib/quota';
 
@@ -24,6 +24,17 @@ const ACCOUNT_COOKIE_OPTS = { httpOnly: true, sameSite: 'lax', maxAge: 180 * 24 
 function isDesignedRejection(e: unknown): e is QuotaExceededError | RbacError {
   return e instanceof QuotaExceededError || e instanceof RbacError;
 }
+
+// 底层异常不能原样回给客户端：Prisma 的 message 带表名/列名，模型网关的带上游 HTTP 与通道细节。
+// 按设计拒绝（配额/权限）的文案本来就是给人看的，原样返回；其余记日志、回一句通用话。
+function actionError(e: unknown, fallback: string): string {
+  if (isDesignedRejection(e)) return e.message;
+  console.error('[actions]', e);
+  return fallback;
+}
+
+/** 客户端传来的字符串：非字符串按空处理（不让 .trim() 在 try 外抛），去首尾空白并截断。 */
+const cleanStr = (v: unknown, max: number): string => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 
 // ── 多账号管理：一个用户多个创作者账号，内容数据按账号完全隔离 ──
 
@@ -168,15 +179,88 @@ export async function actDeleteAccount(accountId: string, confirmName: string) {
 }
 
 // 「账号内容 × 实时热点」结合分析
-export async function actAnalyzeHotFit(hotTitle: string): Promise<{ ok: boolean; analysis?: HotFitAnalysis; error?: string }> {
-  if (!hotTitle.trim()) return { ok: false, error: '请选择或输入一个热点' };
+const HOT_TITLE_MAX = 200;
+
+export async function actAnalyzeHotFit(
+  hotTitle: string,
+): Promise<{ ok: boolean; analysis?: HotFitAnalysis; adoptToken?: string; error?: string }> {
+  // 入参来自客户端：null/对象不能让 .trim() 在 try 外炸；超长文本不能直接灌进提示词与计费路径
+  if (typeof hotTitle !== 'string' || !hotTitle.trim()) return { ok: false, error: '请选择或输入一个热点' };
+  const title = hotTitle.trim();
+  if (title.length > HOT_TITLE_MAX) return { ok: false, error: `热点标题过长（最多 ${HOT_TITLE_MAX} 字）` };
   const s = await getSession();
   requireRole(s, 'topic.manage'); // 热点结合分析是选题构思，且烧 LLM
   try {
-    const analysis = await analyzeHotFit(s.accountId, s.workspaceId, s.tenantId, hotTitle.trim());
-    return { ok: true, analysis };
+    const analysis = await analyzeHotFit(s.accountId, s.workspaceId, s.tenantId, title);
+    // 采纳凭证：一键采纳时只认它，标题/切入角/评分都从凭证里取（见 lib/topic/adopt-token.ts）
+    return { ok: true, analysis, adoptToken: issueHotFitToken(s.accountId, analysis) };
   } catch (e) {
-    return { ok: false, error: (e as Error).message.slice(0, 120) };
+    return { ok: false, error: actionError(e, '分析失败，请稍后重试') };
+  }
+}
+
+// 采纳落库的长度上限：展示用文本超长截断而不是打回（凭证里的值本就是服务端产出）
+const HOT_ADOPT_MAX = { hotTitle: 200, angle: 200, why: 600 } as const;
+// 同一账号、同热点、同切入角在这个窗口内重复采纳 → 视为同一次点击（双击/网络重试），只留一条
+const HOT_ADOPT_DEDUPE_MS = 5 * 60 * 1000;
+
+export async function actAdoptHotAngleAsTopic(params: {
+  /** actAnalyzeHotFit 返回的 adoptToken */
+  token: string;
+  /** 采纳 analysis.angles 里的第几条 */
+  angleIndex: number;
+}): Promise<{ ok: boolean; topicId?: string; error?: string; duplicate?: boolean }> {
+  const p = (params && typeof params === 'object' ? params : {}) as Partial<Record<'token' | 'angleIndex', unknown>>;
+  const s = await getSession();
+  requireRole(s, 'topic.manage');
+
+  // 来源校验：凭证签名 + 账号归属 + 有效期。客户端只能选「第几条」，选不了内容
+  const v = verifyHotFitToken(p.token, s.accountId);
+  if (!v.ok) return { ok: false, error: v.error };
+  const idx = typeof p.angleIndex === 'number' && Number.isInteger(p.angleIndex) ? p.angleIndex : -1;
+  const chosen = v.payload.angles[idx];
+  if (!chosen || typeof chosen !== 'object') return { ok: false, error: '切入角度不存在' };
+
+  const angle = cleanStr(chosen.angle, HOT_ADOPT_MAX.angle);
+  if (!angle) return { ok: false, error: '切入角度不能为空' };
+  const hotTitle = cleanStr(v.payload.hotTitle, HOT_ADOPT_MAX.hotTitle);
+  if (!hotTitle) return { ok: false, error: '缺少热点标题' };
+  const why = cleanStr(chosen.why, HOT_ADOPT_MAX.why);
+  const fitRaw = Number(v.payload.fit);
+  const fitScore = Number.isFinite(fitRaw) ? Math.max(0, Math.min(100, Math.round(fitRaw))) : 0;
+
+  const dedupeKey = { accountId: s.accountId, sourceType: 'hot', sourceRef: hotTitle, title: angle };
+  try {
+    const created = await prisma.topicIdea.create({
+      data: {
+        ...dedupeKey,
+        angle: why || angle,
+        rationale: `来自热点「${hotTitle}」结合分析（契合度 ${fitScore} 分）`,
+        totalScore: fitScore,
+        queue: 'today',
+        state: 'accepted',
+        // 启发式兜底出来的分析（Mock/模型失败）采纳进去也要如实标：评分不是真模型打的
+        mocked: v.payload.mocked === true,
+      },
+    });
+    // 幂等收敛（不靠数据库锁，SQLite/Postgres 通吃）：并发双击时两次 create 都会成功，
+    // 建完再查同键窗口内的全部行，只留最早那条；自己不是最早就删掉自己、返回最早那条的 id。
+    // 先查后建的写法（findFirst → create）两边都可能查空然后各建一条，这里改成建完再收敛：
+    // 后建的那个一定能看见先建的，两边看到同一集合、算出同一个赢家。
+    const siblings = await prisma.topicIdea.findMany({
+      where: { ...dedupeKey, createdAt: { gte: new Date(Date.now() - HOT_ADOPT_DEDUPE_MS) } },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: { id: true },
+    });
+    const winner = siblings[0]?.id ?? created.id;
+    if (winner !== created.id) {
+      await prisma.topicIdea.deleteMany({ where: { id: created.id } });
+      return { ok: true, topicId: winner, duplicate: true };
+    }
+    revalidatePath('/topics');
+    return { ok: true, topicId: created.id };
+  } catch (e) {
+    return { ok: false, error: actionError(e, '采纳失败，请稍后重试') };
   }
 }
 
@@ -221,45 +305,6 @@ export async function actGenerateRecommendations(): Promise<{ created: number } 
   }
 }
 
-// ── 选题操作（采纳/拒绝，写入偏好记忆）──
-
-export async function actAcceptTopic(topicId: string) {
-  const s = await getSession();
-  requireRole(s, 'topic.manage');
-  const topic = await prisma.topicIdea.findFirst({ where: { id: topicId, accountId: s.accountId } });
-  if (!topic) return { ok: false };
-  await prisma.topicIdea.update({ where: { id: topic.id }, data: { state: 'accepted' } });
-  await writeMemory({
-    workspaceId: s.workspaceId,
-    accountId: s.accountId,
-    type: 'preference',
-    content: `用户采纳了选题方向：${topic.angle}`,
-    confidence: 0.4,
-  });
-  revalidatePath('/topics');
-  return { ok: true };
-}
-
-export async function actRejectTopic(topicId: string, reason: string) {
-  const s = await getSession();
-  requireRole(s, 'topic.manage');
-  const topic = await prisma.topicIdea.findFirst({ where: { id: topicId, accountId: s.accountId } });
-  if (!topic) return { ok: false };
-  await prisma.topicIdea.update({
-    where: { id: topic.id },
-    data: { state: 'rejected', rejectReason: reason },
-  });
-  await writeMemory({
-    workspaceId: s.workspaceId,
-    accountId: s.accountId,
-    type: 'preference',
-    content: `用户拒绝选题「${topic.title}」，原因：${reason}`,
-    confidence: 0.4,
-  });
-  revalidatePath('/topics');
-  return { ok: true };
-}
-
 // ── 任务清单 ──
 
 export async function actAddTask(title: string) {
@@ -275,67 +320,6 @@ export async function actToggleTask(id: string, done: boolean) {
   const s = await getSession();
   requireRole(s, 'task.manage');
   await prisma.taskItem.updateMany({ where: { id, workspaceId: s.workspaceId }, data: { done } });
-  revalidatePath('/');
-  return { ok: true };
-}
-
-// ── 今日建议（F8-1）──
-
-export type Advice = { text: string; mocked: boolean };
-
-export async function actGenerateAdvice(context: {
-  completeness: number;
-  topicCount: number;
-  publishCount: number;
-  acceptedCount: number;
-  memoryCount: number;
-  competitorCount: number;
-}): Promise<Advice> {
-  const s = await getSession();
-  requireRole(s, 'content.create');
-  const { llmComplete } = await import('@/lib/llm/gateway');
-  const { readPersona, personaPromptBlock } = await import('@/lib/persona');
-  const account = await prisma.creatorAccount.findUnique({ where: { id: s.accountId } });
-  const persona = readPersona(account?.personaCard ?? '{}');
-
-  const sys = [
-    '你是内容创作者的 AI 运营教练。根据以下账号状态，给出 2-3 条今日建议。',
-    '每条建议必须满足：动作动词 + 具体数量 + 完成时限。例：「今晚从热点雷达收藏 3 个话题」。',
-    '不要给空洞的鸡汤或通用模板。紧扣这个人的人设和当前数据。没有高置信建议时宁缺毋滥，输出 1 条即可。',
-    '',
-    personaPromptBlock(persona),
-  ].join('\n');
-
-  const usr = [
-    `人设完善度：${context.completeness}%`,
-    `今日推荐选题：${context.topicCount} 条`,
-    `已采纳待拍：${context.acceptedCount} 条`,
-    `已发布作品：${context.publishCount} 条`,
-    `生效记忆：${context.memoryCount} 条`,
-    `监控竞对：${context.competitorCount} 个`,
-    '',
-    '请给出今日建议，每条一行，不要编号不要列表符号。',
-  ].join('\n');
-
-  try {
-    const r = await llmComplete(s.tenantId, 'chat', [
-      { role: 'system', content: sys },
-      { role: 'user', content: usr },
-    ], { temperature: 0.6 });
-    return { text: r.text, mocked: r.mocked };
-  } catch (e) {
-    if (e instanceof QuotaExceededError || e instanceof RbacError) {
-      return { text: e.message, mocked: false };
-    }
-    throw e;
-  }
-}
-
-export async function actAdviceToTask(text: string) {
-  const s = await getSession();
-  requireRole(s, 'task.manage');
-  if (!text.trim()) return { ok: false };
-  await prisma.taskItem.create({ data: { workspaceId: s.workspaceId, title: text.trim(), source: 'suggestion' } });
   revalidatePath('/');
   return { ok: true };
 }

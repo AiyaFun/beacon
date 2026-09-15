@@ -99,6 +99,9 @@ export async function buildAccountExport(opts: { tenantId: string; memberId: str
     schedules,
     taskPresets,
     procedureSkills,
+    agentToolDefs,
+    knowledgeBindings,
+    workItems,
     agentLedgers,
     scrapeRecipes,
     scrapeRecords,
@@ -176,6 +179,12 @@ export async function buildAccountExport(opts: { tenantId: string; memberId: str
     prisma.taskPreset.findMany({ where: byWorkspace, orderBy: [{ sort: 'asc' }, { createdAt: 'asc' }] }),
     // 做法技能：名字、说明、步骤都是从他自己跑通的任务里长出来的，搬走了才接得上
     prisma.procedureSkill.findMany({ where: byWorkspace, orderBy: { createdAt: 'asc' } }),
+    // AI 自写工具：代码、参数、白名单都是在他的工作区里长出来的资产，搬走了才接得上
+    prisma.agentToolDef.findMany({ where: byWorkspace, orderBy: { createdAt: 'asc' } }),
+    // 员工知识范围（2026-09-11）：哪个模板读哪些资料——是他配的资产，搬走了才接得上
+    prisma.agentKnowledgeBinding.findMany({ where: byWorkspace, orderBy: { createdAt: 'asc' } }),
+    // 内容工单（2026-09-11）：流程状态与关联、驳回原因、返工次数；正文在草稿里另导
+    prisma.contentWorkItem.findMany({ where: byWorkspace, orderBy: { createdAt: 'asc' }, include: { events: { orderBy: { createdAt: 'asc' } }, runs: { select: { runId: true } } } }),
     // 智能体台账：bot 自己记的盯单与进度（已见清单不导——那是去重用的中间态，且按 90 天滚动）
     prisma.agentLedger.findMany({ where: { ...byWorkspace, kind: 'kv' }, orderBy: [{ botSlug: 'asc' }, { key: 'asc' }] }),
     // 任意站点采集配方：站点、要抓什么、学到的规则——搬走了才能在别处接着用
@@ -352,6 +361,28 @@ export async function buildAccountExport(opts: { tenantId: string; memberId: str
         toolAllowlist: parseJson<string[]>(p.toolAllowlist, []),
         usedCount: p.usedCount,
         createdAt: p.createdAt,
+      })),
+      // AI 自写工具：连代码一起导（status 也导：草稿/启用是他审过的结果）
+      aiTools: agentToolDefs.map((t) => ({
+        id: t.id,
+        name: t.name,
+        label: t.label,
+        description: t.description,
+        params: parseJson<Record<string, unknown>>(t.params, {}),
+        uses: parseJson<string[]>(t.uses, []),
+        code: t.code,
+        status: t.status,
+        usedCount: t.usedCount,
+        createdAt: t.createdAt,
+      })),
+      knowledgeBindings: knowledgeBindings.map((b) => ({
+        id: b.id, templateId: b.templateId, sourceType: b.sourceType, sourceId: b.sourceId, purpose: b.purpose, priority: b.priority, enabled: b.enabled, createdAt: b.createdAt,
+      })),
+      workItems: workItems.map((w) => ({
+        id: w.id, accountId: w.accountId, title: w.title, stage: w.stage, status: w.status, ownerMemberId: w.ownerMemberId, agentTemplateId: w.agentTemplateId,
+        dueAt: w.dueAt, inputs: w.inputs, acceptance: w.acceptance, topicId: w.topicId, draftId: w.draftId, publishPlanId: w.publishPlanId, publishRecordId: w.publishRecordId,
+        runIds: w.runs.map((r) => r.runId), rejectReason: w.rejectReason, reworkCount: w.reworkCount, acceptedAt: w.acceptedAt, createdAt: w.createdAt,
+        events: w.events.map((e) => ({ kind: e.kind, fromStage: e.fromStage, toStage: e.toStage, note: e.note, refKind: e.refKind, refId: e.refId, memberId: e.memberId, at: e.createdAt })),
       })),
       aiCitations: aiCitations.map((c) => ({
         id: c.id,

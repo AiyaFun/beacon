@@ -226,7 +226,15 @@ describe('取消不许被后台线复活', () => {
     const origRun = tool.run;
     tool.run = async (c, a) => {
       executed++;
-      if (executed === 1) await cancelAgentRun(ctx, runId); // 第一个工具跑的时候用户点了终止
+      // 【用 c.runId，别用外面那个 runId 变量】外层是
+      //     const started = await startAgentRun(...); runId = started.runId;
+      // 而这一轮工具**可能在 startAgentRun 还没返回时就跑起来了**——那一刻 runId 还是空串，
+      // `cancelAgentRun(ctx, '')` 取消的是不存在的运行，于是三个工具全跑完、用例红。
+      // 它红得没有道理：产品侧那道闸（lib/agent/run.ts 的 `if (!(await stillRunning(runId))) return`）
+      // 一直是对的，红的是用例自己的竞态。2026-09-12 实测：改之前本机 5 次里挂 4 次，
+      // 且在动过任何产品代码之前的 commit 上同样挂——一条会撒谎的守卫比没有守卫更糟。
+      // 工具自己拿得到这次执行的 id（ToolContext.runId），用它就没有时序问题。
+      if (executed === 1) await cancelAgentRun(ctx, c.runId ?? runId); // 第一个工具跑的时候用户点了终止
       return origRun(c, a);
     };
 

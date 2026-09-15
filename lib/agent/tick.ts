@@ -102,12 +102,14 @@ export async function tickAgentRuns(): Promise<AgentTickResult> {
   //    这里不接手（重跑一半的流水线会把已经做过的步骤再做一遍，可能真的重复建草稿），
   //    而是**如实判死**，让用户自己决定要不要再跑一次。
   const reapedWorkflows = await reapStaleWorkflowRuns(now);
+  // ⑦ 接力持久等待的兜底：叫醒漏了的续跑、超时的终止（2026-09-11）
+  const waited = await sweepWaitingWorkflows(now).catch(() => ({ resumed: 0, timedOut: 0 }));
 
   // ⑥ 等确认等太久的：审批超时=拒绝（见 CONFIRM_STALE_DAYS）
   const expiredConfirms = await expireStaleConfirms(now);
 
-  if (resumed > 0 || stale.length > 0 || promoted > 0 || settled > 0 || reapedWorkflows > 0 || expiredConfirms > 0) {
-    log.info('AI 执行兜底巡检', { resumed, rekicked: stale.length, promoted, settled, reapedWorkflows, expiredConfirms });
+  if (resumed > 0 || stale.length > 0 || promoted > 0 || settled > 0 || reapedWorkflows > 0 || expiredConfirms > 0 || waited.resumed > 0 || waited.timedOut > 0) {
+    log.info('AI 执行兜底巡检', { resumed, rekicked: stale.length, promoted, settled, reapedWorkflows, expiredConfirms, relayResumed: waited.resumed, relayTimedOut: waited.timedOut });
   }
   return { resumed, rekicked: stale.length, promoted, settled, reapedWorkflows, expiredConfirms };
 }
@@ -238,7 +240,8 @@ async function notifyStaleCancel(runId: string, reason: string): Promise<void> {
  */
 async function reapStaleWorkflowRuns(now: Date): Promise<number> {
   const dead = await prisma.workflowRun.findMany({
-    where: { status: 'running', updatedAt: { lt: new Date(now.getTime() - WORKFLOW_STALE_MS) } },
+    // 正在持久等子运行的（waitingOn 非空）不是「没动静」：它由 sweepWaitingWorkflows 按超时管
+    where: { status: 'running', waitingOn: null, updatedAt: { lt: new Date(now.getTime() - WORKFLOW_STALE_MS) } },
     select: { id: true, stepIndex: true },
     orderBy: { updatedAt: 'asc' },
     take: MAX_WORKFLOW_REAP_PER_TICK,
@@ -270,4 +273,49 @@ async function reapStaleWorkflowRuns(now: Date): Promise<number> {
   }
   if (n > 0) log.info('清掉跑飞的智能体流水线', { count: n });
   return n;
+}
+
+/**
+ * ⑦ 接力持久等待的兜底（2026-09-11）：
+ *   · 子运行早到终态但叫醒漏了（进程正好在重启）→ 现在叫；
+ *   · 子运行超过这一跳的 timeoutMinutes 还没结束 → 终止子运行、这一跳判失败，流水线停。
+ * 不做别的：等确认/等额度都算「还在等」，由超时统一兜住，不替用户点头。
+ */
+export async function sweepWaitingWorkflows(now = new Date()): Promise<{ resumed: number; timedOut: number }> {
+  const out = { resumed: 0, timedOut: 0 };
+  const rows = await prisma.workflowRun.findMany({
+    where: { status: 'running', waitingOn: { not: null } },
+    select: { id: true, waitingOn: true, stepIndex: true, updatedAt: true, templateId: true },
+    take: 50,
+  });
+  if (rows.length === 0) return out;
+  const { resumeWorkflowAfterChild } = await import('../workflow/resume');
+  const { parseSteps } = await import('../workflow/steps');
+  const { transition, LIVE_STATUSES } = await import('./run');
+  for (const r of rows) {
+    const childId = (r.waitingOn ?? '').startsWith('run:') ? r.waitingOn!.slice(4) : '';
+    if (!childId) continue;
+    const child = await prisma.agentRun.findUnique({ where: { id: childId }, select: { status: true } });
+    if (!child) {
+      await prisma.workflowRun.updateMany({ where: { id: r.id, status: 'running' }, data: { status: 'failed', waitingOn: null, error: `第 ${r.stepIndex + 1} 步等的那次子运行已不存在，接力中止` } });
+      continue;
+    }
+    if (['done', 'failed', 'cancelled'].includes(child.status)) {
+      // 终态了却还在等 = 叫醒漏了
+      if (await resumeWorkflowAfterChild(childId)) out.resumed += 1;
+      continue;
+    }
+    const tpl = await prisma.workflowTemplate.findUnique({ where: { id: r.templateId }, select: { steps: true } });
+    const step = tpl ? parseSteps(tpl.steps)[r.stepIndex] : undefined;
+    const limitMin = step && step.kind === 'handoff' ? step.timeoutMinutes : 60;
+    if (now.getTime() - r.updatedAt.getTime() < limitMin * 60_000) continue;
+    // 超时：先停子运行（走乐观锁迁移），再判这一跳失败——顺序反了会让子运行在没人等的情况下继续烧
+    await transition(childId, LIVE_STATUSES, 'cancelled', { pending: null, waitingOn: null, leaseUntil: null, quotaResumeAt: null, error: `接力等了 ${limitMin} 分钟没交付，流水线把这一跳终止了` }).catch(() => false);
+    const done = await prisma.workflowRun.updateMany({
+      where: { id: r.id, status: 'running', waitingOn: r.waitingOn },
+      data: { status: 'failed', waitingOn: null, error: `第 ${r.stepIndex + 1} 步的接力超过 ${limitMin} 分钟没交付（子运行停在 ${child.status}），已终止。去执行过程页看它卡在哪：/assistant?run=${childId}` },
+    });
+    if (done.count === 1) out.timedOut += 1;
+  }
+  return out;
 }

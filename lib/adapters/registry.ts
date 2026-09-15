@@ -163,23 +163,75 @@ export function competitorSourceStatus(platform: string): CompetitorSourceStatus
   return PLUGIN_COLLECTABLE.has(platform) ? 'plugin' : 'none';
 }
 
-export async function sourceHealthBoard() {
-  const hot = hotAdapters();
-  const hotHealth = await Promise.all(
-    hot.map(async (a) => ({ name: a.name, kind: a.kind, ...(await a.health()) })),
-  );
-  const competitorHealth = PLATFORM_LIST.map((p) => {
+/**
+ * 数据源实况面板。拆成三段是因为**它们的代价差了三个数量级**：
+ *
+ *   · 竞对那半（competitorSourceBoard）= 纯计算，读的是内存里的适配器链，0 次网络；
+ *   · 热榜那半（hotSourceHealth）= 每个适配器各发一次真实 HTTP 探测，超时 5~6 秒；
+ *   · 自建 RSSHub（rssHubStatus）= 再一次 HTTP，超时 3 秒。
+ *
+ * 【为什么要拆】2026-09-12 量到：/settings 的 domContentLoaded = **5022ms**，
+ * 其余每一页都在 20~50ms。5 秒全花在「这一页顺手探一下所有外部源活着没有」上，
+ * 而那一页真正要给用户看的（定时任务开关、模型渠道数、密钥入口）一次网络都不需要。
+ * 探测挂在渲染的关键路径上 = 外部源慢一秒，用户的设置页就白屏一秒；
+ * 源挂了（超时 6 秒）用户看到的是「这个产品坏了」，而不是「这条数据源坏了」。
+ *
+ * 拆开后：页面主体立刻出来，两块探测各自挂在自己的 <Suspense> 里流进来。
+ * 再加 TTL 缓存——同一批探测结果在 60 秒内共享，连着刷两次设置页不会重探一轮。
+ */
+const HEALTH_TTL_MS = 60_000;
+let hotHealthCache: { at: number; value: Promise<HotSourceHealth[]> } | null = null;
+let rssHubCache: { at: number; value: Promise<RssHubHealth> } | null = null;
+
+export type HotSourceHealth = { name: string; kind: string; ok: boolean; detail?: string };
+export type RssHubHealth = { configured: boolean; baseUrl?: string; ok: boolean; detail: string };
+
+/** 当前挂在链上的热榜通道条数。纯计算——设置页的统计格只要这个数，不必等探测。 */
+export function hotSourceCount(): number {
+  return hotAdapters().length;
+}
+
+/** 热榜各通道的实况。真发 HTTP，**结果缓存 60 秒**（失败的结果不缓存，免得一次抖动钉住一分钟）。 */
+export function hotSourceHealth(): Promise<HotSourceHealth[]> {
+  const now = Date.now();
+  if (hotHealthCache && now - hotHealthCache.at < HEALTH_TTL_MS) return hotHealthCache.value;
+  const value = Promise.all(
+    hotAdapters().map(async (a) => ({ name: a.name, kind: a.kind, ...(await a.health()) })),
+  ).catch((e) => {
+    hotHealthCache = null; // 整批挂了就别把这个结果留在缓存里
+    throw e;
+  });
+  hotHealthCache = { at: now, value };
+  return value;
+}
+
+/** 自建 RSSHub 实况。同样缓存 60 秒；探测本身抛错时如实说，不冒充「没配」。 */
+export function rssHubHealth(): Promise<RssHubHealth> {
+  const now = Date.now();
+  if (rssHubCache && now - rssHubCache.at < HEALTH_TTL_MS) return rssHubCache.value;
+  const value = rssHubStatus().catch(() => ({
+    configured: false, ok: false, detail: '探测本身失败',
+  }));
+  rssHubCache = { at: now, value };
+  return value;
+}
+
+/** 竞对那半：纯计算，读适配器链与插件名单，一次网络都不发。 */
+export function competitorSourceBoard() {
+  return PLATFORM_LIST.map((p) => {
     const chain = competitorChain(p.key);
     const primary = chain[0] ?? new MockCompetitorAdapter(p.key);
     // name 显示整条链（如 "tikhub → rsshub"），kind 取主源——设置页据此标注通道性质
     const name = chain.length > 1 ? chain.map((a) => a.name).join(' → ') : primary.name;
     return { platform: p.key, name, kind: primary.kind, status: competitorSourceStatus(p.key) };
   });
-  // 自建 RSSHub 单独一行：它是**一个共享实例**，逐平台各探一次没有意义。
-  // 【为什么要有这一行】它是竞对链上唯一一条「用户自己部署、可能已经死掉」的通道。
-  // 不显示的话，「这个容器该留还是该停」在产品里根本答不了——只能靠人去翻 docker ps。
-  const rsshub = await rssHubStatus().catch(() => ({
-    configured: false, ok: false, detail: '探测本身失败',
-  }));
-  return { hot: hotHealth, competitor: competitorHealth, rsshub };
+}
+
+/**
+ * 三段合一。运维台（/ops/health）一次要看全，它只有运维在看，等得起；
+ * 用户侧的 /settings 不用这个入口，各段分别流式取（见 app/(app)/settings/page.tsx）。
+ */
+export async function sourceHealthBoard() {
+  const [hot, rsshub] = await Promise.all([hotSourceHealth(), rssHubHealth()]);
+  return { hot, competitor: competitorSourceBoard(), rsshub };
 }

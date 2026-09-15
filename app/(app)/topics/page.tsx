@@ -25,6 +25,7 @@ import { TopicActions } from './TopicActions';
 import { AcceptedBar } from './AcceptedBar';
 import { TopicVotes, type VoteSummary } from './TopicVotes';
 import { TopicRescore } from './TopicRescore';
+import { Suspense } from 'react';
 import { SourceReadinessCard } from './SourceReadiness';
 import { BulkBar } from './BulkBar';
 import { loadReadiness } from '@/lib/topic/readiness';
@@ -346,13 +347,15 @@ export default async function TopicsPage({
     .filter((t) => t.state === active)
     .sort((a, b) => (a.evidence ? 0 : 1) - (b.evidence ? 0 : 1));
 
-  const battles = await buildBattleCards(s.workspaceId, s.accountId, shown).catch(
-    () => new Map<string, BattleCard>(),
-  );
-
-  const readiness = await loadReadiness(s.workspaceId, s.accountId).catch(() => null);
-
-  const memberCount = await prisma.member.count({ where: { tenantId: s.tenantId, status: 'active' } });
+  // 【原来这里是四段串行】对标卡 → 来源就绪度 → 成员数 → 投票，一跳接一跳。
+  // 其中「来源就绪度」已经整个移出阻塞路径（见下方 <ReadinessSlot/>：它自己 4 跳，
+  // 而对成熟账号那张卡根本不渲染——不该让每个人都先等它）。
+  // 剩下三条：成员数谁也不依赖，对标卡与投票都只依赖 shown（上一波就有了），
+  // 所以压成「成员数 + 对标卡」一波、投票一波。
+  const [memberCount, battles] = await Promise.all([
+    prisma.member.count({ where: { tenantId: s.tenantId, status: 'active' } }),
+    buildBattleCards(s.workspaceId, s.accountId, shown).catch(() => new Map<string, BattleCard>()),
+  ]);
   const voteByTopic = new Map<string, VoteSummary>();
   if (memberCount > 1 && shown.length > 0) {
     const votes = await prisma.topicVote.findMany({
@@ -459,7 +462,11 @@ export default async function TopicsPage({
           那个疑问出现在用户读推荐之前，不是之后。 */}
       {/* 「推荐从哪来」只在**没有推荐**时前置——那时它就是「为什么空着」的答案；
           有推荐时它是背景说明，移到列表后面（见下），别把今天要挑的题压下去 */}
-      {shown.length === 0 && readiness && (readiness.cold || readiness.material) && <SourceReadinessCard report={readiness} />}
+      {shown.length === 0 && (
+        <Suspense fallback={null}>
+          <ReadinessSlot workspaceId={s.workspaceId} accountId={s.accountId} />
+        </Suspense>
+      )}
 
       {/* 状态分区 tab */}
       <div className="tabs" style={{ marginBottom: 16 }}>
@@ -547,10 +554,31 @@ export default async function TopicsPage({
           （挂在卡片里就是一闪即逝——那正是「点采纳后直接跳走」的成因，见 accepted-bus.ts）。 */}
       <AcceptedBar key="accepted-bar" />
 
-      {shown.length > 0 && readiness && (readiness.cold || readiness.material) && (
-        <div style={{ marginTop: 16 }}><SourceReadinessCard report={readiness} /></div>
+      {shown.length > 0 && (
+        <Suspense fallback={null}>
+          <div style={{ marginTop: 16 }}><ReadinessSlot workspaceId={s.workspaceId} accountId={s.accountId} /></div>
+        </Suspense>
       )}
 
     </>
   );
+}
+
+/**
+ * 来源就绪度卡（冷启动引导）。
+ *
+ * 【为什么单独抽出来挂 Suspense】loadReadiness 自己要打十来次库、4 个串行往返
+ *（生产跨区一跳 32ms ≈ 128ms），而它渲染出来的条件是
+ * `cold || material` —— 一个订了竞对、导过作品、素材库非空的成熟账号两者皆假，
+ * **这张卡一个像素都不出现**。让每个人先等 128ms 去换一张多数时候不显示的卡，不划算。
+ * 改成流式：页面主体先到，这张卡自己慢慢来（没数据就什么都不渲染，版面不跳）。
+ * 与 /settings 的数据源探活是同一套路。
+ *
+ * 上面两个挂载点是互斥分支（shown 空 / 不空），同一次渲染只会有一个在跑，
+ * 所以不必再套 React cache() 去重。
+ */
+async function ReadinessSlot({ workspaceId, accountId }: { workspaceId: string; accountId: string }) {
+  const readiness = await loadReadiness(workspaceId, accountId).catch(() => null);
+  if (!readiness || !(readiness.cold || readiness.material)) return null;
+  return <SourceReadinessCard report={readiness} />;
 }

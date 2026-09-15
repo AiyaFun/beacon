@@ -8,6 +8,8 @@ import { actStartAgent, actDecideAgentStep, actCancelAgent, actGetAgentRun, actA
 import { DEFAULT_AUTH } from '@/components/DispatchAuth';
 import type { AgentTurn } from '@/lib/agent/run';
 import { SaveAsSkillButton } from '@/components/SaveAsSkillButton';
+import { CopyText } from '@/components/CopyText';
+import { parseGap, gapDevPrompt } from '@/lib/agent/gap-prompt';
 import { useI18n } from '@/lib/i18n';
 
 // 执行面板：看某一次执行的过程，确认、追问、终止、接着跑。
@@ -293,6 +295,32 @@ export function AgentPanel({
             <div className="small muted" style={{ marginTop: 10 }}>
               {isEn ? `Used ${turn.cost.calls} AI calls` : `这次用了 ${turn.cost.calls} 次 AI 调用`}
               {turn.cost.tokens > 0 && (isEn ? ` · approx ${(turn.cost.tokens / 1000).toFixed(1)}k tokens` : ` · 约 ${(turn.cost.tokens / 1000).toFixed(1)}k tokens`)}
+              {turn.cost.costUsd > 0 && ` · ${turn.cost.costUsd < 0.01 ? `$${turn.cost.costUsd.toFixed(4)}` : `$${turn.cost.costUsd.toFixed(2)}`}`}
+              {turn.cost.budgetUsedPct != null && (isEn ? ` · budget ${turn.cost.budgetUsedPct}% of ${turn.cost.budget}` : ` · 预算用了 ${turn.cost.budgetUsedPct}%（上限 ${turn.cost.budget} 次）`)}
+              {turn.cost.toolCalls > 0 && (isEn ? ` · ${turn.cost.toolCalls} tool calls` : ` · 调了 ${turn.cost.toolCalls} 次工具`)}
+              {turn.cost.rejected > 0 && (isEn ? ` · ${turn.cost.rejected} rejected` : ` · 你拒了 ${turn.cost.rejected} 次`)}
+              {turn.cost.bySource.byok > 0 && (isEn ? ` · ${turn.cost.bySource.byok} on your own key` : ` · 其中 ${turn.cost.bySource.byok} 次走你自己的 Key`)}
+              {turn.model && (isEn ? ` · model: ${turn.model}` : ` · 指定渠道：${turn.model}`)}
+              {/* Mock 必须红字说出来：这些调用没接真模型，产物是编的，不能当交付 */}
+              {turn.cost.mockedCalls > 0 && (
+                <span style={{ color: 'var(--red)' }}>
+                  {isEn ? ` · ${turn.cost.mockedCalls} calls fell to Mock (fabricated output)` : ` · ${turn.cost.mockedCalls} 次落到了 Mock（产物是编的，别当真）`}
+                  {turn.cost.degradedCalls > 0 && (isEn ? `, ${turn.cost.degradedCalls} of them provider failures` : `，其中 ${turn.cost.degradedCalls} 次是供应商失败兜底`)}
+                </span>
+              )}
+            </div>
+          )}
+          {turn.citations && turn.citations.length > 0 && (
+            <div className="small muted" style={{ marginTop: 6 }}>
+              {isEn ? `Cited ${turn.citations.length} sources: ` : `引用了 ${turn.citations.length} 个来源：`}
+              {turn.citations.slice(0, 8).map((c, i) => (
+                <span key={`${c.sourceType}-${c.sourceId}-${i}`}>{i > 0 ? '、' : ''}{c.href ? <Link href={c.href}>{c.label}</Link> : c.label}</span>
+              ))}
+            </div>
+          )}
+          {turn.agent && (
+            <div className="small muted" style={{ marginTop: 4 }}>
+              {isEn ? 'Run by ' : '由 '}<Link href={`/workflows?agent=${turn.agent.id}`}>{turn.agent.emoji} {turn.agent.name}</Link>{isEn ? ' · open profile' : ' 执行 · 去看它的档案 →'}
             </div>
           )}
 
@@ -439,6 +467,25 @@ function StatusBadge({ status, mine }: { status: AgentTurn['status']; mine?: boo
 function StepLine({ step }: { step: AgentTurn['steps'][number] }) {
   const { lang } = useI18n();
   const isEn = lang === 'en';
+  // 做不到的事被记成了缺口：单独成卡，带一键复制给开发助手的提示。
+  // 这一步的参数就是缺口本身（见 lib/agent/tools-gap.ts），不另查表。
+  if (step.kind === 'tool_call' && step.tool === 'report_capability_gap') {
+    const gap = parseGap(step.args);
+    return (
+      <span className="stack" style={{ gap: 4, display: 'inline-flex', flexDirection: 'column' }}>
+        <span>
+          <span className="badge badge-amber">{isEn ? 'Gap recorded' : '记下缺口'}</span> {gap.missing || gap.need}
+        </span>
+        <span className="small muted">
+          {gap.tool ? `${isEn ? 'Suggested tool' : '建议工具'}：${gap.tool}${gap.params ? `（${gap.params}）` : ''}` : ''}
+          {gap.manual ? `${gap.tool ? ' · ' : ''}${isEn ? 'Manual path' : '手动路径'}：${gap.manual}` : ''}
+        </span>
+        <span>
+          <CopyText text={gapDevPrompt(gap)} label={isEn ? 'Copy dev prompt' : '复制开发提示'} aigc={false} className="btn btn-sm btn-ghost" />
+        </span>
+      </span>
+    );
+  }
   if (step.kind === 'tool_call') {
     return (
       <span>

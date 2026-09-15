@@ -99,7 +99,7 @@ END $$;
 DO $$
 DECLARE t text;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['BotIntegration','BotConversation','InspirationItem','ReaderComment','MediaAsset','CoverStylePreset','Notification','CollectionRun','IngestToken','AgentRun','PublishPlan','WorkflowRun','ParserIncident','ScheduledAgent','BrowserTask','TaskPreset','ProcedureSkill','ScrapeRecipe','ScrapeRecord','AiCitation','AgentLedger'] LOOP
+  FOREACH t IN ARRAY ARRAY['BotIntegration','BotConversation','InspirationItem','ReaderComment','MediaAsset','CoverStylePreset','Notification','CollectionRun','IngestToken','AgentRun','PublishPlan','WorkflowRun','ParserIncident','ScheduledAgent','BrowserTask','TaskPreset','ProcedureSkill','ScrapeRecipe','ScrapeRecord','AiCitation','AgentLedger','AgentToolDef','AgentKnowledgeBinding','ContentWorkItem'] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY;', t);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY;', t);
     EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON %I;', t);
@@ -207,6 +207,24 @@ BEGIN
   EXECUTE 'ALTER TABLE "AgentArtifact" FORCE ROW LEVEL SECURITY';
   EXECUTE 'DROP POLICY IF EXISTS tenant_isolation ON "AgentArtifact"';
   EXECUTE 'CREATE POLICY tenant_isolation ON "AgentArtifact" FOR ALL USING (app_current_tenant() IS NULL OR "runId" IN (SELECT id FROM "AgentRun" WHERE "workspaceId" IN (SELECT app_tenant_workspaces())))';
+END $$;
+
+-- WorkItemEvent → ContentWorkItem（二级归属，2026-09-11 加）
+DO $$
+BEGIN
+  EXECUTE 'ALTER TABLE "WorkItemEvent" ENABLE ROW LEVEL SECURITY';
+  EXECUTE 'ALTER TABLE "WorkItemEvent" FORCE ROW LEVEL SECURITY';
+  EXECUTE 'DROP POLICY IF EXISTS tenant_isolation ON "WorkItemEvent"';
+  EXECUTE 'CREATE POLICY tenant_isolation ON "WorkItemEvent" FOR ALL USING (app_current_tenant() IS NULL OR "workItemId" IN (SELECT id FROM "ContentWorkItem" WHERE "workspaceId" IN (SELECT app_tenant_workspaces())))';
+END $$;
+
+-- WorkItemRun → ContentWorkItem（二级归属，2026-09-11 加）
+DO $$
+BEGIN
+  EXECUTE 'ALTER TABLE "WorkItemRun" ENABLE ROW LEVEL SECURITY';
+  EXECUTE 'ALTER TABLE "WorkItemRun" FORCE ROW LEVEL SECURITY';
+  EXECUTE 'DROP POLICY IF EXISTS tenant_isolation ON "WorkItemRun"';
+  EXECUTE 'CREATE POLICY tenant_isolation ON "WorkItemRun" FOR ALL USING (app_current_tenant() IS NULL OR "workItemId" IN (SELECT id FROM "ContentWorkItem" WHERE "workspaceId" IN (SELECT app_tenant_workspaces())))';
 END $$;
 
 -- PublishTask → PublishPlan（二级归属，2026-08-18 加）

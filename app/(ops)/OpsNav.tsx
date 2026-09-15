@@ -19,7 +19,7 @@ export function OpsNav() {
   const { lang } = useI18n();
   const isEn = lang === 'en';
   return (
-    <nav className="row" style={{ gap: 4 }}>
+    <nav className="tabs ops-nav" aria-label={isEn ? 'Operations sections' : '运维板块'}>
       {ITEMS.map((it) => {
         // 「/ops」只在完全相等时高亮，否则每个子页都会把它一起点亮
         const active = it.href === '/ops' ? path === '/ops' : path.startsWith(it.href);
@@ -27,7 +27,8 @@ export function OpsNav() {
           <Link
             key={it.href}
             href={it.href}
-            className={`btn btn-sm ${active ? 'btn-primary' : 'btn-ghost'}`}
+            className={`tab ${active ? 'active' : ''}`}
+            aria-current={active ? 'page' : undefined}
           >
             {isEn ? it.labelEn : it.labelZh}
           </Link>

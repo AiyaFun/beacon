@@ -177,8 +177,9 @@ async function generateDraft(page: Page, title: string): Promise<void> {
 
 test('爆款基因：无数据时给引导而不是报错', async ({ page }) => {
   await login(page);
-  await page.goto('/genes');
-  await expect(page.getByRole('heading', { name: '爆款基因' })).toBeVisible();
+  // /genes 已并入「看效果」页（/data?view=genes），旧地址只剩 next.config 的 redirect 兜底
+  await page.goto('/data?view=genes');
+  await expect(page.getByRole('heading', { name: '看效果' })).toBeVisible();
   // 新租户没有带播放的发布记录 → 空状态引导，不是 500 也不是编出来的假数字
   await expect(page.getByText('还没有带播放数据的已发布内容')).toBeVisible();
 });

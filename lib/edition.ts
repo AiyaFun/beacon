@@ -31,6 +31,8 @@ export type Edition = 'saas' | 'appliance' | 'private';
  * TypeScript 会强制你写全，这是刻意的：漏掉一个格子的代价是功能出现在不该出现的版本里。
  */
 export type Capability =
+  /** AI 自写工具（node:vm 沙箱）—— vm 不是安全边界，只在单租户形态开 */
+  | 'aiAuthoredTools'
   /** 微信支付、订阅、退款、发票 —— 只有 SaaS 收钱 */
   | 'payment'
   /** 短信验证码登录（火山短信按条计费） */
@@ -86,6 +88,7 @@ const MATRIX: Record<Edition, Record<Capability, boolean>> = {
     localPublisher: false,
     localShell: false,
     localBrowser: false,
+    aiAuthoredTools: false,
     payment: true,
     smsLogin: true,
     oaLogin: false,
@@ -99,6 +102,7 @@ const MATRIX: Record<Edition, Record<Capability, boolean>> = {
     localPublisher: true,
     localShell: true,
     localBrowser: true,
+    aiAuthoredTools: true,
     payment: false,
     smsLogin: false,
     oaLogin: true,
@@ -113,6 +117,7 @@ const MATRIX: Record<Edition, Record<Capability, boolean>> = {
     localPublisher: true,
     localShell: true,
     localBrowser: true,
+    aiAuthoredTools: true,
     payment: false,
     smsLogin: false,
     oaLogin: true,

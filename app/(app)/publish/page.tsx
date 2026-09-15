@@ -1,14 +1,14 @@
 import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
-import { Card, Stat, Fold } from '@/components/ui';
+import { Fold } from '@/components/ui';
 import { fmtDate } from '@/lib/format';
 import { platformName } from '@/lib/constants';
+import { parseJson } from '@/lib/json';
 import { can } from '@/lib/edition';
 import { listPlans } from '@/lib/publish/plan';
 import { PUBLISH_CAPS, channelLabel, TASK_STATUS_LABEL, TASK_STATUS_LABEL_EN } from '@/lib/publish/capability';
-import { CHANNEL_INTRO, CHANNEL_INTRO_EN } from './PlanTasks';
-import { OpenPlans, NewPlan } from './PlanBoard';
+import { PublishKanban, OpenPlans } from './PlanBoard';
 import { MakeTabs } from '@/components/MakeTabs';
 import { HubHeader } from '@/components/HubHeader';
 import { getServerLang } from '@/lib/i18n/server';
@@ -16,13 +16,17 @@ import { getDictionary } from '@/lib/i18n/dict';
 
 export const dynamic = 'force-dynamic';
 
-export default async function PublishPage() {
+export default async function PublishPage({ searchParams }: { searchParams: Promise<{ plan?: string }> }) {
   const s = await getSession();
+  // 机器人回执与 /runs 的「发布计划」链接都指向 /publish?plan=<id>（lib/agent/artifacts.ts:21、
+  // runs/WorkBoard.tsx:99）。本页原来**根本不收这个参数**，点进来只看到最近 8 条 open 计划，
+  // 那条具体计划很可能不在里面——链接是坏的，而且不报错。
+  const { plan: pinnedPlanId } = await searchParams;
   const lang = await getServerLang();
   const dict = getDictionary(lang);
 
-  const [openPlans, recentDone, drafts, records, wxCred, account] = await Promise.all([
-    listPlans({ workspaceId: s.workspaceId, accountId: s.accountId }, { status: 'open', take: 8 }),
+  const [openPlans, recentDone, drafts, records, missingLink, wxCred] = await Promise.all([
+    listPlans({ workspaceId: s.workspaceId, accountId: s.accountId }, { status: 'open', take: 8, includeId: pinnedPlanId }),
     listPlans({ workspaceId: s.workspaceId, accountId: s.accountId }, { status: 'done', take: 5 }),
     prisma.draft.findMany({
       where: { accountId: s.accountId, status: { notIn: ['published', 'abandoned'] }, versions: { some: {} } },
@@ -34,91 +38,52 @@ export default async function PublishPage() {
       where: { accountId: s.accountId },
       orderBy: { publishedAt: 'desc' },
       take: 8,
-      select: { id: true, title: true, platform: true, publishedAt: true, needsBackfill: true, platformItemId: true },
+      select: { id: true, title: true, platform: true, publishedAt: true, needsBackfill: true, platformItemId: true, metrics: true },
     }),
+    // 「缺链接的记录」是账号全量口径，不是上面那 8 条里数出来的
+    prisma.publishRecord.count({ where: { accountId: s.accountId, needsBackfill: true } }),
     prisma.publishCredential.findUnique({
       where: { accountId_platform: { accountId: s.accountId, platform: 'wechat' } },
       select: { status: true, lastError: true },
     }),
-    prisma.creatorAccount.findUnique({ where: { id: s.accountId }, select: { name: true } }),
   ]);
 
-  const allTasks = openPlans.flatMap((p) => p.tasks);
-  const waitingOnYou = allTasks.filter((t) => t.status === 'filled' || t.status === 'submitted').length;
-  const missingLink = records.filter((r) => r.needsBackfill).length;
-  const rawAccountName = account?.name ?? '';
-  const accountName = (lang === 'en' && (rawAccountName === '我的账号' || !rawAccountName))
-    ? 'My Account'
-    : (rawAccountName || (lang === 'en' ? 'Unnamed' : '未命名账号'));
+  // needsBackfill=false 只说明有作品链接/ID，不等于播放、点赞已经回流：metrics 还是空的就是「待回流」
+  const hasMetrics = (metrics: string) => Object.keys(parseJson<Record<string, unknown>>(metrics, {})).length > 0;
+  // （waitingOnYou 与 accountName 原本算在这儿，两个都一次没进过 JSX；accountName 还为此
+  //   多查一条 creatorAccount。生产库跨区一跳 32ms，纯亏，一并删掉。）
 
   return (
     <>
       <HubHeader
         title={dict.tabs.makeTitle}
-        hint={lang === 'en'
-          ? `Publishing pipeline · Current account: ${accountName}`
-          : `把稿子发出去的那一段 · 只显示当前账号（${accountName}）的计划与记录`}
         tabs={<MakeTabs active="publish" inline />}
-        meta={<span className="small muted hide-mobile">{lang === 'en' ? 'Current Account: ' : '当前账号：'}{accountName}</span>}
       />
 
-      <div className="grid grid-4" style={{ marginBottom: 16 }}>
-        <Stat
-          label={lang === 'en' ? 'Active Schedules' : '进行中的计划'}
-          value={openPlans.length}
-          foot={lang === 'en' ? `${allTasks.length} platform tasks` : `共 ${allTasks.length} 条平台任务`}
-        />
-        <Stat
-          label={lang === 'en' ? 'Waiting on You' : '等你去点发布'}
-          value={waitingOnYou}
-          foot={lang === 'en' ? 'Draft ready in backend' : '已填进后台 / 已进草稿箱'}
-        />
-        <Stat
-          label={lang === 'en' ? 'Ready Drafts' : '可发布的稿子'}
-          value={drafts.length}
-          foot={lang === 'en' ? 'Drafts with body ready' : '有正文且未发布'}
-        />
-        <Stat
-          label={lang === 'en' ? 'Missing URL' : '缺链接的记录'}
-          value={missingLink}
-          foot={lang === 'en' ? 'Link post to sync data' : '补上才能自动回流'}
-          href="/data"
-        />
-      </div>
-
-      <Card
-        title={lang === 'en' ? 'Active Publishing Plans' : '进行中的发布计划'}
-        sub={lang === 'en' ? 'One task per platform, separate channels, independent execution' : '每个平台一条任务，各走各的通道，互不牵连'}
-      >
-        <p className="small muted" style={{ marginTop: 0, lineHeight: 1.7 }}>
-          {lang === 'en' ? CHANNEL_INTRO_EN : CHANNEL_INTRO}
-        </p>
-        <OpenPlans
-          plans={openPlans.map((p) => ({
-            id: p.id,
-            draftId: p.draftId,
-            status: p.status,
-            tasks: p.tasks,
-            draftTitle: p.draftTitle,
-            createdAt: p.createdAt.toISOString(),
-          }))}
-        />
-      </Card>
-
-      <Card
-        title={lang === 'en' ? 'Start a New Publishing Plan' : '开一条新的发布计划'}
-        sub={lang === 'en' ? 'Select completed draft → Choose platforms → Generate tasks' : '选一篇写好的稿子 → 勾平台 → 生成任务'}
-        style={{ marginTop: 16 }}
-      >
-        <NewPlan
-          drafts={drafts.map((d) => ({
-            id: d.id,
-            title: d.title,
-            platform: d.platform,
-            updatedAt: d.updatedAt.toISOString(),
-          }))}
-        />
-      </Card>
+      <PublishKanban
+        plans={openPlans.map((p) => ({
+          id: p.id,
+          draftId: p.draftId,
+          status: p.status,
+          tasks: p.tasks,
+          draftTitle: p.draftTitle,
+          createdAt: p.createdAt.toISOString(),
+        }))}
+        drafts={drafts.map((d) => ({
+          id: d.id,
+          title: d.title,
+          platform: d.platform,
+          updatedAt: d.updatedAt.toISOString(),
+        }))}
+        records={records.map((r) => ({
+          id: r.id,
+          title: r.title ?? '',
+          platform: r.platform,
+          publishedAt: r.publishedAt ? r.publishedAt.toISOString() : '',
+          // 三态只算一次、只在这一处（看板与提示行共用），不再让两个地方各说各的
+          syncState: r.needsBackfill ? 'missing-url' as const : hasMetrics(r.metrics) ? 'synced' as const : 'awaiting' as const,
+        }))}
+      />
 
       <Fold
         title={lang === 'en' ? 'Platform Channel Capabilities Matrix' : '平台通道能力矩阵'}
@@ -198,37 +163,46 @@ export default async function PublishPage() {
         )}
       </Fold>
 
-      <Card
-        title={lang === 'en' ? 'Recent Publishing Records' : '最近发布记录'}
-        sub={lang === 'en' ? 'Publishing records drive analytics sync: missing URLs cannot track data' : '发布记录是数据回流的入口：缺链接的记录学不到任何数据'}
-        style={{ marginTop: 16 }}
-      >
-        {records.length === 0 ? (
-          <p className="small muted">{lang === 'en' ? 'No publishing records yet.' : '还没有发布记录。'}</p>
-        ) : (
-          <div style={{ display: 'grid', gap: 8 }}>
-            {records.map((r) => (
-              <div key={r.id} className="row-between wrap small" style={{ gap: 8 }}>
-                <span className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-                  <span className="badge badge-gray">{platformName(r.platform, lang) || r.platform}</span>
-                  <strong>{r.title || (lang === 'en' ? '(Untitled)' : '（无标题）')}</strong>
-                  {r.needsBackfill && <span className="badge badge-amber">{lang === 'en' ? 'Missing URL' : '缺链接'}</span>}
-                </span>
-                <span className="muted">{fmtDate(r.publishedAt)}</span>
-              </div>
-            ))}
-          </div>
-        )}
-        {missingLink > 0 && (
-          <p className="small" style={{ marginTop: 10 }}>
-            {lang === 'en'
-              ? `${missingLink} records missing post URLs. Add them in `
-              : `有 ${missingLink} 条记录还没贴作品链接。到 `}
-            <Link href="/data">{lang === 'en' ? 'Data Dashboard' : '数据看板'}</Link>
-            {lang === 'en' ? ' to enable automatic analytics sync.' : ' 补上，之后的播放/点赞才能自动回流。'}
-          </p>
-        )}
-      </Card>
+      {/* ── 进行中的计划：逐条任务操作（2026-09-12 接回来的）──
+          OpenPlans 一直导出着，但**全仓库零渲染**：本页只挂了 PublishKanban，而看板只拿 plans
+          算第二列的计数与卡片。后果是 PlanTasks 上的「存草稿箱 / 贴链接 / 标记已发布」
+          只有在「新建发布计划」弹窗刚建完那一刻按得到，关掉或刷新就再也找不到——
+          存量计划等于推不动。与「正文配图」「插件一键采集」是同一类：功能在、入口没了、还不报错。 */}
+      {openPlans.length > 0 && (
+        <Fold
+          title={lang === 'en' ? 'Active Plans · Per-task Actions' : '进行中的计划 · 逐条推进'}
+          sub={lang === 'en' ? 'Save to drafts box, paste the post URL, mark as published' : '存草稿箱 / 贴作品链接 / 标记已发布——每条任务各自推进'}
+          defaultOpen={true}
+        >
+          <OpenPlans
+            plans={[...openPlans]
+              // 点着 ?plan= 进来的那条排最前，用户一眼就看到自己要推进的是哪个
+              .sort((a, b) => (a.id === pinnedPlanId ? -1 : b.id === pinnedPlanId ? 1 : 0))
+              .map((p) => ({
+              id: p.id,
+              draftId: p.draftId,
+              status: p.status,
+              tasks: p.tasks,
+              draftTitle: p.draftTitle,
+              createdAt: p.createdAt.toISOString(),
+            }))}
+          />
+        </Fold>
+      )}
+
+      {/* 【删掉了整张「最近发布记录」】它把看板第三列那同一批 8 条 publishRecord 又印了一遍，
+          而且两处说法相反（看板对每条写死「已回流数据」，这里对同一条写「待回流」）。
+          三态判据已经搬进看板第三列每张卡，补链接的真操作本来就只在 /data 的
+          「发布效果与表现明细」里——这张卡从来只是个跳板，留下跳板那一句就够。 */}
+      {missingLink > 0 && (
+        <p className="small" style={{ marginTop: 12, color: 'var(--text-2)' }}>
+          {lang === 'en'
+            ? `💡 ${missingLink} records missing post URLs. Add them in `
+            : `💡 有 ${missingLink} 条记录尚未关联作品链接。建议前往 `}
+          <Link href="/data" style={{ color: 'var(--brand)', fontWeight: 600 }}>{lang === 'en' ? 'Data Dashboard' : '数据看板'}</Link>
+          {lang === 'en' ? ' to enable automatic analytics sync.' : ' 补上，发布后的播放、点赞数据才能自动回流。'}
+        </p>
+      )}
 
       {recentDone.length > 0 && (
         <Fold

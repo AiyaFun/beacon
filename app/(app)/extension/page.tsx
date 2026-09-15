@@ -112,7 +112,7 @@ export default async function ExtensionPage() {
         action={<Link href="/help" className="btn btn-sm btn-ghost"><Icon.help size={13} /> {isEn ? 'Help Guide' : '使用帮助'}</Link>}
       />
 
-      <div className="grid grid-4" style={{ marginBottom: 16 }}>
+      <div className="grid-stats">
         <Stat label={isEn ? 'Latest (zip)' : '最新版（zip）'} value={latestVersion ? `v${latestVersion}` : '—'} foot={manifest ? 'Manifest V3' : (isEn ? 'Unpacked' : '未打包')} />
         <Stat
           label={isEn ? 'Store Version' : '商店在架版'}

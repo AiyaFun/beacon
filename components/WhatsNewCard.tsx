@@ -4,7 +4,7 @@ import { Card } from '@/components/ui';
 import { listChangelog, splitBold, type ChangelogVersion } from '@/lib/appliance/changelog';
 import { APP_VERSION } from '@/lib/market/version';
 
-// 「最近更新」卡（2026-09-06）：住在「运行设置」页，不占首页。
+// 「最近更新」卡：住在「使用帮助」页下方，不占运行设置与首页。
 //
 // 【唯一来源是 CHANGELOG.md】整机版「检查更新」卡里那段说明也是从它来的
 // （lib/appliance/changelog.ts）。此前首页手抄了一份四个版本的要点——

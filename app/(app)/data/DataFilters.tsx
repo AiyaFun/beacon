@@ -28,43 +28,35 @@ export function DataFilters({ platforms, range, platform }: { platforms: string[
   };
 
   return (
-    <div className="row wrap" style={{ gap: 12, alignItems: 'center' }}>
-      <div className="row" style={{ gap: 4 }}>
-        {RANGES.map((r) => (
-          <button
-            key={r.key}
-            className={`badge ${range === r.key ? 'badge-brand' : 'badge-gray'}`}
-            style={{ cursor: 'pointer', border: 'none' }}
-            aria-pressed={range === r.key}
-            onClick={() => setParam('range', r.key)}
-          >
-            {rangeLabels[r.key] ?? r.label}
-          </button>
-        ))}
-      </div>
-      {platforms.length > 1 && (
-        <div className="row wrap" style={{ gap: 4 }}>
-          <button
-            className={`badge ${platform === 'all' ? 'badge-brand' : 'badge-gray'}`}
-            style={{ cursor: 'pointer', border: 'none' }}
-            aria-pressed={platform === 'all'}
-            onClick={() => setParam('platform', 'all')}
-          >
-            {lang === 'en' ? 'All Platforms' : '全平台'}
-          </button>
-          {platforms.map((p) => (
-            <button
-              key={p}
-              className={`badge ${platform === p ? 'badge-brand' : 'badge-gray'}`}
-              style={{ cursor: 'pointer', border: 'none' }}
-              aria-pressed={platform === p}
-              onClick={() => setParam('platform', p)}
-            >
-              {platformName(p)}
-            </button>
-          ))}
-        </div>
-      )}
+    <div className="filters">
+      {RANGES.map((r) => (
+        <button
+          key={r.key}
+          className={`filter-btn ${range === r.key ? 'active' : ''}`}
+          onClick={() => setParam('range', r.key)}
+        >
+          {r.key === '7d' ? (lang === 'en' ? 'Last 7d' : '近 7 天')
+            : r.key === '30d' ? (lang === 'en' ? 'Last 30d' : '近 30 天')
+            : (lang === 'en' ? 'All Time' : '全部时间')}
+        </button>
+      ))}
+
+      <button
+        className={`filter-btn ${platform === 'all' ? 'active' : ''}`}
+        onClick={() => setParam('platform', 'all')}
+      >
+        {lang === 'en' ? 'All Platforms' : '全平台'}
+      </button>
+
+      {['xiaohongshu', 'douyin', 'wechat'].map((p) => (
+        <button
+          key={p}
+          className={`filter-btn ${platform === p ? 'active' : ''}`}
+          onClick={() => setParam('platform', p)}
+        >
+          {platformName(p, lang)}
+        </button>
+      ))}
     </div>
   );
 }

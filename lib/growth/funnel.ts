@@ -130,9 +130,22 @@ export async function recordFunnelEvent(input: FunnelInput, now: Date = new Date
   }
 }
 
+/** 进程内还没落地的 fire-and-forget 写入。只为 settleFunnelWrites 存在。 */
+const inflight = new Set<Promise<unknown>>();
+
 /** fire-and-forget 版：不 await 到响应里去。 */
 export function recordFunnelEventAsync(input: FunnelInput): void {
-  void recordFunnelEvent(input).catch(() => undefined);
+  const task = recordFunnelEvent(input).catch(() => undefined);
+  inflight.add(task);
+  void task.finally(() => inflight.delete(task));
+}
+
+/**
+ * 等所有在途的漏斗写入落地。给测试（用例结束时库会被删，写入落在删库之后就是
+ * `attempt to write a readonly database` 噪声）与优雅停机用；请求路径不该调它。
+ */
+export async function settleFunnelWrites(): Promise<void> {
+  while (inflight.size) await Promise.allSettled([...inflight]);
 }
 
 /**
@@ -148,9 +161,17 @@ export async function tenantHasEvent(tenantId: string, name: FunnelEventName): P
 }
 
 /** 只在这个租户还没发生过时记一次。 */
-export async function recordFunnelOnce(input: FunnelInput & { tenantId: string }): Promise<boolean> {
-  if (await tenantHasEvent(input.tenantId, input.name)) return false;
-  return recordFunnelEvent(input);
+export function recordFunnelOnce(input: FunnelInput & { tenantId: string }): Promise<boolean> {
+  // 调用方多半是 `void recordFunnelOnce(...)`（lib/pipeline.ts）：也登记进在途集合，
+  // settleFunnelWrites 才等得到它；被 await 的调用不受影响
+  const task = (async () => {
+    if (await tenantHasEvent(input.tenantId, input.name)) return false;
+    return recordFunnelEvent(input);
+  })();
+  const tracked = task.catch(() => false);
+  inflight.add(tracked);
+  void tracked.finally(() => inflight.delete(tracked));
+  return task;
 }
 
 export type FunnelStep = { name: FunnelEventName; label: string; count: number; visitors: number; fromPrevPct: number | null };

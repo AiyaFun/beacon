@@ -376,6 +376,8 @@ export function WorkflowMarket({
             <span className="badge badge-amber" title={isEn ? 'Steps that consume quota on each run' : '跑一次会真实消耗额度的步数'}>
               {t.costlySteps} {isEn ? 'costly steps' : '步花额度'}
             </span>
+            {/* 数字员工档案：状态、在跑什么、成功率、花费、定时、产物一处看全（lib/agent/overview.ts） */}
+            {t.installed && <a className="small" href={`/workflows?agent=${t.id}`}>{isEn ? 'Profile →' : '档案 →'}</a>}
           </div>
           <div className="small muted" style={{ marginTop: 2 }}>{t.description}</div>
         </div>

@@ -3,7 +3,7 @@ import { toJson } from '../json';
 import { platformName } from '../constants';
 import { parseCompetitorUrl } from '../competitor-url';
 import { generateRecommendations, crawlOneCompetitor } from '../pipeline';
-import { runWorkflow, createWorkflowRun } from '../workflow/run';
+import { createWorkflowRun } from '../workflow/run';
 import { isAutonomous, parseAgentConfig, type AgentConfig } from './autonomous';
 import { kickWorkflowRun } from '../workflow/kick';
 import { workflowWaitToken } from './wake';
@@ -25,12 +25,18 @@ import { PRODUCE_TOOLS } from './tools-produce';
 import { PLANNING_TOOLS } from './tools-draft-plan';
 import { LEDGER_TOOLS } from './tools-ledger';
 import { LOCAL_TOOLS } from './tools-local';
+import { ACCOUNT_TOOLS } from './tools-account';
+import { GAP_TOOLS } from './tools-gap';
+import { AUTHOR_TOOLS } from './tools-author';
 
 // ── AI 能调用的系统能力清单 ────────────────────────────────────────────────
 //
-// 【边界，先说死】这里注册的**就是** AI 能做的全部事情。没注册的它做不了，
-// 也不存在「让 AI 写段代码执行一下」的通道——那等于把任意代码执行挂在对话框里。
-// 想让 AI 会一件新事，唯一的路是在这张表里加一个工具（于是它天然带着权限、审计、确认）。
+// 【边界，先说死】这里注册的**就是** AI 能做的全部事情。没注册的它做不了。
+// 想让 AI 会一件新事，有两条路：① 在这张表里加一个工具（天然带着权限、审计、确认）；
+// ② 2026-09-09 起，**单租户形态**（整机版/私有化）里模型可以用 author_tool 把现有工具拼成
+//    一个新工具——它跑在 node:vm 沙箱里、只能调声明过的内置工具、由人看过代码才启用
+//    （lib/agent/ai-tools/）。SaaS 上这条路恒关：vm 不是安全边界，多租户共进程不开。
+// 「让 AI 写段任意代码执行一下」的通道仍然不存在。
 //
 // 【契约层在隔壁】ToolContext / ToolResult / AgentTool 那几个类型，以及每个工具
 // 都要用的 str/num/clamp，都搬到了 ./tool-types —— 理由见那个文件开头
@@ -877,6 +883,12 @@ export const AGENT_TOOLS: AgentTool[] = [
   ...PLANNING_TOOLS,
   // 台账类（读写自己的工作状态 / 已见清单去重）——按 bot 隔离，不花钱不签合约
   ...LEDGER_TOOLS,
+  // 自有账号类（查/加/改自己的创作者账号）——页面上能做的，对话里也要能做（2026-09-09）
+  ...ACCOUNT_TOOLS,
+  // 做不到的事记成结构化缺口（进开发待办），不许只说抱歉（2026-09-09）
+  ...GAP_TOOLS,
+  // 模型给自己起草新工具（沙箱 JS，人审核后启用）；SaaS 上在册但恒回「不提供」（2026-09-09）
+  ...AUTHOR_TOOLS,
 ];
 
 export function toolByName(name: string): AgentTool | null {

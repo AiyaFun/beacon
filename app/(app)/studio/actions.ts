@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { parseJson } from '@/lib/json';
-import { readPersona, personaPromptBlock } from '@/lib/persona';
+import { personaPromptBlock } from '@/lib/persona';
 import { buildAccountContext } from '@/lib/account-context';
 import { llmComplete } from '@/lib/llm/gateway';
 import { QuotaExceededError } from '@/lib/quota';
@@ -30,7 +30,7 @@ import { checkFactDrift, type FactDriftLevel } from '@/lib/humanize/factcheck';
 import { buildTitlePrompt, parseTitleMatrix, diagnoseTitle, type TitleCandidate, type CoverSuggestion, type TitleDiagnosis } from '@/lib/studio/title';
 import { familyPlatforms } from '@/lib/studio/family';
 import { buildOutlinePrompt, buildVoicePrompt, cleanOutline, stripStageLabels } from '@/lib/studio/two-stage';
-import { safePersona, PLATFORM_STYLE, buildSelectionContext, resolveDraftTarget, loadDraftContext, buildDraftMessages, persistDraftVersion } from '@/lib/studio/draft-core';
+import { safePersona, PLATFORM_STYLE, resolveDraftTarget, loadDraftContext, buildDraftMessages, persistDraftVersion } from '@/lib/studio/draft-core';
 import { buildSkillBriefBlock, type SkillBrief } from '@/lib/skills/brief';
 import type { Metrics } from '@/lib/json';
 

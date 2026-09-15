@@ -59,11 +59,6 @@ export async function actSaveLibraryAsset(
   return { ok: true, assets: await listLibrary(s.workspaceId, s.accountId) };
 }
 
-export async function actListLibrary(): Promise<CoverLibraryResult> {
-  const s = await getSession();
-  return { ok: true, assets: await listLibrary(s.workspaceId, s.accountId) };
-}
-
 export async function actDeleteAsset(id: string): Promise<CoverLibraryResult> {
   const s = await getSession();
   requireRole(s, 'content.create');
@@ -105,16 +100,6 @@ export async function actSetDraftCover(draftId: string, assetId: string | null):
   await prisma.draft.update({ where: { id: draft.id }, data: { coverAssetId: assetId } });
   revalidatePath('/studio');
   return { ok: true, covers: await listDraftCovers(s.workspaceId, draft.id), coverAssetId: assetId };
-}
-
-/** 把生成出来的某张封面存进形象库（当以后可复用的素材：比如做成系列封面的底）。 */
-export async function actPinAsset(id: string, pinned: boolean): Promise<{ ok: boolean; error?: string }> {
-  const s = await getSession();
-  requireRole(s, 'content.create');
-  const done = await setMediaPinned(s.workspaceId, id, pinned);
-  if (!done) return { ok: false, error: '这张图不存在' };
-  revalidatePath('/studio');
-  return { ok: true };
 }
 
 // ── 我的风格库（自定义封面风格）──

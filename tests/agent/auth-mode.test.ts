@@ -358,7 +358,7 @@ describe('派发卡：按后果分组，而不是摆 14 行工具名', () => {
     const read = (p: string) => fs.readFileSync(path.join(process.cwd(), p), 'utf8');
     const home = read('components/TaskDeckHome.tsx');
     expect(home, '唯一的派活入口没挂授权卡').toMatch(/<DispatchAuth/);
-    expect(home, '授权没带给 server action，勾了等于没勾').toMatch(/actStartAgent\(goal, auth\)/);
+    expect(home, '授权没带给 server action，勾了等于没勾').toMatch(/actStartAgent\(goal, auth\b/);
     // 助手页不许再长出第二个派活框：它只看执行、接对话的移交
     const panel = read('app/(app)/assistant/AgentPanel.tsx');
     expect(panel, '助手页又摆了一张授权卡——说明派活框回来了').not.toMatch(/<DispatchAuth/);

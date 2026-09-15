@@ -1,4 +1,3 @@
-import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { getSession, getSessionOrNull } from '@/lib/session';
 import { redirect } from 'next/navigation';
@@ -6,15 +5,11 @@ import { edition } from '@/lib/edition';
 import { Landing } from '@/components/landing/Landing';
 import { parseJson } from '@/lib/json';
 import { readPersona, isPersonaBlank } from '@/lib/persona';
-import { fmtDateLong } from '@/lib/format';
 
 import { Fold } from '@/components/ui';
-import { ActionButton } from '@/components/ActionButton';
 import { TaskList } from '@/components/TaskList';
 
 import { TrialProgressCard } from '@/components/TrialProgressCard';
-import { Icon } from '@/components/icons';
-import { loadReadiness } from '@/lib/topic/readiness';
 import { listRuns, KIND_LABEL } from '@/lib/runs';
 import { TaskDeckHome } from '@/components/TaskDeckHome';
 import { PresetCards } from '@/components/PresetCards';
@@ -23,7 +18,6 @@ import { disabledTools } from '@/lib/agent/tool-config';
 import { trialProgress } from '@/lib/pay/trial';
 import { buildBattleReport } from '@/lib/battle/report';
 import { BattleReport } from '@/components/BattleReport';
-import { actGenerateRecommendations, actCrawlCompetitors } from './actions';
 import { WeekBattleHeader } from '@/components/WeekBattleHeader';
 import { PersonaGuideBanner } from '@/components/PersonaGuideBanner';
 import { getServerLang } from '@/lib/i18n/server';
@@ -47,22 +41,30 @@ export default async function Dashboard({
   }
   const [s, lang] = await Promise.all([getSession(), getServerLang()]);
   const isEn = lang === 'en';
-  const [account, topics, tasks, publishRecords, competitors, memories, sensitiveCount, readiness, tenant, newMemories, recommendedCount] = await Promise.all([
-    prisma.creatorAccount.findUnique({ where: { id: s.accountId } }),
-    prisma.topicIdea.findMany({ where: { accountId: s.accountId, state: 'recommended' }, orderBy: { totalScore: 'desc' }, take: 3 }),
-    prisma.taskItem.findMany({ where: { workspaceId: s.workspaceId }, orderBy: { createdAt: 'desc' } }),
-    prisma.publishRecord.findMany({ where: { accountId: s.accountId } }),
-    prisma.watchlistItem.count({ where: { workspaceId: s.workspaceId } }),
-    prisma.memoryEntry.count({ where: { workspaceId: s.workspaceId, active: true } }),
-    prisma.sensitiveWord.count(),
-    loadReadiness(s.workspaceId, s.accountId),
-    prisma.tenant.findUnique({ where: { id: s.tenantId }, select: { plan: true, planExpiresAt: true } }),
-    // 近 7 天新增记忆：把「越用越懂我」从静默变可感知（诚实：真实 count，滚动 7 天窗口）
-    prisma.memoryEntry.count({
-      where: { workspaceId: s.workspaceId, active: true, createdAt: { gte: new Date(Date.now() - 7 * 86_400_000) } },
+  // ── 首屏真正用得上的四样 ──
+  //
+  // 【删掉了七次白查】2026-09-12 逐个变量对了一遍「取回来之后到底渲染在哪」，
+  // 结果这一批里有七项取完从来没被读过一次——都是 2026-08-26 单壳化删掉统计格之后
+  // 留下的残肢（topics / publishRecords / memories / sensitiveCount / readiness /
+  // newMemories / recommendedCount）。其中两项特别贵：
+  //   · publishRecords 是**不带 take 的全量** PublishRecord，随着发布记录一直涨；
+  //   · loadReadiness() 自己内部还要再打十来次库（含一次不带 take 的 crawledPost 全量）。
+  // 并发不等于免费：Promise.all 只是把等待叠在一起，数据库该干的活一次没少。
+  // 没人读的查询不该出现在全站访问量最高的这一页上。
+  const [account, tasks, taskCount, competitors, tenant] = await Promise.all([
+    prisma.creatorAccount.findUnique({ where: { id: s.accountId }, select: { personaCard: true } }),
+    // 待办清单：只取渲染要的四个字段 + 最近 200 条。原来是**整表整行**取回来，
+    // 再整份塞进 RSC 流给客户端组件——待办越攒越多，首页就越来越沉。
+    prisma.taskItem.findMany({
+      where: { workspaceId: s.workspaceId },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+      select: { id: true, title: true, done: true, source: true },
     }),
-    // 本周作战入口条的条数：待起稿的高潜选题总数（topics 只取了 top3，这里要全量）
-    prisma.topicIdea.count({ where: { accountId: s.accountId, state: 'recommended' } }),
+    // 「还有几条没做完」要的是真实总数，不能拿被截断的那 200 条去数
+    prisma.taskItem.count({ where: { workspaceId: s.workspaceId, done: false } }),
+    prisma.watchlistItem.count({ where: { workspaceId: s.workspaceId } }),
+    prisma.tenant.findUnique({ where: { id: s.tenantId }, select: { plan: true, planExpiresAt: true } }),
   ]);
 
   // 试用运营节奏：仅在「试用中且未过期」时得到 isTrial=true（纯函数，见 lib/pay/trial.ts）
@@ -171,7 +173,7 @@ export default async function Dashboard({
         <Fold
           title={isEn ? 'To-Do List' : '待办清单'}
           sub={isEn ? 'Add items, check when done' : '自己加，做完打勾'}
-          note={<span className="small muted">{tasks.filter((t) => !t.done).length} {isEn ? 'unfinished' : '条未完成'}</span>}
+          note={<span className="small muted">{taskCount} {isEn ? 'unfinished' : '条未完成'}</span>}
         >
           <TaskList tasks={tasks} />
         </Fold>

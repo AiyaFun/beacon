@@ -18,6 +18,8 @@ export type RunEntry = {
   title: string;
   status: RunStatus;
   at: Date;
+  /** 什么时候发起的（有这一列的几类才给）。耗时 = at - startedAt，只对已结束的算；没有就不编 */
+  startedAt?: Date;
   detail?: string;
   href: string;
   accountName?: string;

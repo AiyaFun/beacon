@@ -189,7 +189,8 @@ export async function tickScheduledAgents(now = new Date(), tickMinutes = 10): P
             memberId: r.createdBy,
             role: 'owner', // 定时按建它的人跑；真正的权限在 contextForRun 里按库现查
           },
-          { presetId, origin: 'schedule', scheduledAgentId: r.id },
+          // 定时上选的模型渠道覆盖卡上的（null = 用卡上的 / 自动）
+          { presetId, origin: 'schedule', scheduledAgentId: r.id, providerIdOverride: r.providerId },
         );
         if (!d.ok) {
           await markBroken(r, d.error, nameOf(r));
@@ -220,6 +221,7 @@ export async function tickScheduledAgents(now = new Date(), tickMinutes = 10): P
           accountId: r.accountId,
           memberId: r.createdBy,
           trigger: 'schedule',
+          providerId: r.providerId,
         },
         r.templateId,
       );

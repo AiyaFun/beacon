@@ -44,23 +44,59 @@ export async function analyzeHotFit(accountId: string, workspaceId: string, tena
   ];
 
   const res = await llmComplete(tenantId, 'advisor', messages, { json: true, temperature: 0.6 });
-  const parsed = parseJson<Partial<HotFitAnalysis>>(res.text, {});
+  const normalized = normalizeHotFit(parseJson<unknown>(res.text, {}), hotTitle);
 
-  // 解析成功即用；否则用人设启发式兜底，保证永远有可用结果（含 Mock 模式）
-  if (parsed.angles && parsed.angles.length) {
-    return {
-      hotTitle,
-      fit: clampInt(parsed.fit, 60),
-      verdict: parsed.verdict ?? '结合账号人设做差异化切入即可尝试。',
-      angles: parsed.angles.slice(0, 4),
-      production: parsed.production ?? [],
-      risk: parsed.risk ?? '发布前过一遍分平台合规检测。',
-      mocked: res.mocked || Boolean(res.degraded),
-    };
+  // 结构合法且至少有一条切入角才算「解析成功」；否则用人设启发式兜底，保证永远有可用结果（含 Mock 模式）
+  if (normalized) {
+    return { ...normalized, mocked: res.mocked || Boolean(res.degraded) };
   }
-  // 走到启发式兜底 = AI 输出不可用（Mock、或真实响应缺 angles 字段）→ 这不是真 AI 分析，
+  // 走到启发式兜底 = AI 输出不可用（Mock、真实响应缺 angles 字段、或字段形状不对）→ 这不是真 AI 分析，
   // 必须标 mocked=true，否则关键词兜底会被当成真结论展示（review 指出的静默降级）。
   return heuristicFallback(hotTitle, persona.niche || persona.identity, true);
+}
+
+const DEFAULT_VERDICT = '结合账号人设做差异化切入即可尝试。';
+const DEFAULT_RISK = '发布前过一遍分平台合规检测。';
+
+/**
+ * 把模型吐出来的「合法 JSON 但形状未必对」收口成 HotFitAnalysis。
+ *
+ * 此前只判 `angles` 存不存在就整包放行：模型返回 `angles:["文本"]`、`production:{}`、
+ * 对象型 `risk` 都是合法 JSON，前端 `.map()` / JSX 渲染当场炸。这里逐字段按类型过滤：
+ * 不是对象的切入角丢掉、不是字符串的制作建议丢掉、非字符串的 verdict/risk 换缺省句；
+ * 过滤后一条切入角都不剩 → 返回 null，交给调用方走启发式兜底。
+ */
+export function normalizeHotFit(raw: unknown, hotTitle: string): Omit<HotFitAnalysis, 'mocked'> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+
+  const angles: HotFitAngle[] = Array.isArray(r.angles)
+    ? r.angles
+        .map((a): HotFitAngle | null => {
+          if (!a || typeof a !== 'object' || Array.isArray(a)) return null;
+          const o = a as Record<string, unknown>;
+          const angle = str(o.angle);
+          if (!angle) return null;
+          return { angle, why: str(o.why) };
+        })
+        .filter((a): a is HotFitAngle => a !== null)
+        .slice(0, 4)
+    : [];
+  if (!angles.length) return null;
+
+  const production = Array.isArray(r.production)
+    ? r.production.map(str).filter(Boolean).slice(0, 6)
+    : [];
+
+  return {
+    hotTitle,
+    fit: clampInt(r.fit, 60),
+    verdict: str(r.verdict) || DEFAULT_VERDICT,
+    angles,
+    production,
+    risk: str(r.risk) || DEFAULT_RISK,
+  };
 }
 
 function clampInt(v: unknown, def: number): number {

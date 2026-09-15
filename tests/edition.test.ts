@@ -58,6 +58,7 @@ describe('能力矩阵', () => {
       localPublisher: false,
       localShell: false,
       localBrowser: false,
+      aiAuthoredTools: false,
     },
     appliance: {
       payment: false,
@@ -71,6 +72,7 @@ describe('能力矩阵', () => {
       localPublisher: true,
       localShell: true,
       localBrowser: true,
+      aiAuthoredTools: true,
     },
     private: {
       payment: false,
@@ -84,6 +86,7 @@ describe('能力矩阵', () => {
       localPublisher: true,
       localShell: true,
       localBrowser: true,
+      aiAuthoredTools: true,
     },
   };
 

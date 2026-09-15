@@ -110,7 +110,7 @@ export type BriefResult =
   | { ok: false; error: string };
 
 export async function buildBrief(
-  ctx: { tenantId: string; workspaceId: string; accountId: string },
+  ctx: { tenantId: string; workspaceId: string; accountId: string; providerId?: string },
   target: BriefTarget,
 ): Promise<BriefResult> {
   const facts = await collectFacts(target, ctx);
@@ -136,7 +136,7 @@ export async function buildBrief(
       },
       { role: 'user', content: `简报主题：${title}\n\n事实清单：\n${facts.lines.join('\n')}` },
     ],
-    { temperature: 0.4 },
+    { temperature: 0.4, ...(ctx.providerId ? { providerId: ctx.providerId } : {}) },
   );
 
   return { ok: true, title, text: res.text.trim(), mocked: res.mocked };

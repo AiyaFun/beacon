@@ -39,7 +39,7 @@ export default async function MaterialPage() {
         tabs={<AssetTabs active="material" inline />}
       />
 
-      <div className="grid grid-5" style={{ marginBottom: 16 }}>
+      <div className="grid-stats">
         <Stat label={lang === 'en' ? 'Stories' : '经历'} value={byType('experience')} foot={lang === 'en' ? 'Personal anecdotes' : '个人真实故事'} />
         <Stat label={lang === 'en' ? 'Cases' : '案例'} value={byType('case')} foot={lang === 'en' ? 'Project takeaways' : '客户/项目经验'} />
         <Stat label={lang === 'en' ? 'Perspectives' : '观点'} value={byType('opinion')} foot={lang === 'en' ? 'Unique stances' : '独到见解立场'} />

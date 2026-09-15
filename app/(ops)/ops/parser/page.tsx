@@ -36,7 +36,7 @@ export default async function OpsParserPage() {
         }
       />
 
-      <div className="grid grid-4" style={{ marginBottom: 16 }}>
+      <div className="grid-stats">
         <Stat
           label={isEn ? 'Open Incidents' : '待处理事件'}
           value={incidents.filter((i) => i.status === 'open').length}

@@ -12,21 +12,12 @@ import { useI18n } from '@/lib/i18n/context';
 export function AgentCreateActions() {
   const { lang } = useI18n();
   return (
-    <span className="row" style={{ gap: 8 }}>
-      <button
-        type="button"
-        className="btn btn-sm"
-        onClick={() => window.dispatchEvent(new CustomEvent('beacon:new-schedule'))}
-      >
-        {lang === 'en' ? '＋ Scheduled Task' : '＋ 定时任务'}
-      </button>
-      <button
-        type="button"
-        className="btn btn-sm btn-primary"
-        onClick={() => window.dispatchEvent(new CustomEvent('beacon:new-agent'))}
-      >
-        {lang === 'en' ? '＋ New Agent' : '＋ 新建智能体'}
-      </button>
-    </span>
+    <button
+      type="button"
+      className="btn primary"
+      onClick={() => window.dispatchEvent(new CustomEvent('beacon:new-schedule'))}
+    >
+      {lang === 'en' ? 'New Scheduled Task' : '新建定时任务'}
+    </button>
   );
 }

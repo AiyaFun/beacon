@@ -6,6 +6,7 @@ import { getServerLang } from '@/lib/i18n/server';
 
 import { PrivacyCard } from '../settings/PrivacyCard';
 import { HubHeader } from '@/components/HubHeader';
+import { WhatsNewCard } from '@/components/WhatsNewCard';
 
 export const dynamic = 'force-dynamic';
 
@@ -556,7 +557,7 @@ export default async function HelpPage() {
         sub={isEn ? 'Viral Genes · Verify Every Metric Independently' : '爆款基因 · 每个数都能自己验算'}
         style={{ marginBottom: 16 }}
         action={
-          <Link href="/genes" className="btn btn-sm btn-primary">
+          <Link href="/data?view=genes" className="btn btn-sm btn-primary">
             <Icon.gauge size={13} /> {isEn ? 'View Genes' : '去看基因'}
           </Link>
         }
@@ -745,6 +746,11 @@ export default async function HelpPage() {
           })}
         </div>
       </Card>
+
+      {/* 9. 最近更新：从系统设置移至使用帮助下方 */}
+      <div id="whats-new" style={{ marginTop: 16 }}>
+        <WhatsNewCard lang={lang} />
+      </div>
     </>
   );
 }

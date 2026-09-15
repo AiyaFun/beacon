@@ -3,6 +3,7 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { actBulkAccept, actBulkReject } from './actions';
+import { useImeGuard } from '@/lib/ime';
 
 // 「已推荐」分区的批量处理条。
 // 此前只有单条采纳/拒绝：一次生成十条推荐，清空它要点十次。
@@ -16,6 +17,7 @@ export function BulkBar({ ids }: { ids: string[] }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState('');
+  const ime = useImeGuard(); // 组字中的回车是上屏，不是提交（lib/ime.ts）
   const [msg, setMsg] = useState('');
   const [pending, start] = useTransition();
   const router = useRouter();
@@ -91,7 +93,8 @@ export function BulkBar({ ids }: { ids: string[] }) {
             placeholder={lang === 'en' ? 'Why reject these? (Tunes future recommendations)' : '这批为什么不合适？（会记进偏好，让后续推荐更准）'}
             value={reason}
             onChange={(e) => setReason(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && reason.trim() && !pending) reject(); }}
+            {...ime.composition}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !ime.isComposing(e) && reason.trim() && !pending) reject(); }}
           />
           <button className="btn btn-sm btn-primary" onClick={reject} disabled={pending || !reason.trim()}>
             {lang === 'en' ? `Confirm Reject (${selected.size})` : `确认拒绝 ${selected.size} 条`}

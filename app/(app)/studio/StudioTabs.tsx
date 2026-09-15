@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
+import { onTabListKeyDown } from '@/components/tab-keyboard';
 import { useI18n } from '@/lib/i18n';
 
 // 工坊下半区的标签页：技能出成品 / 标题与封面 / 一稿多平台 / 草稿会诊。
@@ -44,6 +45,7 @@ const STUDIO_TAB_EN: Record<string, string> = {
 
 export function StudioTabs({ tabs, initialTab }: { tabs: StudioTab[]; initialTab?: string }) {
   const { lang } = useI18n();
+  const tabId = useId();
   const [active, setActive] = useState(
     initialTab && tabs.some((t) => t.key === initialTab) ? initialTab : (tabs[0]?.key ?? ''),
   );
@@ -68,21 +70,25 @@ export function StudioTabs({ tabs, initialTab }: { tabs: StudioTab[]; initialTab
 
   return (
     <div>
-      <div className="tabs tabs-sub" role="tablist">
+      <div className="studio-tabs-header" role="tablist" aria-label={lang === 'en' ? 'Draft outputs' : '创作成品'} onKeyDown={onTabListKeyDown} style={{ marginBottom: 12 }}>
         {tabs.map((t) => {
           const displayLabel = lang === 'en' && STUDIO_TAB_EN[t.key] ? STUDIO_TAB_EN[t.key] : t.label;
+          const isActive = t.key === cur.key;
           return (
             <button
               key={t.key}
               type="button"
               role="tab"
-              aria-selected={t.key === cur.key}
-              className={`tab ${t.key === cur.key ? 'active' : ''}`}
+              id={`${tabId}-tab-${t.key}`}
+              aria-controls={`${tabId}-panel-${t.key}`}
+              aria-selected={isActive}
+              tabIndex={isActive ? 0 : -1}
+              className={`studio-tab-btn ${isActive ? 'active' : ''}`}
               onClick={() => setActive(t.key)}
             >
-              {displayLabel}
+              <span>{displayLabel}</span>
               {t.badge ? (
-                <span className="badge badge-gray" style={{ marginLeft: 6, fontSize: 10 }}>{t.badge}</span>
+                <span className="studio-tab-badge">{t.badge}</span>
               ) : null}
             </button>
           );
@@ -94,7 +100,7 @@ export function StudioTabs({ tabs, initialTab }: { tabs: StudioTab[]; initialTab
       )}
 
       {tabs.map((t) => (
-        <div key={t.key} role="tabpanel" hidden={t.key !== cur.key}>
+        <div key={t.key} id={`${tabId}-panel-${t.key}`} role="tabpanel" aria-labelledby={`${tabId}-tab-${t.key}`} tabIndex={0} hidden={t.key !== cur.key}>
           {t.node}
         </div>
       ))}

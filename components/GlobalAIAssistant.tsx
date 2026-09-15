@@ -6,6 +6,7 @@ import { Icon } from './icons';
 import { looksActionable } from '@/lib/agent/intent';
 import { prepareReferenceImage } from '@/lib/cover/client-image';
 import { useLanguage } from '@/lib/i18n';
+import { useImeGuard } from '@/lib/ime';
 
 /** 与助手页、服务端同一个数：3 张（超大请求体会被 WAF 回一个假的 200）。 */
 const MAX_PICS = 3;
@@ -78,7 +79,7 @@ export const PAGE_INFOS: Record<string, { name: string; desc: string; nameEn?: s
   '/publish': {
     name: '发布中心',
     nameEn: 'Publishing Hub',
-    desc: '把稿子发出去的那一段：进行中的发布计划与每个平台的任务状态、等你去点发布的任务、平台通道能力矩阵（公众号可接口直发/插件填好你来点/只能手动）、最近发布记录与缺链接提醒。按当前账号过滤。',
+    desc: '把稿子发出去的那一段：进行中的发布计划与每个平台的任务状态、等你去点发布的任务、平台通道能力矩阵（公众号可接口直发/插件填好你来点/只能手动）、已发布作品各自的回流状态（缺作品链接 / 待回流 / 已回流）与补链接入口。按当前账号过滤。',
     descEn: 'Post distribution hub: active publish plans, cross-platform tasks, and publishing status.',
   },
   '/images': {
@@ -156,8 +157,8 @@ export const PAGE_INFOS: Record<string, { name: string; desc: string; nameEn?: s
   '/hotlists': {
     name: '热点聚合中心',
     nameEn: 'Trending Hub',
-    desc: '八大平台热榜聚合与跨源话题聚类，可选一个实时热点做「账号 × 热点」结合分析。部分平台没有真实采集通道时会显示带「示例」标的占位词条，那些词条不参与选题推荐。',
-    descEn: 'Real-time trending topics across 8 platforms and topic clustering.',
+    desc: '多平台热榜聚合与跨源话题聚类，可选一个实时热点做「账号 × 热点」结合分析。部分平台没有真实采集通道时会显示带「示例」标的占位词条，那些词条不参与选题推荐。',
+    descEn: 'Real-time trending topics across multiple platforms and topic clustering.',
   },
   '/library': {
     name: '内容资讯库',
@@ -245,6 +246,8 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
   // 其余页面照旧——这个球的价值是「结合当前这一页」，首页的框没有这层上下文。
   const onHome = pathname === '/';
   const { lang } = useLanguage();
+  /** 中文输入法组字期间的回车不算发送（判据见 lib/ime.ts） */
+  const ime = useImeGuard();
   const [isOpen, setIsOpen] = useState(false);
 
   const defaultWelcome = useCallback((l: 'zh' | 'en') => {
@@ -305,8 +308,8 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
   }
 
   // ── 自由位置/尺寸/字号 State ──
-  // triggerPosMode: 'top' (页面上方，默认) | 'bottom' (页面下方)
-  const [triggerPosMode, setTriggerPosMode] = useState<'top' | 'bottom'>('top');
+  // triggerPosMode: 'bottom' (页面右下角，默认防遮挡) | 'top' (页面上方)
+  const [triggerPosMode, setTriggerPosMode] = useState<'top' | 'bottom'>('bottom');
   const [btnPos, setBtnPos] = useState<{ x: number; y: number } | null>(null); // 入口图标自由拖拽位置
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null); // 助手面板自由拖拽位置
   const [size, setSize] = useState<{ w: number; h: number }>({ w: 380, h: 580 });
@@ -628,6 +631,9 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
   };
 
   function onKey(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // 输入法组字中的回车是「上屏」不是「发送」：不先挡住，用户想让敲的英文字母上屏，
+    // 半截话就已经发出去了。判据与首页那一框共用（lib/ime.ts）
+    if (ime.isComposing(e)) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       send(input);
@@ -655,376 +661,6 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
   if (onHome) return null;
   return (
     <>
-      <style>{`
-        /* 悬浮/固定客服入口按钮 */
-        .float-assistant-trigger {
-          position: fixed;
-          right: 24px;
-          width: 52px;
-          height: 52px;
-          border-radius: 50%;
-          background: linear-gradient(135deg, var(--brand), #ff8c42);
-          box-shadow: 0 4px 18px rgba(232, 85, 45, 0.35);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          color: #fff;
-          cursor: pointer;
-          z-index: 999;
-          transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.3s ease, top 0.3s ease, bottom 0.3s ease;
-          border: none;
-          outline: none;
-        }
-        .float-assistant-trigger.pos-top {
-          top: 72px; /* 位于页面上方（顶部导航栏正下方） */
-          bottom: auto;
-        }
-        .float-assistant-trigger.pos-bottom {
-          bottom: 24px; /* 位于页面右下角 */
-          top: auto;
-        }
-        .float-assistant-trigger:hover {
-          transform: scale(1.1) rotate(5deg);
-          box-shadow: 0 6px 24px rgba(232, 85, 45, 0.45);
-        }
-        .float-assistant-trigger::after {
-          content: '';
-          position: absolute;
-          width: 100%;
-          height: 100%;
-          border-radius: 50%;
-          border: 2px solid var(--brand);
-          opacity: 0.6;
-          animation: float-pulse 2s infinite;
-          pointer-events: none;
-        }
-
-        @keyframes float-pulse {
-          0% { transform: scale(1); opacity: 0.6; }
-          100% { transform: scale(1.4); opacity: 0; }
-        }
-
-        /* 聊天弹窗面板 */
-        .float-assistant-panel {
-          position: fixed;
-          background: var(--surface);
-          border: 1px solid var(--border);
-          border-radius: var(--radius);
-          box-shadow: var(--shadow-lg);
-          z-index: 998;
-          display: flex;
-          flex-direction: column;
-          overflow: hidden;
-          transition: opacity 0.2s ease, transform 0.2s ease;
-          transform-origin: top right;
-          opacity: 0;
-          transform: scale(0.95) translateY(-10px);
-          pointer-events: none;
-        }
-        .float-assistant-panel.pos-bottom-origin {
-          transform-origin: bottom right;
-          transform: scale(0.95) translateY(10px);
-        }
-        .float-assistant-panel.open {
-          opacity: 1;
-          transform: scale(1) translateY(0);
-          pointer-events: auto;
-        }
-
-        /* 顶部可拖拽 Header */
-        .fap-header {
-          background: linear-gradient(135deg, var(--brand), #ff8c42);
-          padding: 12px 16px;
-          color: #fff;
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          cursor: grab;
-          user-select: none;
-        }
-        .fap-header:active {
-          cursor: grabbing;
-        }
-        .fap-header-title {
-          font-weight: 700;
-          font-size: 14.5px;
-          display: flex;
-          align-items: center;
-          gap: 7px;
-        }
-        .fap-header-actions {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-        }
-        .fap-zoom-controls {
-          display: flex;
-          align-items: center;
-          background: rgba(255, 255, 255, 0.18);
-          border-radius: 14px;
-          padding: 1px 4px;
-        }
-        .fap-zoom-badge {
-          font-size: 10.5px;
-          font-weight: 700;
-          color: #fff;
-          padding: 0 4px;
-          min-width: 32px;
-          text-align: center;
-        }
-        .fap-icon-btn {
-          background: transparent;
-          border: none;
-          color: #fff;
-          width: 24px;
-          height: 24px;
-          border-radius: 50%;
-          display: grid;
-          place-items: center;
-          cursor: pointer;
-          transition: background 0.2s;
-        }
-        .fap-icon-btn:hover {
-          background: rgba(255, 255, 255, 0.25);
-        }
-        .fap-icon-btn:disabled {
-          opacity: 0.4;
-          cursor: not-allowed;
-        }
-        .fap-header-close {
-          background: rgba(255, 255, 255, 0.2);
-          border: none;
-          color: #fff;
-          width: 24px;
-          height: 24px;
-          border-radius: 50%;
-          display: grid;
-          place-items: center;
-          cursor: pointer;
-          transition: background 0.2s;
-        }
-        .fap-header-close:hover {
-          background: rgba(255, 255, 255, 0.35);
-        }
-
-        /* 当前页面状态栏与一键分析 */
-        .fap-banner {
-          background: var(--surface-2);
-          border-bottom: 1px solid var(--border);
-          padding: 8px 14px;
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          gap: 10px;
-        }
-        .fap-banner-text {
-          font-size: calc(var(--fap-font-size, 13.5px) * 0.92);
-          color: var(--text-2);
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          white-space: nowrap;
-          overflow: hidden;
-          text-overflow: ellipsis;
-        }
-        .fap-banner-btn {
-          background: var(--brand-soft);
-          color: var(--brand);
-          border: none;
-          border-radius: var(--radius-sm);
-          padding: 4px 8px;
-          font-size: calc(var(--fap-font-size, 13.5px) * 0.88);
-          font-weight: 600;
-          display: flex;
-          align-items: center;
-          gap: 4px;
-          cursor: pointer;
-          transition: all 0.2s;
-          white-space: nowrap;
-        }
-        .fap-banner-btn:hover {
-          background: var(--brand);
-          color: #fff;
-        }
-        .fap-banner-btn:disabled {
-          opacity: 0.6;
-          cursor: not-allowed;
-        }
-
-        /* 消息滚动区域 */
-        .fap-body {
-          flex: 1;
-          overflow-y: auto;
-          padding: 14px;
-          display: flex;
-          flex-direction: column;
-          gap: 12px;
-        }
-
-        /* 气泡样式 */
-        .fap-bubble {
-          display: flex;
-          gap: 8px;
-          max-width: 88%;
-          align-items: flex-start;
-        }
-        .fap-bubble.user {
-          align-self: flex-end;
-          flex-direction: row-reverse;
-        }
-        .fap-bubble.assistant {
-          align-self: flex-start;
-          flex-direction: row;
-        }
-        .fap-avatar {
-          width: 28px;
-          height: 28px;
-          border-radius: 50%;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          color: #fff;
-          flex-shrink: 0;
-          font-size: 12px;
-        }
-        .fap-avatar.user {
-          background: var(--surface-3, #64748b);
-        }
-        .fap-avatar.assistant {
-          background: var(--brand);
-        }
-        .fap-bubble-card {
-          padding: 9px 12px;
-          border-radius: var(--radius-sm);
-          font-size: var(--fap-font-size, 13.5px);
-          line-height: 1.55;
-          white-space: pre-wrap;
-          word-break: break-word;
-        }
-        .fap-bubble-card.user {
-          background: var(--brand);
-          color: #fff;
-        }
-        .fap-bubble-card.assistant {
-          background: var(--surface-2);
-          color: var(--text);
-          border: 1px solid var(--border);
-        }
-        .fap-bubble-card.error {
-          background: var(--red-soft);
-          color: var(--red);
-          border: 1px solid var(--red);
-        }
-
-        /* 「让它直接去做」条：贴在输入框上方，与助手页的移交条同一个位置感 */
-        .fap-handoff {
-          padding: 8px 14px;
-          border-top: 1px solid var(--border);
-          background: var(--amber-soft, var(--surface));
-          display: flex;
-          gap: 10px;
-          align-items: center;
-          justify-content: space-between;
-        }
-
-        /* 参考图预览条 */
-        .fap-pics {
-          padding: 8px 14px 0;
-          display: flex;
-          flex-wrap: wrap;
-          gap: 8px;
-          align-items: center;
-        }
-        /* max-width 要显式给死：globals.css 里有一条针对卡片内图片的 max-width 100% 规则，
-           它会让图片的宽度反过来依赖父容器，而父容器又靠内容撑开——解出来是 2px。
-           注意这段在 style jsx 的模板串里，注释里不能出现花括号，会破坏 JSX 解析 */
-        .fap-pic { width: 46px; height: 46px; max-width: 46px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); display: block; }
-        .fap-pic-x {
-          position: absolute; top: -6px; right: -6px;
-          width: 18px; height: 18px; line-height: 1; padding: 0;
-          border-radius: 50%; border: 1px solid var(--border);
-          background: var(--surface); color: var(--text-2); cursor: pointer;
-        }
-        .fap-pic-btn {
-          display: flex; align-items: center; justify-content: center;
-          width: 34px; height: 34px; flex-shrink: 0;
-          border: 1px solid var(--border); border-radius: 8px;
-          background: var(--surface); color: var(--text-2); cursor: pointer;
-        }
-        .fap-pic-btn:hover { color: var(--brand); border-color: var(--brand); }
-
-        /* 底部输入框 */
-        .fap-footer {
-          padding: 10px 14px;
-          border-top: 1px solid var(--border);
-          background: var(--surface);
-          display: flex;
-          gap: 8px;
-          align-items: flex-end;
-        }
-        .fap-input {
-          flex: 1;
-          border: 1px solid var(--border);
-          border-radius: var(--radius-sm);
-          padding: 8px 10px;
-          min-height: 38px;
-          max-height: 120px;
-          resize: none;
-          background: var(--surface);
-          color: var(--text);
-          font-size: var(--fap-font-size, 13.5px);
-          outline: none;
-          transition: border-color 0.2s;
-        }
-        .fap-input:focus {
-          border-color: var(--brand);
-        }
-        .fap-send-btn {
-          background: var(--brand);
-          color: #fff;
-          border: none;
-          border-radius: var(--radius-sm);
-          width: 36px;
-          height: 36px;
-          display: grid;
-          place-items: center;
-          cursor: pointer;
-          transition: background 0.2s;
-          flex-shrink: 0;
-        }
-        .fap-send-btn:hover {
-          background: #d6431c;
-        }
-        .fap-send-btn:disabled {
-          background: var(--border-strong);
-          cursor: not-allowed;
-        }
-
-        /* 拉伸 Resize 控制手柄 */
-        .fap-resize-handle {
-          position: absolute;
-          width: 14px;
-          height: 14px;
-          z-index: 10;
-        }
-        .fap-resize-handle.bottom-right {
-          right: 0;
-          bottom: 0;
-          cursor: nwse-resize;
-          background: linear-gradient(135deg, transparent 50%, var(--brand) 50%);
-          border-bottom-right-radius: var(--radius);
-          opacity: 0.6;
-        }
-        .fap-resize-handle.top-left {
-          left: 0;
-          top: 0;
-          cursor: nwse-resize;
-          background: linear-gradient(315deg, transparent 50%, var(--brand) 50%);
-          border-top-left-radius: var(--radius);
-          opacity: 0.6;
-        }
-      `}</style>
-
       {/* 位于页面上方（默认 top: 72px）或支持按住自由拖拽到任意位置的入口图标 */}
       <button
         className={`float-assistant-trigger ${!btnPos ? (triggerPosMode === 'top' ? 'pos-top' : 'pos-bottom') : ''}`}
@@ -1228,6 +864,7 @@ export function GlobalAIAssistant({ accountName }: { accountName: string }) {
             value={input}
             disabled={streaming}
             onChange={(e) => setInput(e.target.value)}
+            {...ime.composition}
             onKeyDown={onKey}
             rows={1}
           />

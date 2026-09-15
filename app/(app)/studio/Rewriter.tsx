@@ -10,9 +10,9 @@ import { Icon } from '@/components/icons';
 import { HighlightedEditor, type Mark } from './HighlightedEditor';
 import { supportsMarkdown, hasMarkdownMarkers, mdLiteToHtml, mdLiteToPlain } from '@/lib/studio/markdown';
 import { copyRichText } from '@/lib/clipboard/rich';
-import { AIGC_LABEL } from '@/lib/compliance/aigc';
 import { actRewrite, actSaveHumanVersion, actCoachDiagnose, actCoachOptimize, actDeflavor, type CoachDiagnoseResult } from './actions';
 import { applyLinePrefix as applyLinePrefixAt, wrapSelection as wrapSelectionAt, type EditResult } from './md-lite-edit';
+import { ExportMenu } from './ExportMenu';
 import { useI18n } from '@/lib/i18n';
 
 type Hit = { word: string; tier: string; action: string; start: number; end: number; suggestion?: string; platform?: string };
@@ -73,11 +73,13 @@ export function Rewriter({
   initialText,
   draftTitle,
   initialPlatform,
+  versionSeq = 1,
 }: {
   draftId?: string;
   initialText?: string;
   draftTitle?: string;
   initialPlatform?: string;
+  versionSeq?: number;
 }) {
   const { lang } = useI18n();
   const isEn = lang === 'en';
@@ -203,6 +205,7 @@ export function Rewriter({
 
   // ── 算法教练实时诊断（防抖 700ms，确定性规则零 LLM 成本）──
   const [coach, setCoach] = useState<CoachDiagnoseResult | null>(null);
+  const [showCoachDetails, setShowCoachDetails] = useState(false);
   // 产出这份诊断时的正文原文。命中位置是**相对那一份正文**算的，用户接着又敲了几个字之后
   // 这些偏移就会整体错位、把色块盖到隔壁的词上。所以只有快照与当前正文完全一致时才画标注，
   // 不一致就一个都不画——宁可暂时没有标注，也不能标错地方。
@@ -400,6 +403,15 @@ export function Rewriter({
                 {coach.score} {isEn ? 'pts' : '分'}
               </span>
             )}
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              style={{ height: 26, padding: '0 8px', fontSize: 11.5, borderRadius: 6, marginLeft: 4 }}
+              onClick={() => setShowCoachDetails(false)}
+              title={isEn ? 'Close diagnosis panel' : '收起诊断面板'}
+            >
+              ✕ {isEn ? 'Close' : '收起'}
+            </button>
           </div>
         )}
       </div>
@@ -623,10 +635,9 @@ export function Rewriter({
     </div>
   ) : null;
 
-  const body = (
-    <div className={focus ? 'focus-layer' : 'stack'} style={focus ? undefined : { gap: 14 }}>
-      {/* 专注模式的顶条：正在写哪篇、写了多少、当前两个分数。分数放这儿是为了不用退出就知道好不好 */}
-      {focus && (
+  if (focus && portalReady) {
+    return createPortal(
+      <div className="focus-layer">
         <div className="row-between wrap" style={{ gap: 10 }}>
           <div className="row wrap" style={{ gap: 8, alignItems: 'center' }}>
             <b style={{ fontSize: 14 }}>{draftTitle ?? (isEn ? 'Untitled Draft' : '未命名草稿')}</b>
@@ -657,120 +668,187 @@ export function Rewriter({
             {err && <span className="small" style={{ color: 'var(--red)' }}>{err}</span>}
           </div>
         </div>
-      )}
-
-      {/* 未保存改动的恢复入口。上次离开时暂存在本地的正文，回来时由用户自己决定要不要用 */}
-      {!focus && restorable && (
-        <div
-          className="card"
-          style={{ padding: '10px 14px', boxShadow: 'none', background: 'var(--surface-2)', borderLeft: '3px solid var(--amber)' }}
-        >
-          <div className="row-between wrap" style={{ gap: 10 }}>
-            <div className="small" style={{ lineHeight: 1.6 }}>
-              {isEn ? (
-                <>This draft has <b>unsaved local edits</b> ({restorable.at ? relLocal(restorable.at, isEn) : 'cached locally'}), different from current text.</>
-              ) : (
-                <>这篇有一份<b>没保存的修改</b>（{restorable.at ? relLocal(restorable.at, isEn) : '上次'}留在本机），和当前正文不一样。</>
-              )}
-            </div>
-            <div className="row wrap" style={{ gap: 8 }}>
-              <button
-                className="btn btn-sm btn-accent"
-                onClick={() => { setText(restorable.text); setRestorable(null); }}
-              >
-                {isEn ? 'Restore' : '恢复它'}
-              </button>
-              <button
-                className="btn btn-sm btn-ghost"
-                onClick={() => {
-                  try { window.localStorage.removeItem(storageKey); } catch { /* 见上 */ }
-                  setRestorable(null);
-                }}
-              >
-                {isEn ? 'Discard' : '丢弃'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div
-        className="field"
-        style={focus
-          ? { marginBottom: 0, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }
-          : { marginBottom: 0 }}
-      >
-        {!focus && (
-          <div className="row-between wrap" style={{ gap: 8, marginBottom: 6 }}>
-            <label className="field-label" style={{ fontWeight: 650, marginBottom: 0 }}>
-              {lang === 'en' ? 'Original Body' : '原始正文'}
-            </label>
-            <span className="small muted">
-              {lang === 'en' ? `${stats.chars} chars · ${stats.paras} paras` : `${stats.chars} 字 · ${stats.paras} 段`}
-              {coachLoading ? (lang === 'en' ? ' · Analyzing…' : ' · 诊断中…') : ''}
-              {dirty && <span style={{ color: 'var(--amber)' }}>{lang === 'en' ? ' · Unsaved changes (cached locally)' : ' · 有未保存的修改（已暂存本机）'}</span>}
-            </span>
-          </div>
-        )}
-
-        {/* 轻结构工具条：只在文章型平台出现。插的是纯文本记号，正文仍然是纯文本 */}
-        {mdOn && !preview && (
-          <div className="row wrap" style={{ gap: 6, marginBottom: 6 }}>
-            <span className="small muted">{lang === 'en' ? 'Format' : '排版'}</span>
-            <button className="btn btn-sm btn-ghost" onClick={() => applyLinePrefix('## ')} title={lang === 'en' ? 'Make line a heading' : '把光标所在行变成小标题'}>
-              {lang === 'en' ? 'Heading' : '小标题'}
-            </button>
-            <button className="btn btn-sm btn-ghost" onClick={() => wrapSelection('**')} title={lang === 'en' ? 'Bold selection' : '加粗选中的字'}>
-              {lang === 'en' ? 'Bold' : '加粗'}
-            </button>
-            <button className="btn btn-sm btn-ghost" onClick={() => applyLinePrefix('- ')} title={lang === 'en' ? 'Make lines a list' : '把选中的几行变成列表'}>
-              {lang === 'en' ? 'List' : '列表'}
-            </button>
-            <button className="btn btn-sm btn-ghost" onClick={() => applyLinePrefix('> ')} title={lang === 'en' ? 'Make line a quote' : '把光标所在行变成引用块'}>
-              {lang === 'en' ? 'Quote' : '引用'}
-            </button>
-            <span className="small muted" title={lang === 'en' ? 'Stored as plain text markdown; rendered in preview and rich-text copy' : '记号只是普通字符，草稿存的仍然是纯文本；预览和「复制富文本」时才渲染成排版'}>
-              {lang === 'en' ? 'Plain text markers' : '记号存的是纯文本'}
-            </span>
-          </div>
-        )}
 
         <HighlightedEditor
           value={text}
           onChange={setText}
           marks={marks}
           taRef={taRef}
-          focusMode={focus}
-          rows={12}
-          minHeight={focus ? undefined : 260}
-          fontSize={focus ? 15 : undefined}
-          lineHeight={focus ? 1.9 : undefined}
-          placeholder={lang === 'en'
-            ? 'Paste or write body text — Algorithm coach diagnoses hooks, length, structure, and engagement in real-time. Sensitive terms and cliches are underlined.'
-            : '粘贴或输入正文——算法教练会边写边诊断（钩子/篇幅/结构/互动引导），命中的敏感词和套话会直接标在字下面。'}
+          focusMode={true}
+          fontSize={15}
+          lineHeight={1.9}
         />
+      </div>,
+      document.body,
+    );
+  }
 
-        {/* 标注图例 + 合规命中明细。镜像层挂不了 tooltip，能点开看建议的入口只能放这儿 */}
-        {!focus && (inlineHits.length > 0 || aiHitCount > 0) && (
+  return (
+    <section className="surface editor-pane">
+      <div className="doc-head">
+        <div className="doc-title-wrap">
+          <h2 className="doc-title" id="studioDocTitle">
+            {draftTitle ?? (isEn ? 'Untitled Draft' : '未命名草稿')}
+          </h2>
+          <span className="meta">
+            {platformName(platform, lang)} · v{versionSeq} · {dirty ? (isEn ? 'Cached locally' : '已在本地暂存') : (isEn ? 'Autosaved' : '已自动保存')}
+          </span>
+        </div>
+        <div className="doc-actions">
+          {draftId && (
+            <ExportMenu draftId={draftId} title={draftTitle ?? ''} content={text} />
+          )}
+          <button
+            type="button"
+            className="btn small"
+            onClick={() => setPreview((v) => !v)}
+            title={isEn ? 'Toggle preview' : '切换预览'}
+          >
+            {preview ? (isEn ? 'Edit' : '编辑') : (isEn ? 'Preview' : '预览')}
+          </button>
+        </div>
+      </div>
+
+      <div className="formatbar">
+        <button
+          type="button"
+          className="format-btn"
+          onClick={() => applyLinePrefix('## ')}
+          title={isEn ? 'Heading' : '小标题'}
+        >
+          <b>H</b>
+        </button>
+        <button
+          type="button"
+          className="format-btn"
+          onClick={() => wrapSelection('**')}
+          title={isEn ? 'Bold' : '加粗'}
+        >
+          <b>B</b>
+        </button>
+        <button
+          type="button"
+          className="format-btn"
+          onClick={() => applyLinePrefix('- ')}
+          title={isEn ? 'List' : '列表'}
+        >
+          {isEn ? 'List' : '列表'}
+        </button>
+        <button
+          type="button"
+          className="format-btn"
+          onClick={() => applyLinePrefix('> ')}
+          title={isEn ? 'Quote' : '引用'}
+        >
+          {isEn ? 'Quote' : '引用'}
+        </button>
+        <span className="format-meta">
+          {stats.chars} {isEn ? 'chars' : '字'}
+        </span>
+      </div>
+
+      <div className="editor-wrap">
+        {restorable && (
+          <div
+            className="card"
+            style={{
+              padding: '10px 14px',
+              marginBottom: 10,
+              background: 'var(--surface-2)',
+              borderLeft: '3px solid var(--amber)',
+            }}
+          >
+            <div className="row-between wrap" style={{ gap: 10 }}>
+              <div className="small" style={{ lineHeight: 1.6 }}>
+                {isEn ? (
+                  <>This draft has <b>unsaved local edits</b> ({restorable.at ? relLocal(restorable.at, isEn) : 'cached locally'}), different from current text.</>
+                ) : (
+                  <>这篇有一份<b>没保存的修改</b>（{restorable.at ? relLocal(restorable.at, isEn) : '上次'}留在本机），和当前正文不一样。</>
+                )}
+              </div>
+              <div className="row wrap" style={{ gap: 8 }}>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-accent"
+                  onClick={() => { setText(restorable.text); setRestorable(null); }}
+                >
+                  {isEn ? 'Restore' : '恢复它'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-ghost"
+                  onClick={() => {
+                    try { window.localStorage.removeItem(storageKey); } catch { /* 见上 */ }
+                    setRestorable(null);
+                  }}
+                >
+                  {isEn ? 'Discard' : '丢弃'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {showCoachDetails && renderCoachCard && (
+          <div className="studio-coach-card-drawer" style={{ marginBottom: 12 }}>
+            {renderCoachCard}
+          </div>
+        )}
+
+        {renderResultCard && (
+          <div style={{ marginBottom: 12 }}>
+            {renderResultCard}
+          </div>
+        )}
+
+        {preview ? (
+          <div
+            className="md-preview"
+            style={{
+              background: 'var(--surface)',
+              padding: '14px 16px',
+              borderRadius: 11,
+              border: '1px solid var(--border)',
+              flex: 1,
+              overflowY: 'auto',
+            }}
+            dangerouslySetInnerHTML={{ __html: mdLiteToHtml(text) }}
+          />
+        ) : (
+          <HighlightedEditor
+            value={text}
+            onChange={setText}
+            marks={marks}
+            taRef={taRef}
+            rows={12}
+            placeholder={
+              isEn
+                ? 'Body text here…'
+                : '正文：这两天「00后整顿职场」又上热搜了。\n\n真正值得普通人学的，不是硬碰硬，而是把边界说清楚。\n\n今天分享三个能直接用上的沟通方法。'
+            }
+          />
+        )}
+
+        {(inlineHits.length > 0 || aiHitCount > 0) && (
           <div className="row wrap" style={{ gap: 6, marginTop: 8, alignItems: 'center' }}>
             {inlineHits.length > 0 && (
               <span className="small muted">
-                {lang === 'en' ? `${inlineHits.length} terms flagged:` : `正文里标出 ${inlineHits.length} 处用词：`}
+                {isEn ? `${inlineHits.length} terms flagged:` : `正文里标出 ${inlineHits.length} 处用词：`}
               </span>
             )}
             {inlineHits.slice(0, 10).map((h, i) => (
               <span
                 key={i}
                 className={`badge ${h.action === 'block' ? 'badge-red' : 'badge-amber'}`}
-                title={`${h.action === 'block' ? (lang === 'en' ? 'Blocked' : '禁用') : h.action === 'warn' ? (lang === 'en' ? 'Caution' : '慎用') : (lang === 'en' ? 'Suggest' : '建议')}${h.suggestion ? ` → ${h.suggestion}` : ''}`}
+                title={`${h.action === 'block' ? (isEn ? 'Blocked' : '禁用') : h.action === 'warn' ? (isEn ? 'Caution' : '慎用') : (isEn ? 'Suggest' : '建议')}${h.suggestion ? ` → ${h.suggestion}` : ''}`}
               >
                 {h.word}
               </span>
             ))}
-            {inlineHits.length > 10 && <span className="small muted">{lang === 'en' ? `(${inlineHits.length} total)` : `等 ${inlineHits.length} 处`}</span>}
+            {inlineHits.length > 10 && <span className="small muted">{isEn ? `(${inlineHits.length} total)` : `等 ${inlineHits.length} 处`}</span>}
             {aiHitCount > 0 && (
-              <span className="small muted" title={lang === 'en' ? 'Details in coach card below' : '下方教练卡里有逐条明细'}>
-                {lang === 'en' ? `· ${aiHitCount} cliches flagged (dashed)` : `· 另有 ${aiHitCount} 处套话（虚线标注）`}
+              <span className="small muted">
+                {isEn ? `· ${aiHitCount} cliches flagged` : `· 另有 ${aiHitCount} 处套话（虚线标注）`}
               </span>
             )}
           </div>
@@ -779,114 +857,71 @@ export function Rewriter({
         {markerMismatch && (
           <div className="small" style={{ marginTop: 8, color: 'var(--amber)', lineHeight: 1.6 }}>
             {isEn
-              ? `⚠️ Body text contains formatting markers (## / ** / -), which are not supported by ${platformName(platform, lang)}'s editor and will display as literal symbols. Switch platform or remove markers.`
-              : `⚠️ 正文里有 ## / ** / - 这类排版记号，但${platformName(platform, lang)}的编辑器不认——发出去会原样显示成符号。改平台，或把记号删掉。`}
+              ? `⚠️ Body text contains formatting markers (## / ** / -), which are not supported by ${platformName(platform, lang)}'s editor and will display as literal symbols.`
+              : `⚠️ 正文里有 ## / ** / - 这类排版记号，但${platformName(platform, lang)}的编辑器不认——发出去会原样显示成符号。`}
           </div>
         )}
       </div>
 
-      {/* 排版预览：只渲染给人看，草稿存的还是带记号的纯文本 */}
-      {!focus && mdOn && preview && (
-        <div className="card" style={{ padding: 16, boxShadow: 'none', background: 'var(--surface-2)' }}>
-          <div className="row-between wrap" style={{ gap: 8, marginBottom: 10 }}>
-            <b className="small">{isEn ? 'Format Preview · WeChat Official Account' : '排版预览 · 公众号'}</b>
-            <div className="row wrap" style={{ gap: 8 }}>
-              <button className="btn btn-sm btn-accent" onClick={copyPreviewRich} disabled={!text.trim()}>
-                {mdCopied ? (isEn ? 'Copied ✓' : '已复制 ✓') : (isEn ? 'Copy Rich Text' : '复制富文本')}
-              </button>
-              <button className="btn btn-sm btn-ghost" onClick={() => setPreview(false)}>
-                {isEn ? 'Back to Edit' : '回到编辑'}
-              </button>
-            </div>
-          </div>
-          <div
-            className="md-preview"
-            style={{ background: 'var(--surface)', padding: '14px 16px', borderRadius: 'var(--radius-sm)' }}
-            // mdLiteToHtml 先转义再套标签，产出由构造保证安全（见 lib/studio/markdown.ts）
-            dangerouslySetInnerHTML={{ __html: mdLiteToHtml(text) }}
-          />
-          <div className="small muted" style={{ marginTop: 10, lineHeight: 1.6 }}>
-            {isEn
-              ? `"Copy Rich Text" copies formatted text with "${AIGC_LABEL}" disclosure tag to clipboard, ready to paste into WeChat editor. Draft text remains plain markdown with markers; compliance checks, coaching, and version history function normally.`
-              : `「复制富文本」把排版和「${AIGC_LABEL}」标识一起写进剪贴板，可直接粘进公众号编辑器。草稿本身存的仍是带记号的纯文本，合规检测、教练诊断、版本对比全都照常工作。`}
-          </div>
-        </div>
-      )}
-
-      {/* 专注模式下不出这一排：AI 那几个动作的产出要占半屏才看得清，在只剩编辑框的界面里点等于石沉大海 */}
-      {!focus && (
-        <div className="row wrap" style={{ gap: 10, alignItems: 'center' }}>
-          <select className="select" value={platform} onChange={(e) => setPlatform(e.target.value)} style={{ maxWidth: 180 }}>
-            {PLATFORM_LIST.map((p) => (
-              <option key={p.key} value={p.key}>
-                {isEn ? `Target: ${platformName(p.key, lang)}` : `目标平台 · ${p.name}`}
-              </option>
-            ))}
-          </select>
-          <button className="btn btn-primary btn-sm" onClick={run} disabled={pending || !text.trim()}>
-            <Icon.sparkles size={14} /> {pending ? (isEn ? 'Processing…' : '处理中…') : (isEn ? 'Rewrite + Check' : '一键改写 + 合规检测')}
-          </button>
-          <button className="btn btn-accent btn-sm" onClick={optimize} disabled={pending || !text.trim()}>
-            <Icon.gauge size={14} /> {pending ? (isEn ? 'Processing…' : '处理中…') : (isEn ? 'Coach Optimize' : '教练一键优化')}
-          </button>
+      <div className="editor-dock">
+        <button
+          type="button"
+          className="btn small primary"
+          onClick={run}
+          disabled={pending || !text.trim()}
+          title={isEn ? 'Rewrite text and check compliance' : '根据目标平台调性改写全文，并进行合规检测'}
+        >
+          {pending ? (isEn ? 'Polishing…' : '润色中…') : (isEn ? 'AI Polish' : 'AI 润色')}
+        </button>
+        <button
+          type="button"
+          className="btn small"
+          onClick={() => setShowCoachDetails((v) => !v)}
+          title={isEn ? 'Toggle compliance and algorithm diagnostics' : '展开/收起合规与算法诊断'}
+        >
+          {isEn ? 'Compliance Check' : '合规检查'}
+        </button>
+        <button
+          type="button"
+          className="btn small"
+          onClick={deflavor}
+          disabled={pending || !text.trim()}
+          title={isEn ? 'Eliminate LLM clichés and unnatural rhythm' : '消除大模型典型套话与均匀节奏'}
+        >
+          {isEn ? 'Deflavor' : '去 AI 味'}
+        </button>
+        {dirty && draftId && (
           <button
-            className="btn btn-sm"
-            onClick={deflavor}
+            type="button"
+            className="btn small"
+            onClick={saveManualEdit}
             disabled={pending || !text.trim()}
-            title={isEn ? 'Rewrites cliches and uniform rhythm based on your own sample sentences, preserving all factual info' : '按你自己的原句样本改掉套话与均匀节奏，信息不增不减'}
+            title={isEn ? 'Save current edits' : '保存当前修改'}
           >
-            <Icon.user size={14} /> {pending ? (isEn ? 'Processing…' : '处理中…') : (isEn ? 'Humanize Tone' : '一键去 AI 味')}
+            {isEn ? 'Save Edits' : '保存修改'}
           </button>
-          {draftId && (
-            <button
-              className="btn btn-sm"
-              onClick={saveManualEdit}
-              disabled={pending || !text.trim()}
-              title={isEn ? 'Save current editor content directly as human final draft' : '把编辑框里的当前内容直接存为人工终稿'}
-            >
-              {isEn ? 'Save My Edits' : '保存我的修改'}
-            </button>
-          )}
-          {mdOn && (
-            <button
-              className="btn btn-sm btn-ghost"
-              onClick={() => setPreview((v) => !v)}
-              title={isEn ? 'Preview how formatting markers render and copy rich text to paste into WeChat' : '看排版记号渲染出来是什么样，并可复制成富文本直接粘进公众号'}
-            >
-              <Icon.eye size={14} /> {preview ? (isEn ? 'Hide Preview' : '收起预览') : (isEn ? 'Format Preview' : '排版预览')}
-            </button>
-          )}
-          <button
-            className="btn btn-sm btn-ghost"
-            onClick={() => setFocus(true)}
-            title={isEn ? 'Full screen editor, focus on writing (Esc to exit)' : '整屏只留编辑框，专心写正文（Esc 退出）'}
-          >
-            <Icon.maximize size={14} /> {isEn ? 'Focus Mode' : '专注写作'}
-          </button>
-          {saved && !err && <span className="small" style={{ color: 'var(--green)' }}>{saved}</span>}
-          {err && <span className="small" style={{ color: 'var(--red)' }}>{err}</span>}
-        </div>
-      )}
-
-      {/* 诊断卡片与改写结果：若两者同时存在则展示为双栏，避免单纵列拉得过长 */}
-      {!focus && (renderCoachCard && renderResultCard ? (
-        <div className="grid grid-2" style={{ gap: 16 }}>
-          {renderCoachCard}
-          {renderResultCard}
-        </div>
-      ) : (
-        <>
-          {renderCoachCard}
-          {renderResultCard}
-        </>
-      ))}
-    </div>
+        )}
+        {saved && !err && (
+          <span className="small" style={{ color: 'var(--green)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <Icon.check size={12} /> {saved}
+          </span>
+        )}
+        {err && (
+          <span className="small" style={{ color: 'var(--red)', fontWeight: 600 }}>
+            {err}
+          </span>
+        )}
+        <button
+          type="button"
+          className="btn small dock-right"
+          onClick={() => setFocus(true)}
+          title={isEn ? 'Focus writing (Esc to exit)' : '专注写作（Esc 退出）'}
+        >
+          {isEn ? 'Focus Writing' : '专注写作'}
+        </button>
+      </div>
+    </section>
   );
-
-  // 专注层必须挂到 body 上：它的祖先 .card 在鼠标悬停时带 transform，
-  // 而 transform 元素是 position:fixed 的包含块——就地渲染时"全屏"层只有卡片那么大。
-  // 详见 components/Overlay.tsx。
-  return focus && portalReady ? createPortal(body, document.body) : body;
 }
 
 // 把命中词高亮标出（按 start/end 切片）

@@ -23,7 +23,7 @@ const THEME_NAMES_EN: Record<string, string> = {
   note: 'Memo Yellow',
 };
 
-export function CardExport({ draftId }: { draftId: string }) {
+export function CardExport({ draftId, compact = false }: { draftId: string; compact?: boolean }) {
   const { lang } = useI18n();
   const [data, setData] = useState<Loaded | null>(null);
   const [theme, setTheme] = useState<CardThemeKey>(DEFAULT_CARD_THEME);
@@ -104,7 +104,7 @@ export function CardExport({ draftId }: { draftId: string }) {
     return (
       <span className="row" style={{ gap: 6 }}>
         <button className="btn btn-sm" onClick={load} disabled={pending} title={betaHint}>
-          {pending ? (lang === 'en' ? 'Formatting…' : '排版中…') : (lang === 'en' ? 'Export Cards' : '导出图文卡')}
+          {pending ? (lang === 'en' ? 'Formatting…' : '排版中…') : compact ? (lang === 'en' ? 'Cards' : '图文卡') : (lang === 'en' ? 'Export Cards' : '导出图文卡')}
         </button>
         <span className="badge badge-amber" title={betaHint}>Beta</span>
         {msg && <span className="small" style={{ color: 'var(--red)' }}>{msg}</span>}

@@ -149,7 +149,8 @@ describe('工具与运行接线', () => {
     expect(run).toMatch(/botSlug: tpl\.slug/);
     expect(run).toMatch(/\+ botBlocks,/);
     expect(fs.existsSync(path.join(process.cwd(), 'prisma/postgres/52-agent-ledger.sql'))).toBe(true);
-    expect(read('prisma/postgres/02-rls.sql')).toMatch(/'AgentLedger'\]/);
+    // 名单会继续长（09-09 后面接了 'AgentToolDef'），只钉「在名单里」不钉「在末尾」
+    expect(read('prisma/postgres/02-rls.sql')).toMatch(/'AgentLedger'[,\]]/);
     for (const p of ['prisma/schema.prisma', 'prisma/schema.postgres.prisma']) expect(read(p)).toContain('model AgentLedger');
   });
 });

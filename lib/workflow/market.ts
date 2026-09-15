@@ -39,8 +39,13 @@ export type TemplateSummary = {
  * 内置模板落库（幂等）。**在读的时候顺手做**，不依赖任何一次性种子脚本——
  * 生产库不会跑 prisma/seed.ts，靠脚本的话新装的实例就是一个空市场。
  *
- * 【每个读路径都该调它，别怕成本】三次 upsert 是几毫秒，而调用方
- *（页面渲染、AI 工具）本身动辄几十毫秒到几秒。不调的代价才是真的：
+ * 【每个读路径都该调它，但成本要盯住】这句话原文是「三次 upsert 是几毫秒」——
+ * 那是内置模板只有 3 条、库还在同机的时候写的。如今内置是 **13 条**
+ *（3 条流水线 + 3 条接力 + 7 个职能 bot），而生产库跨云跨区、**单次往返 32ms**：
+ * 原来那个 for+await 的写法 = 13 次首尾相接 = **416ms**，挂在 /workflows、
+ * /runs?view=work、AI 的 list_agents、机器人路由等每一个读路径上。
+ * 2026-09-12 改成一次并发（13 条 upsert 互不依赖，where 是 13 个互不相同的唯一键 slug）。
+ * 不调的代价才是真的：
  * 2026-08-19 给内置模板补 persona 之后，只有 /workflows 页会同步，
  * AI 的 list_agents 在有人访问过那一页之前一直读到空职责——它一个内置智能体
  * 都派不动，而且不报错。
@@ -51,42 +56,49 @@ export type TemplateSummary = {
  * 为几毫秒引入这种耦合不划算——真要优化，优化的是调用频率，不是给函数加记忆。
  */
 export async function ensureBuiltinTemplates(): Promise<void> {
-  for (const w of BUILTIN_WORKFLOWS) {
-    try {
-      await prisma.workflowTemplate.upsert({
-        where: { slug: w.slug },
-        create: {
-          slug: w.slug,
-          name: w.name,
-          description: w.description,
-          emoji: w.emoji,
-          category: w.category,
-          persona: w.persona,
-          requires: w.requires ?? '',
-          steps: toJson(w.steps),
-          mode: w.mode ?? 'pipeline',
-          agentConfig: w.agentConfig ? toJson(w.agentConfig) : null,
-          isBuiltin: true,
-          tenantId: null,
-        },
-        // 内置模板的步骤以代码为准：用户改不了内置模板（要改就复制一份成自建的），
-        // 所以这里覆盖是安全的，且能让下一版内置模板自动生效。
-        // persona 也要进 update：只写 create 的话，**已经存在**的内置模板永远补不上职责
-        // ——而所有现存部署的内置模板都是在加这个字段之前建的
-        // requires 也要进 update：只写 create 的话，**已经存在**的内置模板永远补不上前置条件
-        //（与 persona 当初栽的是同一个跟头）
-        // mode/agentConfig 也进 update：职能型 bot（2026-09-05）是后加的，存量部署里没有
-        update: {
-          name: w.name, description: w.description, emoji: w.emoji,
-          persona: w.persona, requires: w.requires ?? '', steps: toJson(w.steps),
-          mode: w.mode ?? 'pipeline',
-          agentConfig: w.agentConfig ? toJson(w.agentConfig) : null,
-        },
-      });
-    } catch (err) {
-      log.warn('内置模板落库失败', { slug: w.slug, error: (err as Error).message });
-    }
-  }
+  // 并发而不是 for+await：13 条之间没有外键、没有共享唯一键（where 都是各自的 slug），
+  // 谁也不读谁的结果。Prisma 的 upsert 在唯一键 + 无嵌套写时走原生 ON CONFLICT DO UPDATE，
+  // 并发打进去不会互相撞。
+  // try/catch 必须留在**每一条自己身上**：原语义是「某一条失败只 warn，其余照落」，
+  // 用一个外层 try 包住 Promise.all 会变成「一条失败，其余全丢」。
+  await Promise.all(
+    BUILTIN_WORKFLOWS.map(async (w) => {
+      try {
+        await prisma.workflowTemplate.upsert({
+          where: { slug: w.slug },
+          create: {
+            slug: w.slug,
+            name: w.name,
+            description: w.description,
+            emoji: w.emoji,
+            category: w.category,
+            persona: w.persona,
+            requires: w.requires ?? '',
+            steps: toJson(w.steps),
+            mode: w.mode ?? 'pipeline',
+            agentConfig: w.agentConfig ? toJson(w.agentConfig) : null,
+            isBuiltin: true,
+            tenantId: null,
+          },
+          // 内置模板的步骤以代码为准：用户改不了内置模板（要改就复制一份成自建的），
+          // 所以这里覆盖是安全的，且能让下一版内置模板自动生效。
+          // persona 也要进 update：只写 create 的话，**已经存在**的内置模板永远补不上职责
+          // ——而所有现存部署的内置模板都是在加这个字段之前建的
+          // requires 也要进 update：只写 create 的话，**已经存在**的内置模板永远补不上前置条件
+          //（与 persona 当初栽的是同一个跟头）
+          // mode/agentConfig 也进 update：职能型 bot（2026-09-05）是后加的，存量部署里没有
+          update: {
+            name: w.name, description: w.description, emoji: w.emoji,
+            persona: w.persona, requires: w.requires ?? '', steps: toJson(w.steps),
+            mode: w.mode ?? 'pipeline',
+            agentConfig: w.agentConfig ? toJson(w.agentConfig) : null,
+          },
+        });
+      } catch (err) {
+        log.warn('内置模板落库失败', { slug: w.slug, error: (err as Error).message });
+      }
+    }),
+  );
 }
 
 /**

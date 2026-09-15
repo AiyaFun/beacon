@@ -49,12 +49,32 @@ export default function setup() {
   process.env[TEST_DB_DIR_ENV] = RUN_DIR;
 
   const root = path.resolve(__dirname, '../..');
-  execFileSync('npx', ['prisma', 'db', 'push', '--skip-generate', '--accept-data-loss'], {
-    cwd: root,
-    // 绝对路径 file: URL —— 相对路径会被 prisma 解析成相对 schema 目录，从而写进仓库
-    env: { ...process.env, DATABASE_URL: `file:${TEMPLATE_DB}` },
-    stdio: 'pipe',
-  });
+  // prisma 的 schema-engine 偶发起不来（`Schema engine error`，空 message，重跑即好）。
+  // 一次失败就让整轮测试在跑任何用例之前挂掉太脆：重试三次，仍失败才抛，并把 stderr 带上，
+  // 别再让人对着一句空报错猜。
+  const attempts = 3;
+  let lastErr: unknown;
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      fs.rmSync(TEMPLATE_DB, { force: true });
+      execFileSync('npx', ['prisma', 'db', 'push', '--skip-generate', '--accept-data-loss'], {
+        cwd: root,
+        // 绝对路径 file: URL —— 相对路径会被 prisma 解析成相对 schema 目录，从而写进仓库
+        env: { ...process.env, DATABASE_URL: `file:${TEMPLATE_DB}` },
+        stdio: 'pipe',
+      });
+      lastErr = undefined;
+      break;
+    } catch (e) {
+      lastErr = e;
+      const stderr = (e as { stderr?: Buffer }).stderr?.toString() ?? '';
+      console.warn(`[vitest global-setup] prisma db push 第 ${i}/${attempts} 次失败${stderr ? `：${stderr.trim().slice(-400)}` : ''}`);
+    }
+  }
+  if (lastErr) {
+    const stderr = (lastErr as { stderr?: Buffer }).stderr?.toString() ?? '';
+    throw new Error(`模板库建不出来（prisma db push 连续 ${attempts} 次失败）：${stderr.trim() || (lastErr as Error).message}`);
+  }
 
   if (!fs.existsSync(TEMPLATE_DB)) throw new Error(`模板库未生成：${TEMPLATE_DB}`);
 

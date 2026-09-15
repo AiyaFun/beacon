@@ -17,18 +17,8 @@ export default async function OpsLayout({ children }: { children: React.ReactNod
   const isEn = lang === 'en';
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--bg)' }}>
-      <header
-        style={{
-          borderBottom: '1px solid var(--border)',
-          background: 'var(--surface)',
-          padding: '12px 24px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 16,
-          flexWrap: 'wrap',
-        }}
-      >
+    <div className="ops-shell">
+      <header className="ops-header">
         <strong style={{ fontSize: 15, letterSpacing: '-0.3px' }}>
           {isEn ? 'Beacon · Ops Console' : '烽火台 · 平台运维台'}
         </strong>
@@ -36,14 +26,14 @@ export default async function OpsLayout({ children }: { children: React.ReactNod
           {isEn ? 'Cross-Tenant · All Actions Audited' : '跨租户 · 每个动作留痕'}
         </span>
         <OpsNav />
-        <span className="row" style={{ gap: 10, marginLeft: 'auto' }}>
+        <span className="row wrap" style={{ gap: 10, marginLeft: 'auto' }}>
           <span className="small muted">{admin.memberName}</span>
           <Link className="btn btn-sm btn-ghost" href="/">
             {isEn ? 'Back to My Workspace' : '回到我的工作台'}
           </Link>
         </span>
       </header>
-      <div style={{ padding: 24, maxWidth: 1280, margin: '0 auto' }}>{children}</div>
+      <main className="ops-content">{children}</main>
     </div>
   );
 }

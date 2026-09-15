@@ -19,7 +19,11 @@ export type PresetRow = {
   authMode: string;
   preauthorizedTools: string[];
   enabled: boolean;
+  /** 走哪条模型渠道：null = 自动 */
+  providerId: string | null;
 };
+
+export type ModelOption = { id: string; label: string; note?: string };
 
 export type AgentOption = { id: string; label: string; autonomous: boolean };
 export type ToolOption = { name: string; label: string; costly?: boolean; contract?: boolean };
@@ -28,10 +32,13 @@ export function PresetManager({
   presets,
   agents,
   tools,
+  models = [],
 }: {
   presets: PresetRow[];
   agents: AgentOption[];
   tools: ToolOption[];
+  /** 可选的模型渠道（lib/llm/selectable.ts）；空 = 不显示选择 */
+  models?: ModelOption[];
 }) {
   const router = useRouter();
   const { lang } = useI18n();
@@ -42,7 +49,7 @@ export function PresetManager({
 
   const blank = (): PresetRow => ({
     id: '', title: '', goal: '', agentTemplateId: null,
-    authMode: 'unattended', preauthorizedTools: [], enabled: true,
+    authMode: 'unattended', preauthorizedTools: [], enabled: true, providerId: null,
   });
 
   function save(row: PresetRow) {
@@ -55,6 +62,7 @@ export function PresetManager({
         agentTemplateId: row.agentTemplateId,
         authMode: row.authMode,
         preauthorizedTools: row.preauthorizedTools,
+        providerId: row.providerId,
       });
       if (!r.ok) { setErr(r.error ?? (isEn ? 'Failed to save' : '没能保存')); return; }
       setEditing(null);
@@ -116,18 +124,19 @@ export function PresetManager({
         ))}
       </div>
 
-      {editing && <PresetForm row={editing} agents={agents} tools={tools} pending={pending} onCancel={() => setEditing(null)} onSave={save} />}
+      {editing && <PresetForm row={editing} agents={agents} tools={tools} models={models} pending={pending} onCancel={() => setEditing(null)} onSave={save} />}
       {err && <div className="small" style={{ marginTop: 8, color: 'var(--red)' }}>{err}</div>}
     </div>
   );
 }
 
 function PresetForm({
-  row, agents, tools, pending, onCancel, onSave,
+  row, agents, tools, models, pending, onCancel, onSave,
 }: {
   row: PresetRow;
   agents: AgentOption[];
   tools: ToolOption[];
+  models: ModelOption[];
   pending: boolean;
   onCancel: () => void;
   onSave: (r: PresetRow) => void;
@@ -173,6 +182,19 @@ function PresetForm({
             ))}
           </select>
         </label>
+        {models.length > 0 && (
+          <label className="small">
+            {isEn ? 'Model: ' : '用哪个模型：'}
+            <select
+              className="select" style={{ marginLeft: 8, maxWidth: 280 }}
+              value={draft.providerId ?? ''} disabled={pending}
+              onChange={(e) => setDraft({ ...draft, providerId: e.target.value || null })}
+              title={isEn ? 'Which model channel this card runs on; a schedule can override it' : '这张卡派出去走哪条渠道；挂成定时时可以在定时上另选'}
+            >
+              {models.map((m) => <option key={m.id} value={m.id === 'auto' ? '' : m.id}>{m.label}{m.note ? ` · ${m.note}` : ''}</option>)}
+            </select>
+          </label>
+        )}
 
         <div>
           <div className="small" style={{ marginBottom: 6 }}>{isEn ? 'When dispatched:' : '这张卡派出去时：'}</div>

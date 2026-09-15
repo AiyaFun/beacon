@@ -301,50 +301,77 @@ export async function tenantSuspendedMessage(tenantId: string): Promise<string |
  */
 export const getMemberByToken = cache(getMemberByTokenUncached);
 
+/**
+ * 会话解析：token → 成员 / 工作区 / 当前账号。
+ *
+ * 【为什么是一条嵌套查询，不是三条】2026-09-12 量到：生产库跨云跨区，
+ * **单次往返 32ms**（TCP 握手实测 37~54ms，纯网络，改不掉）。而这个函数挂在
+ * 每一个已登录请求上，原来是首尾相接的三段：
+ *     会话 → （拿到 tenantId 才能查）工作区 → （拿到 workspaceId 才能查）账号
+ * 常态 96ms，preferredAccountId 落空时还要再串一到两次，最坏 160ms——
+ * **每一页都先交这笔过路费**，而它一个字节都没渲染。
+ *
+ * 依赖是真的（后一条要前一条的 id），所以不能 Promise.all；但可以让数据库
+ * 一次把整条链取回来：AuthSession → member → tenant → workspaces(最早一个) → accounts。
+ * 选账号那三档回退改在 JS 里做，判据与改造前逐字一致（见下方注释与
+ * tests/auth/session-resolution.test.ts 的 16 条行为用例——那组用例先于本次改动写成、
+ * 在旧实现上跑绿，就是为了证明这里换的是实现不是语义）。
+ *
+ * 【accounts 为什么不加 take】它是「这个创作者在各平台的号」，条数由产品形态封顶
+ *（一个平台一个号），不随使用增长——和 PublishRecord / CrawledPost 那种会一直涨的表不是一回事。
+ * 加个 take 反而会引入「号多到一定程度，切号就悄悄失灵」的静默错。只取 id + status 两列。
+ */
 async function getMemberByTokenUncached(token: string | undefined, preferredAccountId?: string): Promise<AuthedMember | null> {
   if (!token) return null;
-  const session = await prisma.authSession.findUnique({ where: { token }, include: { member: true } });
+  const session = await prisma.authSession.findUnique({
+    where: { token },
+    include: {
+      member: {
+        include: {
+          tenant: {
+            include: {
+              // 多工作区时取建得最早的那个（与改造前 orderBy createdAt asc + findFirst 同义）
+              workspaces: {
+                orderBy: { createdAt: 'asc' },
+                take: 1,
+                include: {
+                  accounts: { orderBy: { createdAt: 'asc' }, select: { id: true, status: true } },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
   if (!session || session.expiresAt < new Date()) return null;
   const member = session.member;
   if (member.status !== 'active') return null; // 停用成员：已签发的会话立即失效
   // 滑动续期：剩余寿命不足一半时延长到满额——日常活跃用户永不掉线。
   // 游客演示会话除外：它按设计只活 1 天，续期会把短命体验会话变成常驻。
+  // （这一次写是有意留成 await 的：它每 45 天才触发一次，不值得为它引入「写没写成不知道」。）
   if (!isDemoTenant(member.tenantId) && session.expiresAt.getTime() - Date.now() < SESSION_TTL_MS / 2) {
     await prisma.authSession.update({
       where: { token },
       data: { expiresAt: new Date(Date.now() + SESSION_TTL_MS) },
     });
   }
-  const workspace = await prisma.workspace.findFirst({
-    where: { tenantId: member.tenantId },
-    orderBy: { createdAt: 'asc' },
-    include: { tenant: true },
-  });
+  const tenant = member.tenant;
+  const workspace = tenant.workspaces[0];
   if (!workspace) return null;
   // 租户被平台封禁：已签发的会话下一次请求即失效（与「成员被停用」同口径）。
   // 判据放在这里而不是 middleware：middleware 只看 cookie 在不在，不查库。
-  if (workspace.tenant.status !== 'active') return null;
-  let account = preferredAccountId
-    ? await prisma.creatorAccount.findFirst({
-        where: { id: preferredAccountId, workspaceId: workspace.id, status: 'active' },
-        select: { id: true },
-      })
-    : null;
-  if (!account) {
-    account = await prisma.creatorAccount.findFirst({
-      where: { workspaceId: workspace.id, status: 'active' },
-      orderBy: { createdAt: 'asc' },
-      select: { id: true },
-    });
-  }
-  // 全部被归档时兜底任意账号，保证会话可用
-  if (!account) {
-    account = await prisma.creatorAccount.findFirst({
-      where: { workspaceId: workspace.id },
-      orderBy: { createdAt: 'asc' },
-      select: { id: true },
-    });
-  }
+  if (tenant.status !== 'active') return null;
+  // 选当前账号，三档回退，与改造前逐字同义：
+  //   ① cookie 指定的那个，必须属于本工作区（accounts 本来就只含本区的）且 active；
+  //   ② 否则最早的 active；
+  //   ③ 再否则最早的任意一个（全被归档时兜底，保证会话仍可用）。
+  const accounts = workspace.accounts;
+  const account =
+    (preferredAccountId ? accounts.find((a) => a.id === preferredAccountId && a.status === 'active') : undefined)
+    ?? accounts.find((a) => a.status === 'active')
+    ?? accounts[0]
+    ?? null;
   return {
     memberId: member.id,
     tenantId: member.tenantId,
@@ -358,7 +385,7 @@ async function getMemberByTokenUncached(token: string | undefined, preferredAcco
     //   ② app/(app)/settings/actions.ts:38 的 canUseOverseas(s.plan) 继续放行海外模型 BYOK
     //      —— 那道闸前置的是个人信息出境合规（PRD §10.5），不能靠一个过期的订阅撑着。
     // lib/quota.ts:planOf() 走的是同一套懒判断，两边口径必须一致，否则配额降了、闸门没降。
-    plan: effectivePlan(workspace.tenant.plan, workspace.tenant.planExpiresAt),
+    plan: effectivePlan(tenant.plan, tenant.planExpiresAt),
   };
 }
 

@@ -27,6 +27,30 @@ export type SelectableModel = {
 
 export const AUTO_MODEL_ID = 'auto';
 
+/**
+ * 把界面上选的模型 id 归一成可落库的 providerId（2026-09-11 按任务选模型）。
+ *   ''/auto/undefined → null（按功能路由，旧行为）
+ *   'platform'        → 'platform'（这个形态开了平台渠道才认）
+ *   其它              → 必须是本租户一条没失效的 ModelProvider，否则报错——别人的 id 静默落回自动会让用户以为选中了
+ */
+export async function normalizeProviderChoice(tenantId: string, id: string | null | undefined): Promise<{ ok: true; providerId: string | null } | { ok: false; error: string }> {
+  const v = (id ?? '').trim();
+  if (!v || v === AUTO_MODEL_ID) return { ok: true, providerId: null };
+  if (v === PLATFORM_PROVIDER_ID) return can('platformLlmChannel') ? { ok: true, providerId: PLATFORM_PROVIDER_ID } : { ok: false, error: '这个部署形态没有平台模型渠道' };
+  const p = await prisma.modelProvider.findFirst({ where: { id: v, tenantId, status: { not: 'failed' } }, select: { id: true } });
+  return p ? { ok: true, providerId: p.id } : { ok: false, error: '选的模型渠道不存在或已失效，去「接入与密钥」看一眼' };
+}
+
+/** providerId → 给人看的名字。null = 自动。 */
+export async function providerLabel(tenantId: string, id: string | null | undefined, lang: string = 'zh'): Promise<string> {
+  const isEn = lang === 'en';
+  if (!id || id === AUTO_MODEL_ID) return isEn ? 'Auto' : '自动';
+  if (id === PLATFORM_PROVIDER_ID) return isEn ? 'Platform default' : '平台默认模型';
+  const p = await prisma.modelProvider.findFirst({ where: { id, tenantId }, select: { label: true, vendor: true, model: true, status: true } });
+  if (!p) return isEn ? 'Channel removed' : '（渠道已删除，按自动跑）';
+  return `${p.label || (LLM_VENDORS[p.vendor]?.name ?? p.vendor)}${p.model ? ` · ${p.model}` : ''}${p.status === 'failed' ? (isEn ? ' (failed)' : '（已失效）') : ''}`;
+}
+
 /** 这次派活可以选哪些模型。顺序即界面顺序：自动 → 自接入若干 → 外接入。 */
 export async function listSelectableModels(tenantId: string, lang: string = 'zh'): Promise<SelectableModel[]> {
   const isEn = lang === 'en';

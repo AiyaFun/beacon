@@ -29,10 +29,15 @@ export async function actSavePreset(input: {
   agentTemplateId?: string | null;
   authMode: string;
   preauthorizedTools: string[];
+  /** 走哪条模型渠道：''/auto = 自动 */
+  providerId?: string | null;
 }): Promise<PresetResult> {
   try {
     const s = await getSession();
     requireRole(s, 'content.create');
+    const { normalizeProviderChoice } = await import('@/lib/llm/selectable');
+    const choice = await normalizeProviderChoice(s.tenantId, input.providerId);
+    if (!choice.ok) return { ok: false, error: choice.error };
 
     const title = input.title.trim().slice(0, 60);
     const goal = input.goal.trim().slice(0, 2000);
@@ -59,6 +64,7 @@ export async function actSavePreset(input: {
       agentTemplateId: input.agentTemplateId || null,
       authMode,
       preauthorizedTools: toJson(tools),
+      providerId: choice.providerId,
     };
 
     if (input.id) {

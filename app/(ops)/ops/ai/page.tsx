@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db';
 import { PageHead, Card, Stat, Empty } from '@/components/ui';
-import { fmtNum } from '@/lib/format';
+import { fmtNum, fmtDate } from '@/lib/format';
+import { parseGap, gapDevPrompt } from '@/lib/agent/gap-prompt';
 import { LLM_FUNCTIONS, LLM_VENDORS, type LlmFunction } from '@/lib/constants';
 import { readPlatformAiConfig, platformSpendUsd } from '@/lib/ops/platform-config';
 import { beijingStartOfDay, beijingStartOfMonth } from '@/lib/beijing';
@@ -71,6 +72,22 @@ export default async function OpsAiPage() {
   const dayCap = cfg.budget.dailyUsdCap;
   const monthCap = cfg.budget.monthlyUsdCap;
 
+  // AI 自己记下的能力缺口（report_capability_gap 的每次调用都在 AgentStep 里留痕，不另建表）。
+  // 这是「做不到 → 补能力」那条环的入口：按建议工具名归并，出现最多的先补。
+  const gapSteps = await prisma.agentStep.findMany({
+    where: { tool: 'report_capability_gap', kind: 'tool_call' },
+    orderBy: { createdAt: 'desc' },
+    take: 100,
+    select: { id: true, args: true, createdAt: true, run: { select: { goal: true, workspaceId: true } } },
+  });
+  const gaps = gapSteps.map((s) => {
+    let args: Record<string, unknown> = {};
+    try { args = JSON.parse(s.args) as Record<string, unknown>; } catch { /* 坏 JSON 当空缺口 */ }
+    return { id: s.id, at: s.createdAt, goal: s.run.goal, gap: parseGap(args) };
+  });
+  const gapByTool = new Map<string, number>();
+  for (const g of gaps) gapByTool.set(g.gap.tool || '（未建议工具名）', (gapByTool.get(g.gap.tool || '（未建议工具名）') ?? 0) + 1);
+
   return (
     <>
       <PageHead
@@ -82,7 +99,7 @@ export default async function OpsAiPage() {
         }
       />
 
-      <div className="grid grid-4" style={{ marginBottom: 16 }}>
+      <div className="grid-stats">
         <Stat
           label={isEn ? 'Platform Covered Today' : '今日平台垫付'}
           value={`$${daySpend.toFixed(2)}`}
@@ -184,6 +201,37 @@ export default async function OpsAiPage() {
           </p>
         </Card>
       </div>
+
+      {/* 做不到 → 补能力：AI 在执行里自己记下的缺口，按建议工具名归并。每条都能复制成开发提示 */}
+      <Card
+        title={isEn ? 'Capability gaps reported by AI' : 'AI 记下的能力缺口'}
+        sub={isEn ? 'What runs could not do; most frequent first. Copy a prompt and hand it to the dev assistant.' : '执行里做不到的事；出现最多的先补。每条可复制成给开发助手的提示。'}
+      >
+        {gaps.length === 0 ? (
+          <Empty text={isEn ? 'No gaps recorded yet' : '还没有记下的缺口'} />
+        ) : (
+          <>
+            <div className="row wrap" style={{ gap: 6, marginBottom: 10 }}>
+              {[...gapByTool.entries()].sort((a, b) => b[1] - a[1]).map(([tool, n]) => (
+                <span key={tool} className="badge badge-amber">{tool} × {n}</span>
+              ))}
+            </div>
+            <div className="stack" style={{ gap: 10 }}>
+              {gaps.slice(0, 30).map((g) => (
+                <details key={g.id} className="fold">
+                  <summary>
+                    <span className="small" style={{ flex: 1, minWidth: 0 }}>
+                      <b>{g.gap.missing || g.gap.need}</b>
+                      <span className="muted"> · {g.gap.tool ?? '—'} · {fmtDate(g.at)}</span>
+                    </span>
+                  </summary>
+                  <pre className="small" style={{ whiteSpace: 'pre-wrap', margin: '8px 0 0', userSelect: 'all' }}>{gapDevPrompt(g.gap, g.goal)}</pre>
+                </details>
+              ))}
+            </div>
+          </>
+        )}
+      </Card>
     </>
   );
 }

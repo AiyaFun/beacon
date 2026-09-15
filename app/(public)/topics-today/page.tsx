@@ -17,8 +17,30 @@ import { recordCrawlerHitAsync } from '@/lib/geo/crawler-log';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = {
-  title: '今日选题榜',
-  description: '按赛道给出今天可做的选题：跨平台正在扩散的话题 + 不依赖热点的常青题 + 三十天内的流量节点，每条带「为什么是今天」。免登录可看。',
+  title: '今日选题榜 · 跨平台扩散话题与常青流量节点推荐',
+  description: '按垂直赛道智能推荐今日高潜选题：精选跨平台正在扩散的焦点话题、不依赖热点的爆款常青题以及未来 30 天流量爆发节点，每条自带「为什么是今天」深度研判理由，免登录可看。',
+  keywords: [
+    '今日选题榜',
+    '爆款选题推荐',
+    '跨平台扩散话题',
+    '常青选题库',
+    '流量节点日历',
+    '自媒体选题灵感',
+    '抖音爆款选题',
+    '小红书热门选题',
+    '公众号深度选题',
+    'B站视频策划',
+    '垂直赛道选题',
+  ],
+  alternates: {
+    canonical: '/topics-today',
+  },
+  openGraph: {
+    title: '今日选题榜 · 跨平台扩散话题与常青流量节点推荐 | 烽火台',
+    description: '每天早上一份带理由的选题推荐，跨平台扩散话题 + 常青选题公式 + 30天节点日历。',
+    url: '/topics-today',
+    type: 'website',
+  },
 };
 
 // 公开「今日选题榜」（2026-09-05 增长缺口整改）。

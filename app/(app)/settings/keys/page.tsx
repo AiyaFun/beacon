@@ -1,12 +1,8 @@
-import { headers } from 'next/headers';
-import { backgroundSchedulerRuns } from '@/lib/jobs/queue';
 import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { parseJson } from '@/lib/json';
 import { decryptKey, maskKey } from '@/lib/crypto';
-import { readBotSecrets } from '@/lib/bot';
-import { loadBotChats } from '@/lib/bot/overview';
 import { can } from '@/lib/rbac';
 import { LLM_FUNCTIONS, type LlmFunction, looksNonChatModel } from '@/lib/constants';
 import { listIngestTokens } from '@/lib/ingest/token';
@@ -17,7 +13,6 @@ import { ProviderRow } from '../ProviderRow';
 import { FunctionRouting } from '../FunctionRouting';
 import { IngestTokenCard } from '../IngestTokenCard';
 import { PublishChannelCard, type CredView } from '../PublishChannelCard';
-import { BotIntegrationCard, type BotRow } from '../BotIntegrationCard';
 import { CheckAllCard } from './CheckAllCard';
 import { HubHeader } from '@/components/HubHeader';
 import { getServerLang } from '@/lib/i18n/server';
@@ -71,11 +66,6 @@ export default async function KeysPage() {
   const isEn = lang === 'en';
   const canManage = can(s.role, 'byok.manage');
 
-  const h = await headers();
-  const proto = h.get('x-forwarded-proto') ?? 'https';
-  const host = h.get('host');
-  const callbackBase = (host ? `${proto}://${host}` : process.env.BEACON_PUBLIC_URL || 'https://beacon.iyunci.cn').replace(/\/$/, '');
-
   const [providers, workspace, ingestTokens, pubCreds, botIntegrations] = await Promise.all([
     prisma.modelProvider.findMany({ where: { tenantId: s.tenantId }, orderBy: { createdAt: 'asc' } }),
     prisma.workspace.findUnique({ where: { id: s.workspaceId }, select: { ingestToken: true } }),
@@ -93,7 +83,10 @@ export default async function KeysPage() {
         tokenExpiresAt: true,
       },
     }),
-    prisma.botIntegration.findMany({ where: { workspaceId: s.workspaceId }, orderBy: { createdAt: 'asc' } }),
+    prisma.botIntegration.findMany({
+      where: { workspaceId: s.workspaceId },
+      select: { id: true, enabled: true },
+    }),
   ]);
   const credOf = (platform: string): CredView => {
     const c = pubCreds.find((x) => x.platform === platform);
@@ -102,49 +95,8 @@ export default async function KeysPage() {
   const wxCred = credOf('wechat');
   const wbCred = credOf('weibo');
 
-  // 渠道卡上的智能体下拉：本租户可见的全部模板（内置+自建）。
-  // 只取 id/name/emoji——persona 在对话时由 router 现查，别把长文本塞进每次页面渲染。
-  const agentOptions = (await prisma.workflowTemplate.findMany({
-    where: { OR: [{ isBuiltin: true }, { tenantId: s.tenantId }] },
-    orderBy: [{ isBuiltin: 'desc' }, { createdAt: 'asc' }],
-    select: { id: true, name: true, emoji: true },
-  })).map((t) => ({ id: t.id, name: `${t.emoji} ${t.name}` }));
-
-  // 会话画像：每个机器人在哪些群、和哪些人聊过（渠道卡「用户 / 群聊」真数 + 「群聊与用户」列表）
-  const chatsByBot = await loadBotChats(s.workspaceId);
-
-  const botRows: BotRow[] = botIntegrations.map((b) => {
-    const secrets = readBotSecrets(b.secretsEnc);
-    return {
-      id: b.id,
-      provider: b.provider,
-      label: b.label,
-      enabled: b.enabled,
-      webhookUrl: b.webhookUrl,
-      inboundKey: b.inboundKey,
-      pushEvents: parseJson<string[]>(b.pushEvents, []),
-      pushSchedule: b.pushSchedule || '09:00',
-      allowCommands: parseJson<string[]>(b.allowCommands, []),
-      agentId: secrets.agentId ?? null,
-      hasSignSecret: !!secrets.signSecret,
-      hasAppSecret: !!secrets.appSecret,
-      hasVerificationToken: !!secrets.verificationToken,
-      hasEncryptKey: !!secrets.encryptKey,
-      maskedSignSecret: maskKey(secrets.signSecret ?? ''),
-      maskedAppSecret: maskKey(secrets.appSecret ?? ''),
-      maskedVerificationToken: maskKey(secrets.verificationToken ?? ''),
-      maskedEncryptKey: maskKey(secrets.encryptKey ?? ''),
-      hasInboundSecrets: !!(secrets.appSecret || secrets.verificationToken || secrets.agentId),
-      lastOutboundAt: b.lastOutboundAt ? b.lastOutboundAt.toISOString() : null,
-      lastInboundAt: b.lastInboundAt ? b.lastInboundAt.toISOString() : null,
-      lastError: b.lastError,
-      agentTemplateId: b.agentTemplateId,
-      chats: chatsByBot.get(b.id) ?? [],
-      // 微信 iLink：绑定的微信 ID 与登录态是否过期都不是密钥，回显给卡片（看到接的是哪个号、过期了提示重扫）
-      ilinkUserId: secrets.ilinkUserId ?? null,
-      ilinkExpired: !!secrets.ilinkExpired,
-    };
-  });
+  const totalBotCount = botIntegrations.length;
+  const activeBotCount = botIntegrations.filter((b) => b.enabled).length;
 
   // 「连通正常」只数真的通过对话测试的：图像/视频渠道没做过实调用，算进来就是虚报
   const okCount = providers.filter((p) => p.status === 'ok' && !looksNonChatModel(p.model)).length;
@@ -167,7 +119,7 @@ export default async function KeysPage() {
         action={<Link href="/settings" className="btn btn-sm btn-ghost"><Icon.settings size={13} /> {isEn ? 'Runtime Settings' : '运行设置'}</Link>}
       />
 
-      <div className="grid grid-4" style={{ marginBottom: 16 }}>
+      <div className="grid-stats">
         <Stat label={isEn ? 'Model Channels' : '模型渠道'} value={providers.length} foot={isEn ? `${okCount} operational` : `${okCount} 条连通正常`} />
         <Stat label={isEn ? 'Image Gen' : '生图能力'} value={arkCount > 0 ? (isEn ? 'Ready' : '已就绪') : (isEn ? 'Unconfigured' : '未配')} foot={arkCount > 0 ? (isEn ? 'Reusing Volcengine Ark Key' : '复用你的方舟 Key') : (isEn ? 'Requires Volcengine Ark channel' : '需要一条火山方舟渠道')} />
         <Stat
@@ -175,7 +127,12 @@ export default async function KeysPage() {
           value={[wxCred && (isEn ? 'WeChat OA' : '公众号'), wbCred && (isEn ? 'Weibo' : '微博')].filter(Boolean).join(' · ') || (isEn ? 'Unconfigured' : '未配')}
           foot={isEn ? 'WeChat OA drafts · Weibo direct posting' : '公众号写草稿箱 · 微博直接发出'}
         />
-        <Stat label={isEn ? 'Bots' : '机器人'} value={botRows.filter((b) => b.enabled).length} foot={isEn ? `${botRows.length} total` : `共 ${botRows.length} 个`} />
+        <Stat
+          label={isEn ? 'Bots' : '机器人'}
+          value={activeBotCount}
+          foot={isEn ? `${totalBotCount} in Channels` : `共 ${totalBotCount} 个 · 去「消息渠道」配置`}
+          href="/notifications"
+        />
       </div>
 
       <CheckAllCard readOnly={!canManage} />
@@ -297,26 +254,30 @@ export default async function KeysPage() {
       </Card>
 
       <Card
-        title={isEn ? 'Bot Integrations' : '机器人接入'}
-        sub={isEn ? 'Feishu / DingTalk / WeCom / WeChat iLink: Outbound push + Inbound ChatOps' : '飞书 / 钉钉 / 企微：出站推送 + 入站 ChatOps'}
+        title={isEn ? 'Bot & Notification Channels' : '消息机器人与渠道'}
+        sub={isEn ? 'Feishu / DingTalk / WeCom / WeChat push notifications and ChatOps' : '飞书 / 钉钉 / 企微 / 微信出站推送与群聊交互'}
         style={{ marginBottom: 16 }}
-        action={<Link href="/notifications" className="btn btn-sm btn-ghost">{isEn ? 'Push events & schedule →' : '推送什么、什么时候推 →'}</Link>}
+        action={
+          <Link href="/notifications" className="btn btn-sm btn-primary">
+            <Icon.chat size={13} /> {isEn ? 'Manage in Notification Channels →' : '前往「消息渠道」管理 →'}
+          </Link>
+        }
       >
-        <p className="small muted" style={{ marginBottom: 12, lineHeight: 1.7 }}>
+        <p className="small muted" style={{ margin: 0, lineHeight: 1.8 }}>
           {isEn ? (
             <>
-              Configure <b>credentials</b> here (Webhook URL, App Secret, etc.). <b>Push event triggers, schedule times, and allowed commands</b> are configured inside each bot item. For details see
-              <Link href="/help" style={{ color: 'var(--brand)', fontWeight: 600, marginLeft: 4 }}>Help Guide →</Link>
+              Bot credentials, group Webhook URLs, push schedules, and inbound ChatOps commands are centrally managed in{' '}
+              <Link href="/notifications" style={{ color: 'var(--brand)', fontWeight: 600 }}>Notification Channels →</Link>.
+              Credentials and event triggers are configured together there to avoid duplicate settings.
             </>
           ) : (
             <>
-              这里只管<b>凭据</b>（Webhook 地址、App Secret 等）。<b>推送哪些事件、几点推、群里能用哪些命令</b>
-              在每条机器人的展开项里配，整体说明见
-              <Link href="/help" style={{ color: 'var(--brand)', fontWeight: 600, marginLeft: 4 }}>使用帮助 →</Link>
+              机器人的群 Webhook、自建应用凭据、推送事件与群指令已全部归拢至{' '}
+              <Link href="/notifications" style={{ color: 'var(--brand)', fontWeight: 600 }}>消息渠道 →</Link>
+              统一管理与配置，此处不再重复设置，避免多处维护造成状态混淆。
             </>
           )}
         </p>
-        <BotIntegrationCard rows={botRows} callbackBase={callbackBase} agentOptions={agentOptions} pollerRuns={backgroundSchedulerRuns()} />
       </Card>
 
       <Card title={isEn ? 'Compliance Boundaries' : '合规边界'} sub={isEn ? 'BYOK does not mean no compliance oversight' : '用自己的 Key，不等于平台不管合规'}>

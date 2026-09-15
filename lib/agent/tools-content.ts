@@ -9,6 +9,7 @@ import { platformOfLink } from '../clip/platform';
 import { platformName } from '../constants';
 import type { AgentTool } from './tool-types';
 import { clamp, num, str } from './tool-types';
+import { libraryInScope, libraryItemAllowed, materialTypesInScope } from './knowledge-scope';
 
 // ── 内容与记忆类工具 ────────────────────────────────────────────────────────
 //
@@ -104,6 +105,10 @@ const searchLibrary: AgentTool = {
   async run(ctx, args) {
     const keyword = str(args.keyword);
     const limit = clamp(num(args.limit, 10), 1, 30);
+    // 知识范围：这个员工的范围里没有资讯库就直说，不静默返回空（空会让模型以为库里真没有）
+    if (!libraryInScope(ctx.knowledge)) {
+      return { ok: false, error: '资讯库不在这个员工的知识范围里（去它的档案里绑定资料）', summary: '资讯库不在知识范围里' };
+    }
 
     // 【为什么不用 loadInspirations】那个函数是选题管线用的：固定 state='open'、
     // 条数写死、没有关键词搜索。这里要的是「翻我存过的东西」，两码事。
@@ -127,15 +132,18 @@ const searchLibrary: AgentTool = {
         : {}),
     };
 
-    const rows = await prisma.inspirationItem.findMany({
+    const scope = ctx.knowledge ?? null;
+    const rowsRaw = await prisma.inspirationItem.findMany({
       where,
       orderBy: { createdAt: 'desc' },
-      take: limit,
+      // 有范围时多取一些再过滤：范围内的条目可能不在最近 N 条里
+      take: scope ? Math.max(limit * 5, 100) : limit,
       select: {
         id: true, title: true, url: true, platform: true, author: true,
-        summary: true, note: true, source: true, state: true, createdAt: true,
+        summary: true, note: true, source: true, state: true, createdAt: true, tags: true,
       },
     });
+    const rows = (scope ? rowsRaw.filter((r) => libraryItemAllowed(scope, r)) : rowsRaw).slice(0, limit);
 
     return {
       ok: true,
@@ -150,10 +158,12 @@ const searchLibrary: AgentTool = {
         存于: fmtDate(r.createdAt),
       })),
       summary: rows.length
-        ? `找到 ${rows.length} 条${keyword ? `与「${keyword}」相关的` : ''}存档`
+        ? `找到 ${rows.length} 条${keyword ? `与「${keyword}」相关的` : ''}存档${scope ? '（只在这个员工的知识范围内）' : ''}`
         : keyword
-          ? `资讯库里没有与「${keyword}」相关的存档`
+          ? `资讯库里没有与「${keyword}」相关的存档${scope ? '（范围内）' : ''}`
           : '资讯库还是空的（用插件剪藏，或在群里给机器人发链接）',
+      // 引用：读了哪几条，写进审计流水，产物能回溯到源对象
+      citations: rows.map((r) => ({ sourceType: 'library_item' as const, sourceId: r.id, label: r.title })),
     };
   },
 };
@@ -172,14 +182,20 @@ const listMaterials: AgentTool = {
     parameters: { type: 'object', properties: {}, required: [] },
   },
   async run(ctx) {
-    const materials = await loadMaterials(ctx.accountId);
+    const scope = materialTypesInScope(ctx.knowledge);
+    if (!scope.allowed) {
+      return { ok: false, error: '素材库不在这个员工的知识范围里（去它的档案里绑定素材类型）', summary: '素材不在知识范围里' };
+    }
+    const all = await loadMaterials(ctx.accountId);
+    const materials = scope.types ? all.filter((m) => scope.types!.includes(m.type)) : all;
     if (materials.length === 0) {
       return { ok: true, data: [], summary: '素材库还是空的——让用户去「经历/素材」页存几条，生成出来的东西会很不一样' };
     }
     return {
       ok: true,
       data: materials.map((m) => ({ 类型: m.type, 内容: m.content, 标签: m.tags })),
-      summary: `${materials.length} 条素材`,
+      summary: `${materials.length} 条素材${scope.types ? `（只看 ${scope.types.join('、')}）` : ''}`,
+      citations: [...new Set(materials.map((m) => m.type))].map((t) => ({ sourceType: 'material_type' as const, sourceId: t, label: `素材类型：${t}` })),
     };
   },
 };
@@ -201,6 +217,9 @@ const readMemory: AgentTool = {
     },
   },
   async run(ctx, args) {
+    if (ctx.knowledge && !ctx.knowledge.memory) {
+      return { ok: false, error: '人设记忆不在这个员工的知识范围里', summary: '记忆不在知识范围里' };
+    }
     const days = clamp(num(args.days, 30), 1, 365);
     const since = new Date(Date.now() - days * 86_400_000);
     const rows = await recentlyLearnedMemories(ctx.workspaceId, ctx.accountId, since, 20);

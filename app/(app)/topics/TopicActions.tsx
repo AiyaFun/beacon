@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { actAccept, actReject } from './actions';
 import { publishAccepted } from './accepted-bus';
 import { useI18n } from '@/lib/i18n';
+import { useImeGuard } from '@/lib/ime';
 
 // 已推荐选题卡片底部的「采纳 / 拒绝」操作。
 // 拒绝展开内联小面板收集原因（快捷理由或自由输入）；原因原文传给
@@ -13,6 +14,7 @@ const QUICK_REASONS = ['不感兴趣', '做过了', '不合人设'];
 
 export function TopicActions({ topicId, title }: { topicId: string; title: string }) {
   const { lang } = useI18n();
+  const ime = useImeGuard(); // 组字中的回车是上屏，不是提交（lib/ime.ts）
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [rejecting, setRejecting] = useState(false); // 拒因面板展开中
@@ -135,7 +137,8 @@ export function TopicActions({ topicId, title }: { topicId: string; title: strin
                 placeholder={lang === 'en' ? 'Tell us why, e.g. topic is outdated' : '随便说说，比如：话题过时了'}
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && !pending) reject(reason); }}
+                {...ime.composition}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !ime.isComposing(e) && !pending) reject(reason); }}
                 disabled={pending}
               />
               <button className="btn btn-sm btn-primary" onClick={() => reject(reason)} disabled={pending} style={{ flexShrink: 0 }}>

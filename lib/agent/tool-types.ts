@@ -15,6 +15,7 @@
 // 新加一个 tools-*.ts 时从这里 import，不要再从 './tools' 拿。
 
 import type { ToolDef } from '../llm/types';
+import type { KnowledgeScope, KnowledgeSourceType } from './knowledge-scope';
 import type { Action as RbacAction } from '../rbac';
 
 // ── AI 能调用的系统能力清单 ────────────────────────────────────────────────
@@ -49,6 +50,11 @@ export type ToolContext = {
    * 空 = 通用助手或页面直接调工具（那时台账落在 'assistant' 名下，见 lib/agent/ledger.ts）。
    */
   botSlug?: string;
+  /**
+   * 这次执行的知识范围（按 agentTemplateId 的绑定现算，见 lib/agent/knowledge.ts）。
+   * 空 = 不收窄。search_library / list_materials / read_persona_memory 按它过滤。
+   */
+  knowledge?: KnowledgeScope | null;
   /** 超时取消信号。工具内部的 fetch / 外部调用可挂此信号，超时后自动 abort。 */
   signal?: AbortSignal;
 };
@@ -76,6 +82,8 @@ export type ToolResult = {
    * 用户点过去会打开别人的东西。
    */
   artifacts?: { kind: ArtifactKind; refId: string; label: string }[];
+  /** 这次读了哪些源对象（写成 AgentStep kind='citation'，让产物能回溯引用） */
+  citations?: { sourceType: KnowledgeSourceType; sourceId: string; label: string }[];
 };
 
 /** 产物的种类。加新种类时记得让界面知道它该跳到哪一页（lib/agent/artifacts.ts）。 */

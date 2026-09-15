@@ -18,12 +18,12 @@ const log = createLogger({ module: 'workflow-kick' });
 
 const inflight = new Set<Promise<void>>();
 
-export function kickWorkflowRun(ctx: WorkflowContext, runId: string): void {
+export function kickWorkflowRun(ctx: WorkflowContext, runId: string, resume?: { childRunId: string }): void {
   if (!runId) return;
   const task = (async () => {
     try {
       const { executeWorkflowRun } = await import('./run');
-      await executeWorkflowRun(ctx, runId);
+      await executeWorkflowRun(ctx, runId, resume);
     } catch (err) {
       // 这里**没有调用方**：抛出去只会变成一条 unhandledRejection。
       // executeWorkflowRun 自己会把失败写进 WorkflowRun.error，

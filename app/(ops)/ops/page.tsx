@@ -40,7 +40,7 @@ export default async function OpsHomePage() {
         desc={isEn ? 'Cross-tenant perspective · Figures aggregated by Beijing time today' : '跨租户视角 · 数字按北京时间当日统计'}
       />
 
-      <div className="grid grid-4" style={{ marginBottom: 16 }}>
+      <div className="grid-stats">
         <Stat
           label={isEn ? 'Total Tenants' : '租户总数'}
           value={fmtNum(tenants.length)}

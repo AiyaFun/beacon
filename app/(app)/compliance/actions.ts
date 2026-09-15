@@ -2,7 +2,7 @@
 
 import { getSession } from '@/lib/session';
 import { checkText, hasRedline, invalidateDfaCache, type WordHit } from '@/lib/compliance/engine';
-import { llmSemanticReview, type SemanticHit, type SemanticReviewResult } from '@/lib/compliance/semantic';
+import { llmSemanticReview, type SemanticReviewResult } from '@/lib/compliance/semantic';
 import { llmComplete } from '@/lib/llm/gateway';
 import { platformName } from '@/lib/constants';
 import { requireRole } from '@/lib/rbac';
@@ -224,25 +224,6 @@ export async function actSubmitFeedback(input: {
   });
   revalidatePath('/compliance');
   return { ok: true };
-}
-
-export async function actListFeedback(): Promise<FeedbackItem[]> {
-  const s = await getSession();
-  requireRole(s, 'compliance.check');
-  const items = await prisma.complianceFeedback.findMany({
-    where: { tenantId: s.tenantId },
-    orderBy: { createdAt: 'desc' },
-    take: 20,
-  });
-  return items.map((f) => ({
-    id: f.id,
-    word: f.word,
-    tier: f.tier,
-    context: f.context,
-    reason: f.reason,
-    status: f.status,
-    createdAt: f.createdAt.toISOString(),
-  }));
 }
 
 // 处理误报申诉：待处理 → 已采纳 / 已驳回。

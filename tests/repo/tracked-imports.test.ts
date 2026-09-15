@@ -31,6 +31,10 @@ describe('🔒 已提交文件 import 的 @/ 目标也要已提交', () => {
     const bad: string[] = [];
     for (const f of files) {
       if (!/\.(ts|tsx)$/.test(f) || f.startsWith('public/downloads/')) continue;
+      // 已跟踪但工作区里没有 = 这个文件正在被删（删了还没 git add）。
+      // 这条守卫管的是「import 指向一个没提交的文件」，不是「文件删没删干净」——
+      // 读一个不存在的路径会直接抛 ENOENT，把整条用例变成一个与它无关的错误。
+      if (!existsSync(path.join(ROOT, f))) continue;
       const src = readFileSync(path.join(ROOT, f), 'utf8');
       for (const m of src.matchAll(/from\s+['"]@\/([^'"]+)['"]/g)) {
         const target = m[1];

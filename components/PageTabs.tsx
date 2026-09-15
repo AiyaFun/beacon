@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
+import { onTabListKeyDown } from '@/components/tab-keyboard';
 
 // 页面级标签页：把一页里互斥的几件事分开，而不是让用户从头滚到尾。
 //
@@ -56,6 +57,7 @@ export function PageTabs({ tabs, initial,
   variant?: 'sub';
 }) {
   const { lang } = useI18n();
+  const tabId = useId();
   const [active, setActive] = useState(
     initial && tabs.some((t) => t.key === initial) ? initial : (tabs[0]?.key ?? ''),
   );
@@ -72,7 +74,7 @@ export function PageTabs({ tabs, initial,
 
   return (
     <div>
-      <div className={`tabs${variant === "sub" ? " tabs-sub" : ""}`} role="tablist">
+      <div className={`tabs${variant === "sub" ? " tabs-sub" : ""}`} role="tablist" aria-label={lang === 'en' ? 'Page sections' : '页面内容'} onKeyDown={onTabListKeyDown}>
         {tabs.map((t) => {
           const displayLabel = lang === 'en' && TAB_LABEL_EN[t.key] ? TAB_LABEL_EN[t.key] : t.label;
           return (
@@ -80,7 +82,10 @@ export function PageTabs({ tabs, initial,
               key={t.key}
               type="button"
               role="tab"
+              id={`${tabId}-tab-${t.key}`}
+              aria-controls={`${tabId}-panel-${t.key}`}
               aria-selected={t.key === cur.key}
+              tabIndex={t.key === cur.key ? 0 : -1}
               className={`tab ${t.key === cur.key ? 'active' : ''}`}
               onClick={() => setActive(t.key)}
             >
@@ -102,7 +107,7 @@ export function PageTabs({ tabs, initial,
       )}
 
       {tabs.map((t) => (
-        <div key={t.key} role="tabpanel" hidden={t.key !== cur.key}>
+        <div key={t.key} id={`${tabId}-panel-${t.key}`} role="tabpanel" aria-labelledby={`${tabId}-tab-${t.key}`} tabIndex={0} hidden={t.key !== cur.key}>
           {t.node}
         </div>
       ))}

@@ -1,7 +1,8 @@
 import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
-import { sourceHealthBoard } from '@/lib/adapters/registry';
+import { Suspense } from 'react';
+import { competitorSourceBoard, hotSourceCount, hotSourceHealth, rssHubHealth } from '@/lib/adapters/registry';
 import { platformName } from '@/lib/constants';
 import { embedderInfo } from '@/lib/vector/embed';
 import { Card, Stat } from '@/components/ui';
@@ -11,7 +12,6 @@ import { readAutomationConfig, AUTOMATION_ITEMS } from '@/lib/jobs/automation';
 import { HubHeader } from '@/components/HubHeader';
 import { can as canEdition } from '@/lib/edition';
 import { LocalShellCard } from './LocalShellCard';
-import { WhatsNewCard } from '@/components/WhatsNewCard';
 
 import { getServerLang } from '@/lib/i18n/server';
 import { getDictionary } from '@/lib/i18n/dict';
@@ -22,10 +22,18 @@ export default async function SettingsPage() {
   const s = await getSession();
   const lang = await getServerLang();
   const dict = getDictionary(lang);
-  const [providers, board, workspace, jobRuns] = await Promise.all([
+  // 整机/私有化才渲染「本机命令执行」卡；SaaS 上取了也不显示，那几列就别查（见下方 canEdition('localShell')）
+  const wantShell = canEdition('localShell');
+  const [providers, workspace, jobRuns] = await Promise.all([
     prisma.modelProvider.count({ where: { tenantId: s.tenantId } }),
-    sourceHealthBoard(),
-    prisma.workspace.findUnique({ where: { id: s.workspaceId }, select: { automationConfig: true } }),
+    // 【一次查完】原来这里查一次 automationConfig，下面**再串行查一次**同一行拿 shell* 那几列。
+    // 同一张表同一行，两次往返——后一次还卡在渲染前面。
+    prisma.workspace.findUnique({
+      where: { id: s.workspaceId },
+      select: wantShell
+        ? { automationConfig: true, shellEnabled: true, shellAllow: true, shellRoot: true, shellExecMode: true, shellTimeoutSec: true, browserCdpUrl: true }
+        : { automationConfig: true },
+    }),
     prisma.jobRun.findMany({
       where: { name: { in: AUTOMATION_ITEMS.map((i) => i.job).filter((j): j is NonNullable<typeof j> => j !== null) } },
       orderBy: { id: 'desc' },
@@ -33,6 +41,9 @@ export default async function SettingsPage() {
       select: { name: true, status: true, detail: true, finishedAt: true, startedAt: true },
     }),
   ]);
+
+  // 竞对通道是纯计算（读适配器链），不必等任何探测
+  const competitorBoard = competitorSourceBoard();
 
   const embed = embedderInfo(); // 语义向量实况（真模型 / 哈希近似），用于「降级说破」
 
@@ -47,11 +58,16 @@ export default async function SettingsPage() {
   const enabledJobs = AUTOMATION_ITEMS.filter((i) => automationConfig[i.key] !== false).length;
   const failedRecently = Object.values(lastRuns).filter((r) => r?.status === 'failed').length;
 
-  // 本机命令执行的现有配置（只有整机版会用到，SaaS 取了也不渲染）
-  const shellCfg = (await prisma.workspace.findUnique({
-    where: { id: s.workspaceId },
-    select: { shellEnabled: true, shellAllow: true, shellRoot: true, shellExecMode: true, shellTimeoutSec: true, browserCdpUrl: true },
-  })) ?? { shellEnabled: false, shellAllow: '[]', shellRoot: null, shellExecMode: 'allowlist', shellTimeoutSec: 20, browserCdpUrl: null };
+  // 本机命令执行的现有配置（只有整机版会用到，SaaS 上 wantShell=false，这几列压根没查）
+  const w = workspace as (typeof workspace & Partial<{ shellEnabled: boolean; shellAllow: string; shellRoot: string | null; shellExecMode: string; shellTimeoutSec: number; browserCdpUrl: string | null }>) | null;
+  const shellCfg = {
+    shellEnabled: w?.shellEnabled ?? false,
+    shellAllow: w?.shellAllow ?? '[]',
+    shellRoot: w?.shellRoot ?? null,
+    shellExecMode: w?.shellExecMode ?? 'allowlist',
+    shellTimeoutSec: w?.shellTimeoutSec ?? 20,
+    browserCdpUrl: w?.browserCdpUrl ?? null,
+  };
 
   return (
     <>
@@ -65,7 +81,7 @@ export default async function SettingsPage() {
         }
       />
 
-      <div className="grid grid-4" style={{ marginBottom: 16 }}>
+      <div className="grid-stats">
         <Stat
           label={lang === 'en' ? 'Model Providers' : '模型渠道'}
           value={providers}
@@ -84,13 +100,10 @@ export default async function SettingsPage() {
         />
         <Stat
           label={lang === 'en' ? 'Hotlist Sources' : '热榜数据源'}
-          value={board.hot.length}
+          value={hotSourceCount()}
           foot={lang === 'en' ? 'Includes fallback routes' : '含降级链路'}
         />
       </div>
-
-      {/* 最近更新（2026-09-06 从首页搬来）：更新说明只有 CHANGELOG.md 一处，这里直接读 */}
-      <WhatsNewCard lang={lang} />
 
       <Card
         title={lang === 'en' ? '🤖 Automated Background Tasks' : '🤖 自动化任务'}
@@ -119,17 +132,12 @@ export default async function SettingsPage() {
           而 sourceHealthBoard() 返回的 competitor 那一半此前**一处都没渲染过**——
           那句承诺零代码兑现。用户看到的是「加了竞对、点进去空白」，界面上不说为什么。
           这比没有这个功能更伤：没有功能他不会失望，有入口点了没数据他会认为产品坏了。 */}
-      {/* ── 竞对数据源（2026-08-29 补）──
-          隐私政策里写着「未配置时…**界面上会显示为数据源未启用**」，
-          而 sourceHealthBoard() 返回的 competitor 那一半此前**一处都没渲染过**——
-          那句承诺零代码兑现。用户看到的是「加了竞对、点进去空白」，界面上不说为什么。
-          这比没有这个功能更伤：没有功能他不会失望，有入口点了没数据他会认为产品坏了。 */}
       <Card
         title={lang === 'en' ? 'Competitor Data Sources' : '竞对数据源'}
         sub={lang === 'en' ? 'Data retrieval readiness across platforms · Server / Extension / None' : '每个平台现在到底取不取得到数据 · 服务端 / 要插件 / 没有'}
       >
         <div className="stack" style={{ gap: 8 }}>
-          {board.competitor.map((c) => {
+          {competitorBoard.map((c) => {
             // 三态分开说：「要装插件」他能自己解决，「真的没有」他做什么都没用。
             // 合并成「未启用」等于把能解决的问题说成解决不了的。
             const label = c.status === 'server'
@@ -157,47 +165,26 @@ export default async function SettingsPage() {
           )}
         </p>
 
-        {/* ── 自建 RSSHub（2026-08-31 补）── */}
-        <div
-          className="row-between wrap"
-          style={{ gap: 8, marginTop: 10, paddingTop: 10, borderTop: '1px dashed var(--border)' }}
-        >
-          <span className="row" style={{ gap: 8, alignItems: 'center' }}>
-            <span className={`dot ${board.rsshub.ok ? 'dot-green' : board.rsshub.configured ? 'dot-red' : 'dot-amber'}`} />
-            <span className="small">{lang === 'en' ? 'Self-hosted RSSHub (Backup Channel)' : '自建 RSSHub（备用通道）'}</span>
-            <span className={`badge ${board.rsshub.ok ? 'badge-green' : board.rsshub.configured ? 'badge-red' : 'badge-gray'}`}>
-              {board.rsshub.ok ? (lang === 'en' ? 'Running' : '在跑') : board.rsshub.configured ? (lang === 'en' ? 'Unreachable' : '连不上') : (lang === 'en' ? 'Not Configured' : '未配置')}
-            </span>
-          </span>
-          <span className="small muted">{board.rsshub.detail}</span>
-        </div>
-        {board.rsshub.configured && !board.rsshub.ok && (
-          <p className="small" style={{ margin: '6px 0 0', color: 'var(--danger)', lineHeight: 1.85 }}>
-            {lang === 'en' ? (
-              <>Configured URL but unreachable—channels marked <code>rsshub</code> fall back to primary sources. Please fix the container or remove <code>BEACON_RSSHUB_BASE_URL</code>.</>
-            ) : (
-              <>配了地址但连不上——上面标着 <code>rsshub</code> 的那几条链现在实际走的是主源，主源没配的话就是取不到。要么把容器起回来，要么把 <code>BEACON_RSSHUB_BASE_URL</code> 拿掉，<b>别让它挂在链上当摆设</b>。</>
-            )}
-          </p>
-        )}
+        {/* ── 自建 RSSHub（2026-08-31 补）── 真探一次 HTTP，所以挂在 Suspense 里流进来 */}
+        <Suspense fallback={<ProbeRow label={lang === 'en' ? 'Self-hosted RSSHub (Backup Channel)' : '自建 RSSHub（备用通道）'} lang={lang} bordered />}>
+          <RssHubRow lang={lang} />
+        </Suspense>
       </Card>
 
       <Card
         title={lang === 'en' ? 'Hotlist Data Sources' : '热榜数据源'}
         sub={lang === 'en' ? 'Open-source self-hosted primary, commercial API fallback, redundant channels' : '开源自建为主，商业 API 兜底，双源冗余'}
       >
-        <div className="stack" style={{ gap: 8 }}>
-          {board.hot.map((h) => (
-            <div key={h.name} className="row-between wrap" style={{ gap: 8, padding: '6px 0' }}>
-              <span className="row" style={{ gap: 8, alignItems: 'center' }}>
-                <span className={`dot ${h.ok ? 'dot-green' : 'dot-amber'}`} />
-                <span className="small">{h.name}</span>
-                <span className="badge badge-gray">{h.kind}</span>
-              </span>
-              <span className="small muted">{h.detail ?? (h.ok ? (lang === 'en' ? 'Normal' : '正常') : (lang === 'en' ? 'Degraded' : '降级中'))}</span>
-            </div>
-          ))}
-        </div>
+        {/* 每条通道各发一次真实探测（超时 5~6 秒）：不让它挡住整页，流式送进来 */}
+        <Suspense fallback={
+          <div className="stack" style={{ gap: 8 }}>
+            {Array.from({ length: hotSourceCount() }).map((_, i) => (
+              <ProbeRow key={i} label={lang === 'en' ? 'Probing…' : '探测中…'} lang={lang} />
+            ))}
+          </div>
+        }>
+          <HotSourceRows lang={lang} />
+        </Suspense>
 
         <div className="divider" style={{ margin: '14px 0' }} />
         <div className="row-between wrap" style={{ gap: 8 }}>
@@ -228,5 +215,75 @@ export default async function SettingsPage() {
         </p>
       </Card>
     </>
+  );
+}
+
+/**
+ * 探测中的占位行：形状与真实行一致（点 + 名字 + 右侧说明），免得数据到位时整页跳一下。
+ */
+function ProbeRow({ label, lang, bordered }: { label: string; lang: string; bordered?: boolean }) {
+  return (
+    <div
+      className="row-between wrap"
+      style={bordered
+        ? { gap: 8, marginTop: 10, paddingTop: 10, borderTop: '1px dashed var(--border)' }
+        : { gap: 8, padding: '6px 0' }}
+    >
+      <span className="row" style={{ gap: 8, alignItems: 'center' }}>
+        <span className="dot dot-gray" />
+        <span className="small muted">{label}</span>
+      </span>
+      <span className="small muted">{lang === 'en' ? 'probing…' : '探测中…'}</span>
+    </div>
+  );
+}
+
+/** 自建 RSSHub 实况行。探测结果在 lib/adapters/registry 里缓存 60 秒。 */
+async function RssHubRow({ lang }: { lang: string }) {
+  const rsshub = await rssHubHealth();
+  return (
+    <>
+      <div
+        className="row-between wrap"
+        style={{ gap: 8, marginTop: 10, paddingTop: 10, borderTop: '1px dashed var(--border)' }}
+      >
+        <span className="row" style={{ gap: 8, alignItems: 'center' }}>
+          <span className={`dot ${rsshub.ok ? 'dot-green' : rsshub.configured ? 'dot-red' : 'dot-amber'}`} />
+          <span className="small">{lang === 'en' ? 'Self-hosted RSSHub (Backup Channel)' : '自建 RSSHub（备用通道）'}</span>
+          <span className={`badge ${rsshub.ok ? 'badge-green' : rsshub.configured ? 'badge-red' : 'badge-gray'}`}>
+            {rsshub.ok ? (lang === 'en' ? 'Running' : '在跑') : rsshub.configured ? (lang === 'en' ? 'Unreachable' : '连不上') : (lang === 'en' ? 'Not Configured' : '未配置')}
+          </span>
+        </span>
+        <span className="small muted">{rsshub.detail}</span>
+      </div>
+      {rsshub.configured && !rsshub.ok && (
+        <p className="small" style={{ margin: '6px 0 0', color: 'var(--danger)', lineHeight: 1.85 }}>
+          {lang === 'en' ? (
+            <>Configured URL but unreachable—channels marked <code>rsshub</code> fall back to primary sources. Please fix the container or remove <code>BEACON_RSSHUB_BASE_URL</code>.</>
+          ) : (
+            <>配了地址但连不上——上面标着 <code>rsshub</code> 的那几条链现在实际走的是主源，主源没配的话就是取不到。要么把容器起回来，要么把 <code>BEACON_RSSHUB_BASE_URL</code> 拿掉，<b>别让它挂在链上当摆设</b>。</>
+          )}
+        </p>
+      )}
+    </>
+  );
+}
+
+/** 热榜各通道实况行。同上，结果缓存 60 秒。 */
+async function HotSourceRows({ lang }: { lang: string }) {
+  const hot = await hotSourceHealth();
+  return (
+    <div className="stack" style={{ gap: 8 }}>
+      {hot.map((h) => (
+        <div key={h.name} className="row-between wrap" style={{ gap: 8, padding: '6px 0' }}>
+          <span className="row" style={{ gap: 8, alignItems: 'center' }}>
+            <span className={`dot ${h.ok ? 'dot-green' : 'dot-amber'}`} />
+            <span className="small">{h.name}</span>
+            <span className="badge badge-gray">{h.kind}</span>
+          </span>
+          <span className="small muted">{h.detail ?? (h.ok ? (lang === 'en' ? 'Normal' : '正常') : (lang === 'en' ? 'Degraded' : '降级中'))}</span>
+        </div>
+      ))}
+    </div>
   );
 }

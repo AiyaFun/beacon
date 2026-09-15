@@ -67,7 +67,7 @@ export function WeeklyReviewCard({ review }: { review: WeeklyReview | null }) {
         ) : undefined
       }
     >
-      <div className="grid grid-4" style={{ marginBottom: 14 }}>
+      <div className="grid-stats" style={{ marginBottom: 14 }}>
         <Stat label={lang === 'en' ? 'Published' : '本周发布'} value={review.published} foot={lang === 'en' ? 'posts' : '篇'} />
         <Stat
           label={lang === 'en' ? 'Avg Views' : '均播'}

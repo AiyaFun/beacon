@@ -6,7 +6,7 @@ import { getSession } from '@/lib/session';
 import { requireRole } from '@/lib/rbac';
 import { toJson } from '@/lib/json';
 import { readBotSecrets, writeBotSecrets, testPush } from '@/lib/bot';
-import { BOT_PROVIDERS, PUSH_EVENTS, EXTERNAL_DEFAULT_COMMANDS, isReplyOnlyProvider, sanitizeAllowCommands, type BotSecrets } from '@/lib/bot/types';
+import { BOT_PROVIDERS, PUSH_EVENTS, isReplyOnlyProvider, sanitizeAllowCommands, type BotSecrets } from '@/lib/bot/types';
 import { ilinkGetQr, ilinkQrStatus } from '@/lib/bot/wechat-ilink';
 import { renderQrSvg } from '@/lib/pay/qr';
 

@@ -53,21 +53,22 @@ export function AccountSwitcher({ accounts, currentId }: { accounts: SwitcherAcc
   }
 
   return (
-    <div ref={boxRef} className="row" style={{ gap: 8, alignItems: 'center', flexShrink: 0, position: 'relative' }}>
+    <div ref={boxRef} className="row account-switcher" style={{ gap: 8, alignItems: 'center', flexShrink: 1, position: 'relative' }}>
       <span className="small muted hide-mobile" style={{ whiteSpace: 'nowrap', flexShrink: 0, fontSize: '12px' }}>
         {dict.shell.currentAccount}
       </span>
 
       {/* 自定义触发器按钮 */}
       <button
+        className="account-switcher-trigger"
         type="button"
+        aria-expanded={open}
         disabled={pending}
         onClick={() => setOpen((v) => !v)}
         style={{
           display: 'inline-flex',
           alignItems: 'center',
           gap: '8px',
-          height: '30px',
           padding: '0 10px',
           borderRadius: '8px',
           background: open ? 'var(--surface-2)' : 'var(--surface)',
@@ -78,7 +79,6 @@ export function AccountSwitcher({ accounts, currentId }: { accounts: SwitcherAcc
           opacity: pending ? 0.6 : 1,
           transition: 'all 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
           boxShadow: '0 1px 2px rgba(0, 0, 0, 0.04)',
-          maxWidth: '240px',
         }}
         title={lang === 'en' ? 'Switch account (data isolated per account)' : '切换后，草稿/选题/记忆/发布数据跟随账号独立展示'}
       >
@@ -97,7 +97,7 @@ export function AccountSwitcher({ accounts, currentId }: { accounts: SwitcherAcc
         <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 110 }}>
           {getAccountDisplayName(currentAccount.name)}
         </span>
-        <span className="small muted" style={{ fontSize: '11.5px', whiteSpace: 'nowrap', flexShrink: 0 }}>
+        <span className="small muted account-switcher-platform" style={{ fontSize: '11.5px', whiteSpace: 'nowrap', flexShrink: 0 }}>
           · {platformName(currentAccount.platform, lang) || currentAccount.platformLabel}
         </span>
 
@@ -234,4 +234,3 @@ export function AccountSwitcher({ accounts, currentId }: { accounts: SwitcherAcc
     </div>
   );
 }
-

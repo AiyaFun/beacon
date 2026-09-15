@@ -65,6 +65,9 @@ repro-*.js
 *tmp*.js
 *.scratch.*
 
+# ── 设计报告与截图（二进制不进 git）──
+reports/
+
 # ── 桌面壳（Tauri 2）──
 desktop/node_modules
 desktop/src-tauri/target

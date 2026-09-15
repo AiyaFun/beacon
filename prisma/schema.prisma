@@ -103,6 +103,7 @@ model Workspace {
   agentRuns       AgentRun[]
   taskPresets     TaskPreset[]
   procedureSkills  ProcedureSkill[]
+  agentToolDefs    AgentToolDef[]
   scrapeRecipes   ScrapeRecipe[]
   scrapeRecords   ScrapeRecord[]
   aiCitations     AiCitation[]
@@ -110,6 +111,8 @@ model Workspace {
   workflowRuns    WorkflowRun[]
   scheduledAgents ScheduledAgent[]
   browserTasks    BrowserTask[]
+  knowledgeBindings AgentKnowledgeBinding[]
+  workItems       ContentWorkItem[]
   parserIncidents ParserIncident[]
 }
 
@@ -1693,6 +1696,9 @@ model AgentRun {
   // 【嵌套只许一层】它非空就说明「我已经是子运行了」——那时再派自主智能体一律拒绝。
   // 不拦的话一个配错的智能体可以自己派自己，几层下去就是指数级的额度消耗。
   parentRunId String?
+  // 这次执行指定走哪条模型渠道（2026-09-11）：null/auto = 按功能路由；'platform' = 平台渠道；否则 = 租户自己的 ModelProvider.id。
+  // 网关按租户校验归属（lib/llm/gateway.ts resolveWithSource 只在本租户 providers 里找），传别人的 id 等于没传。
+  providerId  String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -1735,6 +1741,8 @@ model TaskPreset {
   authMode    String   @default("confirm_each")
   // JSON string[]：预授权勾定的工具
   preauthorizedTools String @default("[]")
+  // 这张卡派出去时走哪条模型渠道（同 AgentRun.providerId 口径；定时可以覆盖它）
+  providerId  String?
   enabled     Boolean  @default(true)
   sort        Int      @default(0)
   createdBy   String?
@@ -1842,6 +1850,47 @@ model ProcedureSkill {
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, workspaceId])
+}
+
+// ── AI 自写工具（2026-09-09，Hermes 式自扩展的烽火台形态）────────────────────
+//
+// 【它是什么】模型用现有工具**拼**出来的一个新工具：一段在 node:vm 沙箱里跑的 JS，
+// 只能调它声明过的那几个静态工具（uses），不能碰文件、进程、网络（fetch 只走既有读取白名单）。
+// 起草（draft）由模型做，**启用由人点**——技能中心里看过代码才能 enabled。
+// 【为什么进表不进文件】web/worker 容器没有代码卷，写进文件重建就没了；且要跟工作区走、随注销删。
+// 【只在单租户形态可用】node:vm 不是安全边界，多租户共进程的 SaaS 上不开（lib/edition.ts aiAuthoredTools）。
+model AgentToolDef {
+  id          String   @id @default(cuid())
+  tenantId    String
+  workspaceId String
+  // 工具名，snake_case，工作区内唯一；模型按这个名字调
+  name        String
+  label       String
+  description String
+  // JSON Schema（object）：模型调它时的参数
+  params      String   @default("{\"type\":\"object\",\"properties\":{}}")
+  // JSON string[]：沙箱里允许调用的静态工具名。**write/costly/contract 由它们的并集推出**
+  uses        String   @default("[]")
+  // 沙箱里跑的 JS 源码：必须定义 async function main(args, sdk)
+  code        String
+  // draft（模型起草，等人看） | enabled（人点过启用） | disabled
+  status      String   @default("draft")
+  write       Boolean  @default(false)
+  costly      Boolean  @default(false)
+  contract    Boolean  @default(false)
+  // 从哪次运行里起草的。松引用不加外键
+  authoredByRunId String?
+  createdBy   String
+  usedCount   Int      @default(0)
+  // 最近一次运行失败的原因（给审核的人看，也给模型自己修）
+  lastError   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, name])
+  @@index([tenantId, workspaceId, status])
 }
 
 model AgentArtifact {
@@ -2081,6 +2130,8 @@ model ScheduledAgent {
   atMinute    Int      @default(0)
   // 周几跑：JSON 数字数组（0=周日）。空数组 = 每天
   weekdays    String   @default("[]")
+  // 到点跑时走哪条模型渠道（同 AgentRun.providerId 口径）。task 型：覆盖卡上的选择；workflow 型：每一步都走它
+  providerId  String?
   enabled     Boolean  @default(true)
   // 连续失败次数。达到 AUTO_PAUSE_FAILS 自动停用并告警——
   // 没有这一条的话，一个坏模板会每天准点烧一次配额直到用户自己发现
@@ -2157,6 +2208,14 @@ model WorkflowRun {
   // JSON: 每步的 {kind, ok, message, at}
   log         String   @default("[]")
   error       String?
+  // 谁发起的（接力续跑时按他的权限派子运行）。老行为空 = 续跑时按工作区 owner
+  memberId    String?
+  // 每一步走哪条模型渠道（续跑时要原样带上）
+  providerId  String?
+  // 接力一跳在等哪次子运行：`run:<AgentRun.id>`。**持久化**是为了进程重启后还能被叫醒：
+  // 子运行到终态 → lib/agent/run.ts 终态钩子按它找回这条流水线 → 从 stepIndex 接着跑。
+  // 非空时定时巡检不把它当「跑飞」判死（它在等，不是没动静）。
+  waitingOn   String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -2167,6 +2226,7 @@ model WorkflowRun {
   @@index([workspaceId, createdAt])
   // 同 AgentRun：到期清理走 (status, updatedAt)
   @@index([status, updatedAt])
+  @@index([waitingOn])
 }
 
 // ─────────────────────── 域19：采集自学习（解析规则自愈）───────────────────────
@@ -2428,4 +2488,113 @@ model AiCitation {
 
   @@index([workspaceId, capturedAt])
   @@index([workspaceId, isMine])
+}
+
+// ─────────────────────── 域：数字员工的知识范围（2026-09-11 P1） ───────────────────────
+//
+// 【为什么要有它】此前所有智能体读的是同一份资料库/素材/记忆：换个员工，答案来源不变，
+// 「情报员只读监控资料、写手只用我的素材」做不到，也解释不了「这段话来自哪里」。
+// 绑定只是**范围声明**：原始资料仍在 InspirationItem / Material / MemoryEntry 各自的表里，
+// 这里不复制任何内容。一个模板一条绑定都没有 = 不收窄（旧行为）；有 ≥1 条 = 只读绑定的。
+// 引用记录写进 AgentStep（kind='citation'），与其它步骤同一条审计流水。
+model AgentKnowledgeBinding {
+  id          String   @id @default(cuid())
+  workspaceId String
+  templateId  String
+  // library_item = 资讯库/灵感箱的一条（sourceId = InspirationItem.id）
+  // library_tag  = 资讯库里带某个标签的全部（sourceId = 标签）
+  // material_type = 素材库的某一类（sourceId = Material.type；'*' = 全部素材）
+  // memory       = 人设记忆（sourceId = '*'）
+  sourceType  String
+  sourceId    String
+  // 给人也给模型看的一句：这份资料在这个员工手里是干什么用的
+  purpose     String   @default("")
+  priority    Int      @default(0)
+  enabled     Boolean  @default(true)
+  createdBy   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  // 【唯一键必须带 workspaceId】内置模板的 id 是全局的：不带的话两个工作区给同一个 bot 绑同一个标签会撞键，
+  // upsert 还会把对方那行的 workspaceId 改成自己的（2026-09-11 审计发现）。
+  @@unique([workspaceId, templateId, sourceType, sourceId])
+  @@index([workspaceId, templateId])
+}
+
+// ─────────────────────── 域：内容工单（2026-09-11 P1） ───────────────────────
+//
+// 【它不是第二份草稿表】工单只做**关联与流程状态**：选题、草稿版本、运行、发布计划各自仍是权威，
+// 这里存的是「这件事走到哪一步、谁负责、验收过没、返工过几次」。
+// 阶段：topic（候选选题）→ drafting（起稿）→ review（审校）→ ready（待发布）→ published（已发布）→ retro（复盘）
+// 驳回必须带原因；返工只把阶段退回、计数 +1，不动任何旧交付（DraftVersion 只增不减）。
+model ContentWorkItem {
+  id            String    @id @default(cuid())
+  workspaceId   String
+  accountId     String
+  title         String
+  stage         String    @default("topic")
+  // open | done | cancelled
+  status        String    @default("open")
+  ownerMemberId String?
+  // 负责这单的数字员工（WorkflowTemplate.id，松引用）
+  agentTemplateId String?
+  dueAt         DateTime?
+  // 给执行者的输入：一段人话（要写什么、给谁看、有哪些约束）
+  inputs        String    @default("")
+  // 验收标准：一段人话（验收时对着它看）
+  acceptance    String    @default("")
+  topicId       String?
+  draftId       String?
+  publishPlanId String?
+  publishRecordId String?
+  rejectReason  String?
+  reworkCount   Int       @default(0)
+  acceptedAt    DateTime?
+  createdBy     String
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  events    WorkItemEvent[]
+  runs      WorkItemRun[]
+
+  @@index([workspaceId, status, stage])
+  @@index([workspaceId, agentTemplateId])
+  @@index([draftId])
+}
+
+// 工单 ↔ 运行的关系表（2026-09-11 审计后从 JSON 数组改成表）：
+// JSON 数组是读-改-写，两次并发派活会丢一条；表 + 唯一键天然幂等，绩效与成本按它取 cohort。
+model WorkItemRun {
+  id         String   @id @default(cuid())
+  workItemId String
+  // AgentRun.id，松引用：运行被到期清理后这条关系仍说明「派过」
+  runId      String
+  createdAt  DateTime @default(now())
+
+  workItem ContentWorkItem @relation(fields: [workItemId], references: [id], onDelete: Cascade)
+
+  @@unique([workItemId, runId])
+  @@index([runId])
+}
+
+// 工单动态：insert-only，谁在什么时候把它推到了哪一步、为什么驳回。
+model WorkItemEvent {
+  id         String   @id @default(cuid())
+  workItemId String
+  // created | stage | accept | reject | rework | link | dispatch | note
+  kind       String
+  fromStage  String?
+  toStage    String?
+  note       String   @default("")
+  refKind    String?
+  refId      String?
+  memberId   String?
+  createdAt  DateTime @default(now())
+
+  workItem ContentWorkItem @relation(fields: [workItemId], references: [id], onDelete: Cascade)
+
+  @@index([workItemId, createdAt])
 }

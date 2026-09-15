@@ -207,6 +207,9 @@ async function resolveWithSource(
       if (picked && (picked.region !== 'overseas' || opts?.allowOverseas)) {
         return { provider: build(picked), source: 'byok' };
       }
+      // 【显式指定就是严格的】（2026-09-11 审计修正）指定的渠道已删/失效/境外受限时**不**静默换成别的：
+      // 用户以为在用 A，账本记的是 B，成本与合规都解释不清。直接报错，让这次调用如实失败。
+      throw new Error(picked ? '指定的模型渠道是境外渠道，这个功能不允许走境外模型' : '指定的模型渠道不存在或已失效，去「接入与密钥」换一条，或改回自动');
     }
     // 优先：routing 指定了该功能的 provider
     for (const want of fnOrder) {
@@ -242,6 +245,8 @@ async function resolveWithSource(
       if (platform) return { provider: build(platform), source: 'platform' };
     }
   }
+  // 显式指定「平台渠道」而平台此刻没有可用渠道：同样不落到环境兜底或 Mock
+  if (forcePlatform && !fromEnv(fnOrder[0])) throw new Error('平台模型渠道此刻不可用，改回自动或换一条自己的渠道');
 
   // env 兜底。**企业版里这把 Key 写在客户自己的 .env 里、烧的是客户自己的钱**，
   // 所以标成 byok 而不是 platform —— 标错的后果是它被送进平台预算闸，

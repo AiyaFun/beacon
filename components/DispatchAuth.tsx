@@ -38,6 +38,8 @@ export function authSummary(value: DispatchAuthValue, groupCount: number, lang: 
   return '每一步都先问我';
 }
 
+import { Icon } from './icons';
+
 export function DispatchAuth({
   tools,
   value,
@@ -69,19 +71,20 @@ export function DispatchAuth({
   }
 
   return (
-    <div className="small" style={{ marginTop: 8 }}>
+    <div className="dispatch-auth-wrapper" style={{ position: 'relative' }}>
       <button
         type="button"
-        className="btn btn-sm btn-ghost"
+        className="dispatch-auth-trigger"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
       >
-        {authSummary(value, checked.size, lang)}
-        <span style={{ marginLeft: 6, opacity: 0.6 }}>{open ? (isEn ? 'Collapse' : '收起') : (isEn ? 'Change' : '改一下')}</span>
+        <span className="dispatch-auth-icon"><Icon.shield size={13} /></span>
+        <span className="dispatch-auth-summary">{authSummary(value, checked.size, lang)}</span>
+        <span className="dispatch-auth-tag">{open ? (isEn ? 'Done' : '收起') : (isEn ? 'Config' : '改一下')}</span>
       </button>
 
       {open && (
-        <div className="card" style={{ padding: 12, marginTop: 8 }}>
+        <div className="card dispatch-auth-dropdown" style={{ padding: 14, marginTop: 6, position: 'absolute', top: '100%', left: 0, zIndex: 40, width: 'max-content', maxWidth: 'min(440px, 92vw)', boxShadow: '0 10px 32px rgba(0, 0, 0, 0.14)' }}>
           <label className="row" style={{ gap: 8, alignItems: 'flex-start', cursor: 'pointer', marginBottom: 8 }}>
             <input
               type="radio"

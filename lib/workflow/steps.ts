@@ -15,7 +15,11 @@ const platformKey = z.enum(Object.keys(PLATFORMS) as [PlatformKey, ...PlatformKe
 // 步骤类型刻意**收得很窄**：每一种都对应系统里一个已经存在、已经有配额与合规闸的动作。
 // 不做「自由脚本步」——那等于把任意代码执行挂在模板里，且任何人分享的模板都能跑它。
 
-export const STEP_KINDS = ['topic', 'draft', 'skill', 'cover', 'illustration', 'publish', 'analyze', 'notify'] as const;
+export const STEP_KINDS = ['topic', 'draft', 'skill', 'cover', 'illustration', 'publish', 'analyze', 'notify', 'handoff'] as const;
+
+/** 接力一跳要交出什么：answer=一段结构化回答（简报/审校意见） | topic/draft/publish_plan=登记过的产物 */
+export const HANDOFF_DELIVERABLES = ['answer', 'topic', 'draft', 'publish_plan'] as const;
+export type HandoffDeliverable = (typeof HANDOFF_DELIVERABLES)[number];
 export type StepKind = (typeof STEP_KINDS)[number];
 
 export const stepSchema = z.discriminatedUnion('kind', [
@@ -63,6 +67,23 @@ export const stepSchema = z.discriminatedUnion('kind', [
     target: z.enum(['performance', 'rivals', 'readers']),
   }),
   z.object({
+    /**
+     * 接力（2026-09-11 P2）：把活交给一个职能 bot（自主型模板）跑一跳，等它交出 deliverable 再进下一步。
+     * 上一跳没交出合格产物，下一跳不启动（流水线一步失败就停）。子运行只嵌一层：
+     * bot 的白名单里没有 run_agent（tests/workflow/role-bots.test.ts 钉死），所以它派不出孙运行。
+     */
+    kind: z.literal('handoff'),
+    /** 职能 bot 的 slug（bot-scout / bot-topic / bot-writer …） */
+    bot: z.string().min(1).max(64),
+    /** 这一跳要做什么（会拼上上一跳的交付） */
+    goal: z.string().min(1).max(1000),
+    deliverable: z.enum(['answer', 'topic', 'draft', 'publish_plan']).default('answer'),
+    /** 这一跳最多烧几次模型调用（不填按 bot 自己的 callBudget） */
+    maxCalls: z.number().int().min(1).max(60).optional(),
+    /** 最多等几分钟（缺省 20） */
+    timeoutMinutes: z.number().int().min(1).max(60).default(20),
+  }),
+  z.object({
     kind: z.literal('notify'),
     /**
      * 把这条流水线的结果推到已配置的群机器人。
@@ -94,6 +115,7 @@ const KIND_LABEL: Record<StepKind, string> = {
   publish: '建发布计划',
   analyze: '出一份简报',
   notify: '推到群里',
+  handoff: '接力给职能 bot',
 };
 
 const ANALYZE_LABEL: Record<'performance' | 'rivals' | 'readers', string> = {
@@ -109,6 +131,7 @@ export function stepLabel(step: WorkflowStep): string {
   if (step.kind === 'illustration') return `${base}（${step.count} 张）`;
   if (step.kind === 'publish') return `${base}（${step.platforms.join('、')}）`;
   if (step.kind === 'analyze') return `${base}：${ANALYZE_LABEL[step.target]}`;
+  if (step.kind === 'handoff') return `${base}：${step.bot}`;
   return base;
 }
 

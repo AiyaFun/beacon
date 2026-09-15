@@ -75,6 +75,24 @@ function toSummary(skill: SkillRow, install?: { enabled: boolean } | null): Skil
 }
 
 // 技能中心全量视图：内置（全租户可见）+ 本租户自定义，带 installed/enabled 标记
+/**
+ * 内置技能落库（幂等）。**在读的时候顺手做**，与 ensureBuiltinTemplates 同一个理由：
+ * 生产库不会跑 prisma/seed.ts，新加的内置技能（如 2026-09-11 的「提词稿 + 分镜」）
+ * 只在 seed 里的话，存量部署永远拿不到。只补缺，不改动已有行（用户可能改过 enabled）。
+ */
+export async function ensureBuiltinSkills(): Promise<void> {
+  const { BUILTIN_SKILLS } = await import('../../prisma/system-data');
+  const have = new Set((await prisma.contentSkill.findMany({ where: { isBuiltin: true }, select: { slug: true } })).map((s) => s.slug));
+  for (const skl of BUILTIN_SKILLS) {
+    if (have.has(skl.slug)) continue;
+    try {
+      await prisma.contentSkill.create({
+        data: { slug: skl.slug, name: skl.name, description: skl.description, emoji: skl.emoji, platform: skl.platform, category: skl.category, outputKind: skl.outputKind, promptTemplate: skl.promptTemplate, tenantId: null, isBuiltin: true, enabled: true },
+      });
+    } catch { /* 并发下另一次请求先建了：唯一键撞上就当已存在 */ }
+  }
+}
+
 export async function listSkillsForTenant(tenantId: string): Promise<SkillSummary[]> {
   const [skills, installs] = await Promise.all([
     prisma.contentSkill.findMany({
@@ -218,6 +236,8 @@ export async function runSkill(opts: {
   context?: string; // 账号完整上下文（指纹/原句样本/口头禅/素材/记忆），供模板 {{context}} 占位符使用（W-2）
   brief?: string; // 本次运行的临时要求（平台/篇幅/语气/指定素材），供模板 {{brief}} 占位符使用
   cover?: CoverRunOptions; // 仅 image 技能用：封面风格 / 参考图 / 留白版
+  /** 走哪条模型渠道（2026-09-11 按任务选模型）；不传 = 按功能路由 */
+  providerId?: string;
 }): Promise<RunSkillResult> {
   const content = (opts.content ?? '').trim();
   if (!content) return { ok: false, error: '正文是空的，先在草稿里写点内容再用技能' };
@@ -270,7 +290,7 @@ export async function runSkill(opts: {
         },
         { role: 'user', content: prompt },
       ],
-      { temperature: 0.5 },
+      { temperature: 0.5, ...(opts.providerId ? { providerId: opts.providerId } : {}) },
     );
   } catch (e) {
     // 配额超限等「按设计拒绝」的错误：如实告知，不降级不吞

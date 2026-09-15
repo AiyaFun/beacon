@@ -63,14 +63,19 @@ describe('接上了没有', () => {
   it('🔒 sourceHealthBoard 真的把它带出来（写了没接等于没做）', () => {
     const reg = readFileSync(join(ROOT, 'lib/adapters/registry.ts'), 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-    expect(reg).toContain('await rssHubStatus()');
-    expect(reg, '算了但没放进返回值').toMatch(/return \{ hot: hotHealth, competitor: competitorHealth, rsshub \}/);
+    // 2026-09-12 拆成三段（竞对那半是纯计算，热榜与 rsshub 各自是真探测且带 60 秒缓存），
+    // 判据不变：**探测真的发出去了、结果真的进了返回值、失败不炸页**。
+    expect(reg, '探测没发出去').toMatch(/rssHubStatus\(\)/);
+    expect(reg, '算了但没放进返回值').toMatch(/return \{ hot, competitor: competitorSourceBoard\(\), rsshub \}/);
     expect(reg, '探测失败会让整块健康看板炸掉').toContain('.catch(');
   });
 
   it('🔒 设置页真的渲染了（board 那半此前就是「算了不渲染」栽过一次）', () => {
     const page = readFileSync(join(ROOT, 'app/(app)/settings/page.tsx'), 'utf8');
-    expect(page).toContain('board.rsshub');
+    // 这一行现在挂在 <Suspense> 里流式送进来（探测要 3 秒，不让它挡整页），
+    // 判据仍是「真的取了、真的渲染了」，不是「写在哪儿」
+    expect(page, '没取').toMatch(/await rssHubHealth\(\)/);
+    expect(page, '取了没渲染').toContain('rsshub.detail');
     // 三态要分开：未配置（不是故障）／在跑／配了但连不上（要人动手）
     for (const t of ['未配置', '在跑', '连不上']) {
       expect(page, `缺少「${t}」这一态`).toContain(t);

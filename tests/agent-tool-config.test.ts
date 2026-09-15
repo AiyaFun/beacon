@@ -5,6 +5,20 @@ import { readToolConfig, writeToolConfig, disabledTools, toolsFor, toolCatalog }
 import { AGENT_TOOLS } from '@/lib/agent/tools';
 import { at, between } from './helpers/anchor';
 
+const { readFileSync } = fs;
+const { resolve } = path;
+/** 递归列出一个目录下所有 .ts/.tsx（跳过 node_modules / .next） */
+function walk(dir: string): string[] {
+  const out: string[] = [];
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (e.name === 'node_modules' || e.name === '.next') continue;
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) out.push(...walk(full));
+    else if (/\.tsx?$/.test(e.name)) out.push(full);
+  }
+  return out;
+}
+
 const ROOT = path.resolve(__dirname, '..');
 const code = (p: string) =>
   fs.readFileSync(path.join(ROOT, p), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
@@ -72,9 +86,24 @@ describe('两个判据必须一起收口', () => {
     expect(exec).toMatch(/已被工作区关闭/);
   });
 
-  it('两个界面入口都过一遍开关，否则会显示一个调不动的工具', () => {
-    expect(code('app/(app)/assistant/page.tsx')).toMatch(/availableTools\(s\.role, disabledTools\(/);
-    expect(code('app/(app)/assistant/agent-actions.ts')).toMatch(/availableTools\(s\.role, disabledTools\(/);
+  it('每一个把工具清单摆给界面看的地方都过一遍开关，否则会显示一个调不动的工具', () => {
+    // 【从「点两个文件名」改成「扫全仓」】原来这条写死了两个入口
+    //（assistant/page.tsx 与 assistant/agent-actions.ts）。问题有两面：
+    //   · 新增第三个入口时它一声不吭 —— 首页派活框、工作流页后来都列了工具，它没管；
+    //   · 旧入口被删时它反而变红（2026-09-12 删掉从没人调的 actListAgentTools 就是这样），
+    //     红得没有道理，容易被顺手改成「注释掉」。
+    // 判据改成自己去找：谁调 availableTools，谁就必须把 disabledTools 一起传进去。
+    const files = walk(resolve(process.cwd(), 'app')).concat(walk(resolve(process.cwd(), 'components')));
+    const callers: string[] = [];
+    for (const f of files) {
+      const src = readFileSync(f, 'utf8');
+      for (const m of src.matchAll(/availableTools\(([^)]*)\)/g)) {
+        callers.push(f);
+        expect(m[1], `${f} 列工具清单时没过工作区开关`).toMatch(/disabledTools\(/);
+      }
+    }
+    // 一个调用点都扫不到 = 这条用例在空转（假绿第一形）
+    expect(callers.length, '一个 availableTools 调用点都没扫到，这条守卫在空转').toBeGreaterThan(0);
   });
 });
 

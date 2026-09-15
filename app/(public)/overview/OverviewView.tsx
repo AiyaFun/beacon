@@ -235,16 +235,12 @@ export function OverviewView() {
   const t = OVERVIEW_I18N[lang];
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--bg, #0d1420)', color: 'var(--ink, #eaf1f9)', fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif' }}>
+    <div className="overview-page">
       {/* Sticky Top Header */}
       <header
         style={{
-          position: 'sticky',
-          top: 0,
-          zIndex: 100,
-          backdropFilter: 'blur(12px)',
-          background: 'rgba(13, 20, 32, 0.88)',
-          borderBottom: '1px solid var(--line, rgba(255, 255, 255, 0.1))',
+          background: 'transparent',
+          borderBottom: '1px solid var(--border)',
           padding: '12px 24px',
         }}
       >
@@ -273,10 +269,10 @@ export function OverviewView() {
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
-                background: 'rgba(255, 255, 255, 0.08)',
+                background: 'var(--surface-2)',
                 padding: '3px 4px',
                 borderRadius: 20,
-                border: '1px solid rgba(255, 255, 255, 0.15)',
+                border: '1px solid var(--border)',
               }}
             >
               <button
@@ -289,8 +285,8 @@ export function OverviewView() {
                   borderRadius: 16,
                   border: 0,
                   cursor: 'pointer',
-                  background: lang === 'zh' ? '#ff6a42' : 'transparent',
-                  color: lang === 'zh' ? '#fff' : 'rgba(255,255,255,0.7)',
+                  background: lang === 'zh' ? 'var(--brand-ink)' : 'transparent',
+                  color: lang === 'zh' ? '#fff' : 'var(--text-2)',
                   transition: 'all 0.18s ease',
                 }}
               >
@@ -306,8 +302,8 @@ export function OverviewView() {
                   borderRadius: 16,
                   border: 0,
                   cursor: 'pointer',
-                  background: lang === 'en' ? '#ff6a42' : 'transparent',
-                  color: lang === 'en' ? '#fff' : 'rgba(255,255,255,0.7)',
+                  background: lang === 'en' ? 'var(--brand-ink)' : 'transparent',
+                  color: lang === 'en' ? '#fff' : 'var(--text-2)',
                   transition: 'all 0.18s ease',
                 }}
               >
@@ -318,7 +314,7 @@ export function OverviewView() {
             <Link
               href="/login"
               style={{
-                background: '#ff6a42',
+                background: 'var(--brand-ink)',
                 color: '#fff',
                 padding: '6px 14px',
                 borderRadius: 8,
@@ -335,7 +331,7 @@ export function OverviewView() {
 
       {/* Hero Section */}
       <section style={{ maxWidth: 1160, margin: '0 auto', padding: '64px 20px 48px', textAlign: 'center' }}>
-        <div style={{ display: 'inline-block', padding: '4px 14px', borderRadius: 20, background: 'rgba(255, 106, 66, 0.15)', color: '#ff6a42', fontSize: 12, fontWeight: 600, marginBottom: 18, border: '1px solid rgba(255, 106, 66, 0.3)' }}>
+        <div style={{ display: 'inline-block', padding: '4px 14px', borderRadius: 20, background: 'rgba(255, 106, 66, 0.15)', color: 'var(--brand-ink)', fontSize: 12, fontWeight: 600, marginBottom: 18, border: '1px solid rgba(255, 106, 66, 0.3)' }}>
           {t.heroBadge}
         </div>
         <h1 style={{ fontSize: 'clamp(28px, 4.5vw, 48px)', fontWeight: 800, lineHeight: 1.25, margin: '0 0 20px', letterSpacing: '-0.02em' }}>
@@ -349,7 +345,7 @@ export function OverviewView() {
           <Link
             href="/desktop"
             style={{
-              background: '#ff6a42',
+              background: 'var(--brand-ink)',
               color: '#fff',
               padding: '12px 24px',
               borderRadius: 10,
@@ -364,14 +360,14 @@ export function OverviewView() {
           <a
             href="#appliance"
             style={{
-              background: 'rgba(255, 255, 255, 0.08)',
-              color: '#fff',
+              background: 'var(--surface-2)',
+              color: 'var(--text)',
               padding: '12px 22px',
               borderRadius: 10,
               fontSize: 15,
               fontWeight: 600,
               textDecoration: 'none',
-              border: '1px solid rgba(255, 255, 255, 0.15)',
+              border: '1px solid var(--border)',
             }}
           >
             {t.ctaDeployAppliance}
@@ -379,7 +375,7 @@ export function OverviewView() {
           <Link
             href="/hotlists"
             style={{
-              color: '#5aa9ff',
+              color: 'var(--accent)',
               padding: '12px 18px',
               fontSize: 15,
               fontWeight: 600,
@@ -400,12 +396,12 @@ export function OverviewView() {
           <p style={{ opacity: 0.7, fontSize: 14, margin: 0 }}>{t.ecosystemSub}</p>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 20 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))', gap: 20 }}>
           {/* Appliance Card */}
-          <div id="appliance" style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: 16, padding: 24, display: 'flex', flexDirection: 'column' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <div id="appliance" className="card overview-feature" style={{ display: 'flex', flexDirection: 'column' }}>
+            <div className="overview-feature-head">
               <span style={{ fontSize: 18, fontWeight: 700 }}>{t.applianceTitle}</span>
-              <span style={{ fontSize: 11, background: 'rgba(52, 211, 153, 0.15)', color: '#34d399', padding: '2px 8px', borderRadius: 12 }}>{t.applianceBadge}</span>
+              <span style={{ fontSize: 11, background: 'rgba(52, 211, 153, 0.15)', color: 'var(--green)', padding: '2px 8px', borderRadius: 12 }}>{t.applianceBadge}</span>
             </div>
             <p style={{ fontSize: 13, opacity: 0.75, lineHeight: 1.6, marginBottom: 16 }}>{t.applianceDesc}</p>
             <ul style={{ paddingLeft: 18, margin: 0, fontSize: 13, lineHeight: 1.8, opacity: 0.9, flex: 1 }}>
@@ -414,10 +410,10 @@ export function OverviewView() {
           </div>
 
           {/* Windows Card */}
-          <div id="windows" style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: 16, padding: 24, display: 'flex', flexDirection: 'column' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <div id="windows" className="card overview-feature" style={{ display: 'flex', flexDirection: 'column' }}>
+            <div className="overview-feature-head">
               <span style={{ fontSize: 18, fontWeight: 700 }}>{t.winTitle}</span>
-              <span style={{ fontSize: 11, background: 'rgba(90, 169, 255, 0.15)', color: '#5aa9ff', padding: '2px 8px', borderRadius: 12 }}>{t.winBadge}</span>
+              <span style={{ fontSize: 11, background: 'rgba(90, 169, 255, 0.15)', color: 'var(--accent)', padding: '2px 8px', borderRadius: 12 }}>{t.winBadge}</span>
             </div>
             <p style={{ fontSize: 13, opacity: 0.75, lineHeight: 1.6, marginBottom: 16 }}>{t.winDesc}</p>
             <ul style={{ paddingLeft: 18, margin: 0, fontSize: 13, lineHeight: 1.8, opacity: 0.9, flex: 1 }}>
@@ -426,10 +422,10 @@ export function OverviewView() {
           </div>
 
           {/* Mac Card */}
-          <div id="mac" style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: 16, padding: 24, display: 'flex', flexDirection: 'column' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <div id="mac" className="card overview-feature" style={{ display: 'flex', flexDirection: 'column' }}>
+            <div className="overview-feature-head">
               <span style={{ fontSize: 18, fontWeight: 700 }}>{t.macTitle}</span>
-              <span style={{ fontSize: 11, background: 'rgba(167, 139, 250, 0.15)', color: '#a78bfa', padding: '2px 8px', borderRadius: 12 }}>{t.macBadge}</span>
+              <span style={{ fontSize: 11, background: 'rgba(167, 139, 250, 0.15)', color: 'var(--accent)', padding: '2px 8px', borderRadius: 12 }}>{t.macBadge}</span>
             </div>
             <p style={{ fontSize: 13, opacity: 0.75, lineHeight: 1.6, marginBottom: 16 }}>{t.macDesc}</p>
             <ul style={{ paddingLeft: 18, margin: 0, fontSize: 13, lineHeight: 1.8, opacity: 0.9, flex: 1 }}>
@@ -438,10 +434,10 @@ export function OverviewView() {
           </div>
 
           {/* SaaS & Ext Card */}
-          <div id="saas" style={{ background: 'rgba(255, 255, 255, 0.03)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: 16, padding: 24, display: 'flex', flexDirection: 'column' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <div id="saas" className="card overview-feature" style={{ display: 'flex', flexDirection: 'column' }}>
+            <div className="overview-feature-head">
               <span style={{ fontSize: 18, fontWeight: 700 }}>{t.saasTitle}</span>
-              <span style={{ fontSize: 11, background: 'rgba(244, 183, 64, 0.15)', color: '#f4b740', padding: '2px 8px', borderRadius: 12 }}>{t.saasBadge}</span>
+              <span style={{ fontSize: 11, background: 'rgba(244, 183, 64, 0.15)', color: 'var(--amber)', padding: '2px 8px', borderRadius: 12 }}>{t.saasBadge}</span>
             </div>
             <p style={{ fontSize: 13, opacity: 0.75, lineHeight: 1.6, marginBottom: 16 }}>{t.saasDesc}</p>
             <ul style={{ paddingLeft: 18, margin: 0, fontSize: 13, lineHeight: 1.8, opacity: 0.9, flex: 1 }}>
@@ -453,20 +449,20 @@ export function OverviewView() {
 
       {/* Appliance Quick Install Block */}
       <section style={{ maxWidth: 1160, margin: '0 auto', padding: '0 20px 60px' }}>
-        <div style={{ background: 'rgba(255, 255, 255, 0.02)', border: '1px solid rgba(255, 255, 255, 0.08)', borderRadius: 16, padding: 32 }}>
+        <div className="card">
           <h3 style={{ fontSize: 20, fontWeight: 700, margin: '0 0 6px' }}>{t.installGuideTitle}</h3>
           <p style={{ opacity: 0.7, fontSize: 13, margin: '0 0 20px' }}>{t.installGuideSub}</p>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 320px), 1fr))', gap: 16 }}>
             <div>
-              <b style={{ fontSize: 13, color: '#34d399' }}>{t.shTitle}</b>
-              <pre style={{ background: '#0a0f18', padding: '14px 16px', borderRadius: 10, fontSize: 12, overflowX: 'auto', border: '1px solid rgba(255,255,255,0.06)', marginTop: 8 }}>
+              <b style={{ fontSize: 13, color: 'var(--green)' }}>{t.shTitle}</b>
+              <pre style={{ background: 'var(--surface-2)', color: 'var(--text)', padding: '14px 16px', borderRadius: 10, fontSize: 12, overflowX: 'auto', border: '1px solid var(--border)', marginTop: 8 }}>
                 <code>bash deploy/appliance/install.sh</code>
               </pre>
             </div>
             <div>
-              <b style={{ fontSize: 13, color: '#5aa9ff' }}>{t.psTitle}</b>
-              <pre style={{ background: '#0a0f18', padding: '14px 16px', borderRadius: 10, fontSize: 12, overflowX: 'auto', border: '1px solid rgba(255,255,255,0.06)', marginTop: 8 }}>
+              <b style={{ fontSize: 13, color: 'var(--accent)' }}>{t.psTitle}</b>
+              <pre style={{ background: 'var(--surface-2)', color: 'var(--text)', padding: '14px 16px', borderRadius: 10, fontSize: 12, overflowX: 'auto', border: '1px solid var(--border)', marginTop: 8 }}>
                 <code>powershell -ExecutionPolicy Bypass -File deploy\appliance\install.ps1</code>
               </pre>
             </div>
@@ -481,10 +477,10 @@ export function OverviewView() {
           <p style={{ opacity: 0.7, fontSize: 13, margin: 0 }}>{t.matrixSub}</p>
         </div>
 
-        <div style={{ overflowX: 'auto', background: 'rgba(255, 255, 255, 0.02)', borderRadius: 16, border: '1px solid rgba(255, 255, 255, 0.08)' }}>
+        <div style={{ overflowX: 'auto', background: 'var(--surface)', borderRadius: 16, border: '1px solid var(--border)' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, textAlign: 'left' }}>
             <thead>
-              <tr style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.1)', background: 'rgba(255, 255, 255, 0.03)' }}>
+              <tr style={{ borderBottom: '1px solid var(--border)', background: 'var(--surface-2)' }}>
                 <th style={{ padding: '14px 18px', minWidth: 220 }}>{t.thTask}</th>
                 <th style={{ padding: '14px 14px', minWidth: 140 }}>{t.thAppliance}</th>
                 <th style={{ padding: '14px 14px', minWidth: 150 }}>{t.thDesktop}</th>
@@ -494,7 +490,7 @@ export function OverviewView() {
             </thead>
             <tbody>
               {t.matrixRows.map((row, idx) => (
-                <tr key={idx} style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.04)' }}>
+                <tr key={idx} style={{ borderBottom: '1px solid var(--border)' }}>
                   <td style={{ padding: '12px 18px', fontWeight: 600 }}>{row[0]}</td>
                   <td style={{ padding: '12px 14px', opacity: 0.9 }}>{row[1]}</td>
                   <td style={{ padding: '12px 14px', opacity: 0.9 }}>{row[2]}</td>
@@ -510,24 +506,24 @@ export function OverviewView() {
       {/* Security & Compliance */}
       <section style={{ maxWidth: 1160, margin: '0 auto', padding: '0 20px 80px' }}>
         <h3 style={{ fontSize: 20, fontWeight: 700, margin: '0 0 20px', textAlign: 'center' }}>{t.secTitle}</h3>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 16 }}>
-          <div style={{ background: 'rgba(255, 255, 255, 0.02)', padding: 20, borderRadius: 12, border: '1px solid rgba(255, 255, 255, 0.06)' }}>
-            <b style={{ fontSize: 14, color: '#34d399' }}>{t.sec1Title}</b>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))', gap: 16 }}>
+          <div className="card">
+            <b style={{ fontSize: 14, color: 'var(--green)' }}>{t.sec1Title}</b>
             <p style={{ fontSize: 12, opacity: 0.75, margin: '8px 0 0', lineHeight: 1.7 }}>{t.sec1Desc}</p>
           </div>
-          <div style={{ background: 'rgba(255, 255, 255, 0.02)', padding: 20, borderRadius: 12, border: '1px solid rgba(255, 255, 255, 0.06)' }}>
-            <b style={{ fontSize: 14, color: '#5aa9ff' }}>{t.sec2Title}</b>
+          <div className="card">
+            <b style={{ fontSize: 14, color: 'var(--accent)' }}>{t.sec2Title}</b>
             <p style={{ fontSize: 12, opacity: 0.75, margin: '8px 0 0', lineHeight: 1.7 }}>{t.sec2Desc}</p>
           </div>
-          <div style={{ background: 'rgba(255, 255, 255, 0.02)', padding: 20, borderRadius: 12, border: '1px solid rgba(255, 255, 255, 0.06)' }}>
-            <b style={{ fontSize: 14, color: '#ff6a42' }}>{t.sec3Title}</b>
+          <div className="card">
+            <b style={{ fontSize: 14, color: 'var(--brand-ink)' }}>{t.sec3Title}</b>
             <p style={{ fontSize: 12, opacity: 0.75, margin: '8px 0 0', lineHeight: 1.7 }}>{t.sec3Desc}</p>
           </div>
         </div>
       </section>
 
       {/* Footer */}
-      <footer style={{ borderTop: '1px solid rgba(255, 255, 255, 0.08)', padding: '28px 20px', textAlign: 'center', fontSize: 12, opacity: 0.6 }}>
+      <footer style={{ borderTop: '1px solid var(--border)', padding: '28px 20px', textAlign: 'center', fontSize: 12, opacity: 0.6 }}>
         {t.footerCopy}
       </footer>
     </div>

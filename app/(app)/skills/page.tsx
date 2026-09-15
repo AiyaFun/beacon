@@ -1,6 +1,6 @@
 import { getSession } from '@/lib/session';
 import { can } from '@/lib/rbac';
-import { listSkillsForTenant } from '@/lib/skills';
+import { listSkillsForTenant, ensureBuiltinSkills } from '@/lib/skills';
 import { Stat, Card } from '@/components/ui';
 import { SkillCenter } from './SkillCenter';
 import { Market } from './Market';
@@ -20,8 +20,11 @@ import { HubHeader } from '@/components/HubHeader';
 import { ProcedureList, type ProcView } from './ProcedureList';
 import { can as canEdition } from '@/lib/edition';
 import { RecipeList } from './RecipeList';
+import { AiToolList, type AiToolView } from './AiToolList';
 import { getServerLang } from '@/lib/i18n/server';
 import { getDictionary } from '@/lib/i18n/dict';
+import { capabilityRegistry, summarizeRegistry } from '@/lib/capabilities/registry';
+import { CapabilityTable } from './CapabilityTable';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,26 +42,50 @@ export default async function SkillsPage({
   // 服务端 view 参数、只渲染当前 tab —— 与 /data、/topics 同一个模式。
   if (sp.view === 'abilities') return <AbilitiesView />;
 
-  const skills = await listSkillsForTenant(s.tenantId);
-  // 【为什么服务端先探一次】市场目录现在是空的（生产 /market/index.json 的 entries: []），
-  // 而那张卡照样渲染出「技能市场 · 装上就能用」+「看看市场里有什么」按钮——
-  // 点下去转一圈告诉你一条都没有。用户 2026-08-26 原话：「没有技能市场，就去掉」。
-  // 有内容时它会自己回来，不是把功能删了。探测失败（网络不通）也当作没有：
-  // 一个点了必然报错的入口，不如不出现。
-  const catalog = await fetchCatalog().catch(() => null);
+  // ── 本页取数：一次并发 ──
+  //
+  // 【为什么合并】原来是七个连着写的 await：内置技能落库 → 技能清单 → 市场目录(HTTP) →
+  // AI 自写工具 → 采集配方 → 采集记录 → 做法技能。逐条核过，只有「采集记录」真依赖
+  // 「采集配方」的 id，其余六条互不相干。生产库跨区一跳 32ms，白等五跳 ≈ 160ms，
+  // 而 fetchCatalog 还是一次公网 HTTP，串在中间尤其亏。
+  // 落库(ensureBuiltinSkills)必须在读清单之前，所以那两条用 .then 串在**同一格**里。
+  const [skills, catalog, aiToolRows, recipeRows, procedureRows] = await Promise.all([
+    // 内置技能落库（幂等，只补缺）：新加的内置技能才能在存量部署出现（生产不跑 seed）
+    ensureBuiltinSkills().catch(() => {}).then(() => listSkillsForTenant(s.tenantId)),
+    // 【为什么服务端先探一次】市场目录现在是空的（生产 /market/index.json 的 entries: []），
+    // 而那张卡照样渲染出「技能市场 · 装上就能用」+「看看市场里有什么」按钮——
+    // 点下去转一圈告诉你一条都没有。用户 2026-08-26 原话：「没有技能市场，就去掉」。
+    // 有内容时它会自己回来，不是把功能删了。探测失败（网络不通）也当作没有：
+    // 一个点了必然报错的入口，不如不出现。
+    fetchCatalog().catch(() => null),
+    // AI 自写的工具：审核台数据（代码一起带到页面上——看过才能启用）
+    prisma.agentToolDef.findMany({ where: { workspaceId: s.workspaceId }, orderBy: { createdAt: 'desc' } }),
+    // 采集配方。与做法技能放同一页：两者都是「AI 学会的东西」，分两处用户要找两遍
+    prisma.scrapeRecipe.findMany({
+      where: { workspaceId: s.workspaceId },
+      orderBy: { updatedAt: 'desc' },
+      take: 50,
+      select: { id: true, name: true, origin: true, status: true, version: true, failCount: true, fields: true },
+    }),
+    // 做法技能（流程技能）。与 ContentSkill 分表，见 lib/skill/distill.ts 的说明
+    prisma.procedureSkill.findMany({
+      where: { workspaceId: s.workspaceId },
+      orderBy: [{ usedCount: 'desc' }, { createdAt: 'desc' }],
+      take: 50,
+      select: { id: true, name: true, description: true, steps: true, usedCount: true },
+    }),
+  ]);
   const marketHasEntries = !!catalog?.ok && catalog.entries.length > 0;
   const readOnly = !can(s.role, 'content.create');
+  const aiTools: AiToolView[] = aiToolRows.map((t) => ({
+    id: t.id, name: t.name, label: t.label, description: t.description,
+    uses: (() => { try { return JSON.parse(t.uses) as string[]; } catch { return []; } })(),
+    code: t.code, status: t.status, write: t.write, costly: t.costly, contract: t.contract,
+    usedCount: t.usedCount, lastError: t.lastError, createdAt: t.createdAt.toISOString(),
+  }));
 
   const installed = skills.filter((k) => k.installed).length;
   const custom = skills.filter((k) => !k.isBuiltin).length;
-
-  // 采集配方。与做法技能放同一页：两者都是「AI 学会的东西」，分两处用户要找两遍
-  const recipeRows = await prisma.scrapeRecipe.findMany({
-    where: { workspaceId: s.workspaceId },
-    orderBy: { updatedAt: 'desc' },
-    take: 50,
-    select: { id: true, name: true, origin: true, status: true, version: true, failCount: true, fields: true },
-  });
 
   // 每个配方**最近抓到的那一条** + 总条数。
   //
@@ -106,13 +133,8 @@ export default async function SkillsPage({
     };
   });
 
-  // 做法技能（流程技能）。与 ContentSkill 分表，见 lib/skill/distill.ts 的说明
-  const procedures: ProcView[] = (await prisma.procedureSkill.findMany({
-    where: { workspaceId: s.workspaceId },
-    orderBy: [{ usedCount: 'desc' }, { createdAt: 'desc' }],
-    take: 50,
-    select: { id: true, name: true, description: true, steps: true, usedCount: true },
-  })).map((p) => ({
+  // 做法技能（流程技能）。与 ContentSkill 分表，见 lib/skill/distill.ts 的说明（取数已并进上面那一波）
+  const procedures: ProcView[] = procedureRows.map((p) => ({
     id: p.id, name: p.name, description: p.description, usedCount: p.usedCount,
     steps: (() => { try { return JSON.parse(p.steps) as { tool: string; why: string }[]; } catch { return []; } })(),
   }));
@@ -123,14 +145,12 @@ export default async function SkillsPage({
         title={lang === 'en' ? 'Skills & Connectors' : '技能 · 连接器'}
         hint={lang === 'en' ? 'Equip capabilities for Studio and AI Assistant' : `${AGENT_ROLES.skill.oneLine} · 装上后创作工坊一键用，AI 助手也会自己挑着用`}
         tabs={<RoleTabs active="skill" inline />}
+        action={
+          <a href="/skills?view=abilities" className="btn">
+            {lang === 'en' ? 'Manage Connectors' : '管理连接器'}
+          </a>
+        }
       />
-
-      <div className="grid grid-4" style={{ marginBottom: 16 }}>
-        <Stat label={lang === 'en' ? 'Available Skills' : '可用技能'} value={skills.length} foot={lang === 'en' ? 'Built-in + Custom' : '内置 + 本团队自定义'} />
-        <Stat label={lang === 'en' ? 'Installed' : '已安装'} value={installed} foot={lang === 'en' ? 'Usable in Studio' : '创作工坊里可直接用'} />
-        <Stat label={lang === 'en' ? 'Custom Skills' : '自定义技能'} value={custom} foot={lang === 'en' ? 'Created by your team' : '你自己教 AI 的活'} />
-        <Stat label={lang === 'en' ? 'Built-in Skills' : '内置技能'} value={skills.length - custom} foot={lang === 'en' ? 'Maintained by platform' : '平台维护，持续更新'} />
-      </div>
 
       {readOnly && (
         <div className="small muted" style={{ marginBottom: 12 }}>
@@ -140,29 +160,45 @@ export default async function SkillsPage({
         </div>
       )}
 
-      {/* 市场排在最前：新用户唯一问得出口的问题是「有哪些现成的可以装」，
-          而不是「怎么自己写一个」。下面那些是已经装好的与自建入口。
-          ⚠️ 目录为空时整张卡不渲染（见上面 marketHasEntries）——空市场是个死入口 */}
+      {/* 现代两列工作台：适合当前账号的技能 + 最近任务 */}
+      <SkillCenter skills={skills} readOnly={readOnly} />
+
+      {/* 市场排在技能后：有内容时显示 */}
       {marketHasEntries && (
         <Card
           id="market"
           title={lang === 'en' ? 'Skill Market' : '技能市场'}
           sub={lang === 'en' ? 'Off-the-shelf skills and agents, ready to install. Prompt templates and step configurations only, no executable code.' : '现成的技能与智能体，装上就能用。都是提示词模板与步骤配置，不含可执行代码'}
-          style={{ marginBottom: 16 }}
+          style={{ marginTop: 16 }}
         >
           <Market readOnly={readOnly} />
         </Card>
       )}
 
-      <SkillCenter skills={skills} readOnly={readOnly} />
+      {/* 高级扩展能力收纳区（做法技能、采集配方与AI自写工具） */}
+      <details className="surface" style={{ marginTop: 16, borderRadius: 12, border: '1px solid var(--border)', padding: '12px 16px' }}>
+        <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 13, color: 'var(--text-2)', userSelect: 'none' }}>
+          {lang === 'en' ? '🧩 Advanced Capabilities (Procedures, Recipes & Custom Tools)' : '🧩 进阶能力扩展（做法技能、采集配方与自写工具）'}
+        </summary>
+        <div style={{ marginTop: 16 }}>
+          <div className="grid-stats">
+            <Stat label={lang === 'en' ? 'Available Skills' : '可用技能'} value={skills.length} foot={lang === 'en' ? 'Built-in + Custom' : '内置 + 本团队自定义'} />
+            <Stat label={lang === 'en' ? 'Installed' : '已安装'} value={installed} foot={lang === 'en' ? 'Usable in Studio' : '创作工坊里可直接用'} />
+            <Stat label={lang === 'en' ? 'Custom Skills' : '自定义技能'} value={custom} foot={lang === 'en' ? 'Created by your team' : '你自己教 AI 的活'} />
+            <Stat label={lang === 'en' ? 'Built-in Skills' : '内置技能'} value={skills.length - custom} foot={lang === 'en' ? 'Maintained by platform' : '平台维护，持续更新'} />
+          </div>
 
-      <div style={{ marginTop: 16 }}>
-        <ProcedureList items={procedures} readOnly={readOnly} />
-      </div>
+          <ProcedureList items={procedures} readOnly={readOnly} />
 
-      <div style={{ marginTop: 16 }}>
-        <RecipeList items={recipes} readOnly={readOnly} canRun={canEdition('localBrowser')} />
-      </div>
+          <div style={{ marginTop: 16 }}>
+            <RecipeList items={recipes} readOnly={readOnly} canRun={canEdition('localBrowser')} />
+          </div>
+
+          <div style={{ marginTop: 16 }}>
+            <AiToolList items={aiTools} readOnly={readOnly} supported={canEdition('aiAuthoredTools')} />
+          </div>
+        </div>
+      </details>
     </>
   );
 }
@@ -185,6 +221,8 @@ async function AbilitiesView() {
   const rows = toolCatalog(s.role, ws?.agentToolConfig);
   // 开关要 byok.manage 权限：能力关掉会影响整个工作区，不是个人偏好
   const canManageTools = can(s.role, 'byok.manage');
+  // 能力注册表（2026-09-11 P1）：七类能力同一个形状，标出「装了但不可用」
+  const registry = await capabilityRegistry(s.tenantId, s.workspaceId, s.role).catch(() => []);
 
   return (
     <>
@@ -206,6 +244,12 @@ async function AbilitiesView() {
           allowlist={readAllowlistLabels()}
           readOnly={!canManageTools}
         />
+      </Card>
+      <Card
+        title={lang === 'en' ? 'Capability registry' : '能力注册表'}
+        sub={lang === 'en' ? 'Tools, custom tools, skills, procedures, executor, channels and model route in one shape — installed vs. usable, risk, usage, assignable agents' : '动作工具 / 自写工具 / 生成技能 / 做法技能 / 执行器 / 消息渠道 / 模型渠道同一张表：装没装、能不能用、风险、用量、能派给谁'}
+      >
+        <CapabilityTable rows={registry} summary={summarizeRegistry(registry)} />
       </Card>
     </>
   );

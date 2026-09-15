@@ -17,6 +17,10 @@ export const todayDict = {
     startedTitle: '已经开始，在后台跑着。',
     startedHint: '可以离开去做别的，跑完（或需要你确认时）右上角 🔔 会提醒你。',
     startedLink: '看执行过程 →',
+    cancelBtn: '终止',
+    cancelling: '终止中…',
+    cancelTip: '停掉这条任务。已经做完的那几步不会撤销',
+    cancelFailed: '没能终止',
     quick: [
       '看看我最近作品数据怎么样，给点建议',
       '按我的人设生成 6 条选题推荐',
@@ -74,6 +78,10 @@ export const todayDict = {
     startedTitle: 'Started, running in background.',
     startedHint: 'Feel free to leave — the 🔔 at top right will notify you when it finishes or needs your approval.',
     startedLink: 'View progress →',
+    cancelBtn: 'Terminate',
+    cancelling: 'Terminating…',
+    cancelTip: 'Stop this task. Steps already completed are not rolled back',
+    cancelFailed: 'Could not terminate',
     quick: [
       'Review my recent performance and give suggestions',
       'Generate 6 topic recommendations based on my persona',

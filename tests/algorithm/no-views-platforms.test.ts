@@ -134,8 +134,18 @@ describe('🔒 页面不许把算不出来的比率渲染成 0.0%', () => {
     expect(TOP, '互动率算不出来时没兜底').toMatch(/pctOrNull\(p\.rate\) \?\?[\s\S]{0,120}NA_TEXT/);
   });
 
-  it('竞对页平均互动率：只对算得出来的作品求均值', () => {
-    expect(COMP).toMatch(/engagementRate\(/);
-    expect(COMP).toMatch(/!== null|!= null/);
+  it('互动率算不出来时保持 null，不许在算的那一步就落成 0', () => {
+    // 【这条以前断在竞对页的「平均互动率」上】那一格 1.3.62 随指标行一起从界面上撤掉了，
+    // 而算它的代码一直留到 2026-09-12 才删——断在一段没人看的计算上，等于没断。
+    // 现在断在**真的会显示出来**的那条路径：榜单每一行的互动率由 top-posts-view 算，
+    // engagementRate 对「没有播放量」的平台返回 null，这个 null 必须一路留到渲染，
+    // 由 CompetitorTopPosts 的 pctOrNull/NA_TEXT 兜底（上面两条用例守着渲染端）。
+    const VIEW = readFileSync(resolve(process.cwd(), 'app/(app)/competitors/top-posts-view.ts'), 'utf8');
+    expect(VIEW, '榜单没有算互动率').toMatch(/rate: engagementRate\(/);
+    expect(VIEW, 'null 在这一步就被填成 0 了，后面再兜底也救不回来').not.toMatch(/rate: engagementRate\([^)]*\)\s*\?\?\s*0/);
+    // 这个页面自己不许再冒出一个「无条件求均值」的口径。
+    // 先剥注释再断——否则页面顶上那段写着 avgEngage 的说明会让它误红（「只在注释里成立」）。
+    const compCode = COMP.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    expect(compCode, '竞对页又出现了直接求均值的互动率').not.toMatch(/avgEngage/);
   });
 });

@@ -9,9 +9,30 @@ import { TrackView } from '@/components/growth/TrackView';
 import { REFERRAL_DAYS } from '@/lib/growth/referral';
 
 export const dynamic = 'force-dynamic';
+
 export const metadata: Metadata = {
-  title: '价格',
-  description: '烽火台三档价格：标准版 ¥129/月、自带 Key 版 ¥69/月、永久买断 ¥2999。注册送 30 天标准版，不用填付款方式。',
+  title: '价格方案 · 烽火台跨平台内容作战室',
+  description: '烽火台透明价格：标准版 ¥129/月、自带 Key 版 ¥69/月、永久买断版 ¥2999。新用户注册即送 30 天标准版，无需绑定付款方式。',
+  keywords: [
+    '烽火台价格',
+    '自媒体SaaS收费',
+    '融媒体工具报价',
+    'AI选题工具会员',
+    '自带Key版SaaS',
+    '永久买断内容创作软件',
+    '新媒体运营工具试用',
+    'MCN机构软件采购',
+    '跨平台作战室版本对比',
+  ],
+  alternates: {
+    canonical: '/pricing',
+  },
+  openGraph: {
+    title: '价格方案 · 烽火台跨平台内容作战室',
+    description: '烽火台三档价格：标准版 ¥129/月、自带 Key 版 ¥69/月、永久买断 ¥2999。注册送 30 天标准版。',
+    url: '/pricing',
+    type: 'website',
+  },
 };
 
 // 公开定价页（2026-09-05 增长缺口整改）：此前价格只在登录后的 /billing 可见——

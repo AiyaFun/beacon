@@ -128,7 +128,7 @@ export default async function BillingPage() {
         action={<span className="badge badge-gradient-brand">{planLabels[current] ?? current}</span>}
       />
 
-      <div className="grid grid-4" style={{ marginBottom: 20 }}>
+      <div className="grid-stats">
         <Stat
           label={lang === 'en' ? 'Current Plan' : '当前套餐'}
           value={<span className="text-gradient-brand">{planLabels[current] ?? current}</span>}

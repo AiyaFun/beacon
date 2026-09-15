@@ -1,7 +1,6 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { requireRole, RbacError } from '@/lib/rbac';
 import { QuotaExceededError } from '@/lib/quota';
@@ -12,10 +11,8 @@ import {
   cancelAgentRun,
   getAgentRunView,
   appendUserNote,
-  availableTools,
   type AgentTurn,
 } from '@/lib/agent/run';
-import { disabledTools } from '@/lib/agent/tool-config';
 import type { ToolContext } from '@/lib/agent/tools';
 import type { DispatchAuthValue } from '@/components/DispatchAuth';
 
@@ -42,9 +39,13 @@ function designed(e: unknown): string | null {
   return null;
 }
 
-export async function actStartAgent(goal: string, auth?: DispatchAuthValue): Promise<AgentResult> {
+export async function actStartAgent(goal: string, auth?: DispatchAuthValue, modelId?: string): Promise<AgentResult> {
   try {
     const ctx = await ctxOf();
+    // 按任务选模型：界面上挑的那条渠道跟这句话一起送过来；归属按租户校验
+    const { normalizeProviderChoice } = await import('@/lib/llm/selectable');
+    const choice = await normalizeProviderChoice(ctx.tenantId, modelId);
+    if (!choice.ok) return { ok: false, error: choice.error };
     // 【授权只认这一下点击】origin 写死 'manual'：这个 action 是**页面上的派发**，
     // 客户端传不了别的来源。缺省「直接跑完」（DEFAULT_AUTH），用户在派发卡上改成
     // 「每一步先问我」或勾一批预授权时才收紧——三档之外的值一律按缺省。
@@ -53,6 +54,7 @@ export async function actStartAgent(goal: string, auth?: DispatchAuthValue): Pro
       origin: 'manual',
       authMode: mode,
       preauthorizedTools: mode === 'preauthorized' ? (auth?.preauthorizedTools ?? []) : [],
+      providerId: choice.providerId,
     });
     revalidatePath('/assistant');
     return { ok: true, turn };
@@ -112,16 +114,5 @@ export async function actGetAgentRun(runId: string): Promise<AgentResult> {
   } catch (e) {
     return { ok: false, error: (e as Error).message.slice(0, 300) };
   }
-}
-
-export async function actListAgentTools() {
-  const s = await getSession();
-  // 同 /assistant 页：被工作区关掉的插件不列出来。两处都要过一遍——
-  // 少过一处，用户就会在某个界面上看到一个调不动的工具
-  const ws = await prisma.workspace.findUnique({
-    where: { id: s.workspaceId },
-    select: { agentToolConfig: true },
-  });
-  return availableTools(s.role, disabledTools(ws?.agentToolConfig));
 }
 

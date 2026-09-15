@@ -18,6 +18,8 @@
  * 它的检查器**遵守 robots.txt**——页面返回 200 也没用，被 Disallow 挡住就报
  * 「无法访问隐私权政策链接」，提交直接卡住（2026-07-27 真机撞到）。
  */
+import { HOT_INGEST_INTERVAL_MINUTES, HOT_SOURCES, sourceBrandName } from '../constants';
+
 export const PUBLIC_ALLOW: readonly string[] = [
   // `/$`：只放行**首页本身**（`$` 是 Google / Bing / Baidu 都认的行尾锚）。
   // 写成裸 `/` 会和 `Disallow: /` 等长打平，Google 按「平局 allow 胜」处理——等于全站放行。
@@ -68,7 +70,7 @@ export const PUBLIC_PAGES: readonly { path: string; title: string; desc: string 
   {
     path: '/hotlists',
     title: '全网热榜',
-    desc: '九个平台的实时热榜聚合（抖音、B站、小红书、微博、知乎等），每 30 分钟更新一次，免登录可看。',
+    desc: `${HOT_SOURCES.length} 个平台的实时热榜聚合（${HOT_SOURCES.map((h) => sourceBrandName(h.key)).join('、')}），每 ${HOT_INGEST_INTERVAL_MINUTES} 分钟更新一次，免登录可看。`,
   },
   { path: '/login', title: '登录', desc: '登录入口。' },
   {

@@ -4,8 +4,8 @@ import { revalidatePath } from 'next/cache';
 import { prisma } from '@/lib/db';
 import { getSession, withSession } from '@/lib/session';
 import { requireRole } from '@/lib/rbac';
-import { parseJson, toJson } from '@/lib/json';
-import { MATERIAL_TYPES, type MaterialType, type MaterialItem } from './types';
+import { toJson } from '@/lib/json';
+import { MATERIAL_TYPES, type MaterialType } from './types';
 
 // 关于 withSession（RLS 生效路径）的取舍，见 lib/session.ts 顶部注释：
 // 「先查归属再按 id 改」这类**短事务、纯 DB** 的写操作走 withSession，
@@ -79,20 +79,3 @@ export async function actDeleteMaterial(id: string): Promise<{ ok: boolean }> {
   });
 }
 
-export async function actListMaterials(): Promise<MaterialItem[]> {
-  const s = await getSession();
-  if (!s.accountId) return [];
-
-  const items = await prisma.material.findMany({
-    where: { accountId: s.accountId },
-    orderBy: { createdAt: 'desc' },
-  });
-
-  return items.map((m) => ({
-    id: m.id,
-    type: m.type as MaterialType,
-    content: m.content,
-    tags: parseJson<string[]>(m.tags, []),
-    createdAt: m.createdAt.toISOString(),
-  }));
-}

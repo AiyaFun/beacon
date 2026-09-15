@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
-import Image from 'next/image';
 import { activeHref, groupHasActive, type NavGroup } from '@/lib/nav';
 import { Icon } from './icons';
 import { useI18n } from '@/lib/i18n';

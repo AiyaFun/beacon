@@ -102,7 +102,7 @@ export default async function MembersPage() {
         }
       />
 
-      <div className="grid grid-4" style={{ marginBottom: 16 }}>
+      <div className="grid-stats">
         <Stat label={isEn ? 'Total Members' : '成员总数'} value={members.length} foot={isEn ? 'Includes deactivated' : '含已停用'} />
         <Stat label={isEn ? 'Active Members' : '活跃成员'} value={activeCount} foot={isEn ? 'Able to log in' : '可正常登录'} />
         <Stat label={isEn ? 'Pending Invites' : '待处理邀请'} value={invites.length} foot={isEn ? 'Valid for 7 days' : '7 天有效期'} />

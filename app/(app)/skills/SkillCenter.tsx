@@ -42,6 +42,20 @@ function categoryLabel(cat: string, lang: string): string {
   return CATEGORY_LABEL[cat] ?? cat;
 }
 
+function outputSummary(kind: string, lang: string): string {
+  const labels: Record<string, [string, string]> = {
+    markdown: ['长文', 'Article'], html: ['富文本', 'Rich text'], text: ['文案', 'Text'], image: ['图片', 'Image'],
+  };
+  return labels[kind]?.[lang === 'en' ? 1 : 0] ?? kind;
+}
+
+function skillIcon(skill: SkillSummary) {
+  if (skill.outputKind === 'image' || skill.category === 'visual') return Icon.image;
+  if (skill.category === 'generate') return Icon.video;
+  if (skill.category === 'check') return Icon.shield;
+  return Icon.file;
+}
+
 const EMPTY_FORM = {
   name: '',
   description: '',
@@ -106,34 +120,162 @@ export function SkillCenter({ skills, readOnly }: { skills: SkillSummary[]; read
     });
   }
 
+  const [query, setQuery] = useState('');
+  const [scenarioFilter, setScenarioFilter] = useState<string>('all');
+
+  const scenarioCounts = {
+    all: skills.length,
+    generate: skills.filter((s) => s.category === 'generate').length,
+    format: skills.filter((s) => s.category === 'format').length,
+    visual: skills.filter((s) => s.category === 'visual').length,
+    check: skills.filter((s) => s.category === 'check').length,
+  };
+
+  const filteredSkills = skills.filter((s) => {
+    if (scenarioFilter !== 'all' && s.category !== scenarioFilter) return false;
+    if (!query.trim()) return true;
+    const q = query.trim().toLowerCase();
+    return (
+      s.name.toLowerCase().includes(q) ||
+      s.description.toLowerCase().includes(q) ||
+      s.platform.toLowerCase().includes(q) ||
+      (s.category && s.category.toLowerCase().includes(q)) ||
+      getSkillDisplayName(s, lang).toLowerCase().includes(q) ||
+      getSkillDisplayDesc(s, lang).toLowerCase().includes(q) ||
+      skillPlatformName(s.platform, lang).toLowerCase().includes(q) ||
+      categoryLabel(s.category, lang).toLowerCase().includes(q) ||
+      outputSummary(s.outputKind, lang).toLowerCase().includes(q)
+    );
+  });
+
   return (
-    <div className="stack" style={{ gap: 16 }}>
+    <div className="stack skill-center" style={{ gap: 16 }}>
+
       {err && <div className="small" style={{ color: 'var(--red)' }}>{err}</div>}
 
-      <div className="grid grid-3" style={{ gap: 12 }}>
-        {skills.map((skl) => (
-          <div key={skl.id} className="card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
-              <span style={{ fontSize: 26, lineHeight: 1 }}>{skl.emoji}</span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div className="row wrap" style={{ gap: 6, alignItems: 'center' }}>
-                  <b className="small">{getSkillDisplayName(skl, lang)}</b>
-                  {skl.installed && (
-                    <span className="badge badge-green"><Icon.check size={11} /> {lang === 'en' ? 'Installed' : '已安装'}</span>
-                  )}
-                </div>
-                <div className="row wrap" style={{ gap: 6, marginTop: 4 }}>
-                  <span className="badge badge-brand">{skillPlatformName(skl.platform, lang)}</span>
-                  <span className="badge badge-gray">{categoryLabel(skl.category, lang)}</span>
-                  {!skl.isBuiltin && <span className="badge badge-accent">{lang === 'en' ? 'Custom' : '自定义'}</span>}
-                </div>
+      <div className="skill-search">
+        <span className="skill-search-icon" aria-hidden="true"><Icon.search size={17} /></span>
+        <input
+          className="input"
+          type="search"
+          aria-label={lang === 'en' ? 'Search skills, platforms or tasks' : '搜索技能、平台或任务'}
+          placeholder={lang === 'en' ? 'Search skills, platforms or tasks' : '搜索技能、平台或任务'}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        {query && <button type="button" className="skill-search-clear" onClick={() => setQuery('')} aria-label={lang === 'en' ? 'Clear search' : '清空搜索'}><Icon.x size={15} /></button>}
+        <span className="skill-result-count" role="status">{lang === 'en' ? `${filteredSkills.length} skills` : `${filteredSkills.length} 项技能`}</span>
+      </div>
+
+      <div className="support-grid skill-workspace">
+        <section className="surface skill-catalog" aria-labelledby="skill-catalog-title">
+          <div className="skill-catalog-head">
+            <div><h2 id="skill-catalog-title">{lang === 'en' ? 'Available Skills' : '可用技能'}</h2><p>{lang === 'en' ? 'Find the right skill for your next draft.' : '按创作需求选择，装好后在工坊直接使用。'}</p></div>
+            <span className="skill-install-summary"><Icon.check size={13} />{skills.filter((skill) => skill.installed).length} {lang === 'en' ? 'installed' : '已安装'}</span>
+          </div>
+          <div className="skill-category-tabs" role="group" aria-label={lang === 'en' ? 'Skill categories' : '技能分类'}>
+            {(['all', 'generate', 'format', 'visual', 'check'] as const).filter((category) => category === 'all' || scenarioCounts[category] > 0).map((category) => (
+              <button key={category} type="button" className="skill-category-tab" aria-pressed={scenarioFilter === category} onClick={() => setScenarioFilter(category)}>
+                {category === 'all' ? (lang === 'en' ? 'All' : '全部') : categoryLabel(category, lang)}<span>{scenarioCounts[category]}</span>
+              </button>
+            ))}
+          </div>
+          <div className="skill-list">
+            {filteredSkills.length === 0 ? (
+              <div className="small muted" style={{ padding: '24px 0', textAlign: 'center' }}>
+                {lang === 'en' ? 'No matching skills found' : '没有找到匹配的技能'}
               </div>
-            </div>
-            <div className="small muted" style={{ flex: 1 }}>{getSkillDisplayDesc(skl, lang)}</div>
-            {/* 导出结果就地显示。**不做自动下载**：Artifact/沙箱里 <a download> 是无效的，
-          而「点了没反应」比多一步复制更糟。给一个可全选的文本框最稳。 */}
+            ) : (
+              filteredSkills.map((skl) => {
+                const Glyph = skillIcon(skl);
+                const desc = getSkillDisplayDesc(skl, lang);
+                return (
+                  <div key={skl.id} className="skill-item">
+                    <div className="skill-item-icon" aria-hidden="true"><Glyph size={19} /></div>
+                    <div className="skill-item-body">
+                      <strong className="skill-item-title">{getSkillDisplayName(skl, lang)}</strong>
+                      {desc && <div className="skill-item-desc" title={desc}>{desc}</div>}
+                      <div className="skill-item-meta">
+                        <span>{skillPlatformName(skl.platform, lang)}</span>
+                        {skl.outputKind && <span title={skl.outputKind.toUpperCase()}>{outputSummary(skl.outputKind, lang)}</span>}
+                        {!skl.isBuiltin && <span>{lang === 'en' ? 'Custom' : '自定义'}</span>}
+                      </div>
+                    </div>
+                    {!readOnly && (
+                      <div className="skill-item-actions">
+                        {skl.installed ? (
+                          <span className="skill-item-installed">
+                            <Icon.check size={11} /> {skl.slug === 'ai-cover' ? (lang === 'en' ? 'Ready to use' : '可直接用') : (lang === 'en' ? 'Installed' : '已安装')}
+                          </span>
+                        ) : (
+                          <button
+                            className="btn small primary"
+                            disabled={busyId === skl.id && pending}
+                            onClick={() => toggleInstall(skl)}
+                          >
+                            {busyId === skl.id && pending
+                              ? (lang === 'en' ? 'Processing…' : '处理中…')
+                              : (lang === 'en' ? 'Install' : '安装')}
+                          </button>
+                        )}
+                        {skl.installed && (
+                          <button
+                            className="btn small btn-ghost"
+                            style={{ fontSize: 11, padding: '2px 6px', color: 'var(--text-3)' }}
+                            title={lang === 'en' ? 'Uninstall' : '卸载'}
+                            disabled={busyId === skl.id && pending}
+                            onClick={() => toggleInstall(skl)}
+                          >
+                            {busyId === skl.id && pending ? '…' : (lang === 'en' ? 'Uninstall' : '卸载')}
+                          </button>
+                        )}
+                        {!skl.isBuiltin && (
+                          <button
+                            className="btn small btn-ghost"
+                            style={{ marginLeft: 6 }}
+                            disabled={busyId === skl.id && pending}
+                            onClick={() => {
+                              setBusyId(skl.id);
+                              setExported(null);
+                              start(async () => {
+                                const r = await actExportSkill(skl.id);
+                                setBusyId(null);
+                                if (r.ok && r.json) setExported({ name: skl.name, json: r.json });
+                                else setErr(r.error ?? (lang === 'en' ? 'Export failed' : '导出失败'));
+                              });
+                            }}
+                          >
+                            {lang === 'en' ? 'Export' : '导出'}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </section>
+
+        <aside className="skill-guide" aria-label={lang === 'en' ? 'Using skills' : '使用技能'}>
+          <div className="surface skill-guide-card">
+            <span className="skill-guide-icon" aria-hidden="true"><Icon.pen size={20} /></span>
+            <h2>{lang === 'en' ? 'From draft to deliverable' : '把草稿变成成品'}</h2>
+            <p>{lang === 'en' ? 'Skills handle a specific part of your creative work.' : '每个技能处理一件具体的创作工作。'}</p>
+            <ol>
+              <li>{lang === 'en' ? 'Choose and install a skill' : '选择需要的技能并安装'}</li>
+              <li>{lang === 'en' ? 'Open a draft in Studio' : '在创作工坊打开一篇草稿'}</li>
+              <li>{lang === 'en' ? 'Run the skill and review the output' : '运行技能，查看生成结果'}</li>
+            </ol>
+            <a href="/studio" className="btn btn-primary">{lang === 'en' ? 'Open Studio' : '打开创作工坊'}<Icon.arrow size={14} /></a>
+          </div>
+          <a href="/runs" className="skill-history-link"><Icon.clock size={17} /><span><strong>{lang === 'en' ? 'Execution history' : '查看运行记录'}</strong><small>{lang === 'en' ? 'Track progress and results' : '追踪执行进度与结果'}</small></span><Icon.arrow size={14} /></a>
+        </aside>
+      </div>
+
+      {/* 导出结果就地显示 */}
       {exported && (
-        <div className="card" style={{ padding: 12, marginTop: 12 }}>
+        <div className="card surface" style={{ padding: 12, marginTop: 12 }}>
           <div className="row-between" style={{ marginBottom: 6 }}>
             <b className="small">「{exported.name}」{lang === 'en' ? ' Skill Pack' : '的技能包（beaconPack）'}</b>
             <button className="btn btn-sm btn-ghost" onClick={() => setExported(null)}>{lang === 'en' ? 'Close' : '关掉'}</button>
@@ -151,44 +293,6 @@ export function SkillCenter({ skills, readOnly }: { skills: SkillSummary[]; read
           </p>
         </div>
       )}
-
-      {!readOnly && (
-              <div>
-                <button
-                  className={`btn btn-sm${skl.installed ? ' btn-ghost' : ' btn-primary'}`}
-                  disabled={busyId === skl.id && pending}
-                  onClick={() => toggleInstall(skl)}
-                >
-                  {busyId === skl.id && pending
-                    ? (lang === 'en' ? 'Processing…' : '处理中…')
-                    : skl.installed
-                      ? (lang === 'en' ? 'Uninstall' : '卸载')
-                      : (lang === 'en' ? 'Install' : '安装')}
-                </button>
-                {!skl.isBuiltin && (
-                  <button
-                    className="btn btn-sm btn-ghost"
-                    style={{ marginLeft: 6 }}
-                    disabled={busyId === skl.id && pending}
-                    onClick={() => {
-                      setBusyId(skl.id);
-                      setExported(null);
-                      start(async () => {
-                        const r = await actExportSkill(skl.id);
-                        setBusyId(null);
-                        if (r.ok && r.json) setExported({ name: skl.name, json: r.json });
-                        else setErr(r.error ?? (lang === 'en' ? 'Export failed' : '导出失败'));
-                      });
-                    }}
-                  >
-                    {lang === 'en' ? 'Export' : '导出'}
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
 
       {!readOnly && (
         <div className="card" style={{ padding: 16 }}>

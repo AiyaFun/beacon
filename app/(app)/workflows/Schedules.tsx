@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { actCreateSchedule, actToggleSchedule, actDeleteSchedule } from './schedule-actions';
+import { actCreateSchedule, actToggleSchedule, actDeleteSchedule, actSetScheduleModel } from './schedule-actions';
 import { scheduleWhen, DOW, DOW_EN } from '@/lib/workflow/schedule-format';
 import { Overlay } from '@/components/Overlay';
 import { useI18n } from '@/lib/i18n/context';
@@ -23,9 +23,13 @@ export type ScheduleRow = {
   lastRunAt: string | null;
   lastStatus: string | null;
   lastError: string | null;
+  /** 走哪条模型渠道（null = 自动 / 用卡上的） */
+  providerId: string | null;
+  modelLabel: string;
 };
 
 export type AgentOption = { id: string; name: string };
+export type ModelOption = { id: string; label: string };
 
 export function Schedules({
   rows,
@@ -35,9 +39,12 @@ export function Schedules({
   autoPauseFails,
   readOnly,
   scheduleWorks,
+  models = [],
 }: {
   rows: ScheduleRow[];
   agents: AgentOption[];
+  /** 可选的模型渠道；空 = 不显示选择 */
+  models?: ModelOption[];
   maxSchedules: number;
   maxRunsPerDay: number;
   autoPauseFails: number;
@@ -50,7 +57,7 @@ export function Schedules({
   const isEn = lang === 'en';
   const [pending, start] = useTransition();
   const [err, setErr] = useState('');
-  const [form, setForm] = useState({ templateId: agents[0]?.id ?? '', hour: 9, minute: 0, weekdays: [] as number[] });
+  const [form, setForm] = useState({ templateId: agents[0]?.id ?? '', hour: 9, minute: 0, weekdays: [] as number[], providerId: '' });
 
   function run(fn: () => Promise<{ ok: boolean; error?: string }>) {
     setErr('');
@@ -135,6 +142,15 @@ export function Schedules({
                   )}
                   {r.lastStatus === 'failed' && r.enabled && <span className="badge badge-red">{isEn ? 'Failed last run' : '上次失败'}</span>}
                   {r.lastStatus === 'skipped' && <span className="badge badge-amber">{isEn ? 'Capped by daily limit' : '上次被上限拦下'}</span>}
+                  {r.lastStatus === 'skipped_manual' && <span className="badge badge-gray">{isEn ? 'Skipped today (manual)' : '今天已手动跳过'}</span>}
+                  {models.length > 0 && (readOnly
+                    ? <span className="badge badge-gray" title={isEn ? 'Model channel' : '模型渠道'}>{r.modelLabel}</span>
+                    : (
+                      <select className="input" style={{ width: 'auto', padding: '0 6px', height: 22, fontSize: 12 }} value={r.providerId ?? ''} disabled={pending} title={isEn ? 'Model channel for this schedule' : '这条定时走哪条模型渠道'}
+                        onChange={(e) => run(() => actSetScheduleModel(r.id, e.target.value || null))}>
+                        {models.map((m) => <option key={m.id} value={m.id === 'auto' ? '' : m.id}>{m.label}</option>)}
+                      </select>
+                    ))}
                 </span>
                 <span className="small muted">
                   {r.lastRunAt ? (isEn ? `Last run ${r.lastRunAt}` : `上次 ${r.lastRunAt}`) : (isEn ? 'Never run' : '还没跑过')}
@@ -172,6 +188,13 @@ export function Schedules({
               {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
             </select>
           </label>
+          {models.length > 0 && (
+            <label className="small muted">{isEn ? 'Model channel' : '用哪个模型'}
+              <select className="input" value={form.providerId} onChange={(e) => setForm({ ...form, providerId: e.target.value })} style={{ marginTop: 4 }} aria-label={isEn ? 'Model channel' : '模型渠道'}>
+                {models.map((m) => <option key={m.id} value={m.id === 'auto' ? '' : m.id}>{m.label}</option>)}
+              </select>
+            </label>
+          )}
           <div className="row" style={{ gap: 10 }}>
             <label className="small muted" style={{ flex: 1 }}>{isEn ? 'Hour' : '几点'}
               <select className="input" value={form.hour} onChange={(e) => setForm({ ...form, hour: Number(e.target.value) })} style={{ marginTop: 4 }} aria-label={isEn ? 'Hour' : '小时'}>
@@ -210,7 +233,7 @@ export function Schedules({
             <button
               className="btn btn-sm btn-primary"
               disabled={pending || full || !form.templateId}
-              onClick={() => run(async () => { const r = await actCreateSchedule({ templateId: form.templateId, atHour: form.hour, atMinute: form.minute, weekdays: form.weekdays }); if (r?.ok !== false) setDialogOpen(false); return r; })}
+              onClick={() => run(async () => { const r = await actCreateSchedule({ templateId: form.templateId, atHour: form.hour, atMinute: form.minute, weekdays: form.weekdays, providerId: form.providerId || null }); if (r?.ok !== false) setDialogOpen(false); return r; })}
             >
               {isEn ? 'Save' : '保存'}
             </button>

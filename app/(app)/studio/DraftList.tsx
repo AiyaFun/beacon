@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { Empty } from '@/components/ui';
 import { useI18n } from '@/lib/i18n';
+import { VersionCompare, type CompareVersion } from './VersionCompare';
 
 // 左栏草稿列表：搜索 + 状态筛选 + 定高自滚。
 
@@ -16,38 +17,46 @@ export type DraftRow = {
   platformName: string;
   platformColor: string;
   versionCount: number;
-  /** 服务端算好的「3小时前」。relTime 读 Date.now()，在客户端自己算必然 hydration 不一致 */
   lastLabel: string;
+  latestVersion?: {
+    seq: number;
+    authorType: string;
+    timeLabel: string;
+  };
 };
 
 const STATUS_LABELS_EN: Record<string, string> = {
   draft: 'Draft',
+  editing: 'Editing',
+  checking: 'Checking',
+  ready: 'Ready',
   published: 'Published',
   shelved: 'Shelved',
-  generating: 'Generating',
-  reviewing: 'Reviewing',
-  approved: 'Approved',
-  rejected: 'Rejected',
-  archived: 'Archived',
+  abandoned: 'Abandoned',
 };
 
-// 超过这个条数才启用内部滚动：少量草稿时定高会在卡片底部留一片空白，很难看
-const SCROLL_FROM = 6;
+function platformTagClass(name: string): string {
+  if (name.includes('公众号') || name.toLowerCase().includes('wechat')) return 'green';
+  if (name.includes('红书') || name.toLowerCase().includes('xhs')) return 'brand';
+  return '';
+}
 
 export function DraftList({
   drafts,
   selectedId,
   emptyText,
+  versions,
 }: {
   drafts: DraftRow[];
   selectedId?: string;
   emptyText: string;
+  versions?: CompareVersion[];
 }) {
   const { lang } = useI18n();
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('all');
+  const [showFilter, setShowFilter] = useState(false);
 
-  // 状态筛选只列**这个账号真的有的**状态：摆一个 0 篇的「已搁置」按钮，点下去只会得到一片空白
   const statuses = useMemo(() => {
     const seen = new Map<string, { text: string; n: number }>();
     for (const d of drafts) {
@@ -66,92 +75,110 @@ export function DraftList({
     );
   }, [drafts, q, status]);
 
-  if (drafts.length === 0) return <Empty icon="📝" text={emptyText} />;
-
-  const scrolls = drafts.length > SCROLL_FROM;
-
   return (
-    <div className="stack" style={{ gap: 10 }}>
-      {drafts.length > 3 && (
-        <>
+    <>
+      <div className="surface-head">
+        <strong>{lang === 'en' ? 'Drafts' : '草稿'}</strong>
+        <span className="meta">{drafts.length} {lang === 'en' ? 'drafts' : '篇'}</span>
+      </div>
+
+      <div className="surface-body" style={{ paddingBottom: 7 }}>
+        <div className="draft-search">
           <input
             className="input"
-            style={{ fontSize: 12.5, padding: '7px 12px' }}
-            placeholder={
-              lang === 'en' ? `Search ${drafts.length} drafts by title…` : `搜索这 ${drafts.length} 篇草稿的标题…`
-            }
+            placeholder={lang === 'en' ? 'Search drafts' : '搜索草稿'}
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
-          {statuses.length > 1 && (
-            <div className="row wrap" style={{ gap: 6 }}>
-              <button
-                className={`btn btn-sm ${status === 'all' ? 'btn-accent' : 'btn-ghost'}`}
-                onClick={() => setStatus('all')}
-              >
-                {lang === 'en' ? 'All' : '全部'} {drafts.length}
-              </button>
-              {statuses.map((s) => (
-                <button
-                  key={s.key}
-                  className={`btn btn-sm ${status === s.key ? 'btn-accent' : 'btn-ghost'}`}
-                  onClick={() => setStatus(s.key)}
-                >
-                  {s.text} {s.n}
-                </button>
-              ))}
-            </div>
-          )}
-        </>
-      )}
-
-      {shown.length === 0 ? (
-        <div className="small muted" style={{ padding: '12px 2px' }}>
-          {lang === 'en'
-            ? 'No matching drafts. Try another keyword or click "All".'
-            : '没有匹配的草稿。换个关键词，或点上面「全部」。'}
+          <button
+            type="button"
+            className={`btn small ${showFilter ? 'primary' : ''}`}
+            onClick={() => setShowFilter((v) => !v)}
+            title={lang === 'en' ? 'Filter by status' : '按状态筛选'}
+          >
+            {lang === 'en' ? 'Filter' : '筛选'}
+          </button>
         </div>
-      ) : (
-        <div
-          className={scrolls ? 'stack rail-scroll' : 'stack'}
-          style={scrolls ? { gap: 8, maxHeight: 'min(46vh, 460px)' } : { gap: 8 }}
-        >
-          {shown.map((d) => {
+
+        {showFilter && statuses.length > 1 && (
+          <div className="row wrap" style={{ gap: 4, marginTop: 8 }}>
+            <button
+              type="button"
+              className={`tag ${status === 'all' ? 'brand' : ''}`}
+              style={{ cursor: 'pointer', border: 'none' }}
+              onClick={() => setStatus('all')}
+            >
+              {lang === 'en' ? 'All' : '全部'} {drafts.length}
+            </button>
+            {statuses.map((s) => (
+              <button
+                key={s.key}
+                type="button"
+                className={`tag ${status === s.key ? 'brand' : ''}`}
+                style={{ cursor: 'pointer', border: 'none' }}
+                onClick={() => setStatus(s.key)}
+              >
+                {s.text} {s.n}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="draft-list">
+        {drafts.length === 0 ? (
+          <div style={{ padding: '24px 12px' }}>
+            <Empty icon="📝" text={emptyText} />
+          </div>
+        ) : shown.length === 0 ? (
+          <div className="small muted" style={{ padding: '16px 12px', textAlign: 'center' }}>
+            {lang === 'en' ? 'No matching drafts.' : '没有匹配的草稿'}
+          </div>
+        ) : (
+          shown.map((d) => {
             const active = d.id === selectedId;
             const statusLabel = lang === 'en' ? (STATUS_LABELS_EN[d.status] ?? d.statusText) : d.statusText;
+            const tagCls = platformTagClass(d.platformName);
+
             return (
-              <Link
-                key={d.id}
-                href={`/studio?draft=${d.id}`}
-                className="card"
-                style={{
-                  padding: 12,
-                  boxShadow: 'none',
-                  display: 'block',
-                  background: active ? 'var(--surface-2)' : 'transparent',
-                  borderColor: active ? 'var(--brand)' : undefined,
-                }}
-              >
-                <div className="row-between" style={{ gap: 8 }}>
-                  <b className="small" style={{ fontSize: 13, lineHeight: 1.4 }}>{d.title}</b>
-                  <span className="badge" style={{ background: 'var(--surface-2)', color: d.platformColor }}>
-                    {d.platformName}
-                  </span>
-                </div>
-                <div className="row wrap" style={{ gap: 6, marginTop: 6 }}>
-                  <span className={`badge ${d.statusCls}`}>{statusLabel}</span>
-                  <span className="badge badge-gray">
-                    {lang === 'en' ? `v${d.versionCount}` : `${d.versionCount} 版`}
-                  </span>
-                  <span className="small muted">
-                    {lang === 'en' ? `Updated ${d.lastLabel}` : `最新 ${d.lastLabel}`}
-                  </span>
-                </div>
-              </Link>
+              <div key={d.id}>
+                <Link
+                  href={`/studio?draft=${d.id}`}
+                  className={`draft-row ${active ? 'active' : ''}`}
+                >
+                  <strong>{d.title}</strong>
+                  <div className="draft-row-meta">
+                    <span className={`tag ${tagCls}`}>{d.platformName}</span>
+                    <span className="meta">{statusLabel}</span>
+                    <span className="meta">{d.lastLabel}</span>
+                  </div>
+                </Link>
+
+                {active && (
+                  <div className="version-inline">
+                    <div className="row-between" style={{ gap: 6, alignItems: 'flex-start' }}>
+                      <div>
+                        {`v${d.latestVersion?.seq ?? d.versionCount} ${d.latestVersion?.authorType ?? (lang === 'en' ? 'AI Draft' : 'AI 初稿')}`}
+                        <br />
+                        <span className="muted">
+                          {lang === 'en'
+                            ? `Current version, ${d.latestVersion?.timeLabel ?? d.lastLabel}`
+                            : `当前版本，${d.latestVersion?.timeLabel ?? d.lastLabel}`}
+                        </span>
+                      </div>
+                      {versions && versions.length >= 2 && (
+                        <div style={{ flexShrink: 0 }}>
+                          <VersionCompare versions={versions} draftId={d.id} />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
             );
-          })}
-        </div>
-      )}
-    </div>
+          })
+        )}
+      </div>
+    </>
   );
 }

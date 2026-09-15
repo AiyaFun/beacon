@@ -114,12 +114,16 @@ beforeEach(async () => {
 //
 // 放在这里而不是每个文件各写一遍 afterEach：新写的测试文件不会「忘了收」。
 afterEach(async () => {
-  const [{ settleAgentKicks }, { settleWorkflowKicks }] = await Promise.all([
+  const [{ settleAgentKicks }, { settleWorkflowKicks }, { settleFunnelWrites }] = await Promise.all([
     import('../../lib/agent/kick'),
     import('../../lib/workflow/kick'),
+    import('../../lib/growth/funnel'),
   ]);
   await settleWorkflowKicks().catch(() => {});
   await settleAgentKicks().catch(() => {});
+  // 漏斗事件（recordFunnelEventAsync）也是旁路写：全量跑时它落在 afterAll 删库之后，
+  // 表现成 prisma:error「attempt to write a readonly database」（2026-09-10 抓到两处）
+  await settleFunnelWrites().catch(() => {});
 });
 
 afterAll(() => {

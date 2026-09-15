@@ -35,7 +35,7 @@ export default async function OpsGrowthPage({ searchParams }: { searchParams: Pr
         }
       />
 
-      <div className="grid grid-4" style={{ marginBottom: 16 }}>
+      <div className="grid-stats">
         <Stat label={isEn ? 'Landing Visitors' : '看到首页的人'} value={fmtNum(landing)} foot={isEn ? 'Unique visitors (anon cookie)' : '独立访客（匿名串）'} />
         <Stat
           label={isEn ? 'Registered' : '注册成功'}

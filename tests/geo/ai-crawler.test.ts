@@ -9,6 +9,7 @@ import { normalizePath, CRAWLER_HIT_RETENTION_DAYS } from '@/lib/geo/crawler-log
 import { PUBLIC_ALLOW, PUBLIC_PAGES, allowedByRobots } from '@/lib/geo/public-surface';
 import { buildLlmsTxt } from '@/lib/geo/llms-txt';
 import { extractCitations, answerSiteOf, AI_ANSWER_SITES } from '@/lib/geo/citation';
+import { generateKnowledgeGraphJsonLd } from '@/lib/geo/json-ld';
 
 // AI 爬虫识别（2026-08-29）。
 //
@@ -577,5 +578,56 @@ describe('llms.txt 运行时也守住不变量', () => {
     for (const p of paths) {
       expect(allowedByRobots(p), `${p} 出现在 llms.txt 里，却没被 robots 放行`).toBe(true);
     }
+  });
+});
+
+describe('JSON-LD 结构化数据知识图谱与元数据质量守卫', () => {
+  const jsonLd = generateKnowledgeGraphJsonLd('https://beacon.iyunci.cn');
+
+  it('Schema.org 上下文与图谱根节点合法', () => {
+    expect(jsonLd['@context']).toBe('https://schema.org');
+    expect(Array.isArray(jsonLd['@graph'])).toBe(true);
+    expect(jsonLd['@graph'].length).toBeGreaterThanOrEqual(6);
+  });
+
+  it('涵盖 6 大核心实体节点类型', () => {
+    const types = jsonLd['@graph'].map((n: { '@type': string }) => n['@type']);
+    expect(types).toContain('WebSite');
+    expect(types).toContain('Organization');
+    expect(types).toContain('Product');
+    expect(types).toContain('SoftwareApplication');
+    expect(types).toContain('Service');
+    expect(types).toContain('FAQPage');
+  });
+
+  it('🔒 彻底清除历史意外注入的非业务词', () => {
+    const serialized = JSON.stringify(jsonLd);
+    expect(serialized).not.toContain('帮我直接分析这个里面的功能');
+    const layoutSrc = read('app/layout.tsx');
+    expect(layoutSrc).not.toContain('帮我直接分析这个里面的功能');
+  });
+
+  it('FAQPage 包含完整且高价值的问答结构，赋能 AI 搜索直接引用', () => {
+    const faq = jsonLd['@graph'].find((n: { '@type': string }) => n['@type'] === 'FAQPage') as {
+      mainEntity: Array<{ name: string; acceptedAnswer: { text: string } }>;
+    };
+    expect(faq).toBeTruthy();
+    expect(faq.mainEntity.length).toBeGreaterThanOrEqual(5);
+    for (const item of faq.mainEntity) {
+      expect(item.name.length).toBeGreaterThan(5);
+      expect(item.acceptedAnswer.text.length).toBeGreaterThan(20);
+    }
+  });
+
+  it('SoftwareApplication 声明了完备的平台支持与功能清单', () => {
+    const app = jsonLd['@graph'].find((n: { '@type': string }) => n['@type'] === 'SoftwareApplication') as {
+      operatingSystem: string;
+      featureList: string[];
+    };
+    expect(app).toBeTruthy();
+    expect(app.operatingSystem).toContain('Web');
+    expect(app.operatingSystem).toContain('Windows');
+    expect(app.operatingSystem).toContain('macOS');
+    expect(app.featureList.length).toBeGreaterThanOrEqual(6);
   });
 });

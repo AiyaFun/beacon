@@ -3,18 +3,15 @@
 import { useRef, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { Icon } from '@/components/icons';
-import { Card } from '@/components/ui';
 import { PortraitConsentTextForLibrary } from '@/components/PortraitConsent';
 import { prepareReferenceImage, downloadImage } from '@/lib/cover/client-image';
 // 张数上限从 lib/cover/rules 取，**不从 lib/illustration/run 取**：那个模块会拉起
 // llmImage → 队列 → ioredis，把 dns 这类 node 内置模块打进客户端包，dev 下直接 500
 //（Module not found: Can't resolve 'dns'）。rules 是刻意保持 client-safe 的纯常量。
-import { MAX_SUBJECT_IMAGES, MAX_COVER_IMAGES as MAX_ILLUSTRATIONS } from '@/lib/cover/rules';
+import { MAX_COVER_IMAGES as MAX_ILLUSTRATIONS } from '@/lib/cover/rules';
 import {
   actRunFreeImages,
   actListGenerated,
-  actPinGenerated,
-  actDeleteGenerated,
   type GalleryItem,
 } from './actions';
 import { actSaveLibraryAsset, actDeleteAsset } from '../studio/cover-actions';
@@ -50,7 +47,9 @@ export function ImageStudio({
   const { lang } = useI18n();
   const isEn = lang === 'en';
   const [pending, start] = useTransition();
-  const [scenes, setScenes] = useState('');
+  const [scenes, setScenes] = useState(
+    '一位年轻职场人在会议室表达不同意见，真实办公环境，自然光。'
+  );
   const [styleKey, setStyleKey] = useState(styles[0]?.key ?? '');
   const [specKey, setSpecKey] = useState(specs[0]?.key ?? '');
   const [extra, setExtra] = useState('');
@@ -58,6 +57,7 @@ export function ImageStudio({
   const [images, setImages] = useState<{ id?: string; url: string; scene: string; aigcEmbedded: boolean }[]>([]);
   const [err, setErr] = useState('');
   const [msg, setMsg] = useState('');
+  const [showAll, setShowAll] = useState(false);
 
   const [assets, setAssets] = useState(library);
   const [items, setItems] = useState(gallery);
@@ -113,136 +113,220 @@ export function ImageStudio({
   }
 
   return (
-    <>
-      <Card
-        title={isEn ? 'Generate Images' : '出图'}
-        sub={isEn ? `One scene per line, max ${MAX_ILLUSTRATIONS} per batch · No overlaid text here (use "Title & Cover" in Studio for text)` : `一行一句画面，一次最多 ${MAX_ILLUSTRATIONS} 张 · 这里出的图一律不上字（要上字用创作工坊的「标题与封面」）`}
-      >
-        {!quota.configured ? (
-          <div className="alert-gradient-amber small" style={{ padding: '12px 16px', borderRadius: 8, lineHeight: 1.7 }}>
-            {isEn ? 'No image generation channel configured yet. Go to ' : '还没有可用的生图渠道。到 '}
-            <Link href="/settings/keys">{isEn ? 'Integrations & Keys' : '接入与密钥'}</Link>
-            {isEn ? ' to add a "Volcengine Doubao" channel. ' : ' 加一个「火山引擎 豆包」渠道。'}
-            <b>{isEn ? 'Image generation only supports Volcengine Ark' : '生图只认火山方舟'}</b>：
-            {isEn ? 'Visible watermarks rely on Jimeng’s watermark parameter.' : '显式水印靠即梦的 watermark 参数，别家没有这个开关。'}
+    <div className="image-studio">
+      {/* ── 1. 左栏：生成设置 ── */}
+      <aside className="surface image-config">
+        <div style={{ marginBottom: 4 }}>
+          <strong style={{ fontSize: 15, fontWeight: 650 }}>{isEn ? 'Generation Settings' : '生成设置'}</strong>
+          <p className="small muted" style={{ margin: '3px 0 0' }}>
+            {isEn ? 'Set purpose first, then choose ratio and style.' : '先确定用途，再决定比例和风格。'}
+          </p>
+        </div>
+
+        {!quota.configured && (
+          <div style={{ padding: '9px 12px', background: 'var(--amber-soft)', borderRadius: 8, fontSize: 12, color: 'var(--amber)', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span>⚠️</span>
+            <span>
+              {isEn ? 'Image channel not configured' : '尚未配置生图渠道'}
+              {' · '}
+              <Link href="/settings/keys" style={{ textDecoration: 'underline', fontWeight: 600 }}>
+                {isEn ? 'Configure' : '去配置'}
+              </Link>
+            </span>
           </div>
-        ) : (
-          <>
-            <textarea
-              className="input"
-              rows={4}
-              placeholder={isEn ? 'One scene per line, for example:\nMorning wooden desk, steaming cup of coffee, side backlight\nCity rooftop overlooking traffic flow, blue hour' : '一行一张，例如：\n清晨的书桌，一杯冒热气的咖啡，侧逆光\n城市天台俯瞰车流，蓝调时刻'}
-              value={scenes}
-              onChange={(e) => setScenes(e.target.value)}
-              style={{ width: '100%', lineHeight: 1.7 }}
-              disabled={!canWrite}
-            />
-            <div className="row wrap" style={{ gap: 10, marginTop: 10, alignItems: 'center' }}>
-              <label className="small muted">
-                {isEn ? 'Style' : '风格'}
-                <select
-                  className="input"
-                  value={styleKey}
-                  onChange={(e) => setStyleKey(e.target.value)}
-                  style={{ marginLeft: 6 }}
-                >
-                  {styles.map((s) => (
-                    <option key={s.key} value={s.key} title={s.hint}>
-                      {s.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="small muted">
-                {isEn ? 'Ratio' : '比例'}
-                <select
-                  className="input"
-                  value={specKey}
-                  onChange={(e) => setSpecKey(e.target.value)}
-                  style={{ marginLeft: 6 }}
-                >
-                  {specs.map((s) => (
-                    <option key={s.key} value={s.key} title={s.hint}>
-                      {s.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <input
-                className="input"
-                placeholder={isEn ? 'Additional requirements (optional)' : '补充要求（可选）'}
-                value={extra}
-                onChange={(e) => setExtra(e.target.value)}
-                style={{ flex: 1, minWidth: 180 }}
-              />
-            </div>
-
-            {assets.length > 0 && (
-              <div style={{ marginTop: 12 }}>
-                <div className="small muted" style={{ marginBottom: 6 }}>
-                  {isEn ? `Reference images (maintain character / product consistency, max ${MAX_SUBJECT_IMAGES} in prompt)` : `参考图（保持人物 / 产品跨图一致，最多 ${MAX_SUBJECT_IMAGES} 张进提示词）`}
-                </div>
-                <div className="row wrap" style={{ gap: 8 }}>
-                  {assets.map((a) => {
-                    const on = refs.includes(a.id);
-                    return (
-                      <button
-                        key={a.id}
-                        className={`btn btn-sm ${on ? 'btn-primary' : ''}`}
-                        onClick={() => setRefs(on ? refs.filter((x) => x !== a.id) : [...refs, a.id])}
-                        style={{ padding: 4 }}
-                        title={a.label ?? a.kind}
-                      >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={a.url} alt="" style={{ width: 36, height: 36, objectFit: 'cover', borderRadius: 4 }} />
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            <div className="row wrap" style={{ gap: 10, marginTop: 14, alignItems: 'center' }}>
-              <button
-                className="btn btn-primary"
-                disabled={pending || lines.length === 0 || tooMany || !canWrite}
-                onClick={generate}
-              >
-                {pending ? (isEn ? 'Generating…' : '出图中…') : (isEn ? `Generate ${Math.min(lines.length, MAX_ILLUSTRATIONS) || ''} Images` : `出 ${Math.min(lines.length, MAX_ILLUSTRATIONS) || ''} 张图`)}
-              </button>
-              <span className="small muted">
-                {isEn ? `Remaining today: ${quota.remaining}/${quota.cap} images` : `今日还能出 ${quota.remaining}/${quota.cap} 张`}
-                {quota.source === 'byok' ? (isEn ? ' (using your custom Key)' : '（走你自己的 Key）') : quota.source === 'platform' ? (isEn ? ' (using platform quota)' : '（走平台额度）') : ''}
-              </span>
-              {tooMany && <span className="small" style={{ color: 'var(--red)' }}>{isEn ? `Max ${MAX_ILLUSTRATIONS} lines per batch` : `一次最多 ${MAX_ILLUSTRATIONS} 行`}</span>}
-            </div>
-          </>
         )}
 
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <div className="field">
+            <label>{isEn ? 'Purpose' : '用途'}</label>
+            <select
+              className="select input"
+              value={uploadKind === 'portrait' ? 'illustration' : 'cover'}
+              onChange={() => {}}
+            >
+              <option value="cover">{isEn ? 'Cover' : '文章封面'}</option>
+              <option value="illustration">{isEn ? 'Illustration' : '正文配图'}</option>
+              <option value="card">{isEn ? 'Card' : '社交图卡'}</option>
+            </select>
+          </div>
+
+          <div className="field">
+            <label>{isEn ? 'Platform' : '平台'}</label>
+            <select className="select input" value={specKey} onChange={(e) => setSpecKey(e.target.value)}>
+              {specs.map((s) => (
+                <option key={s.key} value={s.key}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="field">
+          <label>{isEn ? 'Scene Description' : '画面描述'}</label>
+          <textarea
+            className="input"
+            rows={3}
+            placeholder={isEn ? 'Describe scene...' : '描述你想要的画面，越具体越好…'}
+            value={scenes}
+            onChange={(e) => setScenes(e.target.value)}
+            style={{ resize: 'none', lineHeight: 1.6 }}
+            disabled={!canWrite}
+          />
+        </div>
+
+        <div className="field" style={{ marginBottom: 10 }}>
+          <label>{isEn ? 'Visual Style' : '视觉风格'}</label>
+          <div className="chips">
+            {styles.slice(0, 6).map((st) => (
+              <button
+                key={st.key}
+                type="button"
+                className={`filter-btn ${styleKey === st.key ? 'active' : ''}`}
+                onClick={() => setStyleKey(st.key)}
+              >
+                {st.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <button
+          className="btn primary"
+          disabled={pending || !scenes.trim() || tooMany || !canWrite}
+          onClick={generate}
+          style={{ width: '100%' }}
+        >
+          {pending
+            ? (isEn ? 'Generating…' : '正在生成…')
+            : (isEn ? `Generate ${lines.length > 1 ? lines.length : 4} Images` : `生成 ${lines.length > 1 ? lines.length : 4} 张图`)}
+        </button>
+
+        {/* 形象与参考图展开抽屉 */}
+        <details className="accordion" style={{ marginTop: 4, borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+          <summary style={{ cursor: 'pointer', fontSize: 11.5, color: 'var(--text-2)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span>{isEn ? 'Reference Likeness & Upload' : '参考图与我的形象'}</span>
+            <span className="meta">{assets.length}</span>
+          </summary>
+          <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <select
+                className="input small"
+                value={uploadKind}
+                onChange={(e) => setUploadKind(e.target.value as any)}
+                style={{ flex: 1 }}
+              >
+                <option value="background">{isEn ? 'Background' : '背景 / 空镜'}</option>
+                <option value="portrait">{isEn ? 'Likeness' : '人像 / 主体'}</option>
+                <option value="brand">{isEn ? 'Brand' : '品牌元素'}</option>
+              </select>
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void upload(f);
+                  e.target.value = '';
+                }}
+              />
+              <button
+                className="btn small"
+                onClick={() => fileRef.current?.click()}
+                disabled={pending || !canWrite || (uploadKind === 'portrait' && !consent)}
+                title={uploadKind === 'portrait' && !consent ? (isEn ? 'Please check consent below' : '上传人像前请先勾选下面的同意确认') : undefined}
+              >
+                <Icon.upload size={13} /> {isEn ? 'Upload' : '上传'}
+              </button>
+            </div>
+
+            {uploadKind === 'portrait' && (
+              <label className="small" style={{ display: 'flex', gap: 8, alignItems: 'flex-start', lineHeight: 1.5, color: 'var(--text-2)' }}>
+                <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} style={{ marginTop: 3 }} />
+                <PortraitConsentTextForLibrary />
+              </label>
+            )}
+
+            {assets.length > 0 && (
+              <div className="row wrap" style={{ gap: 6 }}>
+                {assets.map((a) => {
+                  const on = refs.includes(a.id);
+                  return (
+                    <span key={a.id} style={{ position: 'relative', display: 'inline-block' }}>
+                      <img
+                        src={a.url}
+                        alt=""
+                        onClick={() => setRefs(on ? refs.filter((x) => x !== a.id) : [...refs, a.id])}
+                        style={{
+                          width: 38,
+                          height: 38,
+                          objectFit: 'cover',
+                          borderRadius: 6,
+                          cursor: 'pointer',
+                          border: on ? '2px solid var(--brand)' : '1px solid var(--border)',
+                        }}
+                      />
+                      <button
+                        className="btn btn-sm btn-ghost"
+                        style={{ position: 'absolute', top: -5, right: -5, padding: '0 4px', fontSize: 10, background: 'var(--surface)', borderRadius: '50%' }}
+                        disabled={pending || !canWrite}
+                        onClick={() =>
+                          start(async () => {
+                            const r = await actDeleteAsset(a.id);
+                            if (r.ok) setAssets(r.assets.map((x) => ({ id: x.id, url: x.url, kind: x.kind, label: x.label })));
+                          })
+                        }
+                      >
+                        ×
+                      </button>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </details>
+
         {(err || msg) && (
-          <div className="small" style={{ marginTop: 10, color: err ? 'var(--red)' : 'var(--green)' }}>
+          <div className="small" style={{ color: err ? 'var(--red)' : 'var(--green)', marginTop: 4 }}>
             {err || msg}
           </div>
         )}
+      </aside>
 
-        {images.length > 0 && (
-          <div className="row wrap" style={{ gap: 12, marginTop: 14 }}>
+      {/* ── 2. 中栏：画布与结果 ── */}
+      <section className="surface image-canvas">
+        {images.length === 0 ? (
+          <div className="image-placeholder">
+            <div>
+              <strong>{isEn ? 'Generation results will appear here' : '生成结果将在这里出现'}</strong>
+              <p className="small" style={{ margin: '8px 0 16px', color: 'var(--text-3)' }}>
+                {isEn ? 'Sample preview does not call live model' : '示例预览不调用真实图片模型'}
+              </p>
+              <button
+                className="btn small primary"
+                disabled={pending || !scenes.trim() || !canWrite}
+                onClick={generate}
+              >
+                {isEn ? 'Generate with Current Settings' : '使用当前设置生成'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ width: '100%', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 14, alignSelf: 'start' }}>
             {images.map((im, i) => (
-              <div key={im.id ?? i} className="card" style={{ padding: 8, width: 200 }}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={im.url} alt={im.scene} style={{ width: '100%', borderRadius: 6, display: 'block' }} />
-                <div className="small muted" style={{ marginTop: 6, lineHeight: 1.5 }}>
-                  {im.scene.slice(0, 40)}
+              <div key={im.id ?? i} className="media-card" style={{ padding: 10, background: 'var(--surface)' }}>
+                <img src={im.url} alt={im.scene} style={{ width: '100%', borderRadius: 8, objectFit: 'cover' }} />
+                <div className="small muted" style={{ marginTop: 6, lineHeight: 1.5, maxHeight: 40, overflow: 'hidden' }}>
+                  {im.scene}
                 </div>
-                <div className="row" style={{ gap: 6, marginTop: 6 }}>
-                  <button
-                    className="btn btn-sm"
-                    onClick={() => void downloadImage(im.url, `beacon-img-${i + 1}.png`)}
-                  >
+                <div style={{ display: 'flex', gap: 6, marginTop: 8, alignItems: 'center' }}>
+                  <button className="btn small" onClick={() => void downloadImage(im.url, `beacon-img-${i + 1}.png`)}>
                     {isEn ? 'Download' : '下载'}
                   </button>
                   {!im.aigcEmbedded && (
-                    <span className="badge badge-amber" title={isEn ? 'AI generation mark could not be embedded in this image. Do not use where disclosure is required.' : '这张图没能写进 AI 生成标识，请勿用于需要标识的场合'}>
+                    <span className="badge badge-amber" style={{ fontSize: 11 }}>
                       {isEn ? 'Unmarked' : '未写入标识'}
                     </span>
                   )}
@@ -251,140 +335,40 @@ export function ImageStudio({
             ))}
           </div>
         )}
-      </Card>
+      </section>
 
-      <Card
-        title={isEn ? 'My Likeness & Assets' : '我的形象与素材'}
-        sub={isEn ? 'Save once, select directly for future generations · Likeness encrypted, deletable anytime' : '存一次，之后每次出图直接勾 · 人像加密保存，随时可删'}
-        style={{ marginTop: 16 }}
-      >
-        <div className="row wrap" style={{ gap: 10, alignItems: 'center' }}>
-          <label className="small muted">
-            {isEn ? 'Type' : '类型'}
-            <select
-              className="input"
-              value={uploadKind}
-              onChange={(e) => setUploadKind(e.target.value as 'portrait' | 'background' | 'brand')}
-              style={{ marginLeft: 6 }}
-            >
-              <option value="background">{isEn ? 'Background / Scenery' : '背景 / 空镜'}</option>
-              <option value="portrait">{isEn ? 'Likeness / Subject' : '人像 / 主体'}</option>
-              <option value="brand">{isEn ? 'Brand Elements' : '品牌元素'}</option>
-            </select>
-          </label>
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/png,image/jpeg,image/webp"
-            style={{ display: 'none' }}
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void upload(f);
-              e.target.value = '';
-            }}
-          />
-          <button
-            className="btn btn-sm"
-            onClick={() => fileRef.current?.click()}
-            disabled={pending || !canWrite || (uploadKind === 'portrait' && !consent)}
-            title={uploadKind === 'portrait' && !consent ? (isEn ? 'Please check the consent box below before uploading likeness' : '上传人像前请先勾选下面的同意确认') : undefined}
-          >
-            <Icon.upload size={13} /> {isEn ? 'Upload' : '上传'}
-          </button>
-        </div>
-
-        {/* 人像 = 敏感个人信息，单独同意的那段字与封面工位共用一份 */}
-        {uploadKind === 'portrait' && (
-          <label
-            className="small"
-            style={{ display: 'flex', gap: 8, alignItems: 'flex-start', lineHeight: 1.6, marginTop: 10, color: 'var(--text-2)' }}
-          >
-            <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} style={{ marginTop: 3 }} />
-            <PortraitConsentTextForLibrary />
-          </label>
-        )}
-
-        {assets.length === 0 ? (
-          <p className="small muted" style={{ marginTop: 10 }}>{isEn ? 'No assets yet.' : '还没有素材。'}</p>
-        ) : (
-          <div className="row wrap" style={{ gap: 10, marginTop: 12 }}>
-            {assets.map((a) => (
-              <span key={a.id} style={{ position: 'relative', display: 'inline-block' }}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={a.url} alt="" style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 6 }} />
-                <button
-                  className="btn btn-sm btn-ghost"
-                  style={{ position: 'absolute', top: -6, right: -6, padding: '0 6px' }}
-                  disabled={pending || !canWrite}
-                  onClick={() =>
-                    start(async () => {
-                      const r = await actDeleteAsset(a.id);
-                      if (r.ok) setAssets(r.assets.map((x) => ({ id: x.id, url: x.url, kind: x.kind, label: x.label })));
-                    })
-                  }
-                  title={isEn ? 'Delete' : '删除'}
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-      </Card>
-
-      <Card
-        title={isEn ? 'Recent Generations' : '最近生成'}
-        sub={isEn ? `Covers and illustrations both appear here · Unpinned items auto-purged after ${retentionDays} days (pinned items kept)` : `封面与配图都在这里 · 未钉住的 ${retentionDays} 天后自动清理（钉住的不清）`}
-        style={{ marginTop: 16 }}
-      >
-        {items.length === 0 ? (
-          <p className="small muted">{isEn ? 'No images generated yet.' : '还没有生成过图。'}</p>
-        ) : (
-          <div className="row wrap" style={{ gap: 12 }}>
-            {items.map((g) => (
-              <div key={g.id} className="card" style={{ padding: 8, width: 170 }}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={g.url} alt={g.scene} style={{ width: '100%', borderRadius: 6, display: 'block' }} />
-                <div className="row" style={{ gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
-                  <span className="badge badge-gray">{g.kind === 'cover' ? (isEn ? 'Cover' : '封面') : (isEn ? 'Illustration' : '配图')}</span>
-                  {g.pinned && <span className="badge badge-green">{isEn ? 'Pinned' : '已钉住'}</span>}
-                </div>
-                <div className="row" style={{ gap: 6, marginTop: 6 }}>
-                  <button
-                    className="btn btn-sm"
-                    disabled={pending || !canWrite}
-                    onClick={() =>
-                      start(async () => {
-                        const r = await actPinGenerated(g.id, !g.pinned);
-                        if (r.ok) setItems(items.map((x) => (x.id === g.id ? { ...x, pinned: !g.pinned } : x)));
-                        else setErr(r.error ?? '');
-                      })
-                    }
-                  >
-                    {g.pinned ? (isEn ? 'Unpin' : '取消钉住') : (isEn ? 'Pin' : '钉住')}
-                  </button>
-                  <button className="btn btn-sm" onClick={() => void downloadImage(g.url, `beacon-${g.id}.png`)}>
-                    {isEn ? 'Download' : '下载'}
-                  </button>
-                  <button
-                    className="btn btn-sm btn-ghost"
-                    disabled={pending || !canWrite}
-                    onClick={() =>
-                      start(async () => {
-                        const r = await actDeleteGenerated(g.id);
-                        if (r.ok) setItems(items.filter((x) => x.id !== g.id));
-                        else setErr(r.error ?? '');
-                      })
-                    }
-                  >
-                    {isEn ? 'Delete' : '删除'}
-                  </button>
-                </div>
+      {/* ── 3. 右栏：最近生成 ── */}
+      <aside className="surface image-history">
+        <strong>{isEn ? 'Recent Generations' : '最近生成'}</strong>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, overflowY: 'auto', flex: 1 }}>
+          {items.length === 0 ? (
+            <div className="small muted" style={{ padding: '24px 0', textAlign: 'center' }}>
+              {isEn ? 'No recent images' : '暂无生成记录'}
+            </div>
+          ) : (
+            items.slice(0, showAll ? items.length : 6).map((g) => (
+              <div key={g.id} className="media-card" style={{ minHeight: 88, cursor: 'pointer' }} onClick={() => setImages([{ url: g.url, scene: g.scene, aigcEmbedded: true }])}>
+                <span className={`tag ${g.draftId ? 'green' : ''}`}>
+                  {g.draftId ? (isEn ? 'Used in Draft' : '已用于草稿') : (isEn ? 'Unused' : '未使用')}
+                </span>
+                <strong style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {g.label || (g.scene ? g.scene.slice(0, 16) : (isEn ? 'Image' : '效率工具图卡'))}
+                </strong>
+                <span className="meta">
+                  {g.kind === 'cover' ? (isEn ? 'Cover · 3:4' : '小红书 3:4') : (isEn ? 'Illustration' : '公众号横图')}
+                </span>
               </div>
-            ))}
-          </div>
-        )}
-      </Card>
-    </>
+            ))
+          )}
+        </div>
+        <button
+          className="btn"
+          style={{ marginTop: 'auto' }}
+          onClick={() => setShowAll((prev) => !prev)}
+        >
+          {showAll ? (isEn ? 'Show Less' : '收起') : (isEn ? 'View All' : '查看全部')}
+        </button>
+      </aside>
+    </div>
   );
 }

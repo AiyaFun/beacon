@@ -24,8 +24,12 @@ describe('栅格子项不许把整页撑开', () => {
   });
 
   it('.grid-N 都是 1fr 展开——这条用例的前提没了就该重新想一遍', () => {
-    // 如果哪天改成了固定 px 或 auto，上面那条 min-width 的意义会变，别让它变成一条没人懂的遗留
-    expect(CSS).toMatch(/\.grid-2 \{ grid-template-columns: repeat\(2, 1fr\); \}/);
+    // 如果哪天改成了固定 px 或 auto，上面那条 min-width 的意义会变，别让它变成一条没人懂的遗留。
+    //
+    // 【2026-09-11 之后写法变了，判据没变】1.3.67 把它改成了 `minmax(0, 1fr)` ——
+    // 那是**同一个意图的更强版本**：把「下界是内容最小宽度」这件事直接写死在轨道上，
+    // 不再只靠 `.grid > * { min-width: 0 }` 那一道。两种写法都收，固定 px / auto 仍然要红。
+    expect(CSS).toMatch(/\.grid-2 \{ grid-template-columns: repeat\(2, (?:1fr|minmax\(0, 1fr\))\); \}/);
   });
 });
 
@@ -53,7 +57,11 @@ describe('分工梯按「格子多宽」排，不按「窗口多宽」', () => {
     // 这块梯子会出现在宽窄差很多的容器里：助手页是整幅宽，采集助手页里它在 .grid-2
     // 的一格中只有 475px。按视口断点排的话，宽屏下那一格里就是四条 100px 的窄柱，
     // 每个字单独一行——媒体查询问的是「窗口多宽」，这里要问的是「我这个格子多宽」
-    expect(CSS).toMatch(/\.role-ladder \{[^}]*repeat\(auto-fit, minmax\(\d+px, 1fr\)\)/);
+    //
+    // 【2026-09-11 之后下界包了一层 min()，判据没变】1.3.67 改成
+    // `minmax(min(100%, 190px), 1fr)`：容器比 190px 还窄时轨道跟着缩，而不是撑破容器——
+    // 仍然是「按格子多宽排」，只是把最窄的那种格子也接住了。两种写法都收。
+    expect(CSS).toMatch(/\.role-ladder \{[^}]*repeat\(auto-fit, minmax\((?:min\(100%, )?\d+px\)?, 1fr\)\)/);
     expect(CSS, '不该再靠视口断点排分工梯').not.toMatch(/@media[^{]*\{ \.role-ladder \{/);
   });
 });

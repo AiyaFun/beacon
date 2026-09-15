@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { actSwitchAccount } from '@/app/(app)/actions';
 import type { RangeKey } from '@/lib/insight/dashboard-filter';
 import { useI18n } from '@/lib/i18n';
+import { Icon } from '@/components/icons';
 
 export type ElsewhereAccount = { id: string; name: string; platformLabel: string; count: number };
 
@@ -33,6 +34,7 @@ export function OffscreenDataHint({
   elsewhere: ElsewhereAccount[];
 }) {
   const { lang } = useI18n();
+  const isEn = lang === 'en';
   const [pending, start] = useTransition();
   const router = useRouter();
 
@@ -55,53 +57,78 @@ export function OffscreenDataHint({
   }
 
   return (
-    <div
-      className="card"
-      style={{ marginBottom: 16, borderLeft: '3px solid var(--brand, #e8552d)' }}
-    >
-      <div style={{ fontWeight: 600, marginBottom: 6 }}>
-        {lang === 'en'
-          ? 'Data has been synced, but is not visible in the current view'
-          : '数据已经回填进来了，只是不在当前视图里'}
-      </div>
+    <div className="offscreen-data-hint">
+      <div className="offscreen-data-hint-main">
+        <div className="offscreen-data-hint-content">
+          <div className="offscreen-data-hint-icon">
+            <Icon.clock size={20} />
+          </div>
 
-      {hiddenByFilter && (
-        <div className="small" style={{ marginBottom: 8 }}>
-          {lang === 'en' ? (
-            <>
-              This account has <b>{totalForAccount}</b> posts, but{' '}
-              {range !== 'all' && <>none fall within <b>{range === '7d' ? 'Past 7 Days' : 'Past 30 Days'}</b></>}
-              {range !== 'all' && platformFilter !== 'all' && ', and '}
-              {platformFilter !== 'all' && <>do not match the current platform filter</>}
-              {' — '}the extension captures each post’s <b>actual publication date</b>, so older works fall outside this window.
-            </>
-          ) : (
-            <>
-              这个账号名下有 <b>{totalForAccount}</b> 条作品，但
-              {range !== 'all' && <>都不在<b>{range === '7d' ? '近 7 天' : '近 30 天'}</b>内</>}
-              {range !== 'all' && platformFilter !== 'all' && '，且'}
-              {platformFilter !== 'all' && <>不属于当前筛选的平台</>}
-              ——插件回填时带的是作品的<b>真实发表时间</b>，老作品自然落在窗口外。
-            </>
-          )}
-          <div style={{ marginTop: 6 }}>
-            <button type="button" className="btn btn-sm" onClick={showAll} disabled={pending}>
-              {lang === 'en' ? 'View All Time Range' : '看全部时间范围'}
-            </button>
+          <div className="offscreen-data-hint-body">
+            <div className="offscreen-data-hint-title-row">
+              <span className="offscreen-data-hint-title">
+                {isEn
+                  ? 'Data has been synced, but is not visible in current view'
+                  : '数据已经回填进来了，只是不在当前视图里'}
+              </span>
+              {hiddenByFilter && (
+                <span className="offscreen-data-hint-badge">
+                  {isEn ? `${totalForAccount} items off-window` : `当前窗口外 · ${totalForAccount} 条作品`}
+                </span>
+              )}
+            </div>
+
+            {hiddenByFilter && (
+              <div className="offscreen-data-hint-desc">
+                {isEn ? (
+                  <>
+                    This account has <b>{totalForAccount}</b> posts, but{' '}
+                    {range !== 'all' && <>none fall within <b>{range === '7d' ? 'Past 7 Days' : 'Past 30 Days'}</b></>}
+                    {range !== 'all' && platformFilter !== 'all' && ', and '}
+                    {platformFilter !== 'all' && <>do not match the current platform filter</>}
+                    {' — '}the extension captures each post’s <b>actual publication date</b>, so older works fall outside this window.
+                  </>
+                ) : (
+                  <>
+                    这个账号名下有 <b>{totalForAccount}</b> 条作品，但
+                    {range !== 'all' && <>都不在 <b>{range === '7d' ? '近 7 天' : '近 30 天'}</b> 内</>}
+                    {range !== 'all' && platformFilter !== 'all' && '，且'}
+                    {platformFilter !== 'all' && <>不属于当前筛选的平台</>}
+                    ——插件回填时带的是作品的<b>真实发表时间</b>，老作品自然落在窗口外。
+                  </>
+                )}
+              </div>
+            )}
           </div>
         </div>
-      )}
+
+        {hiddenByFilter && (
+          <div className="offscreen-data-hint-action">
+            <button
+              type="button"
+              className="offscreen-data-hint-btn"
+              onClick={showAll}
+              disabled={pending}
+            >
+              <span>{isEn ? 'View All Time Range' : '看全部时间范围'}</span>
+              <Icon.arrow size={13} />
+            </button>
+          </div>
+        )}
+      </div>
 
       {elsewhere.length > 0 && (
-        <div className="small">
-          {lang === 'en'
-            ? 'Additional data is logged under other creator accounts (this view displays the currently active account):'
-            : '另外还有数据记在其它创作账号名下（本页只显示顶栏当前选中的那个账号）：'}
-          <div className="stack" style={{ gap: 6, marginTop: 6 }}>
+        <div className="offscreen-data-hint-elsewhere">
+          <div style={{ color: 'var(--text-2)', marginBottom: 8 }}>
+            {isEn
+              ? 'Additional data is logged under other creator accounts (this view displays the currently active account):'
+              : '另外还有数据记在其它创作账号名下（本页只显示顶栏当前选中的那个账号）：'}
+          </div>
+          <div className="row wrap" style={{ gap: 8 }}>
             {elsewhere.map((a) => (
-              <div key={a.id} className="row" style={{ gap: 8, alignItems: 'center' }}>
+              <div key={a.id} className="offscreen-account-chip">
                 <span>
-                  {a.platformLabel} · <b>{a.name}</b>: {a.count} {lang === 'en' ? 'posts' : '条'}
+                  {a.platformLabel} · <b>{a.name}</b>: {a.count} {isEn ? 'posts' : '条'}
                 </span>
                 <button
                   type="button"
@@ -109,7 +136,7 @@ export function OffscreenDataHint({
                   onClick={() => switchTo(a.id)}
                   disabled={pending}
                 >
-                  {lang === 'en' ? 'Switch to this account' : '切到这个账号'}
+                  {isEn ? 'Switch to this account' : '切到这个账号'}
                 </button>
               </div>
             ))}

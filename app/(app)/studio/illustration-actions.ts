@@ -7,7 +7,6 @@ import { requireRole, RbacError } from '@/lib/rbac';
 import { QuotaExceededError } from '@/lib/quota';
 import { DemoReadonlyError } from '@/lib/demo/guard';
 import { planScenes, runIllustration, MAX_ILLUSTRATIONS, type IllustrationScene } from '@/lib/illustration/run';
-import { listDraftIllustrations } from '@/lib/media/store';
 
 // 正文配图（组图）。与封面共用同一套配额/预算/打标闸，这里只做「拆画面 → 出图 → 落库」的编排。
 
@@ -92,13 +91,3 @@ export async function actRunIllustration(input: {
   }
 }
 
-export async function actListIllustrations(draftId: string) {
-  const s = await getSession();
-  const rows = await listDraftIllustrations(s.workspaceId, draftId);
-  return rows.map((r) => ({
-    id: r.id,
-    url: r.url,
-    scene: typeof r.meta.scene === 'string' ? r.meta.scene : '',
-    anchor: typeof r.meta.anchor === 'string' ? r.meta.anchor : '',
-  }));
-}
