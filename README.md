@@ -27,6 +27,7 @@
 </p>
 
 <p align="center">
+  <a href="#下载安装">下载安装</a> ·
   <a href="#它解决什么问题">它解决什么问题</a> ·
   <a href="#暂不支持与开发中">暂不支持与开发中</a> ·
   <a href="#适合谁用">适合谁用</a> ·
@@ -56,6 +57,55 @@
 </table>
 
 <p align="center"><sub>截图来自演示工作台（示例数据）。</sub></p>
+
+
+## 下载安装
+
+烽火台有三种使用方式，按需选择：
+
+| 方式 | 适合谁 | 怎么装 |
+|---|---|---|
+| **在线版** | 想先试试 | 直接打开 [beacon.iyunci.cn](https://beacon.iyunci.cn) |
+| **桌面客户端** | 已有在线版账号，需要本机浏览器采集与自动回填 | 下载对应平台安装包 👇 |
+| **整机版** | 想把整套系统装在自己的电脑上，数据完全本地 | 克隆仓库，一条命令装完 👇 |
+
+### 桌面客户端
+
+桌面客户端是在线版的浏览器伴侣——安装后可以用你本机的 Chrome 执行采集和自动回填，不需要额外的浏览器插件。
+
+从 [Releases](https://github.com/AiyaFun/beacon/releases) 页面下载：
+
+| 平台 | 文件 | 说明 |
+|---|---|---|
+| **macOS** (Apple Silicon) | `烽火台_x.x.x_aarch64.dmg` | 打开 DMG → 拖进 Applications |
+| **Windows** (x64) | `烽火台_x.x.x_x64-setup.exe` | 双击运行安装向导 |
+
+安装后用你的在线版账号登录即可。客户端会自动检查更新。
+
+### 整机版（私有部署）
+
+整套系统跑在你自己的电脑上，数据存在本地 SQLite，不需要服务器、不需要 Docker。
+
+```bash
+git clone https://github.com/AiyaFun/beacon.git
+cd beacon
+bash deploy/appliance/install.sh    # macOS / Linux
+```
+
+Windows 用 PowerShell：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy\appliance\install.ps1
+```
+
+安装脚本会自动完成：检查 Node.js → 生成配置 → 安装依赖 → 建库 → 构建 → 注册开机自启 → 打开装机向导。
+
+升级到新版本：
+
+```bash
+git pull
+bash deploy/appliance/update.sh
+```
 
 
 ## 它解决什么问题

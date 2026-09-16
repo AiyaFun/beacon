@@ -27,6 +27,7 @@
 </p>
 
 <p align="center">
+  <a href="#download--install">Download</a> ·
   <a href="#what-problem-does-it-solve">What It Solves</a> ·
   <a href="#not-supported-yet--in-progress">Not Supported Yet</a> ·
   <a href="#who-is-it-for">Who It's For</a> ·
@@ -56,6 +57,55 @@
 </table>
 
 <p align="center"><sub>Screenshots are from the demo workspace (sample data).</sub></p>
+
+
+## Download & Install
+
+Three ways to use Beacon — pick what fits:
+
+| Option | Best for | How to get it |
+|---|---|---|
+| **Online** | Try it out | Open [beacon.iyunci.cn](https://beacon.iyunci.cn) |
+| **Desktop client** | Existing users who need local browser automation | Download the installer below 👇 |
+| **Appliance** | Run the whole system on your own machine, data stays local | Clone the repo, one command to install 👇 |
+
+### Desktop Client
+
+The desktop client is a browser companion for the online version — it uses your local Chrome for data collection and auto-backfill.
+
+Download from [Releases](https://github.com/AiyaFun/beacon/releases):
+
+| Platform | File | Notes |
+|---|---|---|
+| **macOS** (Apple Silicon) | `烽火台_x.x.x_aarch64.dmg` | Open DMG → drag to Applications |
+| **Windows** (x64) | `烽火台_x.x.x_x64-setup.exe` | Run the setup wizard |
+
+Sign in with your online account after installation. The client checks for updates automatically.
+
+### Appliance (Self-Hosted)
+
+Runs entirely on your own machine with a local SQLite database. No server, no Docker required.
+
+```bash
+git clone https://github.com/AiyaFun/beacon.git
+cd beacon
+bash deploy/appliance/install.sh    # macOS / Linux
+```
+
+On Windows, use PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy\appliance\install.ps1
+```
+
+The install script handles everything: checks Node.js → generates config → installs dependencies → creates database → builds → registers auto-start → opens the setup wizard.
+
+To update:
+
+```bash
+git pull
+bash deploy/appliance/update.sh
+```
 
 
 ## What Problem Does It Solve
