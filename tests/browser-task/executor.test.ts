@@ -376,7 +376,9 @@ describe('别反复采同一个主页（2026-09-04 真机：采集浏览器反�
     expect(await prisma.browserTask.count({ where: { workspaceId, status: { in: ['pending', 'claimed'] } } })).toBe(0);
   });
 
-  it('失败后退避：第 1 次等 10 分钟，退避期内领不到', async () => {
+  it('失败后退避：第 1 次偶发失败立刻可再领（2026-09-15 改），第 2 次才等 10 分钟，退避期内领不到', async () => {
+    // 2026-09-15 真机：冷启动那次 32 秒失败 → 退避 10 分钟 → 第二次 20 秒成功，用户白等 10 分钟。
+    // 退避防的是「三次失败挤在三分钟里」，所以从第二次失败起才退。
     const payload = await selfPayload();
     const e = await enqueueBrowserTask({ workspaceId, payload, createdBy: memberId });
     const { token } = await issueIngestToken({ workspaceId, memberId, label: 'dev' });
@@ -384,10 +386,16 @@ describe('别反复采同一个主页（2026-09-04 真机：采集浏览器反�
     const c = await claimNextTask(workspaceId, 'dev', ['collect_self_profile']);
     expect(c?.id).toBe(e.ok ? e.id : '');
     await completeTask(workspaceId, c!.id, { ok: false, error: '页面没加载完' });
-    const row = await prisma.browserTask.findUnique({ where: { id: c!.id } });
+    let row = await prisma.browserTask.findUnique({ where: { id: c!.id } });
+    expect(row?.status).toBe('pending');
+    expect(row?.leaseUntil, '第一次偶发失败不该退避').toBeNull();
+    expect((await claimNextTask(workspaceId, 'dev', ['collect_self_profile']))?.id, '第一次失败后应立刻能再领').toBe(c!.id);
+
+    await completeTask(workspaceId, c!.id, { ok: false, error: '页面没加载完' });
+    row = await prisma.browserTask.findUnique({ where: { id: c!.id } });
     expect(row?.status).toBe('pending');
     const wait = (row!.leaseUntil!.getTime() - Date.now()) / 60_000;
-    expect(wait, '失败后没有退避，下一分钟又会被领走').toBeGreaterThan(8);
+    expect(wait, '第二次失败后没有退避，下一分钟又会被领走').toBeGreaterThan(8);
     expect(wait).toBeLessThan(12);
     expect(await claimNextTask(workspaceId, 'dev', ['collect_self_profile']), '退避期内被领走了').toBeNull();
   });

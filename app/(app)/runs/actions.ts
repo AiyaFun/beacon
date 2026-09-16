@@ -6,7 +6,7 @@ import { getSession } from '@/lib/session';
 import { requireRole } from '@/lib/rbac';
 import { assertNotDemo } from '@/lib/demo/guard';
 import { runWorkflow } from '@/lib/workflow/run';
-import { cancelBrowserTask } from '@/lib/browser-task';
+import { cancelBrowserTask, retryBrowserTaskNow } from '@/lib/browser-task';
 
 // 运行中心的动作层。
 //
@@ -67,4 +67,15 @@ export async function actCancelBrowserTask(taskId: string) {
   const r = await cancelBrowserTask(s.workspaceId, taskId);
   revalidatePath('/runs');
   return r.ok ? { ok: true as const } : { ok: false as const, error: r.error ?? '取消不了' };
+}
+
+/** 「现在重试」：失败退避中的采集任务立刻放回可领状态（2026-09-15）。正在跑的、已有结局的都改不了。 */
+export async function actRetryBrowserTaskNow(taskId: string) {
+  const s = await getSession();
+  requireRole(s, 'content.create');
+  assertNotDemo(s.tenantId);
+
+  const r = await retryBrowserTaskNow(s.workspaceId, taskId);
+  revalidatePath('/runs');
+  return r.ok ? { ok: true as const } : { ok: false as const, error: r.error ?? '重试不了' };
 }

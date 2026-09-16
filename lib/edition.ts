@@ -72,7 +72,21 @@ export type Capability =
    * **SaaS 恒 false**——服务端在机房，够不到用户的浏览器；真要做只能托管登录态，
    * 那是这个产品明确不做的那件事（与 localPublisher 同一条理由）。
    */
-  | 'localBrowser';
+  | 'localBrowser'
+  /**
+   * 用 ChatGPT 订阅（Codex OAuth）当模型渠道（2026-09-15）。OpenClaw / Hermes 走的就是这条：
+   * 用户在自己机器上用自己的 ChatGPT 账号登录，按订阅额度用 Codex 后端的模型，不用 API Key。
+   * OpenAI 2026-05 起明确允许第三方工具走订阅 OAuth；Anthropic 的订阅相反是明令禁止的，所以只有 ChatGPT。
+   * **SaaS 恒 false**：订阅是用户个人的，平台不能替他用（与 localShell 同一条理由：多租户共用一台机器）。
+   */
+  | 'chatgptSubscription'
+  /**
+   * 海外模型渠道可用于全部功能（2026-09-15）。SaaS 里海外模型只许出海内容场景（PRD §10.5，个人信息出境合规），
+   * 而这条闸的调用方（allowOverseas）从没接上过——海外 BYOK 在 SaaS 事实上不可用。
+   * 整机版/私有化跑在客户自己的机器上、烧客户自己的 Key/订阅，是否用海外模型由客户自己定。
+   * 没有这一格，上面那条 ChatGPT 订阅渠道（region=overseas）会被选路整段跳过、名存实亡。
+   */
+  | 'overseasLlm';
 
 /**
  * 能力矩阵。**这张表就是三个版本的产品定义**，改它等于改产品边界，不要顺手改。
@@ -97,6 +111,8 @@ const MATRIX: Record<Edition, Record<Capability, boolean>> = {
     quotaBilling: true,
     setupWizard: false,
     botInboundWs: false,
+    chatgptSubscription: false,
+    overseasLlm: false,
   },
   appliance: {
     localPublisher: true,
@@ -112,6 +128,8 @@ const MATRIX: Record<Edition, Record<Capability, boolean>> = {
     setupWizard: true,
     // 整机在 NAT 后面，飞书服务器打不进来 —— 入站只能由本机主动出站连长连接。
     botInboundWs: true,
+    chatgptSubscription: true,
+    overseasLlm: true,
   },
   private: {
     localPublisher: true,
@@ -128,6 +146,8 @@ const MATRIX: Record<Edition, Record<Capability, boolean>> = {
     setupWizard: true,
     // 客户云上有公网地址和证书，沿用现成的 webhook 入站，不引入长连接进程。
     botInboundWs: false,
+    chatgptSubscription: true,
+    overseasLlm: true,
   },
 };
 

@@ -59,6 +59,9 @@ describe('能力矩阵', () => {
       localShell: false,
       localBrowser: false,
       aiAuthoredTools: false,
+      // 订阅是用户个人的，平台不能替他用；海外模型在 SaaS 只许出海场景（且那条闸从没接上）
+      chatgptSubscription: false,
+      overseasLlm: false,
     },
     appliance: {
       payment: false,
@@ -73,6 +76,8 @@ describe('能力矩阵', () => {
       localShell: true,
       localBrowser: true,
       aiAuthoredTools: true,
+      chatgptSubscription: true,
+      overseasLlm: true,
     },
     private: {
       payment: false,
@@ -87,6 +92,8 @@ describe('能力矩阵', () => {
       localShell: true,
       localBrowser: true,
       aiAuthoredTools: true,
+      chatgptSubscription: true,
+      overseasLlm: true,
     },
   };
 

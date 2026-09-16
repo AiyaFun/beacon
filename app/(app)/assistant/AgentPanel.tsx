@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Icon } from '@/components/icons';
-import { actStartAgent, actDecideAgentStep, actCancelAgent, actGetAgentRun, actAppendNote } from './agent-actions';
+import { actStartAgent, actDecideAgentStep, actCancelAgent, actGetAgentRun, actAppendNote, actRetryBrowserTaskNow } from './agent-actions';
 import { DEFAULT_AUTH } from '@/components/DispatchAuth';
 import type { AgentTurn } from '@/lib/agent/run';
 import { SaveAsSkillButton } from '@/components/SaveAsSkillButton';
@@ -27,6 +27,75 @@ import { useI18n } from '@/lib/i18n';
 // 恢复用的 actGetAgentRun 当时就写好了，只是一个调用方都没有（写了没接的老形状）。
 
 type ToolInfo = { name: string; label: string; write: boolean; costly: boolean; contract: boolean; description: string };
+
+/** 按看的人的本地时钟给「几点几分」（这是浏览器里的界面，用户自己的时区最直观） */
+function clockOf(iso: string, isEn: boolean): string {
+  try {
+    return new Date(iso).toLocaleTimeString(isEn ? 'en-US' : 'zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+  } catch {
+    return iso;
+  }
+}
+
+/**
+ * 等采集执行器时的说明卡：退避中 → 「第 N 次没成：原因，HH:MM 自动重试」+「现在重试」；
+ * 正在跑 / 排队中 → 一句话；之前几次的失败原因收在折叠里（attemptLog，成功也不清）。
+ */
+function WaitingTaskCard({ task, runId, mine, busy, isEn, onRetry }: {
+  task: NonNullable<AgentTurn['waitingTask']>;
+  runId: string;
+  mine: boolean;
+  busy: boolean;
+  isEn: boolean;
+  onRetry: (taskId: string, runId: string) => void;
+}) {
+  const backingOff = !!task.retryAt;
+  return (
+    <div className="card" style={{ marginTop: 10, padding: 12, ...(backingOff ? { borderColor: 'var(--amber)', background: 'var(--amber-soft)' } : {}) }}>
+      {backingOff ? (
+        <>
+          <div style={{ fontWeight: 650 }}>
+            {isEn ? `Attempt ${task.attempts} failed` : `第 ${task.attempts} 次没成`}
+            {task.lastError ? `：${task.lastError}` : ''}
+          </div>
+          <div className="small" style={{ marginTop: 4 }}>
+            {isEn
+              ? `Will retry automatically at ${clockOf(task.retryAt!, true)} (attempt ${task.attempts + 1}).`
+              : `${clockOf(task.retryAt!, false)} 会自动重试（第 ${task.attempts + 1} 次）。`}
+          </div>
+          {mine && (
+            <button className="btn btn-sm" style={{ marginTop: 8 }} disabled={busy} onClick={() => onRetry(task.taskId, runId)}>
+              {isEn ? 'Retry now' : '现在重试'}
+            </button>
+          )}
+        </>
+      ) : (
+        <div className="small">
+          {task.status === 'claimed'
+            ? (isEn ? `The collector is running it now (attempt ${task.attempts}).` : `执行器正在跑这条活（第 ${task.attempts} 次尝试）。`)
+            : (isEn
+              ? `Queued for the collector to pick up${task.attempts > 0 ? ` (attempt ${task.attempts + 1})` : ''}.`
+              : `已排队，等执行器来领${task.attempts > 0 ? `（第 ${task.attempts + 1} 次）` : ''}。`)}
+        </div>
+      )}
+      {task.log.length > 0 && (
+        <details style={{ marginTop: 8 }}>
+          <summary className="small muted" style={{ cursor: 'pointer' }}>
+            {isEn ? `Previous attempts (${task.log.length})` : `之前 ${task.log.length} 次为什么没成`}
+          </summary>
+          <ul className="small" style={{ margin: '6px 0 0', paddingLeft: 18, lineHeight: 1.7 }}>
+            {task.log.map((h, i) => (
+              <li key={i}>
+                {clockOf(h.at, isEn)} · {isEn ? `#${h.n}` : `第 ${h.n} 次`}
+                {h.inPlace ? (isEn ? ' (before an on-the-spot retry)' : '（客户端当场重试前的那次）') : ''}：{h.error}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </div>
+  );
+}
 
 /** 已经结束的三种状态。跑完之后才出现「接着跑 / 换个说法重新派」那一栏。 */
 const ENDED: AgentTurn['status'][] = ['done', 'failed', 'cancelled'];
@@ -137,6 +206,23 @@ export function AgentPanel({
   }, [live, turn]);
 
   const busy = pending;
+
+  /**
+   * 「现在重试」（2026-09-15）：把失败退避中的采集任务立刻放回可领状态；桌面客户端里顺手叫执行器马上来领
+   *（与 waiting_browser 那个 kick 同一条路），浏览器里没有壳就只能等插件下次醒来。然后重读一次运行刷新卡片。
+   */
+  function retryWaitingTask(taskId: string, runId: string) {
+    run(async () => {
+      const r = await actRetryBrowserTaskNow(taskId);
+      if (!r.ok) return { ok: false, error: r.error };
+      if (inDesktop) {
+        try {
+          void (window as { __TAURI_INTERNALS__?: { invoke: (c: string) => Promise<unknown> } }).__TAURI_INTERNALS__?.invoke('executor_kick');
+        } catch { /* 旧客户端没有这个命令：退回 20 秒轮询 */ }
+      }
+      return actGetAgentRun(runId);
+    });
+  }
 
   /** 确认/拒绝时如果填了附言，先记下来再决定——它要跟着这次决定一起送进模型 */
   function decideWithNote(runId: string, approve: boolean) {
@@ -284,6 +370,18 @@ export function AgentPanel({
             <div className="small" style={{ marginTop: 12, color: 'var(--muted)' }}>
               {turn.waitingFor}{isEn ? '. You can close this page to do other tasks, you will be notified in the notification center once finished.' : '。你可以关掉这一页去做别的，跑完会在通知里告诉你。'}
             </div>
+          )}
+          {/* 停在「等采集执行器」时说清在等什么（2026-09-15）：真机上一次采集 11 分钟，其中 10 分钟是第一次失败后的退避，
+              而面板只安静地转圈——用户既不知道第一次为什么没成，也不知道还要等多久、能不能催。 */}
+          {turn.status === 'waiting_browser' && turn.waitingTask && (
+            <WaitingTaskCard
+              task={turn.waitingTask}
+              runId={turn.runId}
+              mine={turn.mine}
+              busy={busy}
+              isEn={isEn}
+              onRetry={retryWaitingTask}
+            />
           )}
 
           {turn.answer && (

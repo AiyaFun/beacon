@@ -153,8 +153,47 @@ export const RECOLLECT_COOLDOWN_MINUTES = 30;
 /**
  * 失败后的重试退避：第 n 次失败后至少等这么久再让执行器领（分钟）。
  * 原先失败即刻放回池子，执行器下一分钟就再领——三次失败挤在三分钟里，同样是「反复开关浏览器」。
+ *
+ * 【第一次失败不退避】（2026-09-15 真机）采集浏览器冷启动的第一次尝试 32 秒失败 → 按 10 分钟退避 →
+ * 第二次 20 秒成功；用户等了 11 分钟，其中 10 分钟在等一个不该有的退避。退避防的是「三次失败挤在三分钟里」，
+ * 而第一次失败后立刻再试一次，与用户自己再派一次没有区别（执行器复用同一页，不是再开一个窗口）。
+ * 第二次再失败才退 10 分钟；第三次失败判死（MAX_ATTEMPTS）。
+ * 例外见 backoffMinutesAfterFailure：错误明确要用户动手（登录墙/人机验证/限频）时，立刻重试只会把登录页
+ * 再弹到他面前——照旧退避；客户端已经当场重试过一次的（retriedAfter）也照旧退避。
  */
-export const RETRY_BACKOFF_MINUTES = [10, 30] as const;
+export const RETRY_BACKOFF_MINUTES = [0, 10] as const;
+/** 第一次失败但错误要用户动手 / 客户端已当场重试过时，用这个退避（分钟） */
+export const FIRST_FAILURE_GUARDED_BACKOFF_MINUTES = 10;
+
+/**
+ * 错误里出现这些字样 = 要用户动手（登录、过验证、等限频解除），机器立刻重试没有意义。
+ * 桌面执行器与插件各有各的措辞，都列在这里；改措辞时两边一起改（tests/browser-task/retry-and-attempt-log 钉着）。
+ */
+export const USER_ACTION_ERROR_HINTS = [
+  '等你在采集浏览器里登录', // 桌面执行器：撞硬登录墙，等了几分钟没登上
+  '所以读不到你的内容', // 桌面执行器：软信号判出没登录
+  '人机验证', '访问过于频繁', '验证码',
+  '没登录', '未登录', '请先登录', // 插件那条路的措辞
+] as const;
+/**
+ * 「解析器取不到内容」那句人话里提到「还没登录」只是最常见原因的提示——页面没渲染完也报同一句，
+ * 而那正是冷启动第一次失败的典型样子。它不算要用户动手。
+ */
+const NOT_USER_ACTION_HINTS = ['解析器取不到内容', 'parser_stale'] as const;
+
+export function needsUserAction(error?: string | null): boolean {
+  if (!error) return false;
+  if (NOT_USER_ACTION_HINTS.some((s) => error.includes(s))) return false;
+  return USER_ACTION_ERROR_HINTS.some((s) => error.includes(s));
+}
+
+/** 第 attempts 次失败后要退避几分钟（0 = 立刻可再领）。attempts 从 1 数。 */
+export function backoffMinutesAfterFailure(attempts: number, error?: string | null, retriedInPlace = false): number {
+  const n = Math.min(Math.max(attempts, 1), RETRY_BACKOFF_MINUTES.length);
+  const base = RETRY_BACKOFF_MINUTES[n - 1] ?? FIRST_FAILURE_GUARDED_BACKOFF_MINUTES;
+  if (base === 0 && (retriedInPlace || needsUserAction(error))) return FIRST_FAILURE_GUARDED_BACKOFF_MINUTES;
+  return base;
+}
 
 /**
  * 令牌多久没来领活就不算「在线的执行器」（2026-09-05）。

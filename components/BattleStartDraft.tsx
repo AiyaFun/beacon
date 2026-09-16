@@ -19,7 +19,7 @@ import { useI18n } from '@/lib/i18n';
 // 【诚实】没配生成 Key / 配额用尽时流式路由回 4xx/5xx 带原文，这里红字如实展示并给去配 Key
 // 的入口，不假装在转圈；已生成但落库失败也如实说（额度已经花了）。
 
-type Done = { draftId?: string; seq?: number; warning?: string };
+type Done = { draftId?: string; seq?: number; warning?: string; humanize?: { before: number | null; after: number | null; changed: boolean; note?: string } };
 
 export function BattleStartDraft({ topicId, title }: { topicId: string; title: string }) {
   const router = useRouter();
@@ -83,12 +83,15 @@ export function BattleStartDraft({ topicId, title }: { topicId: string; title: s
           } else if (ev === 'delta') {
             setPreview((p) => p + String(data));
             requestAnimationFrame(() => previewRef.current?.scrollTo({ top: previewRef.current.scrollHeight }));
+          } else if (ev === 'polished') {
+            // 服务端自动去 AI 味后的整篇：替换预览，存下来的也是这一版
+            setPreview(String(data));
           } else if (ev === 'done') {
             const d = data as Done;
             const did = d.draftId ?? landedDraftId;
             draftIdRef.current = did; // 记住草稿 id，供「再写一版」复投
             setStreaming(false);
-            setDone({ draftId: did, seq: d.seq, warning: d.warning });
+            setDone({ draftId: did, seq: d.seq, warning: d.warning, humanize: d.humanize });
             setFinished(true);
             return;
           } else if (ev === 'error') {
@@ -171,6 +174,9 @@ export function BattleStartDraft({ topicId, title }: { topicId: string; title: s
                   <div className="small" style={{ marginTop: 10, color: 'var(--green)' }}>
                     {isEn ? `✓ Draft version ${done.seq} generated, saved to drafts` : `✓ 已生成第 ${done.seq} 版初稿，存进草稿箱`}
                     {done.warning && <span style={{ color: 'var(--amber)' }}>｜⚠️ {done.warning}</span>}
+                    {done.humanize?.changed && done.humanize.before != null && done.humanize.after != null && (
+                      <span className="muted">｜{isEn ? `humanized: ${done.humanize.before} → ${done.humanize.after}` : `已自动去 AI 味：人味分 ${done.humanize.before} → ${done.humanize.after}`}</span>
+                    )}
                   </div>
                 )}
 

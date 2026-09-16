@@ -115,6 +115,8 @@ export async function POST(req: Request) {
     }
   }
 
-  const r = await completeTask(auth.workspace.id, taskId, { ok: okFlag, result: resultText, error: errorText }, claimerId);
+  // retriedAfter：新版桌面执行器冷启动第一次失败后原地重跑过，这是第一次的原因（服务端留档 + 据此判退避）
+  const retriedAfter = typeof body.retriedAfter === 'string' && body.retriedAfter ? body.retriedAfter : undefined;
+  const r = await completeTask(auth.workspace.id, taskId, { ok: okFlag, result: resultText, error: errorText, retriedAfter }, claimerId);
   return json(r, r.ok ? 200 : 409);
 }

@@ -4,7 +4,7 @@ import React, { useState, useMemo } from 'react';
 import Link from 'next/link';
 import type { RunEntry, RunStatus } from '@/lib/runs/badge';
 import { ActionButton } from '@/components/ActionButton';
-import { actRerunWorkflow, actCancelBrowserTask } from './actions';
+import { actRerunWorkflow, actCancelBrowserTask, actRetryBrowserTaskNow } from './actions';
 import { RunsBatchExecute } from '@/components/RunsBatchExecute';
 import { useI18n } from '@/lib/i18n';
 import { beijingDayKey } from '@/lib/beijing';
@@ -347,6 +347,16 @@ export function RunsClientView({ rows, n }: RunsClientViewProps) {
                         </ActionButton>
                       )}
 
+                      {/* 失败退避中的采集任务：detail 里已写「第几次没成、几点自动重试」，这里给一个不等的口（2026-09-15） */}
+                      {r.kind === 'browser' && r.status === 'waiting' && r.retryAt && (
+                        <ActionButton
+                          action={actRetryBrowserTaskNow.bind(null, r.id)}
+                          loadingText={dict.runs.retryingBrowser}
+                          className="btn primary"
+                        >
+                          {dict.runs.retryBrowser}
+                        </ActionButton>
+                      )}
                       {r.kind === 'browser' && r.status === 'waiting' && (
                         <ActionButton
                           action={actCancelBrowserTask.bind(null, r.id)}

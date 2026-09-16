@@ -133,6 +133,12 @@ export type AgentTurn = {
   /** 挂起时：在等什么（给界面一句人话，不是给模型看的） */
   waitingFor?: string;
   /**
+   * 停在「等采集执行器」时那条活的状态（2026-09-15）：第几次、上次为什么没成、几点自动再领、之前每次的记录。
+   * 只有 waitingFor 一句话的话，面板只能安静转圈——真机上一次采集 11 分钟，其中 10 分钟是第一次失败后的
+   * 退避，用户既不知道第一次为什么没成，也不知道还要等多久、能不能催。
+   */
+  waitingTask?: import('../browser-task').BrowserTaskWaitView;
+  /**
    * 还有几句追问没送达。**界面必须标出来**——用户打完字就以为生效了，
    * 而它可能要等到下一轮才被读到（正在跑的那一轮已经把话说出口了）。
    */
@@ -507,6 +513,12 @@ async function viewOf(runId: string, viewerId?: string): Promise<AgentTurn> {
   // pending 这一列身兼两职（等你点头 / 等浏览器回来），但界面上只有前者该出确认卡。
   // 不按状态分的话，一次「等插件」会渲染成一张点了也没用的确认卡。
   const awaitingConfirm = run.status === 'awaiting_confirm';
+  // 等采集执行器时把那条活查出来给界面（动态 import：browser-task 反过来动态引 agent/wake，静态引会绕成环）。
+  // 查不到/查失败不拦视图：那只是少一张说明卡，运行本身照常
+  const waitingTaskId = run.status === 'waiting_browser' && run.waitingOn?.startsWith('browser:') ? run.waitingOn.slice('browser:'.length) : null;
+  const waitingTask = waitingTaskId
+    ? await import('../browser-task').then((m) => m.browserTaskWaitView(run.workspaceId, waitingTaskId)).catch(() => null)
+    : null;
   return {
     runId: run.id,
     status: run.status as AgentRunStatus,
@@ -515,6 +527,7 @@ async function viewOf(runId: string, viewerId?: string): Promise<AgentTurn> {
     answer: run.answer ?? undefined,
     error: run.error ?? undefined,
     waitingFor: waitingText(run.status as AgentRunStatus, run.quotaResumeAt, queuePosition, run.waitingOn),
+    waitingTask: waitingTask ?? undefined,
     pendingNotes: notesPending || undefined,
     artifacts: artifacts.length ? artifacts : undefined,
     // 有 Mock 调用也要给：那正是「产物是编的」需要被看见的时候

@@ -38,6 +38,26 @@
 
 ---
 
+## 界面一览
+
+<table>
+  <tr>
+    <td width="50%" valign="top"><b>今天</b> · 说一句话就派活；本周作战报告里每条高潜选题后面就是「起稿」入口<br><br><img src="docs/screenshots/today.png" alt="今天：派活框与本周作战报告"></td>
+    <td width="50%" valign="top"><b>看情报</b> · 七源热榜聚合，账号 × 热点差异化雷达<br><br><img src="docs/screenshots/hotlists.png" alt="看情报：热榜与差异化雷达"></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><b>挑选题</b> · 每条推荐带六维评分、差异化切入角、抢跑窗口和「为什么推给你」<br><br><img src="docs/screenshots/topics.png" alt="挑选题：带理由的选题推荐"></td>
+    <td width="50%" valign="top"><b>做内容</b> · 照着选题方案与平台格式起稿，自动去 AI 味，一稿多平台<br><br><img src="docs/screenshots/studio.png" alt="做内容：创作工坊"></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><b>看效果</b> · 作品表现回流，播放 / 互动一眼看清，一键生成复盘<br><br><img src="docs/screenshots/data.png" alt="看效果：数据看板"></td>
+    <td width="50%" valign="top"><b>技能 · 连接器</b> · 公众号排版、小红书图文、抖音口播等成品技能，装上即用<br><br><img src="docs/screenshots/skills.png" alt="技能：把草稿变成各平台成品"></td>
+  </tr>
+</table>
+
+<p align="center"><sub>截图来自演示工作台（示例数据）。</sub></p>
+
+
 ## 它解决什么问题
 
 创作者日常面临三个核心痛点：**追什么热点、学谁的套路、怎么写得又快又合规**。

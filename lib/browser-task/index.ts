@@ -4,7 +4,7 @@ import { createLogger } from '../logger';
 import { notify } from '../notify';
 import {
   browserTaskPayloadSchema, retriable, MAX_ATTEMPTS, TASK_TTL_HOURS, LEASE_MINUTES, KIND_LABEL,
-  RECOLLECT_COOLDOWN_MINUTES, RETRY_BACKOFF_MINUTES, EXECUTOR_ALIVE_MINUTES,
+  RECOLLECT_COOLDOWN_MINUTES, EXECUTOR_ALIVE_MINUTES, backoffMinutesAfterFailure,
   type BrowserTaskKind, type BrowserTaskPayload,
 } from './kinds';
 
@@ -263,18 +263,60 @@ export function humanizeExecutorError(raw: string | undefined | null): string | 
   return EXECUTOR_ERROR_TEXT[key] ?? raw;
 }
 
+/**
+ * 一次尝试的记录（2026-09-15）：给用户看「之前几次为什么没成」，给排查看「那几分钟卡在哪」。
+ *
+ * 【为什么单独留一列，不复用 error】error 表示的是**当前结局**：成功了它就该清空（一条 done 的活挂着
+ * 一句错误，界面会把它当失败）。而「第一次为什么没成」是事后要查的历史——真机上一次 11 分钟的采集，
+ * 前 10 分钟在等退避，事后 error 已被成功清掉、可重试的失败又刻意不通知、客户端也没日志，一个字都查不到。
+ */
+export type BrowserTaskAttempt = {
+  /** 第几次尝试（= 领活时的 attempts） */
+  n: number;
+  at: string;
+  error: string;
+  /** 谁交回的（IngestToken.id / legacy） */
+  by?: string;
+  /** 这次失败后退避了几分钟；0 = 立刻可再领。判死的那次没有这一项 */
+  backoffMin?: number;
+  /** 客户端当场重试之前的那一次（没单独交回服务端，随最终结果一起报上来） */
+  inPlace?: boolean;
+};
+
+/** 最多留多少条：MAX_ATTEMPTS 次 × 每次至多一条当场重试 + 几条租约到期，10 条够看且不撑爆一行 */
+const ATTEMPT_LOG_MAX = 10;
+const ATTEMPT_ERROR_MAX = 300;
+
+export function parseAttemptLog(raw: string | null | undefined): BrowserTaskAttempt[] {
+  const arr = parseJson<unknown>(raw ?? '[]', []);
+  return Array.isArray(arr) ? (arr.filter((x) => x && typeof x === 'object') as BrowserTaskAttempt[]) : [];
+}
+
+/** 只追加、不覆盖；超出上限丢最旧的 */
+function appendAttempts(raw: string | null | undefined, entries: BrowserTaskAttempt[]): string {
+  const next = [...parseAttemptLog(raw), ...entries.map((e) => ({ ...e, error: (e.error || '未说明原因').slice(0, ATTEMPT_ERROR_MAX) }))];
+  return toJson(next.slice(-ATTEMPT_LOG_MAX));
+}
+
 export async function completeTask(
   workspaceId: string,
   taskId: string,
-  outcome: { ok: boolean; result?: string; error?: string },
+  /**
+   * retriedAfter：新版桌面执行器在采集浏览器冷启动的第一次失败后**原地重跑一次**，不把第一次交回来排队；
+   * 那一次的错误随最终结果（成功或失败都可能）一起报上来，服务端照样留档，且据此判断退避。
+   */
+  outcome: { ok: boolean; result?: string; error?: string; retriedAfter?: string },
   /** 交活的是谁（领活时的 claimerId）。给了就必须与 claimedBy 一致：租约过期被别人重领后，前一个持有者的迟到结果不收。 */
   claimerId?: string,
 ): Promise<{ ok: boolean; status?: string; error?: string }> {
+  // 【退避判据看翻译前的原文】parser_stale 翻成人话后会提到「还没登录」——那只是最常见原因的提示，
+  // 不是「要用户动手」的判据（needsUserAction 也对这句话做了豁免，两道保险）
+  const rawError = outcome.error;
   // 内部错误码不许原样落库/露给用户（见 humanizeExecutorError）
-  outcome = { ...outcome, error: humanizeExecutorError(outcome.error) };
+  outcome = { ...outcome, error: humanizeExecutorError(outcome.error), retriedAfter: humanizeExecutorError(outcome.retriedAfter) };
   const t = await prisma.browserTask.findFirst({
     where: { id: taskId, workspaceId },
-    select: { id: true, kind: true, attempts: true, status: true, claimedBy: true },
+    select: { id: true, kind: true, attempts: true, status: true, claimedBy: true, attemptLog: true },
   });
   // 带 workspaceId 查：不带的话拿到别人的任务 id 就能改别人的状态
   if (!t) return { ok: false, error: '任务不存在' };
@@ -289,13 +331,23 @@ export async function completeTask(
   // 另一路（用户再派一次 → 取代；或取消）可能已把它标成 cancelled。不带条件的 update 会把它
   // 复活成 done/pending 再跑一遍。updateMany 带 status:'claimed'，count=0 就是被人抢先了。
   const guard = { id: t.id, status: 'claimed' as const, ...(claimerId ? { claimedBy: claimerId } : {}) };
+  const nowIso = new Date().toISOString();
+  // 客户端当场重试过的那一次也要留档：它没交回过服务端，这里是唯一能记下它的地方
+  const inPlace: BrowserTaskAttempt[] = outcome.retriedAfter
+    ? [{ n: t.attempts, at: nowIso, error: outcome.retriedAfter, by: claimerId, inPlace: true }]
+    : [];
 
   if (outcome.ok) {
     const n = await prisma.browserTask.updateMany({
       where: guard,
-      data: { status: 'done', result: (outcome.result ?? '').slice(0, 500), error: null, leaseUntil: null },
+      // error 清空（它表示当前结局）；attemptLog **不清**——之前几次为什么没成，事后要查得到
+      data: {
+        status: 'done', result: (outcome.result ?? '').slice(0, 500), error: null, leaseUntil: null,
+        ...(inPlace.length ? { attemptLog: appendAttempts(t.attemptLog, inPlace) } : {}),
+      },
     });
     if (n.count === 0) return { ok: false, error: '这条活刚被取代或取消了，这次结果不收' };
+    if (inPlace.length) log.info('浏览器任务当场重试后成功', { taskId, kind: t.kind, attempt: t.attempts, firstError: (outcome.retriedAfter ?? '').slice(0, 200) });
     const row = await prisma.browserTask.findUniqueOrThrow({ where: { id: t.id } });
     // 派活到干完中间可能隔了几小时（要等用户打开浏览器）。不通知的话，
     // 发起的人得自己想起来回去看——而他多半已经在做别的事了。
@@ -318,6 +370,8 @@ export async function completeTask(
   // 「这个版本不认识」不是偶发失败，再试三次也是同一句话——直接判死，别让 AI 执行多挂两轮
   const unknownKind = /不认识/.test(outcome.error ?? '');
   const canRetry = !unknownKind && retriable(t.kind as BrowserTaskKind) && t.attempts < MAX_ATTEMPTS;
+  // 退避几分钟：第一次失败通常立刻可再领（冷启动那一次），要用户动手的 / 客户端已当场重试过的照旧等（见 kinds.ts）
+  const backoffMin = canRetry ? backoffMinutesAfterFailure(t.attempts, rawError, inPlace.length > 0) : undefined;
   const changed = await prisma.browserTask.updateMany({
     where: guard,
     data: {
@@ -327,14 +381,22 @@ export async function completeTask(
       claimedBy: null,
       claimedAt: null,
       // 【失败后退避，不是下一分钟就再领】（2026-09-04）pending 行的 leaseUntil 借用为「这个时间之前别领」
-      // （claimNextTask 只领 leaseUntil 为空或已过期的）。第 1 次失败等 10 分钟、第 2 次等 30 分钟。
+      // （claimNextTask 只领 leaseUntil 为空或已过期的）。退避 0 分钟 = 留空 = 立刻可领。
       // 原先失败即刻放回，三次失败挤在三分钟里，用户看到采集浏览器反复开关、同一页反复被打开。
-      leaseUntil: canRetry
-        ? new Date(Date.now() + (RETRY_BACKOFF_MINUTES[Math.min(t.attempts, RETRY_BACKOFF_MINUTES.length) - 1] ?? 10) * 60_000)
-        : null,
+      leaseUntil: canRetry && backoffMin ? new Date(Date.now() + backoffMin * 60_000) : null,
+      attemptLog: appendAttempts(t.attemptLog, [
+        ...inPlace,
+        { n: t.attempts, at: nowIso, error: outcome.error ?? '未说明原因', by: claimerId, ...(canRetry ? { backoffMin } : {}) },
+      ]),
     },
   });
   if (changed.count === 0) return { ok: false, error: '这条活刚被取代或取消了，这次结果不收' };
+  // 【每次失败都落一行日志】可重试的失败刻意不通知用户（下面），那排查就只能靠这一行
+  log.warn('浏览器任务这次没跑成', {
+    taskId, kind: t.kind, attempt: t.attempts, by: claimerId,
+    error: (outcome.error ?? '未说明原因').slice(0, 200),
+    next: !canRetry ? '判死' : backoffMin ? `${backoffMin} 分钟后可再领` : '立刻可再领',
+  });
   const failed = await prisma.browserTask.findUniqueOrThrow({ where: { id: t.id } });
   // 【「常见原因是没登录」只在错误确实与登录有关时加】（2026-09-04 审计）：「竞对不存在」「格式不合法」
   // 「超过几分钟没跑完」后面都跟一句没登录，等于教用户去做一件无关的事。
@@ -395,6 +457,53 @@ export async function cancelBrowserTask(workspaceId: string, taskId: string): Pr
 }
 
 /**
+ * 用户点「现在重试」（2026-09-15）：把退避中的活立刻放回可领状态，执行器下一次来问就领走。
+ *
+ * 只动 pending 且在退避期内的：claimed 的正在跑（催也没用）、done/failed 已有结局（要的话重派一次）。
+ * 本来就可领的（leaseUntil 空）直接回 ok——用户看到的「在等」是在等执行器来领，不是在等退避。
+ */
+export async function retryBrowserTaskNow(workspaceId: string, taskId: string): Promise<{ ok: boolean; error?: string }> {
+  const t = await prisma.browserTask.findFirst({ where: { id: taskId, workspaceId }, select: { status: true, leaseUntil: true } });
+  if (!t) return { ok: false, error: '任务不存在' };
+  if (t.status !== 'pending') {
+    return { ok: false, error: t.status === 'claimed' ? '执行器正在跑这条活，不用催' : '这条活已经有结局了，要的话再派一次' };
+  }
+  if (!t.leaseUntil || t.leaseUntil <= new Date()) return { ok: true };
+  await prisma.browserTask.updateMany({ where: { id: taskId, workspaceId, status: 'pending' }, data: { leaseUntil: null } });
+  log.info('用户手动跳过重试退避', { taskId });
+  return { ok: true };
+}
+
+/** 停在「等采集执行器」的运行给界面看的那几样：第几次、上次为什么没成、什么时候自动再领、之前每次的记录。 */
+export type BrowserTaskWaitView = {
+  taskId: string;
+  status: string;
+  attempts: number;
+  /** 最近一次失败原因（只在 pending 退避中给；正在跑/还没跑过时没有） */
+  lastError?: string;
+  /** 退避到什么时候会自动再领（ISO）；空 = 没在退避 */
+  retryAt?: string;
+  log: BrowserTaskAttempt[];
+};
+
+export async function browserTaskWaitView(workspaceId: string, taskId: string): Promise<BrowserTaskWaitView | null> {
+  const t = await prisma.browserTask.findFirst({
+    where: { id: taskId, workspaceId },
+    select: { id: true, status: true, attempts: true, error: true, leaseUntil: true, attemptLog: true },
+  });
+  if (!t) return null;
+  const backingOff = t.status === 'pending' && !!t.leaseUntil && t.leaseUntil > new Date();
+  return {
+    taskId: t.id,
+    status: t.status,
+    attempts: t.attempts,
+    lastError: backingOff ? (t.error ?? undefined) : undefined,
+    retryAt: backingOff ? t.leaseUntil!.toISOString() : undefined,
+    log: parseAttemptLog(t.attemptLog),
+  };
+}
+
+/**
  * 按**紧急度**排的顺序。
  *
  * 数据库的 `orderBy: status` 是字母序（cancelled < claimed < done < expired < failed < pending），
@@ -421,6 +530,8 @@ export async function listBrowserTasksForUi(workspaceId: string, take = 12) {
     select: {
       id: true, kind: true, status: true, origin: true, attempts: true,
       result: true, error: true, expiresAt: true, createdAt: true,
+      // 退避中给界面说「几点自动重试」；每次尝试的记录给「之前为什么没成」
+      leaseUntil: true, attemptLog: true,
     },
   });
   return rows.sort(
@@ -444,12 +555,25 @@ export async function releaseExpiredLeases(now = new Date()): Promise<number> {
     });
     for (const d of dead) await wake(d.id, { ok: false, summary: '采集没跑成：执行器领走后一直没交回结果' });
   }
-  const r = await prisma.browserTask.updateMany({
+  // 逐条放回：租约静默过期也是一次「没跑成」，要记进 attemptLog（否则用户只看到 attempts 在涨、原因是空的）
+  const expired = await prisma.browserTask.findMany({
     where: { status: 'claimed', leaseUntil: { lt: now } },
-    data: { status: 'pending', claimedBy: null, claimedAt: null, leaseUntil: null },
+    select: { id: true, attempts: true, attemptLog: true, claimedBy: true },
   });
-  if (r.count > 0) log.info('浏览器任务租约到期已放回', { count: r.count });
-  return r.count;
+  for (const e of expired) {
+    await prisma.browserTask.updateMany({
+      where: { id: e.id, status: 'claimed' },
+      data: {
+        status: 'pending', claimedBy: null, claimedAt: null, leaseUntil: null,
+        attemptLog: appendAttempts(e.attemptLog, [{
+          n: e.attempts, at: now.toISOString(), by: e.claimedBy ?? undefined, backoffMin: 0,
+          error: `执行器领走后 ${LEASE_MINUTES} 分钟没交回结果（租约到期，已放回队列；多半是那台电脑睡了或网络断了）`,
+        }]),
+      },
+    });
+  }
+  if (expired.length > 0) log.info('浏览器任务租约到期已放回', { count: expired.length, ids: expired.map((e) => e.id) });
+  return expired.length;
 }
 
 /**

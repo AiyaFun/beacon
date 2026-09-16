@@ -4,6 +4,8 @@ import { toJson, parseJson } from '../json';
 import { llmComplete } from '../llm/gateway';
 import { generateRecommendations } from '../pipeline';
 import { resolveDraftTarget, loadDraftContext, buildDraftMessages, persistDraftVersion } from '../studio/draft-core';
+import { tidyDraft } from '../studio/platform-format';
+import { finishDraft } from '../studio/humanize-pass';
 import { runSkill } from '../skills';
 import { runCover } from '../cover/run';
 import { planScenes, runIllustration } from '../illustration/run';
@@ -138,15 +140,16 @@ async function runStep(
         // Mock 的初稿是示例文案。写进草稿会让后面每一步都围着假内容转，且用户很可能直接拿去发。
         return { ok: false, message: '还没接入真实模型（这一步只会产出示例内容），已停在这里' };
       }
+      const content = (await finishDraft({ tenantId: ctx.tenantId, text: tidyDraft(res.text, target.target.platform), platform: target.target.platform, persona: target.target.persona, accountCtx: dctx.accountCtx, providerId: ctx.providerId ?? undefined })).text;
       await persistDraftVersion({
         workspaceId: ctx.workspaceId,
         accountId: ctx.accountId,
         draftId: target.target.draftId,
         topicTitle: target.target.topicTitle,
-        content: res.text,
+        content,
         label: '工作流模板生成的初稿',
       });
-      return { ok: true, message: `初稿写好了（${res.text.length} 字）` };
+      return { ok: true, message: `初稿写好了（${content.length} 字）` };
     }
 
     case 'skill': {

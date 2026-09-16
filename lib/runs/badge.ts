@@ -26,6 +26,8 @@ export type RunEntry = {
   memberId?: string;
   memberName?: string;
   steps?: RunStep[];
+  /** 采集任务失败后的退避到期时刻（只有退避中的才有）：界面据它给「现在重试」（2026-09-15） */
+  retryAt?: Date;
 };
 
 /**

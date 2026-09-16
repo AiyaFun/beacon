@@ -276,22 +276,34 @@ async fn poll_and_run(app: &AppHandle, cfg: &ExecutorConfig) -> Result<(), Strin
         }
 
         // 领到活了才去碰浏览器：没活的时候不要每分钟探一次 Chrome
-        let outcome = match ensure_cdp(app) {
-            // 【超时必须容得下登录等待】2026-09-04 审计：这里原本是 120 秒，而登录墙分支要等用户
-            // 登录（LOGIN_WAIT_ROUNDS × ~4.2 秒）。于是用户正在输密码、界面上却已经报
-            // 「这一页超过两分钟没跑完」——一个与真实原因毫不相干的理由，而那句写好的
-            // 「去采集浏览器窗口里登录」永远执行不到。超时值必须由等待预算推出来，不能各写各的。
-            Ok(()) => tokio::time::timeout(Duration::from_secs(TASK_TIMEOUT_SECS), execute(app, &client, cfg, task))
-                .await
-                .unwrap_or_else(|_| Err(format!("这一页超过 {} 分钟没跑完，放弃", TASK_TIMEOUT_SECS / 60).into())),
-            Err(e) => Err(e),
+        let (cold, mut outcome) = match ensure_cdp(app) {
+            Ok(cold) => (cold, execute_with_timeout(app, &client, cfg, task).await),
+            Err(e) => (false, Err(e)),
         };
+        // 【冷启动的第一次失败：原地重跑一次，不交回去排队】（2026-09-15 真机）采集浏览器由这一轮刚拉起时，
+        // 第一次尝试常常因为页面没渲染完/执行上下文没起来而失败；此前立刻交回失败 → 服务端按退避 10 分钟
+        // 才让再领 → 用户等了 11 分钟，而第二次 20 秒就采完。这里趁还持有这条活（租约 15 分钟）直接再跑一次：
+        // 复用的是同一页，不会再开窗口。要用户动手的错误（登录墙/人机验证）与「再试也一样」的错误不重跑。
+        // 第一次的原因随最终结果一起交回（retriedAfter），服务端照样留档，且据此不再给第二次免退避。
+        let mut retried_after: Option<String> = None;
+        let first_err = match &outcome {
+            Err(e) if cold && worth_inplace_retry(e) => Some(e.clone()),
+            _ => None,
+        };
+        if let Some(first) = first_err {
+            retried_after = Some(first);
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            outcome = execute_with_timeout(app, &client, cfg, task).await;
+        }
 
-        let body = match &outcome {
+        let mut body = match &outcome {
             Ok(Outcome::Parsed(p)) => serde_json::json!({ "taskId": task_id, "ok": true, "parsed": p }),
             Ok(Outcome::Read(d)) => serde_json::json!({ "taskId": task_id, "ok": true, "data": d }),
             Err(e) => serde_json::json!({ "taskId": task_id, "ok": false, "error": e.chars().take(300).collect::<String>() }),
         };
+        if let Some(first) = &retried_after {
+            body["retriedAfter"] = serde_json::Value::String(first.chars().take(300).collect());
+        }
         // 【交活必须看回应】（2026-09-04 审计）原先 `let _ = ...send()`：网络抖一下、服务端 500、
         // 令牌被吊销（401）、活已被取代（409）——一律当成功记 done，客户端一片安静，
         // 服务端那条任务仍是 claimed，15 分钟后被重领再采一遍。
@@ -335,8 +347,35 @@ async fn poll_and_run(app: &AppHandle, cfg: &ExecutorConfig) -> Result<(), Strin
 /// 真机三次失败在同一句「Chrome 正开着但没打开调试端口，请先 ⌘Q」——而且就算他退出了也没用：
 /// **Chrome ≥136 拒绝在默认 user-data-dir 上开调试端口**，他机器上是 152。
 /// 现在起独立 profile 的采集浏览器（9223），与他日常的 Chrome 互不干扰，他什么都不用退出。
-fn ensure_cdp(app: &AppHandle) -> Result<(), String> {
-    crate::collect_browser::ensure(app).map(|_| ())
+/// 返回 true = 采集浏览器是这一次刚拉起来的（冷启动），见 collect_browser::ensure_reporting。
+fn ensure_cdp(app: &AppHandle) -> Result<bool, String> {
+    crate::collect_browser::ensure_reporting(app).map(|(_, cold)| cold)
+}
+
+/// 单任务带硬超时地跑一遍。
+///
+/// 【超时必须容得下登录等待】2026-09-04 审计：这里原本是 120 秒，而登录墙分支要等用户
+/// 登录（LOGIN_WAIT_ROUNDS × ~4.2 秒）。于是用户正在输密码、界面上却已经报
+/// 「这一页超过两分钟没跑完」——一个与真实原因毫不相干的理由，而那句写好的
+/// 「去采集浏览器窗口里登录」永远执行不到。超时值必须由等待预算推出来，不能各写各的。
+async fn execute_with_timeout(app: &AppHandle, client: &reqwest::Client, cfg: &ExecutorConfig, task: &serde_json::Value) -> Result<Outcome, String> {
+    tokio::time::timeout(Duration::from_secs(TASK_TIMEOUT_SECS), execute(app, client, cfg, task))
+        .await
+        .unwrap_or_else(|_| Err(format!("这一页超过 {} 分钟没跑完，放弃", TASK_TIMEOUT_SECS / 60)))
+}
+
+/// 这个错误值不值得原地再跑一次（只在冷启动那一次用）。
+///
+/// 只排除两类：要用户动手的（再跑只会把登录页再弹到他面前），与「再跑一遍也是同一句」的
+/// （版本不认识 / 连不上站点 / 取不到脚本 / 已经跑满超时）。其余——页面没准备好、调试通道、
+/// 解析器在这一页认不出主页、取不到内容——都是冷启动那一次的典型样子。
+/// 措辞与服务端 lib/browser-task/kinds.ts 的 USER_ACTION_ERROR_HINTS 对齐，改一边要改另一边。
+fn worth_inplace_retry(err: &str) -> bool {
+    const SKIP: &[&str] = &[
+        "等你在采集浏览器里登录", "所以读不到你的内容", "人机验证", "访问过于频繁",
+        "不认识", "打不开这个网址", "取不到解析脚本", "解析脚本回应", "没带目标地址", "脚本包里没有", "没跑完，放弃",
+    ];
+    !SKIP.iter().any(|s| err.contains(s))
 }
 
 /// 页面上那圈「烽火台正在采集」的标识（2026-09-04，用户点名要）。

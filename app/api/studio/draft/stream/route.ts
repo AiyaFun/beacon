@@ -3,6 +3,8 @@ import { can } from '@/lib/rbac';
 import { llmCompleteStream } from '@/lib/llm/gateway';
 import { checkFactDrift } from '@/lib/humanize/factcheck';
 import { resolveDraftTarget, loadDraftContext, buildDraftMessages, persistDraftVersion } from '@/lib/studio/draft-core';
+import { tidyDraft } from '@/lib/studio/platform-format';
+import { finishDraft } from '@/lib/studio/humanize-pass';
 
 // 初稿的**流式**出口：边写边显示，不再是转一分钟圈然后整篇蹦出来。
 //
@@ -70,12 +72,23 @@ export async function POST(req: Request) {
         return;
       }
 
-      const content = full.trim();
+      // 落库前做确定性清洗（markdown 小标题/加粗/字段标签）：预览里流过的是原文，存下来的是能直接粘出去的
+      let content = tidyDraft(full, target.platform);
       if (!content) {
         send('error', { error: 'AI 没返回内容，请重试' });
         controller.close();
         return;
       }
+      // 第二道：自动去 AI 味（测出套话/节奏问题才多调一次）。改了就把整篇推给前端替换预览（polished），存的也是改后的
+      let humanize: { before: number | null; after: number | null; changed: boolean; note?: string } | undefined;
+      try {
+        const human = await finishDraft({ tenantId: s.tenantId, text: content, platform: target.platform, persona: target.persona, accountCtx: ctx.accountCtx });
+        humanize = { before: human.before, after: human.after, changed: human.changed, note: human.note };
+        if (human.changed) {
+          content = human.text;
+          send('polished', content);
+        }
+      } catch { /* 这一道绝不拖垮起稿 */ }
 
       try {
         const { seq } = await persistDraftVersion({
@@ -87,7 +100,7 @@ export async function POST(req: Request) {
         });
         // 与非流式同一道闸：多出来的数字如实告警，不假装模型很听话
         const drift = checkFactDrift(`${target.topicTitle} ${target.topicAngle} ${ctx.accountCtx.text}`, content);
-        send('done', { draftId: target.draftId, seq, warning: drift.warning });
+        send('done', { draftId: target.draftId, seq, warning: drift.warning, humanize });
       } catch (e) {
         // 内容已经生成出来了（额度也花了），落库失败要如实说，别让用户以为存下了
         send('error', { error: `内容已生成但保存失败：${(e as Error).message}` });

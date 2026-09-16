@@ -16,6 +16,10 @@ import { PublishChannelCard, type CredView } from '../PublishChannelCard';
 import { CheckAllCard } from './CheckAllCard';
 import { HubHeader } from '@/components/HubHeader';
 import { getServerLang } from '@/lib/i18n/server';
+import { can as editionCan } from '@/lib/edition';
+import { getChatgptChannel, chatgptChannelView, CHATGPT_VENDOR } from '@/lib/llm/chatgpt/channel';
+import { codexCliAvailable } from '@/lib/llm/chatgpt/auth';
+import { ChatgptSubscriptionCard } from '../ChatgptSubscriptionCard';
 
 export const dynamic = 'force-dynamic';
 
@@ -41,6 +45,7 @@ const VENDOR_LABEL: Record<string, { zh: string; en: string }> = {
   together: { zh: 'Together AI', en: 'Together AI' },
   deepinfra: { zh: 'DeepInfra', en: 'DeepInfra' },
   custom: { zh: '自定义', en: 'Custom' },
+  chatgpt: { zh: 'ChatGPT 订阅', en: 'ChatGPT subscription' },
 };
 
 const STATUS_META: Record<string, { dot: string; textZh: string; textEn: string }> = {
@@ -95,6 +100,11 @@ export default async function KeysPage() {
   const wxCred = credOf('wechat');
   const wbCred = credOf('weibo');
 
+  // ChatGPT 订阅渠道（2026-09-15）：只在整机版/私有化渲染；SaaS 连卡都不出（server action 那边也拒）
+  const chatgptOn = editionCan('chatgptSubscription');
+  const chatgptRow = chatgptOn ? await getChatgptChannel(s.tenantId) : null;
+  const chatgptView = chatgptRow ? chatgptChannelView(chatgptRow) : null;
+
   const totalBotCount = botIntegrations.length;
   const activeBotCount = botIntegrations.filter((b) => b.enabled).length;
 
@@ -137,6 +147,8 @@ export default async function KeysPage() {
 
       <CheckAllCard readOnly={!canManage} />
 
+      {chatgptOn && <ChatgptSubscriptionCard view={chatgptView} cliAvailable={codexCliAvailable()} readOnly={!canManage} />}
+
       <Card
         title={isEn ? 'Model Channels (BYOK)' : '模型渠道（BYOK）'}
         sub={isEn ? 'Encrypted storage · Write-only · Bring your own AI keys, platform only charges tooling fee' : '加密存储 · 只写不读 · 用你自己的 AI 账号，平台只收工具钱'}
@@ -158,7 +170,8 @@ export default async function KeysPage() {
                     dot: (STATUS_META[p.status] ?? STATUS_META.untested).dot,
                     text: isEn ? (STATUS_META[p.status] ?? STATUS_META.untested).textEn : (STATUS_META[p.status] ?? STATUS_META.untested).textZh,
                   };
-              const masked = maskKey(decryptKey(p.apiKeyEnc));
+              // ChatGPT 订阅那一行里存的是 OAuth token 不是 Key，脱敏显示一个 JSON 片段没有意义
+              const masked = p.vendor === CHATGPT_VENDOR ? (isEn ? 'subscription login · no key' : '订阅登录 · 无 Key') : maskKey(decryptKey(p.apiKeyEnc));
               const vendorInfo = VENDOR_LABEL[p.vendor];
               const vendorName = vendorInfo ? (isEn ? vendorInfo.en : vendorInfo.zh) : p.vendor;
               return (

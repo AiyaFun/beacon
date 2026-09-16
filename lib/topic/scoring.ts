@@ -53,7 +53,8 @@ export const ANGLE_SHAPE_LABELS: Record<AngleShape, string> = {
 
 // 每种形状「算写实了」的判据。**prompt 直接从这张表拼**，不在 prompt 里另抄一份：
 // 两处各写一遍，改了一处忘另一处，模型收到的要求就和这里的口径悄悄分了家。
-const ANGLE_SHAPE_RULES: Record<AngleShape, string> = {
+// 初稿提示词也直接引这张表（lib/studio/draft-core buildPlanBlock）：选题中心判定的「答案结构」就是稿子的骨架
+export const ANGLE_SHAPE_RULES: Record<AngleShape, string> = {
   definition: '必须划出边界——它是什么，更要说清它不是什么',
   comparison: '必须点名对比的双方/多方，并给出至少两个对比维度（成本、门槛、适用人群……）',
   list: '必须给出条目数，并说清这些条目的并列口径（按什么切分、彼此为什么不重叠）',

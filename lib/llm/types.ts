@@ -33,6 +33,13 @@ export type ToolCall = {
   id: string;
   name: string;
   arguments: string;
+  /**
+   * 推理模型的**加密思考项**，不透明字符串（2026-09-15，ChatGPT 订阅渠道）。
+   * Responses API 在 store=false 时要求：回灌工具结果那一轮必须把上一轮的 reasoning 项原样带回，
+   * 否则 400「function_call 没有对应的 reasoning 项」。它跟着 toolCalls 一起进对话记录、再原样回去；
+   * OpenAI 兼容渠道看不懂它，会直接忽略。只挂在这一批调用的第一条上。
+   */
+  reasoning?: string;
 };
 
 // content 保持可以是纯字符串：绝大多数调用是纯文本，不该被多模态改造拖累可读性。

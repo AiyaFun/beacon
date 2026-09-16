@@ -1,0 +1,94 @@
+# cnb.cool 流水线（2026-09-01 用户拍板：桌面包不再用 GitHub Actions；且不出自托管机器，
+# 直接用 cnb 官方 Linux 节点交叉构建 Windows 安装包）。
+#
+# 【为什么 Linux 能出 Windows 包】exe 主程序交叉编译早就验证可行（2026-08-27 在 Mac 上
+# 出过真 PE32+，当时卡死的是 macOS arm64 的 makensis——Homebrew 那个包是坏的）。
+# 而 Linux 的 NSIS 是正经 apt 包，Tauri 官方支持 cargo-xwin + clang/lld + makensis 这条链。
+# 首次触发即验证：哪一步红了看日志改这里，不必回到「自己养一台 Windows 机」。
+#
+# 【为什么 mac 不进流水线】mac 包必须签名+公证，凭据（Developer ID 证书、公证钥匙串、
+# 更新真钥匙 ~/.beacon-signing/）只住打包机，绝不进任何 CI——本地 desktop/build-mac.sh 一条龙。
+#
+# 【更新签名】TAURI_SIGNING_PRIVATE_KEY 用仓库**明面上的一次性钥匙**
+# （desktop/ci-throwaway-updater.key，不是机密）：只为让打包器在配了 updater 公钥时走完流程。
+# 它签出的 .sig 一律作废——pack:desktop 收集时在打包机上用真钥匙重签，
+# 客户端信任的公钥也只对应真钥匙。守卫：tests/desktop/updater-wiring.test.ts。
+#
+# 【产物怎么拿】最后一步把 exe 强推到本仓库的 desktop-artifacts 孤儿分支
+# （CNB_TOKEN 是流水线内置临时令牌，官方文档明说可用于代码推送）。
+# 打包机上 git fetch 那个分支即可取回；网页上进该分支也能直接下载。
+
+# 顶层键匹配**分支名**（cnb 语义）。写 main 的话流水线只挂 main，而这棵树推的分支是
+# opensource-clean——按钮点了也永远排不到活。"**" 表示任意分支；实际入口由
+# .cnb/web_trigger.yml 的 reg 限定在哪些分支页出现按钮。
+"**":
+  # 分支详情页的「构建 Windows 桌面包」按钮触发（见 .cnb/web_trigger.yml）。
+  # 刻意不挂 push：桌面壳极少改，这条要编译整个 Rust 依赖树，没必要每次 push 白烧十几分钟。
+  web_trigger_desktop_win:
+    - docker:
+        # 【为什么不是 ubuntu:24.04】首跑（cnb-a9i-1k1dld16k）就死在这：Ubuntu 的 npm 包
+        # 会拖进 350+ 个 node-* deb（日志里排到第 352 个），整条链在 dpkg 配置阶段炸掉
+        # （E: Sub-process /usr/bin/dpkg returned an error code (1)），
+        # 还顺带把日志撑爆 102400 上限、真正的错误被截断。
+        # 官方 node 镜像自带 Node 20 与 git，这一整类问题从根上就没有了。
+        image: node:20-bookworm
+      stages:
+        - name: 系统依赖（clang/lld/llvm + NSIS）
+          script: |
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            # 输出重定向掉：cnb 单条日志上限 102400，apt 刷屏会把后面真正要看的错误挤没
+            apt-get update -qq > /dev/null
+            # libayatana-appindicator3-dev：**Windows 包为什么要装 Linux 的托盘库**——
+            # tauri-cli 在打包阶段会按**宿主系统**探测托盘依赖（我们的壳用了 tray-icon 特性），
+            # 探不到就 panic「Can't detect any appindicator library」并 core dump，
+            # 而此时 Windows 的 exe 其实已经编译好了（cnb-17g-1k1dm8bp0 实测：
+            # Built application at ... beacon-desktop.exe 之后才 Aborted）。
+            # 装上它只是让宿主侧的探测过关，一个字节都不会进 Windows 产物。
+            apt-get install -y -qq --no-install-recommends \
+              clang lld llvm nsis libayatana-appindicator3-dev > /dev/null
+            # cargo-xwin 找的是**不带版本号**的 llvm-rc/llvm-lib/llvm-dlltool；
+            # Debian 只装带版本号的（llvm-rc-14 之类），缺链接要到构建阶段才报「找不到 llvm-rc」
+            for t in llvm-rc llvm-lib llvm-dlltool; do
+              if ! command -v "$t" >/dev/null 2>&1; then
+                src=$(ls /usr/bin/${t}-* 2>/dev/null | head -1)
+                [ -n "$src" ] && ln -sf "$src" "/usr/bin/$t"
+              fi
+            done
+            echo "node $(node -v) · $(clang --version | head -1) · makensis $(makensis -VERSION | head -1) · llvm-rc=$(command -v llvm-rc || echo 缺) · $(uname -m)"
+        - name: Rust + Windows 交叉目标 + cargo-xwin
+          script: |
+            set -e
+            curl -sSf https://sh.rustup.rs | sh -s -- -y -q --default-toolchain stable --profile minimal
+            . "$HOME/.cargo/env"
+            rustup -q target add x86_64-pc-windows-msvc
+            cargo install cargo-xwin --locked -q
+        - name: 交叉构建 NSIS 安装包
+          script: |
+            set -e
+            . "$HOME/.cargo/env"
+            export TAURI_SIGNING_PRIVATE_KEY="$(cat desktop/ci-throwaway-updater.key)"
+            export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
+            cd desktop
+            npm install --no-audit --no-fund --silent > /dev/null
+            npx tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc --bundles nsis
+        - name: 验明产物是真 PE32+ 并记录指纹
+          script: |
+            set -e
+            NSIS_DIR=desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis
+            ls -la "$NSIS_DIR"
+            file desktop/src-tauri/target/x86_64-pc-windows-msvc/release/beacon-desktop.exe
+            sha256sum "$NSIS_DIR"/*.exe
+        - name: 产物推到 desktop-artifacts 分支（打包机 fetch 即取）
+          script: |
+            set -e
+            NSIS_DIR=desktop/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis
+            ORIGIN="$(git config --get remote.origin.url | sed -E 's#^https://[^@/]*@#https://#')"
+            EXPORT=$(mktemp -d)
+            cp "$NSIS_DIR"/*.exe "$EXPORT/"
+            cd "$EXPORT"
+            git init -q -b desktop-artifacts
+            git -c user.name=cnb-pipeline -c user.email=pipeline@cnb.cool add -A
+            git -c user.name=cnb-pipeline -c user.email=pipeline@cnb.cool commit -qm "win desktop build $(date -u +%FT%TZ)"
+            git push -f "$(echo "$ORIGIN" | sed -E "s#^https://#https://cnb:${CNB_TOKEN}@#")" desktop-artifacts
+            echo "✅ 已推 desktop-artifacts 分支：$(ls -la *.exe)"

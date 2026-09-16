@@ -18,6 +18,7 @@ import { checkArkSize } from '../cover/specs';
 import { can } from '../edition';
 import { pickPlatformProvider, routedPlatformProvider } from './platform-providers';
 import { assertPlatformBudget } from '../ops/platform-config';
+import { getChatgptChannel, chatgptProviderFromRow, type ChatgptChannelRow } from './chatgpt/channel';
 
 const log = createLogger({ module: 'image' });
 
@@ -75,7 +76,30 @@ export type ImageGenResult =
   | { ok: true; images: GeneratedImage[]; model: string; source: QuotaSource }
   | { ok: false; reason: 'not_configured' | 'quota' | 'failed'; error: string };
 
-type ImageProvider = { baseUrl: string; apiKey: string; model: string; source: QuotaSource };
+type ImageProvider = {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  source: QuotaSource;
+  /** 走 ChatGPT 订阅渠道生图时带上那一行（baseUrl/apiKey 此时为空，见 resolveImageProvider ①b） */
+  chatgpt?: ChatgptChannelRow;
+};
+
+/**
+ * 方舟那套「宽x高」→ OpenAI image_generation 认的三档。按长宽比就近：方 / 横 / 竖。
+ * 尺寸与封面规格不完全一致时由下游按需裁切（bytes 进内存后的处理与方舟同一条路）。
+ */
+export function openaiImageSize(size: string): '1024x1024' | '1536x1024' | '1024x1536' {
+  const m = /^(\d+)\s*[x×]\s*(\d+)$/i.exec(size.trim());
+  if (!m) return '1024x1024';
+  const w = Number(m[1]);
+  const h = Number(m[2]);
+  if (!w || !h) return '1024x1024';
+  const r = w / h;
+  if (r > 1.15) return '1536x1024';
+  if (r < 0.87) return '1024x1536';
+  return '1024x1024';
+}
 
 /**
  * 解析这个租户的图像 provider。优先级（对齐 lib/llm/gateway.ts 的选择哲学）：
@@ -95,6 +119,15 @@ async function resolveImageProvider(tenantId: string | null): Promise<ImageProvi
       const routing = parseJson<Record<string, string>>(p.routing, {});
       if (routing.image === p.id) {
         return { baseUrl: p.baseUrl, apiKey: decryptKey(p.apiKeyEnc), model: p.model, source: 'byok' };
+      }
+    }
+    // ①b ChatGPT 订阅渠道**显式**指到 image（2026-09-15，只在整机版/私有化）：走 Responses 的 image_generation 工具。
+    //    不兜底、不静默：它出的图没有方舟那种服务端强制的显式水印，只有用户自己把「封面生图」指过去才用；
+    //    隐式标识照常在 lib/cover/run.ts 注入。排在「任意豆包渠道」之前，因为显式路由永远压过顺带命中。
+    if (can('chatgptSubscription')) {
+      const gpt = await getChatgptChannel(tenantId);
+      if (gpt && gpt.status !== 'failed' && parseJson<Record<string, string>>(gpt.routing, {}).image === gpt.id) {
+        return { baseUrl: '', apiKey: '', model: gpt.model, source: 'byok', chatgpt: gpt };
       }
     }
     // ② 任意豆包渠道：复用 base+key，模型强制默认即梦（该渠道的 model 多半是文本/视频模型，不能拿来生图）
@@ -251,6 +284,30 @@ export async function llmImage(
     // 否则占的是一个桶、还的是另一个桶
     await Promise.all([releaseLlmQuota(tenantId, provider.source), releaseImageDailyCap(tenantId, provider.source)]);
   };
+
+  // ChatGPT 订阅渠道：不是 /images/generations，是 Responses 的 image_generation 工具（见 lib/llm/chatgpt/provider.ts）
+  if (provider.chatgpt) {
+    try {
+      const b64s = await chatgptProviderFromRow(provider.chatgpt).generateImage(
+        { prompt: req.prompt, size: openaiImageSize(req.size), referenceImages: req.referenceImages },
+        opts?.timeoutMs ?? IMAGE_TIMEOUT_MS,
+      );
+      const images: GeneratedImage[] = [];
+      for (const b of b64s) {
+        const bytes = decodeBase64(b);
+        if (bytes.length > 0) images.push({ bytes, mime: sniffImageMime(bytes) ?? 'image/png' });
+      }
+      if (!images.length) {
+        await giveBack();
+        return { ok: false, reason: 'failed', error: 'ChatGPT 没有返回图片（这个模型/账号可能不支持生图工具），请稍后重试或把「封面生图」改指回方舟' };
+      }
+      await recordImageUsage(tenantId, provider);
+      return { ok: true, images, model: provider.model, source: provider.source };
+    } catch (err) {
+      await giveBack();
+      return { ok: false, reason: 'failed', error: (err as Error).message.slice(0, 200) };
+    }
+  }
 
   try {
     const body: Record<string, unknown> = {

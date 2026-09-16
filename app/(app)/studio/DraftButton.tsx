@@ -46,7 +46,7 @@ export function DraftButton({ draftId, topicId }: { draftId: string | null; topi
       }
       finish(
         r.draftId,
-        (r.stages === 2 ? '深度模式已生成（大纲 → 成稿）' : note) + (r.warning ? `｜⚠️ ${r.warning}` : ''),
+        (r.stages === 2 ? '深度模式已生成（大纲 → 成稿）' : note) + (r.warning ? `｜⚠️ ${r.warning}` : '') + (r.humanize?.note ? `｜${r.humanize.note}` : ''),
       );
     });
   }
@@ -97,10 +97,13 @@ export function DraftButton({ draftId, topicId }: { draftId: string | null; topi
             seenDelta = true;
             setPreview((p) => p + String(data));
             previewRef.current?.scrollTo({ top: previewRef.current.scrollHeight });
+          } else if (ev === 'polished') {
+            // 服务端自动去 AI 味后的整篇：替换预览
+            setPreview(String(data));
           } else if (ev === 'done') {
-            const d = data as { draftId?: string; seq?: number; warning?: string };
+            const d = data as { draftId?: string; seq?: number; warning?: string; humanize?: { note?: string } };
             setStreaming(false);
-            finish(d.draftId ?? landedDraftId, `已生成第 ${d.seq} 版初稿${d.warning ? `｜⚠️ ${d.warning}` : ''}`);
+            finish(d.draftId ?? landedDraftId, `已生成第 ${d.seq} 版初稿${d.warning ? `｜⚠️ ${d.warning}` : ''}${d.humanize?.note ? `｜${d.humanize.note}` : ''}`);
             return;
           } else if (ev === 'error') {
             setStreaming(false);

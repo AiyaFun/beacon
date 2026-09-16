@@ -27,6 +27,8 @@ export const runsDict = {
     rerunConfirm: '重新跑一遍这条智能体？会重新消耗额度。',
     cancelBrowser: '不用采了',
     cancelling: '取消中…',
+    retryBrowser: '现在重试',
+    retryingBrowser: '放回队列中…',
     status: {
       waiting: '等你确认',
       running: '正在跑',
@@ -75,6 +77,8 @@ export const runsDict = {
     rerunConfirm: 'Rerun this agent workflow? This will consume quota.',
     cancelBrowser: 'Cancel Task',
     cancelling: 'Cancelling…',
+    retryBrowser: 'Retry now',
+    retryingBrowser: 'Requeuing…',
     status: {
       waiting: 'Pending Approval',
       running: 'Running',

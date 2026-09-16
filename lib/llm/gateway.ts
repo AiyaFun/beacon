@@ -12,6 +12,7 @@ import type { LlmFunction } from '../constants';
 import type { ChatMessage, LlmProvider, LlmResult, ToolDef } from './types';
 import { MockProvider } from './mock';
 import { OpenAICompatibleProvider } from './openai-compatible';
+import { CHATGPT_VENDOR, chatgptProviderFromRow, getChatgptChannel } from './chatgpt/channel';
 import { looksVideoCapable, VIDEO_MODEL_HINT } from './ark';
 // 平台渠道的读侧收在一处（文本与图像共用同一份缓存与选路，见该文件顶部注释）
 import { pickPlatformProvider, invalidatePlatformProviderCache } from './platform-providers';
@@ -80,18 +81,29 @@ export async function llmVision(
   opts?: { temperature?: number; json?: boolean },
 ): Promise<VisionResult> {
   assertNotDemo(tenantId);
-  const provider = visionFromEnv();
+  const envProvider = visionFromEnv();
+  // 整机版/私有化：没配视觉模型但接了 ChatGPT 订阅 → 用它看图（GPT 系列本就多模态，截图当 input_image 直接喂）。
+  // 烧的是用户自己的订阅，按 byok 记账、不过平台预算闸。
+  const gpt = !envProvider && tenantId && can('chatgptSubscription') ? await getChatgptChannel(tenantId).catch(() => null) : null;
+  const provider = envProvider ?? (gpt && gpt.status !== 'failed' ? chatgptProviderFromRow(gpt) : null);
   if (!provider) {
-    return { ok: false, reason: 'not_configured', error: '未配置视觉模型（需在服务端设置 BEACON_VISION_LLM_MODEL）' };
+    return {
+      ok: false,
+      reason: 'not_configured',
+      error: can('chatgptSubscription')
+        ? '未配置视觉模型（在服务端设置 BEACON_VISION_LLM_MODEL，或到「接入与密钥」接入 ChatGPT 订阅，看图会自动走它）'
+        : '未配置视觉模型（需在服务端设置 BEACON_VISION_LLM_MODEL）',
+    };
   }
-  await assertPlatformBudget(); // 视觉模型走 env 平台渠道 = 平台垫付，同样受预算闸约束
-  await assertLlmQuota(tenantId, 'platform'); // 真实付费调用，照常占额度
+  const source: QuotaSource = envProvider ? 'platform' : 'byok';
+  if (source === 'platform') await assertPlatformBudget(); // 视觉模型走 env 平台渠道 = 平台垫付，同样受预算闸约束
+  await assertLlmQuota(tenantId, source); // 真实付费调用，照常占额度
   try {
     const result = await provider.complete(messages, opts);
-    await recordUsage(tenantId, 'scoring', result, 'platform');
+    await recordUsage(tenantId, 'scoring', result, source);
     return { ok: true, text: result.text, model: result.model };
   } catch (err) {
-    await releaseLlmQuota(tenantId, 'platform'); // 调用失败不占名额，与 llmComplete 同口径
+    await releaseLlmQuota(tenantId, source); // 调用失败不占名额，与 llmComplete 同口径
     return { ok: false, reason: 'failed', error: (err as Error).message.slice(0, 200) };
   }
 }
@@ -191,6 +203,9 @@ async function resolveWithSource(
   // 用户显式选了「平台渠道」（外接入）：跳过自己的 BYOK 段，直接落到下面平台那一段。
   // 不这么做的话他选了平台、系统还是用他自己的 Key——那就是选项没生效。
   const forcePlatform = opts?.providerId === PLATFORM_PROVIDER_ID;
+  // 海外渠道能不能用：调用方显式放行（出海内容场景），或这个形态整体放行（整机版/私有化跑在客户自己机器上，
+  // 见 lib/edition.ts overseasLlm）。SaaS 里两者都没有 → 海外渠道整段跳过，行为与从前一致。
+  const overseasOk = opts?.allowOverseas === true || can('overseasLlm');
 
   if (tenantId && !forcePlatform) {
     const providers = await prisma.modelProvider.findMany({
@@ -204,7 +219,7 @@ async function resolveWithSource(
     // 落空时**不报错、按原有次序继续**：模型被删/被停用后用户的旧选择不该让他发不出消息。
     if (opts?.providerId) {
       const picked = providers.find((p) => p.id === opts.providerId);
-      if (picked && (picked.region !== 'overseas' || opts?.allowOverseas)) {
+      if (picked && (picked.region !== 'overseas' || overseasOk)) {
         return { provider: build(picked), source: 'byok' };
       }
       // 【显式指定就是严格的】（2026-09-11 审计修正）指定的渠道已删/失效/境外受限时**不**静默换成别的：
@@ -216,14 +231,14 @@ async function resolveWithSource(
       for (const p of providers) {
         const routing = parseJson<Record<string, string>>(p.routing, {});
         if (routing[want] === p.id) {
-          if (p.region === 'overseas' && !opts?.allowOverseas) continue;
+          if (p.region === 'overseas' && !overseasOk) continue;
           return { provider: build(p), source: 'byok' };
         }
       }
     }
     // 次选：默认 provider
     const def = providers.find((p) => p.isDefault);
-    if (def && (def.region !== 'overseas' || opts?.allowOverseas)) {
+    if (def && (def.region !== 'overseas' || overseasOk)) {
       return { provider: build(def), source: 'byok' };
     }
   }
@@ -267,11 +282,17 @@ export async function resolveProvider(
 }
 
 function build(p: {
+  id?: string;
+  vendor?: string;
   label: string;
   baseUrl: string;
   apiKeyEnc: string;
   model: string;
 }): LlmProvider {
+  // ChatGPT 订阅渠道：apiKeyEnc 里是 OAuth token 不是 Key，协议是 Responses 不是 chat/completions（lib/llm/chatgpt）
+  if (p.vendor === CHATGPT_VENDOR && p.id) {
+    return chatgptProviderFromRow({ id: p.id, label: p.label, model: p.model, apiKeyEnc: p.apiKeyEnc });
+  }
   return new OpenAICompatibleProvider({
     name: p.label,
     baseUrl: p.baseUrl,

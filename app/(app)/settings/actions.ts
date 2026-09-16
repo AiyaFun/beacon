@@ -14,6 +14,7 @@ import { encryptKey, decryptKey } from '@/lib/crypto';
 import { channelOf } from '@/lib/publish/capability';
 
 import { checkVendorEndpoint, canUseOverseas, LLM_FUNCTIONS, looksNonChatModel } from '@/lib/constants';
+import { CHATGPT_VENDOR, pingChatgptChannel } from '@/lib/llm/chatgpt/channel';
 import { pingProvider } from '@/lib/llm/connectivity';
 import { parseJson } from '@/lib/json';
 
@@ -83,6 +84,12 @@ export async function actTestProvider(id: string) {
   requireRole(s, 'byok.manage');
   const p = await prisma.modelProvider.findFirst({ where: { id, tenantId: s.tenantId } });
   if (!p) return { ok: false, error: '渠道不存在' };
+  // ChatGPT 订阅渠道：不是 Key、不是 chat/completions，ping 走它自己那条（含 token 刷新与回写）
+  if (p.vendor === CHATGPT_VENDOR) {
+    const r = await pingChatgptChannel(s.tenantId);
+    revalidatePath('/settings/keys');
+    return r;
+  }
   const routing = parseJson<Record<string, string>>(p.routing, {});
   // 显式路由到图像/视频，或模型名一看就不是对话模型 → 按「非对话模型」口径判定
   const nonChat = routing.image === p.id || routing.video === p.id || looksNonChatModel(p.model);

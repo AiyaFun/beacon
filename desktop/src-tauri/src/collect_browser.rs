@@ -50,8 +50,17 @@ pub fn profile_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 /// 【绝不碰用户日常的 Chrome】不探 9222、不判断他的 Chrome 在不在跑、不要求他退出。
 /// 这个函数从头到尾只跟自己那个 profile 打交道。
 pub fn ensure(app: &tauri::AppHandle) -> Result<String, String> {
+    ensure_reporting(app).map(|(url, _)| url)
+}
+
+/// 同 ensure，另外报告**这次是不是我们刚把它拉起来的**（true = 冷启动）。
+///
+/// 执行器据此决定第一次失败要不要原地重跑一次（2026-09-15 真机）：冷启动那一次页面常常还没准备好
+/// ——32 秒失败、交回服务端排 10 分钟退避、第二次 20 秒采完，用户白等了 10 分钟。
+/// 已经开着的浏览器上失败，多半不是「再试一次就好」的事，不给这个待遇。
+pub fn ensure_reporting(app: &tauri::AppHandle) -> Result<(String, bool), String> {
     if port_open(COLLECT_PORT) {
-        return Ok(COLLECT_CDP.to_string());
+        return Ok((COLLECT_CDP.to_string(), false));
     }
     let chrome = crate::find_chrome().ok_or_else(|| "没找到 Chrome。请先安装 Google Chrome。".to_string())?;
     let dir = profile_dir(app)?;
@@ -83,7 +92,7 @@ pub fn ensure(app: &tauri::AppHandle) -> Result<String, String> {
     // 「端口没通」，而进程其实好好地在起——用户看到的就是「第一次总是失败，再派一次就好了」。
     for _ in 0..60 {
         if port_open(COLLECT_PORT) {
-            return Ok(COLLECT_CDP.to_string());
+            return Ok((COLLECT_CDP.to_string(), true));
         }
         std::thread::sleep(Duration::from_millis(400));
     }

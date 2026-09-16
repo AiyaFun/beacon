@@ -2183,6 +2183,10 @@ model BrowserTask {
   // 且必须留在 WAF 的请求体阈值以内（超限会回一个假的 HTTP 200）
   resultData  String?
   error       String?
+  // 每次尝试的失败原因（JSON 数组，只追加，成功也不清；形状见 lib/browser-task/index.ts BrowserTaskAttempt）。
+  // 2026-09-15 真机：一次采集 11 分钟里前 10 分钟在等退避，事后连第一次为什么失败都查不到——
+  // error 在成功时被清空、可重试的失败不通知、客户端也没日志。留档在这里，界面与日志都从它取。
+  attemptLog  String   @default("[]")
   createdBy   String
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt

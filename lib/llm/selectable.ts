@@ -48,7 +48,8 @@ export async function providerLabel(tenantId: string, id: string | null | undefi
   if (id === PLATFORM_PROVIDER_ID) return isEn ? 'Platform default' : '平台默认模型';
   const p = await prisma.modelProvider.findFirst({ where: { id, tenantId }, select: { label: true, vendor: true, model: true, status: true } });
   if (!p) return isEn ? 'Channel removed' : '（渠道已删除，按自动跑）';
-  return `${p.label || (LLM_VENDORS[p.vendor]?.name ?? p.vendor)}${p.model ? ` · ${p.model}` : ''}${p.status === 'failed' ? (isEn ? ' (failed)' : '（已失效）') : ''}`;
+  const vendor = p.vendor === 'chatgpt' ? (isEn ? 'ChatGPT subscription' : 'ChatGPT 订阅') : LLM_VENDORS[p.vendor]?.name ?? p.vendor;
+  return `${p.label || vendor}${p.model ? ` · ${p.model}` : ''}${p.status === 'failed' ? (isEn ? ' (failed)' : '（已失效）') : ''}`;
 }
 
 /** 这次派活可以选哪些模型。顺序即界面顺序：自动 → 自接入若干 → 外接入。 */
@@ -73,7 +74,8 @@ export async function listSelectableModels(tenantId: string, lang: string = 'zh'
     where: { tenantId, status: { not: 'failed' } },
     orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
   });
-  const vendorName = (v: string) => LLM_VENDORS[v]?.name ?? v;
+  // 'chatgpt' 不在 BYOK 白名单里（它不是填 Key 的渠道，是订阅登录），名字单独给
+  const vendorName = (v: string) => (v === 'chatgpt' ? (isEn ? 'ChatGPT subscription' : 'ChatGPT 订阅') : LLM_VENDORS[v]?.name ?? v);
   for (const p of providers) {
     out.push({
       id: p.id,

@@ -116,3 +116,18 @@ export async function actGetAgentRun(runId: string): Promise<AgentResult> {
   }
 }
 
+/**
+ * 「现在重试」（2026-09-15）：运行停在等采集执行器、那条活在失败退避里时，把它立刻放回可领状态。
+ * 只改任务行的退避时间，不碰运行本身——运行照旧停在 waiting_browser，活跑完由 wake 叫醒。
+ * 面板拿到 ok 之后自己去叫桌面执行器领（executor_kick）并重读一次运行。
+ */
+export async function actRetryBrowserTaskNow(taskId: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const ctx = await ctxOf();
+    const { retryBrowserTaskNow } = await import('@/lib/browser-task');
+    return await retryBrowserTaskNow(ctx.workspaceId, taskId);
+  } catch (e) {
+    return { ok: false, error: designed(e) ?? (e as Error).message.slice(0, 300) };
+  }
+}
+

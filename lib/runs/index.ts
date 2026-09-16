@@ -5,6 +5,10 @@ import { platformName } from '@/lib/constants';
 import { TASK_STATUS_LABEL } from '@/lib/publish/capability';
 import { KIND_LABEL as BROWSER_KIND_LABEL } from '@/lib/browser-task/kinds';
 
+/** 北京时间「几点几分」：退避到期时刻给人看。生产容器是 UTC，不能用本地时区（lib/beijing 口径） */
+const beijingClock = (d: Date) =>
+  new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Shanghai' }).format(d);
+
 // ── 运行中心：把「我现在有什么在跑 / 有什么在等我」收成一处 ──────────────────
 //
 // 【为什么要有】此前系统里有五类会跑起来的东西，各自散在不同页面：
@@ -240,7 +244,11 @@ async function listRunsUncached(workspaceId: string, take: number): Promise<RunE
       where: { workspaceId },
       orderBy: { updatedAt: 'desc' },
       take,
-      select: { id: true, kind: true, status: true, result: true, error: true, updatedAt: true, createdAt: true, accountId: true, origin: true },
+      select: {
+        id: true, kind: true, status: true, result: true, error: true, updatedAt: true, createdAt: true, accountId: true, origin: true,
+        // 退避中要说「第几次没成、几点自动重试」（2026-09-15）
+        attempts: true, leaseUntil: true,
+      },
     }),
   ]);
 
@@ -322,27 +330,33 @@ async function listRunsUncached(workspaceId: string, take: number): Promise<RunE
         accountName: nameOf.get(p.accountId),
       })),
     ),
-    ...browserTasks.map((r) => ({
+    ...browserTasks.map((r) => {
+      // pending 且 leaseUntil 在未来 = 失败后的退避期（lib/browser-task completeTask 借用这一列）
+      const backingOff = r.status === 'pending' && !!r.leaseUntil && r.leaseUntil.getTime() > Date.now();
+      return {
       id: r.id,
       kind: 'browser' as const,
       title: BROWSER_KIND_LABEL[r.kind as keyof typeof BROWSER_KIND_LABEL] ?? r.kind,
       status: browserTaskStatus(r.status),
       at: r.updatedAt,
       startedAt: r.createdAt,
-      // pending 时要说清「在等什么」——用户看到「等你处理」却不知道自己该干嘛最糟
+      // pending 时要说清「在等什么」——用户看到「等你处理」却不知道自己该干嘛最糟。
+      // 退避中更要说清「第几次没成、几点自动重试」（2026-09-15：真机一次采集 11 分钟里 10 分钟在等退避，界面上只有转圈）
       detail: [
         r.origin === 'agent' ? 'AI 派的' : r.origin === 'schedule' ? '定时派的' : r.origin === 'api' ? '外部程序派的（对外调用令牌）' : null,
-        r.status === 'pending' ? '等你的浏览器打开插件' : null,
+        backingOff ? `第 ${r.attempts} 次没成，${beijingClock(r.leaseUntil!)} 自动重试` : r.status === 'pending' ? '等你的浏览器打开插件' : null,
         r.result ?? r.error ?? null,
       ]
         .filter(Boolean)
         .join(' · '),
+      retryAt: backingOff ? r.leaseUntil! : undefined,
       // 落运行中心，不落插件页：用户 2026-08-26 问「为什么点最近是跳到插件里去呢」。
       // 浏览器任务是「有什么在跑」，跟「怎么装扩展」是两件事；而 /runs 本来就收这一类，
       // 还带取消按钮（app/(app)/runs/page.tsx 的 kind==='browser' 分支）。
       href: '/runs',
       accountName: r.accountId ? nameOf.get(r.accountId) : undefined,
-    })),
+      };
+    }),
   ];
 
   return sortRuns(rows);

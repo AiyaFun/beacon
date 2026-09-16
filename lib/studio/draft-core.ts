@@ -5,6 +5,9 @@ import { aiFlavorBanBlock } from '../humanize/lexicon';
 import { platformName, type PlatformKey } from '../constants';
 import { writeMemory } from '../memory/core';
 import type { ChatMessage } from '../llm/types';
+import { platformFormatBlock } from './platform-format';
+import { ANGLE_SHAPE_LABELS, ANGLE_SHAPE_RULES, normalizeAngleShape } from '../topic/scoring';
+import { buildBattleCards, formatViews, type BattleReference } from '../topic/battlecard';
 
 // 初稿生成的**共享内核**：定位草稿 → 装上下文 → 拼 prompt → 落库，四段都在这里，
 // 被两个入口共用：
@@ -48,9 +51,36 @@ export async function buildSelectionContext(
   return lines.join('\n');
 }
 
+/**
+ * 选题在初稿里要用到的那几列。此前只带 rationale/sourceType/sourceRef，于是选题中心花一次精排定下的
+ * 「答案结构」「已知事实」「时间窗口」全在起稿这一步丢掉了——稿子只能靠标题 + 一句切入角从头猜。
+ */
+export type DraftTopic = {
+  id: string;
+  title: string;
+  angle: string;
+  angleShape: string | null;
+  rationale: string | null;
+  evidence: string | null;
+  windowHint: string | null;
+  scores: string;
+  sourceType: string;
+  sourceRef: string | null;
+};
+
+function toDraftTopic(t: {
+  id: string; title: string; angle: string; angleShape: string | null; rationale: string | null;
+  evidence: string | null; windowHint: string | null; scores: string; sourceType: string; sourceRef: string | null;
+}): DraftTopic {
+  return {
+    id: t.id, title: t.title, angle: t.angle, angleShape: t.angleShape, rationale: t.rationale,
+    evidence: t.evidence, windowHint: t.windowHint, scores: t.scores, sourceType: t.sourceType, sourceRef: t.sourceRef,
+  };
+}
+
 export type DraftTarget = {
   draftId: string;
-  topic: { rationale: string | null; sourceType: string; sourceRef: string | null } | null;
+  topic: DraftTopic | null;
   topicTitle: string;
   topicAngle: string;
   platform: PlatformKey;
@@ -119,7 +149,7 @@ export async function resolveDraftTarget(input: {
     ok: true,
     target: {
       draftId: draft.id,
-      topic: draft.topic ? { rationale: draft.topic.rationale, sourceType: draft.topic.sourceType, sourceRef: draft.topic.sourceRef } : null,
+      topic: draft.topic ? toDraftTopic(draft.topic) : null,
       topicTitle,
       topicAngle,
       platform,
@@ -129,9 +159,56 @@ export async function resolveDraftTarget(input: {
   };
 }
 
-export type DraftContext = { accountCtx: AccountContext; selectionCtx: string };
+export type DraftContext = {
+  accountCtx: AccountContext;
+  selectionCtx: string;
+  /** 选题方案块（buildPlanBlock）：切入角 / 答案结构 / 已知事实 / 时间窗口 / 同题参考。没有选题时为空串 */
+  planCtx: string;
+};
 
-/** 账号上下文（指纹/原句样本/口头禅/素材/记忆）+ 选题上下文包。两种模式都要用。 */
+/**
+ * 选题**方案**块（2026-09-15）。用户的话：「点击起稿的内容效果没有很高——已经有对应的格式还有方案」。
+ *
+ * 选题中心一次精排已经定了：切入角（angle）、答案结构（angleShape：清单/对比/流程/定义/判断，
+ * 每种都有「算写实了」的判据 ANGLE_SHAPE_RULES）、「为什么是你/为什么是现在」的事实证据（evidence，
+ * 候选源产出、不是编的）、时间窗口（windowHint）；作战卡还查出了订阅竞对做过同题的作品。
+ * 此前这些一样都没进初稿提示词，稿子只能拿标题 + 一句切入角从头猜，出来就是面面俱到的综述。
+ * 这里把它们拼成一份「照着写」的方案，事实只许来自这里和账号上下文。
+ */
+export function buildPlanBlock(topic: DraftTopic, references: BattleReference[] = []): string {
+  const shape = normalizeAngleShape(topic.angleShape);
+  const lines = ['【这条选题的方案（选题中心已经定了，照它写，别另起炉灶）】'];
+  if (topic.angle.trim()) lines.push(`- 切入角（唯一主线，不要写成面面俱到的综述）：${topic.angle.trim()}`);
+  if (shape) lines.push(`- 答案结构：${ANGLE_SHAPE_LABELS[shape]}——${ANGLE_SHAPE_RULES[shape]}`);
+  if (topic.evidence?.trim()) lines.push(`- 已知事实（来自账号历史数据 / 热榜时间线 / 读者评论，不是推测；稿子里的事实只许来自这里和账号素材）：${topic.evidence.trim()}`);
+  if (topic.windowHint?.trim()) lines.push(`- 时间窗口：${topic.windowHint.trim()}（可以点出「就是现在」的意义，但别写具体日期）`);
+  if (topic.rationale?.trim()) lines.push(`- 为什么值得做：${topic.rationale.trim()}`);
+  if (references.length) {
+    const refs = references.slice(0, 3).map((r) => `《${r.title}》（${platformName(r.platform)}${r.views > 0 ? ` · ${formatViews(r.views)} 播放` : ''}）`);
+    lines.push(`- 同题参考（订阅竞对近 30 天做过的；只用来避开同质化、找到他们没说的那一层，不许照抄）：${refs.join('；')}`);
+  }
+  return lines.length > 1 ? lines.join('\n') : '';
+}
+
+/**
+ * 「怎么写才不像机器」。每一条都对应真机初稿里出现过的毛病：
+ * 「### 📌【目标客群】」式栏目、每段一个 emoji、「我亲自去体验了一下」（素材库里根本没有）、
+ * 「那么问题来了」「欢迎在评论区分享你的看法哦😊」收尾、「最近发现了一种…」起手。
+ * 禁用词表（aiFlavorBanBlock）管的是词，这里管的是**结构与编造**。
+ */
+export const DRAFT_HYGIENE_BLOCK = [
+  '【怎么写才不像机器】',
+  '- 不要按「开头钩子 → 分点小标题 → 总结 → 互动提问」的模板铺排，也不要给每段配一个 emoji 或【栏目名】；要点顺着说，像一个人在讲一件事',
+  '- 素材库和已知事实里没有的亲身经历、数字、身份，一个都不要编：没有「我亲自试过」的记录就不要写「我亲自试过」，宁可少一段',
+  '- 第一句就进正题：不要「最近发现了」「今天来聊聊」「大家好」这类起手式',
+  '- 结尾要么是一句立得住的判断，要么是一个具体到能回答的问题；不要「总结」「那么问题来了」「欢迎在评论区留言」',
+  '- 除非上面的平台格式明确允许，不用小标题、不用 markdown（#、**、---）、不用【】',
+  '- 不用「首先/其次/最后」「一方面/另一方面」这类路标词；不用「不仅…而且」「不是…而是」「既…又」这类对仗——密集对仗是读者最先认出 AI 的地方',
+  '- 写具体：一个真场景、一个有名字的东西、一个只来自方案或素材的数字，胜过三句概括；允许有立场、允许说「我不太确定」、允许一句题外话',
+  '- 句子可以不完整，段落长短不齐，关键的一句可以单独成段；不要每段都是三四句、每句都是二十来字',
+].join('\n');
+
+/** 账号上下文（指纹/原句样本/口头禅/素材/记忆）+ 选题上下文包 + 选题方案。两种模式都要用。 */
 export async function loadDraftContext(input: {
   workspaceId: string;
   accountId: string;
@@ -147,32 +224,53 @@ export async function loadDraftContext(input: {
     memoryQuery: [input.target.topicTitle, input.target.topicAngle].filter(Boolean).join(' '),
   });
   const selectionCtx = await buildSelectionContext(input.target.topic);
-  return { accountCtx, selectionCtx };
+  let planCtx = '';
+  if (input.target.topic) {
+    const t = input.target.topic;
+    let references: BattleReference[] = [];
+    try {
+      // 作战卡的「同题参考」：订阅竞对近 30 天做过的同题作品。拿不到就不给，方案块照样成立
+      const cards = await buildBattleCards(input.workspaceId, input.accountId, [{ id: t.id, title: t.title, scores: t.scores }]);
+      references = cards.get(t.id)?.references ?? [];
+    } catch { /* 参考样本只是锦上添花 */ }
+    planCtx = buildPlanBlock(t, references);
+  }
+  return { accountCtx, selectionCtx, planCtx };
 }
 
 /** 普通（非深度）初稿的 prompt。流式与非流式逐字相同——这正是把它拎出来的原因。 */
 export function buildDraftMessages(target: DraftTarget, ctx: DraftContext): { messages: ChatMessage[]; temperature: number } {
+  const shape = normalizeAngleShape(target.topic?.angleShape);
   return {
     temperature: 0.8,
     messages: [
       {
         role: 'system',
         content: [
-          `你是账号的内容创作助手，为「${platformName(target.platform)}」平台创作一篇初稿文案。`,
+          `你是账号的内容创作助手，为「${platformName(target.platform)}」平台写一篇能直接发出去的初稿。`,
           personaPromptBlock(target.persona),
           ctx.accountCtx.text,
           ctx.selectionCtx,
+          // 方案（选题中心定的切入角/答案结构/事实/窗口/同题参考）与格式（字数/标题/分段/标签/结尾）：
+          // 2026-09-15 之前两样都没有，稿子靠模型自觉，出来是同一副公众号腔
+          ctx.planCtx,
+          platformFormatBlock(target.platform),
           aiFlavorBanBlock(),
-          // 平台形态：改写 / 派生 / 深度模式一直都注入它，唯独**普通模式初稿**没有——
-          // 于是一步起稿的「小红书味」全靠模型自觉，出来常是通用公众号腔。补上这一句。
-          PLATFORM_STYLE[target.platform] ? `目标平台的内容形态：${PLATFORM_STYLE[target.platform]}` : '',
-          '要求：结构完整（钩子-正文-引导），贴合人设与目标平台，优先复用素材库里的真实经历与被验证的擅长方向增强差异化，控制在合理篇幅。只输出正文。',
+          DRAFT_HYGIENE_BLOCK,
+          '要求：贴合人设与目标平台，优先复用素材库里的真实经历与被验证的擅长方向增强差异化；方案里的切入角是唯一主线。只输出正文，不要解释、不要附标题以外的任何标签。',
           '语感要求：句子长短要有起伏，不要句句工整、段段等长；该说人话的地方就说半句话。',
         ]
           .filter(Boolean)
           .join('\n\n'),
       },
-      { role: 'user', content: `选题：${target.topicTitle}\n差异化切入角：${target.topicAngle || '（自行确定）'}` },
+      {
+        role: 'user',
+        content: [
+          `选题：${target.topicTitle}`,
+          `差异化切入角：${target.topicAngle || '（自行确定）'}`,
+          shape ? `答案结构：${ANGLE_SHAPE_LABELS[shape]}` : '',
+        ].filter(Boolean).join('\n'),
+      },
     ],
   };
 }

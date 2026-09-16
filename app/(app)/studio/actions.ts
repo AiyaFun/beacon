@@ -29,8 +29,10 @@ import { aiFlavorBanBlock } from '@/lib/humanize/lexicon';
 import { checkFactDrift, type FactDriftLevel } from '@/lib/humanize/factcheck';
 import { buildTitlePrompt, parseTitleMatrix, diagnoseTitle, type TitleCandidate, type CoverSuggestion, type TitleDiagnosis } from '@/lib/studio/title';
 import { familyPlatforms } from '@/lib/studio/family';
-import { buildOutlinePrompt, buildVoicePrompt, cleanOutline, stripStageLabels } from '@/lib/studio/two-stage';
-import { safePersona, PLATFORM_STYLE, resolveDraftTarget, loadDraftContext, buildDraftMessages, persistDraftVersion } from '@/lib/studio/draft-core';
+import { buildOutlinePrompt, buildVoicePrompt, cleanOutline } from '@/lib/studio/two-stage';
+import { safePersona, PLATFORM_STYLE, resolveDraftTarget, loadDraftContext, buildDraftMessages, persistDraftVersion, DRAFT_HYGIENE_BLOCK } from '@/lib/studio/draft-core';
+import { platformFormatBlock, tidyDraft } from '@/lib/studio/platform-format';
+import { finishDraft } from '@/lib/studio/humanize-pass';
 import { buildSkillBriefBlock, type SkillBrief } from '@/lib/skills/brief';
 import type { Metrics } from '@/lib/json';
 
@@ -462,7 +464,6 @@ export async function actRewrite(
   const account = await prisma.creatorAccount.findUnique({ where: { id: s.accountId } });
   const persona = safePersona(account?.personaCard);
 
-  const style = PLATFORM_STYLE[platform] ?? '按该平台主流内容形态改写。';
   // 与算法教练规则库对齐：改写时同步注入该平台 top 算法信号，避免风格提示词与规则库双源漂移
   const rules = await platformSignals(platform, 3);
   const ruleBlock = rules.length
@@ -483,17 +484,19 @@ export async function actRewrite(
         role: 'system',
         content: [
           `你是资深内容改写编辑。请把用户提供的正文改写为适配「${platformName(platform)}」的版本。`,
-          `目标平台风格要求：${style}${ruleBlock}`,
+          // 可执行的格式说明（字数/标题/分段/标签/结尾）替代原来那一句风格形容；算法要点照旧跟在后面
+          `${platformFormatBlock(platform)}${ruleBlock}`,
           personaPromptBlock(persona),
           accountCtx.text,
           aiFlavorBanBlock(),
-          '只输出改写后的正文，不要解释、不要加标题标注。',
+          DRAFT_HYGIENE_BLOCK,
+          '不要新增原文没有的事实、数据或案例。只输出改写后的正文，不要解释、不要加标题标注。',
         ].filter(Boolean).join('\n\n'),
       },
       { role: 'user', content: body },
     ], { temperature: 0.7 });
 
-    const rewritten = res.text.trim();
+    const rewritten = res.mocked ? tidyDraft(res.text, platform) : (await finishDraft({ tenantId: s.tenantId, text: tidyDraft(res.text, platform), platform, persona, accountCtx })).text;
     const compliance = await checkText(rewritten, platform, s.tenantId);
     return { rewritten, compliance, mocked: res.mocked, degraded: res.degraded };
   } catch (e) {
@@ -522,6 +525,8 @@ export async function actDraft(
   warning?: string;
   mocked?: boolean;
   degraded?: boolean;
+  /** 自动去 AI 味的结果（改前/改后人味分；没测出问题就不调第二次） */
+  humanize?: { before: number | null; after: number | null; changed: boolean; note?: string };
 }> {
   const s = await getSession();
   requireRole(s, 'content.create'); // 生成初稿并落 draft/draftVersion
@@ -559,6 +564,7 @@ export async function actDraft(
             topicAngle,
             contextBlock: [personaPromptBlock(persona), accountCtx.text].filter(Boolean).join('\n\n'),
             selectionBlock: selectionCtx,
+            planBlock: ctx.planCtx, // 选题方案：答案结构/已知事实/时间窗口/同题参考，大纲照它列
           }),
         },
         { role: 'user', content: `选题：${topicTitle}\n差异化切入角：${topicAngle || '（自行确定）'}` },
@@ -583,13 +589,15 @@ export async function actDraft(
               voiceBlock: [accountCtx.parts.exemplar, accountCtx.parts.catchphrase, accountCtx.parts.fingerprint]
                 .filter(Boolean).join('\n\n'),
               styleHint: PLATFORM_STYLE[platform],
+              formatBlock: platformFormatBlock(platform), // 字数/标题/分段/标签/结尾，可执行的格式说明
               banBlock: aiFlavorBanBlock(),
+              hygieneBlock: DRAFT_HYGIENE_BLOCK,
             }),
           },
           { role: 'user', content: outline },
         ], { temperature: 0.85 });
 
-        content = stripStageLabels(voiceRes.text);
+        content = tidyDraft(voiceRes.text, platform);
         stages = 2;
         mocked = mocked || !!voiceRes.mocked;
         degraded = degraded || !!voiceRes.degraded;
@@ -612,12 +620,16 @@ export async function actDraft(
       // prompt 由 draft-core 拼（流式路由用同一个函数），这里只负责调用与记账口径
       const { messages, temperature } = buildDraftMessages(target, ctx);
       const res = await llmComplete(s.tenantId, 'generation', messages, { temperature });
-      content = res.text.trim();
+      // 确定性清洗：提示词禁了模型照样会吐 markdown 小标题 / 加粗 / 字段标签（与流式路由同一道）
+      content = tidyDraft(res.text, platform);
       mocked = !!res.mocked;
       degraded = !!res.degraded;
     }
 
     if (!content) return { ok: false, error: 'AI 没返回内容，请重试' };
+    // 第二道：自动去 AI 味（测出套话/节奏问题才多调一次；没变好就用原稿；Mock 直接跳过）
+    const human = mocked ? { text: content, changed: false, before: null, after: null, note: undefined } : await finishDraft({ tenantId: s.tenantId, text: content, platform, persona, accountCtx });
+    content = human.text;
     const { seq } = await persistDraftVersion({
       workspaceId: s.workspaceId,
       accountId: s.accountId,
@@ -628,7 +640,7 @@ export async function actDraft(
     });
 
     revalidatePath('/studio');
-    return { ok: true, draftId: draft.id, seq, stages, warning, mocked, degraded };
+    return { ok: true, draftId: draft.id, seq, stages, warning, mocked, degraded, humanize: { before: human.before, after: human.after, changed: human.changed, note: human.note } };
   } catch (e) {
     // 配额用尽 → 结构化返回（ActionButton 的 r.ok===false 分支红字展示）；其余异常抛给 boundary。
     if (isDesignedRejection(e)) return { ok: false, error: e.message };
@@ -1073,12 +1085,14 @@ export async function actCreateDraft(input: {
               voiceBlock: [accountCtx.parts.exemplar, accountCtx.parts.catchphrase, accountCtx.parts.fingerprint]
                 .filter(Boolean).join('\n\n'),
               styleHint: PLATFORM_STYLE[platform],
+              formatBlock: platformFormatBlock(platform),
               banBlock: aiFlavorBanBlock(),
+              hygieneBlock: DRAFT_HYGIENE_BLOCK,
             }),
           },
           { role: 'user', content: outline },
         ], { temperature: 0.85 });
-        const deepContent = stripStageLabels(voiceRes.text);
+        const deepContent = voiceRes.mocked ? tidyDraft(voiceRes.text, platform) : (await finishDraft({ tenantId: s.tenantId, text: tidyDraft(voiceRes.text, platform), platform, persona, accountCtx })).text;
         if (deepContent) {
           await prisma.draftVersion.create({
             data: {
@@ -1108,18 +1122,20 @@ export async function actCreateDraft(input: {
       {
         role: 'system',
         content: [
-          `你是账号的内容创作助手，为「${platformName(platform)}」平台把一个想法写成一篇初稿。`,
+          `你是账号的内容创作助手，为「${platformName(platform)}」平台把一个想法写成一篇能直接发出去的初稿。`,
           personaPromptBlock(persona),
           accountCtx.text,
+          platformFormatBlock(platform),
           aiFlavorBanBlock(),
-          '要求：结构完整（钩子-正文-引导），只用用户想法里已有的事实和素材库里的真实经历，**不要编造数据、案例或身份**；说不清的地方宁可留空也不要编。',
+          DRAFT_HYGIENE_BLOCK,
+          '要求：只用用户想法里已有的事实和素材库里的真实经历，**不要编造数据、案例或身份**；说不清的地方宁可留空也不要编。',
           '语感要求：句子长短要有起伏，不要句句工整、段段等长。只输出正文。',
         ].filter(Boolean).join('\n\n'),
       },
       { role: 'user', content: `我的想法：${body.slice(0, 1500)}` },
     ], { temperature: 0.8 });
 
-    const content = res.text.trim();
+    const content = res.mocked ? tidyDraft(res.text, platform) : (await finishDraft({ tenantId: s.tenantId, text: tidyDraft(res.text, platform), platform, persona, accountCtx })).text;
     if (content) {
       await prisma.draftVersion.create({
         data: { draftId: draft.id, seq: 1, authorType: 'ai', content, diffFromPrev: '按你的一句话想法生成的首版初稿' },
@@ -1396,7 +1412,6 @@ export async function actDeriveToPlatform(
 
   // 并行派生：每个平台独立调 LLM，总耗时从 N× 降到 max(1×)
   const results = await Promise.allSettled(toDerive.map(async (platform) => {
-    const style = PLATFORM_STYLE[platform] ?? '按该平台主流内容形态改写。';
     const rules = await platformSignals(platform, 3);
     const accountCtx = await buildAccountContext({
       workspaceId: s.workspaceId,
@@ -1412,7 +1427,8 @@ export async function actDeriveToPlatform(
         role: 'system',
         content: [
           `把同一篇内容改写成适配「${platformName(platform)}」的版本。这是同一个选题的多平台分发，核心事实与观点必须一致，只改表达形态。`,
-          `目标平台风格要求：${style}`,
+          // 可执行的格式说明（字数/标题/分段/标签/结尾）替代原来那一句风格形容
+          platformFormatBlock(platform),
           rules.length ? `该平台算法要点：\n${rules.map((r) => `- ${r.advice}`).join('\n')}` : '',
           personaPromptBlock(persona),
           accountCtx.text,
@@ -1424,7 +1440,7 @@ export async function actDeriveToPlatform(
       { role: 'user', content: source.content },
     ], { temperature: 0.7 });
 
-    const content = stripStageLabels(res.text);
+    const content = res.mocked ? tidyDraft(res.text, platform) : (await finishDraft({ tenantId: s.tenantId, text: tidyDraft(res.text, platform), platform, persona, accountCtx })).text;
     if (!content) return { platform, skip: '模型没返回内容' as string };
     return { platform, content, mocked: res.mocked, degraded: res.degraded };
   }));

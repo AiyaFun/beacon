@@ -38,6 +38,26 @@
 
 ---
 
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%" valign="top"><b>Today</b> · Dispatch work in one sentence; every high-potential topic in the weekly battle report has a "Draft" button right next to it<br><br><img src="docs/screenshots/today.png" alt="Today: dispatch box and weekly battle report"></td>
+    <td width="50%" valign="top"><b>Intel</b> · Trending lists from seven sources, plus an account × trend differentiation radar<br><br><img src="docs/screenshots/hotlists.png" alt="Intel: trending lists and differentiation radar"></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><b>Topics</b> · Each recommendation comes with a six-dimension score, a differentiated angle, a head-start window and "why this is for you"<br><br><img src="docs/screenshots/topics.png" alt="Topics: recommendations with reasons"></td>
+    <td width="50%" valign="top"><b>Studio</b> · Drafts follow the topic plan and the platform format, get de-AI'd automatically, and adapt to multiple platforms<br><br><img src="docs/screenshots/studio.png" alt="Studio: content workshop"></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><b>Performance</b> · Post metrics flow back; views and engagement at a glance, one-click retrospective<br><br><img src="docs/screenshots/data.png" alt="Performance dashboard"></td>
+    <td width="50%" valign="top"><b>Skills · Connectors</b> · Ready-made skills for WeChat layout, Xiaohongshu notes, Douyin scripts and more<br><br><img src="docs/screenshots/skills.png" alt="Skills: turn drafts into platform-ready pieces"></td>
+  </tr>
+</table>
+
+<p align="center"><sub>Screenshots are from the demo workspace (sample data).</sub></p>
+
+
 ## What Problem Does It Solve
 
 Creators face three daily challenges: **What's trending? What are competitors doing? How to write fast while staying compliant?**
