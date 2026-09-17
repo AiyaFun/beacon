@@ -228,7 +228,8 @@ const createRecipe: AgentTool = {
 
     // 【上限在建之前判】AI 误解一句话就可能连建十几个，而每个都会进定时扫描、
     // 每轮在用户浏览器里开一次标签。建完再拦等于已经建进去了
-    const existing = await prisma.scrapeRecipe.count({ where: { workspaceId: ctx.workspaceId } });
+    // 内置平台配方（platformKey 非空）是系统播的，不占用户的额度
+    const existing = await prisma.scrapeRecipe.count({ where: { workspaceId: ctx.workspaceId, platformKey: null } });
     if (existing >= MAX_RECIPES_PER_WORKSPACE) {
       return { ok: false, summary: `配方已经有 ${existing} 个（上限 ${MAX_RECIPES_PER_WORKSPACE}）。先去技能页删掉用不上的再建。` };
     }

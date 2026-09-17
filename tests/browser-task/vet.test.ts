@@ -1,10 +1,25 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { prisma } from '@/lib/db';
 import { vetBrowserTaskArgs, resolveCompetitorRef } from '@/lib/browser-task/vet';
+import { BROWSER_TASK_KINDS, RECIPE_PLATFORMS } from '@/lib/browser-task/kinds';
+import { DESKTOP_LABEL_PREFIX } from '@/lib/ingest/token';
 import { AGENT_TOOLS } from '@/lib/agent/tools';
 import { between, orderedBefore } from '../helpers/anchor';
+
+// 【配方平台的主页地址】lib/competitor-url.ts 正在由另一条线补微博/快手/知乎/头条/百家号的主页拼法。
+// 这里只在**真模块拼不出**时给配方平台补一个地址——真模块一旦能拼，用的就是真的；非配方平台一律原样透传
+// （公众号那条「没有可采的公开主页」用例仍在测真行为）。本文件测的是 vet 的分流，不是 competitor-url 的拼法。
+vi.mock('@/lib/competitor-url', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('@/lib/competitor-url')>();
+  const RECIPE = ['weibo', 'kuaishou', 'zhihu', 'toutiao', 'baijiahao'];
+  return {
+    ...mod,
+    competitorHomeUrl: (platform: string, handle: string) =>
+      mod.competitorHomeUrl(platform, handle) ?? (RECIPE.includes(platform) ? `https://${platform}.test/${encodeURIComponent(handle)}` : null),
+  };
+});
 
 // 浏览器任务的三道闸收口（2026-08-26）。
 //
@@ -31,7 +46,7 @@ beforeEach(async () => {
   memberId = m.id;
   await prisma.ingestToken.create({
     // 这枚令牌模拟的是**当前版本**的插件：自报过全部能力（老插件那种没自报的在 executor.test.ts 单独测）
-    data: { lastUsedAt: new Date(),  workspaceId, token: `bcn_${Math.random().toString(36).slice(2)}`, label: '测试设备', memberId, kinds: JSON.stringify(['collect_competitor', 'collect_self_profile', 'open_and_read']) },
+    data: { lastUsedAt: new Date(),  workspaceId, token: `bcn_${Math.random().toString(36).slice(2)}`, label: '测试设备', memberId, kinds: JSON.stringify([...BROWSER_TASK_KINDS]) },
   });
   const c = await prisma.competitorAccount.create({
     data: { platform: 'douyin', handle: 'wang_talks', name: '学习博主小王' },
@@ -196,10 +211,16 @@ describe('collect_self_profile：把「我的 X 账号」落到具体账号', ()
     }
   });
 
-  it('公众号：整条通道已删，如实拒绝而不是排一个没人做的活', async () => {
-    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'wechat' });
+  it('三张平台表之外的平台（PLATFORMS 里没有的）：说清三类各能派哪些，不编一条路', async () => {
+    // 2026-09-16 起 PLATFORMS 里的每个平台都有路（微博走配方），只有表外的键才会到这里
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'threads' });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toContain('手动回填');
+    if (!r.ok) {
+      expect(r.summary).toContain('没有可派的自有回填路');
+      expect(r.error).toContain('自己的公开主页');
+      expect(r.error).toContain('创作者后台');
+      expect(r.error).toContain('按配方');
+    }
   });
 
   it('没填 handle：如实说去账号页填，不编一个', async () => {
@@ -238,11 +259,252 @@ describe('collect_self_profile：把「我的 X 账号」落到具体账号', ()
     expect(r.ok && r.payload.accountId).toBe(x.id);
   });
 
-  it('抖音/小红书这类没有服务端可派的自有回填路：说清支持哪些、该去哪手动回填', async () => {
-    await mkAccount({ name: '抖音号', platform: 'douyin', handle: 'dy' });
+  it('YouTube：频道页是公开的，与 X/TikTok 同走 collect_self_profile（带 handle）', async () => {
+    const a = await mkAccount({ name: '我的频道', platform: 'youtube', handle: '@mychannel' });
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'youtube' });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.payload).toEqual({ kind: 'collect_self_profile', platform: 'youtube', accountId: a.id, handle: 'mychannel' });
+  });
+});
+
+// ── 创作者后台回填与配方采集：两种只有插件会做的活（2026-09-15）─────────────────
+//
+// 抖音/小红书/B站/视频号/公众号的自有数据在创作者后台里，微博/快手/知乎/头条/百家号的竞对没有手写解析器。
+// 此前这两类服务端根本派不出去（前者让用户去后台页手点侧栏，后者直接说「没有可采的主页」）。
+// 2026-09-15 各有一个 kind 但只有插件会做；2026-09-16 起（用户原话「每一个平台都可以通过插件或者调用浏览器
+// 的方式采集」）桌面客户端与本机浏览器也会做：本机就绪就标 local，排队时按「谁会做这种活」说回执，
+// 没有会做的执行器时指路更新插件**或**桌面客户端；抖音/小红书/B站多一条退路——改采公开主页。
+describe('创作者后台回填（collect_self_backend）：三条路都会做，退路是公开主页', () => {
+  beforeEach(async () => {
+    await prisma.creatorAccount.deleteMany();
+  });
+  const mkAccount = (data: { name: string; platform: string; handle?: string | null }) =>
+    prisma.creatorAccount.create({ data: { workspaceId, ...data } });
+  const oldPluginToken = async () => {
+    await prisma.ingestToken.deleteMany();
+    await prisma.ingestToken.create({
+      data: { lastUsedAt: new Date(), workspaceId, token: `bcn_${Math.random().toString(36).slice(2)}`, label: '旧插件', memberId, kinds: JSON.stringify(['collect_competitor', 'collect_self_profile', 'open_and_read']) },
+    });
+  };
+
+  /** 再登记一台桌面客户端执行器：让 queuedExecutors 会回 both，才验得出「插件专属的活回执只说插件」 */
+  const alsoDesktop = () => prisma.ingestToken.create({
+    data: { lastUsedAt: new Date(), workspaceId, token: `bcn_${Math.random().toString(36).slice(2)}`, label: `${DESKTOP_LABEL_PREFIX}macOS`, memberId, kinds: JSON.stringify(['collect_competitor', 'collect_self_profile', 'open_and_read']) },
+  });
+
+  it('抖音 + 新插件：派 collect_self_backend，带 accountId、不带 handle，记在这个账号名下', async () => {
+    await alsoDesktop();
+    const a = await mkAccount({ name: '抖音号', platform: 'douyin', handle: 'dy' });
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'douyin' });
+    expect(r.ok, r.ok ? '' : r.error).toBe(true);
+    if (r.ok) {
+      expect(r.payload).toEqual({ kind: 'collect_self_backend', platform: 'douyin', accountId: a.id });
+      expect(r.accountId).toBe(a.id);
+      expect(r.local).toBeUndefined();
+      // 工作区里插件和桌面客户端都在，但只有插件会领这种活——回执不该说「插件/桌面客户端」
+      expect(r.executors, '只有插件会领这种活，回执不该说「桌面客户端」').toBe('plugin');
+    }
+  });
+
+  it('账号没填 handle 也照派：后台页认的是登录态，不靠 handle 拼地址', async () => {
+    const a = await mkAccount({ name: '没handle的B站号', platform: 'bilibili', handle: null });
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'bilibili' });
+    expect(r.ok, r.ok ? '' : r.error).toBe(true);
+    if (r.ok) expect(r.payload).toEqual({ kind: 'collect_self_backend', platform: 'bilibili', accountId: a.id });
+  });
+
+  it('旧插件（能力里没有 collect_self_backend）+ 抖音有 handle：退到公开主页，回执说破只有公开数字、升级后自动走后台', async () => {
+    await oldPluginToken();
+    const a = await mkAccount({ name: '抖音号', platform: 'douyin', handle: 'dy' });
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'douyin' });
+    expect(r.ok, r.ok ? '' : r.error).toBe(true);
+    if (r.ok) {
+      expect(r.payload).toEqual({ kind: 'collect_self_profile', platform: 'douyin', accountId: a.id, handle: 'dy' });
+      expect(r.note).toContain('公开主页');
+      expect(r.note).toContain('完播率');
+      expect(r.note).toContain('1.2.19');
+    }
+  });
+
+  it('旧插件 + 抖音没填 handle：退不了主页，拒绝并同时指路「更新插件或桌面客户端」', async () => {
+    await oldPluginToken();
+    await mkAccount({ name: '抖音号', platform: 'douyin', handle: null });
     const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'douyin' });
     expect(r.ok).toBe(false);
-    if (!r.ok) { expect(r.error).toContain('主页'); expect(r.error).toContain('手动回填'); }
+    if (!r.ok) {
+      expect(r.error).toContain('更新插件');
+      expect(r.error).toContain('1.2.19');
+      expect(r.error, '桌面客户端也会做后台回填了，要一并指路').toContain('桌面客户端');
+    }
+  });
+
+  it('旧插件 + 视频号（没有公开主页可退）：拒绝，指路更新插件或桌面客户端', async () => {
+    await oldPluginToken();
+    await mkAccount({ name: '视频号', platform: 'shipinhao', handle: null });
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'shipinhao' });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.summary).toBe('执行器太旧');
+      expect(r.error).toContain('1.2.19');
+      expect(r.error).toContain('桌面客户端');
+      expect(r.error, '视频号没有公开主页，不该说成退到主页').not.toContain('公开主页');
+    }
+  });
+
+  it('新桌面客户端（自报 collect_self_backend）+ 旧插件：派后台，回执只说桌面客户端', async () => {
+    await oldPluginToken();
+    await prisma.ingestToken.create({
+      data: { lastUsedAt: new Date(), workspaceId, token: `bcn_${Math.random().toString(36).slice(2)}`, label: `${DESKTOP_LABEL_PREFIX}macOS`, memberId, kinds: JSON.stringify([...BROWSER_TASK_KINDS]) },
+    });
+    const a = await mkAccount({ name: '抖音号', platform: 'douyin', handle: 'dy' });
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'douyin' });
+    expect(r.ok, r.ok ? '' : r.error).toBe(true);
+    if (r.ok) {
+      expect(r.payload).toEqual({ kind: 'collect_self_backend', platform: 'douyin', accountId: a.id });
+      expect(r.executors, '只有桌面客户端会做这种活，回执不该说「插件」').toBe('desktop');
+    }
+  });
+
+  it('本机浏览器就绪：**走 local** 当场进后台（2026-09-16 起本机也会做）', async () => {
+    const a = await mkAccount({ name: '小红书号', platform: 'xiaohongshu', handle: 'xhs' });
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'xiaohongshu' }, { localCdpUrl: 'http://127.0.0.1:9222' });
+    expect(r.ok, r.ok ? '' : r.error).toBe(true);
+    if (r.ok) {
+      expect(r.local).toEqual({ cdpUrl: 'http://127.0.0.1:9222' });
+      expect(r.payload).toEqual({ kind: 'collect_self_backend', platform: 'xiaohongshu', accountId: a.id });
+      expect(r.accountId).toBe(a.id);
+    }
+  });
+
+  it('本机就绪 + 没插件：照样当场进后台（本机浏览器不需要插件）', async () => {
+    await prisma.ingestToken.deleteMany();
+    const a = await mkAccount({ name: '视频号', platform: 'shipinhao', handle: null });
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'shipinhao' }, { localCdpUrl: 'http://127.0.0.1:9222' });
+    expect(r.ok, r.ok ? '' : r.error).toBe(true);
+    if (r.ok) {
+      expect(r.local).toBeDefined();
+      expect(r.payload).toEqual({ kind: 'collect_self_backend', platform: 'shipinhao', accountId: a.id });
+    }
+  });
+
+  it('公众号：派得出去，但回执要预先说破「要先在插件设置里授权 mp.weixin.qq.com」（服务端不知道授没授）', async () => {
+    await mkAccount({ name: '我的公众号', platform: 'wechat', handle: null });
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'wechat' });
+    expect(r.ok, r.ok ? '' : r.error).toBe(true);
+    if (r.ok) {
+      expect(r.payload.kind).toBe('collect_self_backend');
+      expect(r.note).toContain('mp.weixin.qq.com');
+    }
+    await oldPluginToken();
+    const rejected = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'wechat' });
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.error, '拒绝时也要带上授权那句').toContain('mp.weixin.qq.com');
+  });
+
+  it('对外路由直接写内部 kind（collect_self_backend）也走同一条闸', async () => {
+    const a = await mkAccount({ name: '抖音号', platform: 'douyin', handle: 'dy' });
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_backend', platform: 'douyin' });
+    expect(r.ok && r.payload).toEqual({ kind: 'collect_self_backend', platform: 'douyin', accountId: a.id });
+  });
+});
+
+describe('配方采集竞对（collect_competitor_recipe）：三条路都会做', () => {
+  const mkWatched = async (platform: string, handle: string) => {
+    const c = await prisma.competitorAccount.create({ data: { platform, handle, name: `${platform}-${handle}` } });
+    await prisma.watchlistItem.create({ data: { workspaceId, competitorId: c.id } });
+    return c.id;
+  };
+
+  it('微博竞对 + 新插件 + 旧桌面客户端：payload 的 kind 是 collect_competitor_recipe，limit 收进 1..50，回执只说插件', async () => {
+    // 旧桌面客户端（只自报最初三种）也在线：它不会做配方采集，回执只能说「插件」
+    await prisma.ingestToken.create({
+      data: { lastUsedAt: new Date(), workspaceId, token: `bcn_${Math.random().toString(36).slice(2)}`, label: `${DESKTOP_LABEL_PREFIX}macOS`, memberId, kinds: JSON.stringify(['collect_competitor', 'collect_self_profile', 'open_and_read']) },
+    });
+    const id = await mkWatched('weibo', 'someone');
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_competitor', competitorId: id, limit: 500 });
+    expect(r.ok, r.ok ? '' : r.error).toBe(true);
+    if (r.ok) {
+      expect(r.payload).toEqual({ kind: 'collect_competitor_recipe', competitorId: id, limit: 50 });
+      expect(r.local).toBeUndefined();
+      expect(r.executors, '旧桌面客户端不会做配方采集，回执不该说「插件/桌面客户端」').toBe('plugin');
+      expect(r.note, '要提醒用户先在侧边栏对站点授权').toContain('授权');
+    }
+  });
+
+  it('微博竞对 + 本机浏览器就绪：标 local 当场按配方采（2026-09-16 起本机也会做）', async () => {
+    const id = await mkWatched('weibo', 'someone');
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_competitor', competitorId: id, limit: 500 }, { localCdpUrl: 'http://127.0.0.1:9222' });
+    expect(r.ok, r.ok ? '' : r.error).toBe(true);
+    if (r.ok) {
+      expect(r.payload).toEqual({ kind: 'collect_competitor_recipe', competitorId: id, limit: 50 });
+      expect(r.local).toEqual({ cdpUrl: 'http://127.0.0.1:9222' });
+    }
+  });
+
+  it('五个配方平台都走这条；抖音这类有手写解析器的照旧是 collect_competitor', async () => {
+    for (const p of RECIPE_PLATFORMS) {
+      const id = await mkWatched(p, `h_${p}`);
+      const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_competitor', competitorId: id });
+      expect(r.ok && r.payload.kind, `${p} 该走配方`).toBe('collect_competitor_recipe');
+    }
+    const dy = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_competitor', competitorId });
+    expect(dy.ok && dy.payload.kind).toBe('collect_competitor');
+  });
+
+  it('旧插件（能力里没有 collect_competitor_recipe）：拒绝并让用户更新插件 + 在侧边栏对站点授权；能力闸在主页地址闸之前', async () => {
+    await prisma.ingestToken.deleteMany();
+    await prisma.ingestToken.create({
+      data: { lastUsedAt: new Date(), workspaceId, token: `bcn_${Math.random().toString(36).slice(2)}`, label: '旧插件', memberId, kinds: JSON.stringify(['collect_competitor', 'collect_self_profile', 'open_and_read']) },
+    });
+    const id = await mkWatched('zhihu', 'someone');
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_competitor', competitorId: id });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.summary).toBe('执行器太旧');
+      expect(r.error).toContain('1.2.19');
+      expect(r.error).toContain('授权');
+      expect(r.error, '桌面客户端也会按配方采了，要一并指路').toContain('桌面客户端');
+      expect(r.error, '该说的是更新插件，不是「没有主页」').not.toContain('没有可以直接打开的公开主页');
+    }
+    // 本机浏览器就绪就能救：当场按配方采
+    const local = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_competitor', competitorId: id }, { localCdpUrl: 'http://127.0.0.1:9222' });
+    expect(local.ok).toBe(true);
+    if (local.ok) expect(local.local).toBeDefined();
+  });
+
+  it('对外路由直接写内部 kind（collect_competitor_recipe）也走同一条闸', async () => {
+    const id = await mkWatched('kuaishou', 'ks1');
+    const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_competitor_recipe', competitorId: id, limit: 5 });
+    expect(r.ok && r.payload).toEqual({ kind: 'collect_competitor_recipe', competitorId: id, limit: 5 });
+  });
+
+  it('🔒 配方平台的能力闸在主页地址闸之前（插件太旧时该说「更新插件」，不是「没有主页」）', () => {
+    // 上面那条用例里主页地址是补出来的，验不出顺序；这里直接钉源码
+    const vet = read('lib/browser-task/vet.ts').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    const seg = between(vet, "if (kind === 'collect_competitor') {", "if (kind === 'collect_self_profile') {");
+    orderedBefore(seg, "caps.has('collect_competitor_recipe')", 'competitorHomeUrl(comp.platform, comp.handle)');
+  });
+
+  it('🔒 本机那条路对后台 / 配方两种 kind 各有自己的执行函数（不是拿主页解析器去开后台页）', () => {
+    const run = read('lib/browser-task/local-run.ts').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    const fn = between(run, 'export async function runBrowserTaskLocally', 'ingestParsedPage({');
+    const backend = fn.indexOf("payload.kind === 'collect_self_backend'");
+    const recipe = fn.indexOf("payload.kind === 'collect_competitor_recipe' || payload.kind === 'collect_self_recipe'");
+    expect(backend, 'runBrowserTaskLocally 没有后台分支').toBeGreaterThan(-1);
+    expect(recipe, 'runBrowserTaskLocally 没有配方分支').toBeGreaterThan(-1);
+    expect(fn.slice(backend, recipe)).toContain('collectBackendLocal(');
+    expect(fn.slice(recipe)).toContain('collectRecipeLocal(');
+    expect(fn.slice(recipe)).toContain('ingestRecipeOutcome(');
+    expect(backend, '后台/配方分支要在主页解析器那条之前').toBeLessThan(fn.indexOf('collectPlatformPageLocal('));
+    // 后台入口来自服务端那张与插件同源的表，不由模型/调用方给
+    const target = between(run, 'export async function executorTarget', 'export async function runBrowserTaskLocally');
+    expect(target).toContain("p.kind === 'collect_self_backend'");
+    expect(target).toContain('backendEntryFor(p.platform)');
+  });
+
+  it('🔒 自有回填三种 kind 都按 accountId 去重（同一账号同一 kind 就是同一个活）', () => {
+    const idx = read('lib/browser-task/index.ts').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    expect(idx).toContain("parsed.data.kind === 'collect_self_profile' || parsed.data.kind === 'collect_self_backend' || parsed.data.kind === 'collect_self_recipe'");
   });
 });
 
@@ -289,10 +551,47 @@ describe('没装插件：配了本机浏览器就当场跑，没配就指路', (
     if (!r.ok) expect(r.summary).toContain('开关');
   });
 
-  it('公众号：本机浏览器也不做（整条通道已删），如实拒绝', async () => {
+  it('公众号后台 + 本机浏览器就绪：当场进后台（不需要插件），回执仍带上公众号那句提醒', async () => {
+    const a = await prisma.creatorAccount.create({ data: { workspaceId, name: '我的公众号', platform: 'wechat', handle: null } });
     const r = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'wechat' }, { localCdpUrl: 'http://127.0.0.1:9222' });
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toContain('手动回填');
+    expect(r.ok, r.ok ? '' : r.error).toBe(true);
+    if (r.ok) {
+      expect(r.local).toBeDefined();
+      expect(r.payload).toEqual({ kind: 'collect_self_backend', platform: 'wechat', accountId: a.id });
+      expect(r.note).toContain('mp.weixin.qq.com');
+    }
+  });
+
+  it('配方平台的自己主页（collect_self_recipe）：要 handle；本机就绪当场跑；没有会做的执行器就指路更新', async () => {
+    const a = await prisma.creatorAccount.create({ data: { workspaceId, name: '我的微博', platform: 'weibo', handle: '123456789' } });
+    const local = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'weibo' }, { localCdpUrl: 'http://127.0.0.1:9222' });
+    expect(local.ok, local.ok ? '' : local.error).toBe(true);
+    if (local.ok) {
+      expect(local.payload).toEqual({ kind: 'collect_self_recipe', platform: 'weibo', accountId: a.id, handle: '123456789' });
+      expect(local.local).toBeDefined();
+      expect(local.note).toContain('配方');
+    }
+    // 旧插件在线、本机没开：拒绝并指路
+    await prisma.ingestToken.create({
+      data: { lastUsedAt: new Date(), workspaceId, token: `bcn_${Math.random().toString(36).slice(2)}`, label: '旧插件', memberId, kinds: JSON.stringify(['collect_competitor', 'collect_self_profile', 'open_and_read']) },
+    });
+    const old = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'weibo' });
+    expect(old.ok).toBe(false);
+    if (!old.ok) { expect(old.summary).toBe('执行器太旧'); expect(old.error).toContain('1.2.19'); }
+    // 新插件在线：排队，回执说插件
+    await prisma.ingestToken.deleteMany();
+    await prisma.ingestToken.create({
+      data: { lastUsedAt: new Date(), workspaceId, token: `bcn_${Math.random().toString(36).slice(2)}`, label: '新插件', memberId, kinds: JSON.stringify([...BROWSER_TASK_KINDS]) },
+    });
+    const queued = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'weibo' });
+    expect(queued.ok, queued.ok ? '' : queued.error).toBe(true);
+    if (queued.ok) { expect(queued.payload.kind).toBe('collect_self_recipe'); expect(queued.executors).toBe('plugin'); }
+    // 没填 handle：拼不出主页地址，如实说
+    await prisma.creatorAccount.deleteMany();
+    await prisma.creatorAccount.create({ data: { workspaceId, name: '我的快手', platform: 'kuaishou', handle: null } });
+    const noHandle = await vetBrowserTaskArgs(workspaceId, { kind: 'collect_self_profile', platform: 'kuaishou' });
+    expect(noHandle.ok).toBe(false);
+    if (!noHandle.ok) expect(noHandle.summary).toBe('账号没填 handle');
   });
 
   it('X 主页回填走本机浏览器：payload 与排队那条路一字不差，只多一个 local', async () => {

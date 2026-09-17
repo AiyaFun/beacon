@@ -1,6 +1,6 @@
 {
   "name": "beacon",
-  "version": "1.3.77",
+  "version": "1.3.82",
   "private": true,
   "description": "烽火台 · 跨平台内容作战室 — 面向创作者/内容团队的多平台选题创作 SaaS",
   "scripts": {
@@ -17,6 +17,7 @@
     "db:push": "prisma db push --skip-generate",
     "db:seed": "tsx prisma/seed.ts",
     "sync:system-data": "tsx scripts/sync-system-data.ts",
+    "seo:push": "tsx scripts/seo-push.ts",
     "seed:demo": "tsx scripts/seed-demo.ts",
     "pack:ext": "tsx scripts/pack-extension.ts",
     "pack:desktop": "tsx scripts/pack-desktop.ts",

@@ -53,14 +53,14 @@ export function DesktopExecutorCard() {
       <p className="small muted" style={{ lineHeight: 1.8, margin: '0 0 10px' }}>
         {isEn ? (
           <>
-            After registration, collection tasks dispatched by AI (collecting competitor profiles, backfilling your own X/TikTok profiles, reading webpages) are claimed by <b>this desktop client</b>,
+            After registration, collection tasks dispatched by AI (collecting competitor profiles on every platform, backfilling your own data — public profiles and creator studios alike — and reading webpages) are claimed by <b>this desktop client</b>,
             opened and read in an <b>isolated collection browser</b>, and returned directly to your workspace. It runs separately from your daily Chrome without interference—<b>no need to close or quit anything</b>.
             The only setup is logging into each platform once: the first time a platform is accessed, a window will appear on the login page; session state persists afterward.
             <b> Read-only</b>: does not click, fill, submit, or handle passwords for you.
           </>
         ) : (
           <>
-            登记后，AI 派出的采集任务（采竞对主页、回填你自己的 X / TikTok 主页、读网页）由<b>这台电脑上的客户端</b>领走，
+            登记后，AI 派出的采集任务（采各平台竞对主页、回填你自己的数据——公开主页与创作者后台都行、读网页）由<b>这台电脑上的客户端</b>领走，
             用一个<b>独立的采集浏览器</b>打开页面读取，结果直接交回工作区。它跟你日常的 Chrome 分开、互不影响，<b>你不用退出任何东西</b>。
             代价是每个平台要各登录一次：首次采某平台时窗口会摆到你面前停在登录页，登完之后登录态长期留着。
             <b>只读</b>：不点击、不填写、不提交，不替你输账号密码。

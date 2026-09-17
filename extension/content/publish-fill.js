@@ -10,9 +10,15 @@
 //   · 一旦点了，回执报 published 但**不带链接**（拿不到作品地址），由用户回填。
 // 平台创作者协议普遍不欢迎自动化发布，风险由打开开关的人自己承担——设置页和这里都写明了。
 //
-// ⚠️ 选择器**尚未真机校准**（2026-08-18）。平台后台改版频繁，填不进去是预期内的情况，
-// 所以每一步都有诚实降级：找不到输入框就把内容复制到剪贴板并如实告诉你「没填进去，已复制」，
-// 绝不假装填好了。回执里报的也是 failed 而不是 filled。
+// ⚠️ 选择器**尚未真机校准**（2026-08-18 照文档手写，到 2026-09-15 仍无一条真机验过）。
+// 平台后台改版频繁，填不进去是预期内的情况，所以每一步都有诚实降级：找不到输入框就把内容
+// 复制到剪贴板并如实告诉你「没填进去，已复制」，绝不假装填好了。回执里报的也是 failed 而不是 filled。
+//
+// 2026-09-15 接上采集自学习回路：手写候选全落空时，先把表单区域的**脱敏骨架**报给服务端
+// （__beaconReportParseMiss，只传结构不传内容，见 common.js），服务端学出选择器后随规则包下发，
+// 下一次由 __beaconRuleSelectorsSync 兜底——校准从真实用户的发布页上自己长出来，不必等插件发版。
+// 下发规则只在手写候选之后才试（同 common.js 的规矩：下发规则是应急补丁，不该盖过主解析器）。
+// 发布**按钮**刻意不接这条回路，原因写在 findPublishButton 上面。
 
 (function () {
   if (window.__beaconPublishFillLoaded) return;
@@ -76,6 +82,11 @@
   const PUBLISH_BUTTON_TEXT = /^(发布|立即发布|发表|确认发布|发布视频|发布笔记|发布文章)$/;
   const PUBLISH_BUTTON_DENY = /(草稿|预览|定时|设置|取消|返回|删除)/;
 
+  // 🔒 按钮**不接**服务端下发的学习规则（输入框接了，按钮不接），代价不对称：
+  //   · 输入框选错了，最坏是把字填进别的框，用户一眼看见、改掉就好；
+  //   · 按钮选错了，是替用户点了「删除」「退出」，或把半成品发了出去——不可逆。
+  // 模型从脱敏骨架里学出来的选择器只有结构没有文字语义，认不出「发布」和「删除」的区别，
+  // 所以按钮只信眼前这行字（PUBLISH_BUTTON_TEXT / PUBLISH_BUTTON_DENY），永远不查规则包。
   function findPublishButton() {
     const cands = [...document.querySelectorAll('button, [role="button"], a.btn, div[class*="publish"]')];
     for (const el of cands) {
@@ -92,10 +103,41 @@
 
   function pick(list) {
     for (const sel of list || []) {
-      const el = document.querySelector(sel);
+      let el = null;
+      // 服务端学来的选择器也从这里过：一条语法不合法的不能把整次填充炸掉
+      //（异常会让 onclick 里的 await 悬空，按钮永远卡在「填充中…」）。
+      try { el = document.querySelector(sel); } catch { continue; }
       if (el && el.offsetParent !== null) return el;
     }
     return null;
+  }
+
+  // ── 采集自学习接线（2026-09-15）──
+  // 两个入口都做 typeof 守卫：common.js 与本脚本同一组注入，但它若缺席（注入顺序、页面 CSP、
+  // 旧版本混装），填充本身必须照常工作——自学习是旁路，旁路坏了不能连累主流程。
+  /** 服务端学来的候选选择器。没有规则包、没有 common.js、出任何错，都返回空数组。 */
+  function learnedSelectors(field) {
+    try {
+      if (typeof globalThis.__beaconRuleSelectorsSync !== 'function') return [];
+      const list = globalThis.__beaconRuleSelectorsSync(platform, field);
+      return Array.isArray(list) ? list : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * 上报「这个字段没找到」。根节点取 form > main > body 里第一个存在的——
+   * 骨架越贴近表单，服务端越容易从里面认出输入框；整页 body 是最后的退路。
+   */
+  function reportMiss(field) {
+    try {
+      if (typeof globalThis.__beaconReportParseMiss !== 'function') return;
+      const root = ['form', 'main', 'body'].find((sel) => document.querySelector(sel)) || 'body';
+      globalThis.__beaconReportParseMiss(platform, 'publish', field, root);
+    } catch {
+      /* 旁路，出错就算了 */
+    }
   }
 
   // React/Vue 受控组件不认直接赋值：必须走原生 setter + 派发 input 事件，
@@ -122,8 +164,15 @@
 
   async function fillTask(task) {
     const conf = SELECTORS[platform] || {};
-    const titleEl = pick(conf.title);
-    const bodyEl = pick(conf.body);
+    // 手写候选先跑，全落空才试服务端学来的——顺序不能反，见文件头。
+    let titleEl = pick(conf.title);
+    if (!titleEl) titleEl = pick(learnedSelectors('publish.title'));
+    let bodyEl = pick(conf.body);
+    if (!bodyEl) bodyEl = pick(learnedSelectors('publish.body'));
+    // 两轮都没找到的字段先报上去让服务端学（按字段报，服务端按字段学锚点），再走下面的诚实降级。
+    // 报了不等于填上了：这一次仍如实说「没填进去」，学到的东西是给下一次用的。
+    if (!titleEl) reportMiss('publish.title');
+    if (!bodyEl) reportMiss('publish.body');
 
     if (!titleEl && !bodyEl) {
       await copyFallback(task);

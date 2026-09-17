@@ -110,6 +110,42 @@ describe('执行器状态必须如实告诉模型（2026-09-04 真机：没插�
     expect(out).toMatch(/浏览器插件已连接/);
   });
 
+  it('执行器能力里缺哪一项就说破哪一项（2026-09-15 加创作者后台；09-16 起指路插件**或**桌面客户端）', () => {
+    const at = (kinds: string[], executors: ('plugin' | 'desktop')[] = ['plugin']) =>
+      renderAccountsContext({ ...base, plugin: { installed: true, lastSeenAt: null, kinds }, executors });
+    // 全都会：不说「版本旧了」
+    const full = at(['collect_competitor', 'collect_self_profile', 'open_and_read', 'collect_self_backend', 'collect_competitor_recipe', 'collect_self_recipe']);
+    expect(full).not.toMatch(/版本旧了/);
+    // 只缺创作者后台与配方（1.2.18 那代）：说清缺的是什么，指路升到 1.2.19（插件或桌面客户端都行）
+    const noBackend = at(['collect_competitor', 'collect_self_profile', 'open_and_read']);
+    expect(noBackend).toMatch(/版本旧了，不会回填创作者后台/);
+    expect(noBackend).toMatch(/不会按配方采/);
+    expect(noBackend).not.toMatch(/不会回填自己的主页/);
+    expect(noBackend).toMatch(/插件或桌面客户端升到 1\.2\.19/);
+    // 只登记了旧桌面客户端：同一句话，别把他支去装插件
+    const oldDesktop = at(['collect_competitor', 'collect_self_profile', 'open_and_read'], ['desktop']);
+    expect(oldDesktop).toMatch(/桌面客户端已登记为采集执行器/);
+    expect(oldDesktop).toMatch(/不会回填创作者后台/);
+    // 两样都缺（更老的插件）：两句都要有
+    const legacy = at(['collect_competitor', 'open_and_read']);
+    expect(legacy).toMatch(/不会回填自己的主页/);
+    expect(legacy).toMatch(/不会回填创作者后台/);
+  });
+
+  it('自有回填的口径：每个平台都有路，三条执行路都会做；不再说「只有插件会做」', () => {
+    const out = renderAccountsContext({ ...base, plugin: { installed: true, lastSeenAt: null }, executors: ['plugin'] });
+    expect(out).toMatch(/每个平台都有路/);
+    expect(out).toMatch(/视频号\/抖音\/小红书\/B站\/公众号 进创作者后台读数/);
+    expect(out).toMatch(/X\/TikTok\/YouTube\/抖音\/小红书\/B站 采自己的公开主页/);
+    expect(out).toMatch(/微博\/快手\/知乎\/头条号\/百家号 按采集配方采自己的主页/);
+    expect(out).toContain('mp.weixin.qq.com');
+    expect(out).toMatch(/竞对：微博\/快手\/知乎\/头条号\/百家号 按采集配方采/);
+    expect(out, '页面直读那句要有：解析器没认出不等于采不了').toMatch(/模型直读/);
+    expect(out, '这句已经不成立了（三条路都会做）').not.toMatch(/只有浏览器插件会做/);
+    expect(out, '这句已经不成立了（后台平台如今派得出去）').not.toMatch(/手动回填/);
+    expect(out).not.toMatch(/公众号连那条路都没有了/);
+  });
+
   it('🔒 系统提示不许一律说「插件要等用户下次打开浏览器」，且不许把工具名当命令给用户', async () => {
     const src = fs.readFileSync(path.join(process.cwd(), 'lib/agent/run.ts'), 'utf8');
     expect(src, '还在无条件说「插件要等用户下次打开浏览器才会跑」').not.toMatch(/它是\*\*排队\*\*：插件要等用户下次打开浏览器才会跑/);

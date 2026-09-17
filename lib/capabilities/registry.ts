@@ -22,6 +22,10 @@ export * from './types';
 // 风险等级来自服务端工具定义（write/costly/contract），不由模型自报，也不由页面猜。
 
 /** 静态工具依赖哪些东西：不列在这里的工具视为只依赖模型渠道。 */
+// 【键是 AGENT_TOOLS 里的工具名，不是浏览器任务的 kind】下面的循环按 AGENT_TOOLS 出行，这张表按 t.name 查。
+// collect_self_profile 不是工具名（它是 dispatch_browser_task 的一个 kind），所以那一行从来没生效过；
+// 2026-09-15 新加的 collect_self_backend / collect_competitor_recipe 两个 kind 同理**不在这里加**——
+// 加了也是死键。它们的执行器依赖随 dispatch_browser_task 这一行走，而 vet.ts 派活时按插件自报的能力再判一次。
 const TOOL_DEPS: Record<string, { edition?: EditionCap; needsExecutor?: boolean; needsKey?: 'image' }> = {
   run_shell: { edition: 'localShell' },
   read_file: { edition: 'localShell' },
@@ -30,6 +34,10 @@ const TOOL_DEPS: Record<string, { edition?: EditionCap; needsExecutor?: boolean;
   browse_local: { edition: 'localBrowser' },
   collect_competitor: { needsExecutor: true },
   collect_self_profile: { needsExecutor: true },
+  // AI 在用户日常浏览器里一步步操作页面（2026-09-17）：靠插件执行，没插件这条路根本走不了。
+  // 与上面两个的区别是它还要求**用户此刻打开着烽火台页面**——那一条没法在这张静态表里表达，
+  // 由工具自己在运行时如实回报（tools-operate.ts 等不到结果时那句话）。
+  operate_browser: { needsExecutor: true },
   make_cover: { needsKey: 'image' },
   make_illustrations: { needsKey: 'image' },
 };

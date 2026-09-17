@@ -1,12 +1,13 @@
+import type { Metadata } from 'next';
+import { pageMetadata } from '@/lib/geo/page-seo';
 import Link from 'next/link';
 import { DataRequestForm } from './DataRequestForm';
 import { getServerLang } from '@/lib/i18n/server';
 
-export async function generateMetadata() {
-  const lang = await getServerLang();
-  return {
-    title: lang === 'en' ? 'Data Removal Request — Beacon' : '被监控账号移除申请 — 烽火台',
-  };
+// 此前这里只有 title，且自带品牌名——根布局的 title.template 会再拼一次，实际输出两遍。
+// 中英文案都收在 lib/geo/page-seo.ts；这一页是全站唯一真有英文正文分支的公开页。
+export async function generateMetadata(): Promise<Metadata> {
+  return pageMetadata('/legal/data-request', await getServerLang());
 }
 
 export default async function DataRequestPage() {

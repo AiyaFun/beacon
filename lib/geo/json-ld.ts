@@ -1,6 +1,7 @@
 import { CHINA_AREA_SERVED } from './china-regions';
 import { APP_VERSION } from '../market/version';
 import { HOT_SOURCES } from '../constants';
+import { KNOWS_ABOUT, knowsAboutString } from './keywords';
 
 // 热榜源数量从唯一真相源派生：此前写死「9 大平台」，而 HOT_SOURCES 早已只剩 7 个（小红书/X 被移除）
 const HOT_SOURCE_COUNT = HOT_SOURCES.length;
@@ -14,72 +15,13 @@ export function generateKnowledgeGraphJsonLd(baseUrl: string) {
   const siteUrl = baseUrl.replace(/\/$/, '');
   const logoUrl = `${siteUrl}/logo.png`;
 
-  const knowsAboutSkills = [
-    // 基础技术标准与协议
-    'Schema.org',
-    'JSON-LD',
-    'Open Graph Protocol',
-    'Robots Exclusion Protocol',
-    'XML Sitemap Standard',
-    'HTTP/2',
-    'HTML5 Meta Tags',
-    'AIGC Content Standard',
-    // 核心业务功能与底层能力
-    '全网热榜聚合',
-    '跨平台竞对实时监控',
-    '12视角AI选题智囊团',
-    '账号人设AI记忆系统',
-    '平台算法教练',
-    '分平台合规检测',
-    '一稿四态内容改写',
-    'GEO生成式引擎优化',
-    'SEO搜索引擎优化',
-    // 自媒体、融媒体与 AI 智能学习拓展词
-    '自媒体运营与爆款打造',
-    '融媒体中心与矩阵管理',
-    '融媒体跨平台内容分发',
-    'AI智能学习与自主进阶',
-    'AI创作教练与人设记忆',
-    '自媒体合规风控系统',
-    '融媒体全流程作战室',
-    // AI搜索大模型与搜索引擎收录优化
-    'DeepSeek AI引用率优化',
-    'ChatGPT搜索收录提升',
-    'Perplexity检索卡片构建',
-    'Kimi内容识别与提取',
-    '豆包AI搜索收录',
-    '微信小微原生AI搜索引擎',
-    '微信搜一搜收录优化',
-    '夸克AI搜索',
-    '百度双Agent优化',
-    '元宝AI搜索收录',
-    '腾讯混元收录优化',
-    '智谱清言收录优化',
-    '谷歌SEO与BingSEO优化',
-    '谷歌AI Overviews收录',
-    'Bing Copilot优化',
-    '品牌SoV声量监测与被引用率分析',
-    'RAG大模型检索增强与AI引用率优化',
-    '语义SEO与实体知识图谱构建',
-    // 扩展业务场景与专业能力
-    '烽火台Beacon跨平台作战室',
-    '先知道做什么再谈怎么写',
-    '8大选题推荐来源体系',
-    '抢跑流量窗口前瞻',
-    '30天流量节点日历',
-    '常青选题公式与爆款标题生成',
-    '微信公众号深度长文改写',
-    '小红书爆款图文笔记改写与违禁词风控',
-    '抖音短视频分镜脚本生成与完播率提升',
-    'B站中长视频文案改写',
-    'MCN机构矩阵内容管理与多团队协作',
-    '县级融媒体中心内容中枢建设',
-    '个人IP孵化高潜选题库',
-    '自媒体矩阵跨平台一键排版分发',
-    '广告法极限词与平台合规规则库',
-  ];
+  // 实体清单收在 lib/geo/keywords.ts —— 与网页 <meta keywords> 同一个文件里的两份清单，
+  // 图的是「改的时候两份都在眼前」。此前这里和 app/layout.tsx 各写一份，加词只加一处不会报错。
+  const knowsAboutSkills = [...KNOWS_ABOUT];
 
-  const keywordsString = knowsAboutSkills.join(', ');
+  // 逗号串也收在那边：Schema.org 的 keywords 要的是一个字符串而不是数组，
+  // 这个「要串不要数组」的知识只该有一处知道。
+  const keywordsString = knowsAboutString();
 
   return {
     '@context': 'https://schema.org',

@@ -23,8 +23,15 @@ use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use tokio_tungstenite::tungstenite::Message;
 
-/// 自报给服务端的能力：只列这里真的会做的 kind。公众号后台回填要插件那套步进机，这里不做。
-pub const SUPPORTED_KINDS: &str = "collect_competitor,collect_self_profile,open_and_read";
+/// 自报给服务端的能力：只列这里真的会做的 kind。
+/// 2026-09-16 起加创作者后台（collect_self_backend）、配方（collect_competitor_recipe / collect_self_recipe）：
+/// 用户原话「每一个平台都可以通过插件或者调用浏览器的方式采集」。脚本仍从服务端现取——后台脚本是插件那份
+/// self-backend.js，配方执行器是插件那份 tools/recipe-run.js，这里只是开页、注入、逐站读、交回。
+pub const SUPPORTED_KINDS: &str = "collect_competitor,collect_self_profile,open_and_read,collect_self_backend,collect_competitor_recipe,collect_self_recipe";
+/// 创作者后台一次最多走几站（入口 → 作品数据页…）。与插件 self-backend.js 的 beaconCoreAutoRoutes 上限同一个数。
+const BACKEND_MAX_ROUTES: usize = 4;
+/// 页面直读兜底的最低文字量：少于这个数的页面多半还没渲染完（冷启动第一次的典型样子），该走重试而不是交给模型读。
+const PAGE_READ_MIN_CHARS: usize = 400;
 /// 领活间隔。2026-09-05 从 60s 降到 20s：用户要「派下去立刻开始」——一分钟的等待在他眼里就是「没反应」。
 /// 网页派活后还会 invoke `executor_kick` 让这边立刻领一次，20s 只是兜底。
 const POLL_SECS: u64 = 20;
@@ -425,9 +432,9 @@ async fn execute(app: &AppHandle, client: &reqwest::Client, cfg: &ExecutorConfig
     let url = task["target"]["url"].as_str().ok_or("这条任务没带目标地址（服务端太旧？）")?.to_string();
     let platform = task["target"]["platform"].as_str().unwrap_or("").to_string();
 
-    // 脚本每次现取：解析器在服务端修了，这里立刻跟上
+    // 脚本每次现取：解析器在服务端修了，这里立刻跟上。kind 决定脚本包长什么样（主页解析器 / 后台脚本 / 配方）
     let scripts: serde_json::Value = client
-        .get(format!("{}/api/ingest/executor?platform={}", cfg.base, platform))
+        .get(format!("{}/api/ingest/executor?platform={}&kind={}", cfg.base, platform, kind))
         .header("x-beacon-ingest-token", &cfg.token)
         .send()
         .await
@@ -443,7 +450,11 @@ async fn execute(app: &AppHandle, client: &reqwest::Client, cfg: &ExecutorConfig
     let read_text = scripts["readText"].as_str().ok_or("脚本包里没有读正文函数")?;
 
     let mut page = Cdp::open(app, &url).await?;
-    let r = run_in_page(&mut page, &url, kind, login_wall, collect, read_text, &scripts).await;
+    let r = match kind {
+        "collect_self_backend" => run_backend(&mut page, &url, login_wall, &scripts).await,
+        "collect_competitor_recipe" | "collect_self_recipe" => run_recipe(&mut page, &url, login_wall, &scripts).await,
+        _ => run_in_page(&mut page, &url, kind, login_wall, collect, read_text, &scripts).await,
+    };
     // 【让他去登录时绝不清页】否则我们一边说「窗口停在这一页请登录」，一边把它导航回 about:blank
     // ——2026-09-04 真机（小红书）撞到的正是这个。park=false 时页面原样留着，也不记进 parked，
     // 下次任务另开一页，绝不抢这一页。
@@ -491,15 +502,8 @@ async fn wait_for_login(page: &mut Cdp, page_url: &str, login_wall: &str) -> boo
     false
 }
 
-async fn run_in_page(
-    page: &mut Cdp,
-    page_url: &str,
-    kind: &str,
-    login_wall: &str,
-    collect: &str,
-    read_text: &str,
-    scripts: &serde_json::Value,
-) -> Result<Outcome, String> {
+/// 等一页「真的能用了」：执行上下文起来 → 标识 → readyState=complete → 地址不再跳。三种任务共用。
+async fn settle(page: &mut Cdp) -> Result<(), String> {
     page.call("Page.enable", serde_json::json!({})).await?;
     // 【先等执行上下文，再等 readyState】2026-09-04 真机：新开的页在头几秒里
     // Runtime.evaluate 会回「Cannot find default execution context」——页面进程还没把
@@ -543,6 +547,32 @@ async fn run_in_page(
             if stable >= 2 { break; }
         }
     }
+    Ok(())
+}
+
+/// 页面直读兜底（2026-09-16）：解析器认不出/一条没读到时，把页面可见文字与链接原样带回，
+/// 由服务端让模型直接从页面内容里读出作品与数字（用户原话「直接在网页上读取对应的信息」）。
+/// 页面文字太少（还没渲染完）就不带——那是冷启动第一次失败的典型样子，该走原地重试，不该交给模型读一页空白。
+async fn page_read_fallback(page: &mut Cdp, scripts: &serde_json::Value, why: String) -> Result<Outcome, String> {
+    let Some(read_fn) = scripts["pageRead"].as_str() else { return Err(why) };
+    let Ok(read) = page.eval(&format!("({read_fn})()"), false).await else { return Err(why) };
+    let chars = read["text"].as_str().map(|t| t.chars().count()).unwrap_or(0);
+    if chars < PAGE_READ_MIN_CHARS {
+        return Err(why);
+    }
+    Ok(Outcome::Parsed(serde_json::json!({ "posts": [], "read": read, "parserError": why })))
+}
+
+async fn run_in_page(
+    page: &mut Cdp,
+    page_url: &str,
+    kind: &str,
+    login_wall: &str,
+    collect: &str,
+    read_text: &str,
+    scripts: &serde_json::Value,
+) -> Result<Outcome, String> {
+    settle(page).await?;
 
     let wall = page.eval(&format!("({login_wall})()"), false).await?;
     if wall["walled"] == true {
@@ -575,7 +605,7 @@ async fn run_in_page(
     }
     let r = page.eval(&format!("({collect})({{ deep: true }})"), true).await?;
     if let Some(e) = r.get("error").and_then(|e| e.as_str()) {
-        return Err(match e {
+        let why = match e {
             "no_handle" => "解析器没在这一页认出账号主页（可能没加载完、或站点改版了）".to_string(),
             "parser_missing" => "解析器没装载上".to_string(),
             // 2026-09-04：X 把页面上的语义锚点（data-testid / lang / time / role=group）全拆了，
@@ -583,7 +613,9 @@ async fn run_in_page(
             // 而不是让上层含混地报「这个号可能还没发过内容」。
             "parser_stale" => "解析器取不到内容：页面上能看到作品，但读不出正文与数据。最常见的原因是**采集浏览器还没登录这个平台**（X 未登录时给的是精简页面，没有可读的结构）——请在「烽火台采集浏览器」窗口里登录一次再派；已经登录仍这样的话，就是站点改版了，等解析器更新（服务端修好当天生效，客户端不用重装）。".to_string(),
             other => other.to_string(),
-        });
+        };
+        // 解析器认不出这一页：页面直读兜底（页面文字够多才带回，否则照旧报错走重试）
+        return page_read_fallback(page, scripts, why).await;
     }
     let payload = r.get("payload").cloned().ok_or_else(|| "解析器没返回结果".to_string())?;
 
@@ -617,8 +649,156 @@ async fn run_in_page(
                 }
             }
         }
+        // 登着、页面也有内容、解析器却一条没读到：页面直读兜底（改版了/新布局），服务端让模型从页面文字里读
+        return page_read_fallback(page, scripts, "主页上能看到内容，但解析器一条作品都没读到（可能站点改版了）".to_string()).await;
     }
     Ok(Outcome::Parsed(payload))
+}
+
+/// 注入后台脚本并问探针：这一页是哪个后台、停在登录页没有、该走哪几站。
+async fn inject_and_probe(page: &mut Cdp, srcs: &[String], probe_fn: &str) -> Result<serde_json::Value, String> {
+    for s in srcs {
+        page.eval_script(s).await?;
+    }
+    page.eval(&format!("({probe_fn})()"), false).await
+}
+
+/// 创作者后台：等用户在**这一页**登录完（与 wait_for_login 同一套摆前台 + 每 3 秒回入口页复判，
+/// 只是判据换成后台探针 + 通用登录墙两条一起看）。返回 true = 登上了。
+async fn wait_for_backend_login(page: &mut Cdp, entry_url: &str, srcs: &[String], probe_fn: &str, login_wall: &str) -> bool {
+    let _ = page.call("Page.bringToFront", serde_json::json!({})).await;
+    let _ = page.eval(BADGE_LOGIN, false).await;
+    crate::collect_browser::focus_window();
+    for _ in 0..LOGIN_WAIT_ROUNDS {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let _ = page.call("Page.navigate", serde_json::json!({ "url": entry_url })).await;
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        if settle(page).await.is_err() { continue; }
+        let _ = page.eval(BADGE_ON, false).await;
+        let _ = page.eval(BADGE_LOGIN, false).await;
+        let generic = page.eval(&format!("({login_wall})()"), false).await.unwrap_or_default();
+        if generic["walled"] == true { continue; }
+        if let Ok(p) = inject_and_probe(page, srcs, probe_fn).await {
+            if p["known"] == true && p["login"] != true {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// 创作者后台回填（2026-09-16）：入口 → 探针 → 逐站导航、注入、读数 → 合并交回。
+/// 脚本是插件那份 self-backend.js（服务端 /api/ingest/executor?kind=collect_self_backend 下发），
+/// 站内走哪几页由它的 autoRoutes 算——与插件那条路同一套判据，只是「问 SW 下一站」换成了这里自己数。
+/// 只读、不点、不填；未登录就把窗口摆到用户面前等他登（密码永远他自己输）。
+async fn run_backend(page: &mut Cdp, entry_url: &str, login_wall: &str, scripts: &serde_json::Value) -> Result<Outcome, String> {
+    let probe_fn = scripts["backendProbe"].as_str().ok_or("脚本包里没有后台探针")?;
+    let collect_fn = scripts["backendCollect"].as_str().ok_or("脚本包里没有后台读数函数")?;
+    let srcs: Vec<String> = scripts["scripts"]
+        .as_array()
+        .ok_or("脚本包里没有后台脚本")?
+        .iter()
+        .filter_map(|s| s.as_str().map(|x| x.to_string()))
+        .collect();
+    if srcs.is_empty() {
+        return Err("脚本包里没有后台脚本".into());
+    }
+    settle(page).await?;
+    let generic = page.eval(&format!("({login_wall})()"), false).await.unwrap_or_default();
+    if generic["walled"] == true && generic["kind"] != "login" {
+        let why = generic["why"].as_str().unwrap_or("");
+        return Err(format!("站点这次要求人机验证或提示访问过于频繁（{why}），过一阵再试。我们不会替你过验证码。"));
+    }
+    let mut probe = inject_and_probe(page, &srcs, probe_fn).await?;
+    if probe["login"] == true || (generic["walled"] == true && generic["kind"] == "login") {
+        if !wait_for_backend_login(page, entry_url, &srcs, probe_fn, login_wall).await {
+            return Err("等你在采集浏览器里登录这个创作者后台，等了几分钟还没登上，这次先停了。那个窗口还停在登录页，登好之后再派一次即可，之后几个月都不用再登。我不会替你输入账号密码。".into());
+        }
+        probe = inject_and_probe(page, &srcs, probe_fn).await?;
+    }
+    if probe["known"] != true {
+        let cur = page.eval("location.href", false).await.unwrap_or_default();
+        return Err(format!("打开创作者后台后被带到了一个不认识的页面（{}），没法读数", cur.as_str().unwrap_or("?").chars().take(120).collect::<String>()));
+    }
+    let routes: Vec<String> = probe["routes"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|r| r.as_str().map(|x| x.to_string())).collect())
+        .unwrap_or_default();
+    if routes.is_empty() {
+        let reason = probe["noRoutes"]["reason"].as_str().unwrap_or("创作者后台里没找到「作品数据/内容管理」页的入口，这次没读到");
+        let need_login = probe["noRoutes"]["needLogin"] == true;
+        return Err(if need_login { format!("{reason}（请在采集浏览器里登录后再派）") } else { reason.to_string() });
+    }
+
+    // 逐站读；作品按 platformItemId 去重（先到者优先），账号级块取第一份非空
+    let mut posts: Vec<serde_json::Value> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut daily: Option<serde_json::Value> = None;
+    let mut audience: Option<serde_json::Value> = None;
+    let mut walked: Vec<String> = Vec::new();
+    for r in routes.iter().take(BACKEND_MAX_ROUTES) {
+        if page.call("Page.navigate", serde_json::json!({ "url": r })).await.is_err() { continue; }
+        if settle(page).await.is_err() { continue; }
+        for s in &srcs { let _ = page.eval_script(s).await; }
+        walked.push(r.clone());
+        let Ok(got) = page.eval(&format!("({collect_fn})()"), true).await else { continue };
+        let Some(p) = got.get("payload") else { continue };
+        if let Some(arr) = p["posts"].as_array() {
+            for post in arr {
+                let id = post["platformItemId"].as_str().unwrap_or("").to_string();
+                if id.is_empty() || !seen.insert(id) { continue; }
+                posts.push(post.clone());
+                if posts.len() >= 50 { break; }
+            }
+        }
+        if daily.is_none() && p["dailyStats"].as_array().map(|a| !a.is_empty()).unwrap_or(false) { daily = Some(p["dailyStats"].clone()); }
+        if audience.is_none() && !p["audience"].is_null() { audience = Some(p["audience"].clone()); }
+    }
+    if posts.is_empty() && daily.is_none() && audience.is_none() {
+        return Err("创作者后台的作品数据页上一行都没读到（可能页面改版了、列表还没出数，或这个号还没发过内容）".into());
+    }
+    let platform = probe["platform"].as_str().unwrap_or("").to_string();
+    let mut backend = serde_json::json!({ "platform": platform, "handle": "self", "posts": posts, "routes": walked });
+    if let Some(d) = daily { backend["dailyStats"] = d; }
+    if let Some(a) = audience { backend["audience"] = a; }
+    Ok(Outcome::Parsed(serde_json::json!({ "backend": backend })))
+}
+
+/// 按配方采一页（2026-09-16）：规则/选项由服务端随脚本包给（recipe），页面里跑的是插件那份 recipe-run.js
+/// 原样包一层（recipeRun）。三种结局（scrape / learn / stale）与页面直读一起原样交回，学习与映射在服务端。
+async fn run_recipe(page: &mut Cdp, page_url: &str, login_wall: &str, scripts: &serde_json::Value) -> Result<Outcome, String> {
+    let run_fn = scripts["recipeRun"].as_str().ok_or("脚本包里没有配方执行器")?;
+    let ready_fn = scripts["recipeReady"].as_str().unwrap_or("() => true");
+    let recipe = scripts["recipe"].clone();
+    if recipe.is_null() {
+        return Err("脚本包里没有这个平台的配方".into());
+    }
+    settle(page).await?;
+    let wall = page.eval(&format!("({login_wall})()"), false).await?;
+    if wall["walled"] == true {
+        let why = wall["why"].as_str().unwrap_or("");
+        if wall["kind"] == "login" {
+            if !wait_for_login(page, page_url, login_wall).await {
+                return Err(format!("等你在采集浏览器里登录这个平台（{why}），等了几分钟还没登上，这次先停了。那个窗口还停在登录页，登好之后再派一次即可，之后几个月都不用再登。我不会替你输入账号密码。"));
+            }
+        } else {
+            return Err(format!("站点这次要求人机验证或提示访问过于频繁（{why}），过一阵再试。我们不会替你过验证码。"));
+        }
+    }
+    // 配方指定的就绪选择器：等到它出现（最多 20 秒），否则抓到的是骨架屏
+    let sel = recipe["options"]["readySelector"].as_str().unwrap_or("").to_string();
+    for _ in 0..20 {
+        let ok = page.eval(&format!("({ready_fn})({})", serde_json::Value::String(sel.clone())), false).await.unwrap_or(serde_json::json!(true));
+        if ok == true { break; }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    let outcome = page.eval(&format!("({run_fn})({recipe})"), false).await?;
+    let read = match scripts["pageRead"].as_str() {
+        Some(f) => page.eval(&format!("({f})()"), false).await.unwrap_or(serde_json::Value::Null),
+        None => serde_json::Value::Null,
+    };
+    let cur = page.eval("location.href", false).await.unwrap_or_default();
+    Ok(Outcome::Parsed(serde_json::json!({ "recipe": outcome, "read": read, "url": cur })))
 }
 
 /// 极简 CDP 会话：只用到 Page.enable / Runtime.evaluate 两个方法，不引整套客户端库。

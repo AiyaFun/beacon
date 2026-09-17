@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Card } from '@/components/ui';
 import { Overlay } from '@/components/Overlay';
+import { useContextMenu, RowMoreButton, type ContextMenuItem } from '@/components/ContextMenu';
 import { useEffect } from 'react';
 import {
   actInstallWorkflow,
@@ -357,6 +358,50 @@ export function WorkflowMarket({
     });
   }
 
+  // 卡片右键菜单：把这张卡下面那一排按钮原样收一份到指针底下。
+  // 删除在这里必须两步——卡片上那颗「删除」是一点就没（这条路上删的是用户自己配的智能体）。
+  const cardMenu = useContextMenu();
+
+  function cardMenuItems(t: Template): ContextMenuItem[] {
+    if (readOnly) return [];
+    const list: ContextMenuItem[] = [];
+    if (t.installed) {
+      list.push({
+        key: 'run',
+        label: isEn ? 'Run once' : '跑一遍',
+        disabled: pending || watchId !== null,
+        onSelect: () => doRun(t),
+      });
+    } else {
+      list.push({ key: 'install', label: isEn ? 'Install' : '装上', onSelect: () => simple(() => actInstallWorkflow(t.id)) });
+    }
+    if (t.installed) {
+      list.push({ key: 'profile', label: isEn ? 'Open profile' : '打开档案', onSelect: () => router.push(`/workflows?agent=${t.id}`) });
+    }
+    if (t.isBuiltin && t.installed) {
+      list.push({ key: 'uninstall', label: isEn ? 'Remove' : '移除', onSelect: () => simple(() => actUninstallWorkflow(t.id)) });
+    }
+    list.push({
+      key: 'export',
+      label: isEn ? 'Export' : '导出',
+      onSelect: () => start(async () => {
+        const r = await actExportWorkflow(t.id);
+        if (r.ok && r.json) setExported(r.json);
+        else setErr(r.error ?? (isEn ? 'Export failed' : '导出失败'));
+      }),
+    });
+    if (!t.isBuiltin) {
+      list.push({
+        key: 'delete',
+        label: isEn ? 'Delete agent' : '删除智能体',
+        danger: true,
+        confirm: isEn ? 'Click again to delete' : '再点一次，确认删除',
+        onSelect: () => simple(() => actDeleteWorkflow(t.id)),
+      });
+    }
+    return list;
+  }
+
   // 已装/未装分区（2026-08-25 画廊化）：第一眼是「我的班底」，市场候补在下面——
   // 与豆包「工作伙伴」的心智一致：先看我雇了谁，再看还能雇谁。
   const mine = templates.filter((t) => t.installed);
@@ -366,7 +411,7 @@ export function WorkflowMarket({
   // 摊开印在每张卡上（最多 10 行）正是这一页显得密的头号原因。
   // ⚠️ busyId 三元与 doRun 的时序有 tests/workflow/market-ui.test.ts 源码级守卫，别改写法。
   const renderCard = (t: Template) => (
-    <div key={t.id} className="card" style={{ padding: 14 }}>
+    <div key={t.id} className="card has-row-more" style={{ padding: 14 }} onContextMenu={(e) => cardMenu.open(e, cardMenuItems(t))}>
       <div className="row" style={{ gap: 10, alignItems: 'center' }}>
         <span className="persona-avatar" style={{ background: 'var(--brand-soft)', fontSize: 17 }}>{t.emoji}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -378,6 +423,8 @@ export function WorkflowMarket({
             </span>
             {/* 数字员工档案：状态、在跑什么、成功率、花费、定时、产物一处看全（lib/agent/overview.ts） */}
             {t.installed && <a className="small" href={`/workflows?agent=${t.id}`}>{isEn ? 'Profile →' : '档案 →'}</a>}
+            <div style={{ flex: 1 }} />
+            {!readOnly && <RowMoreButton onOpen={(e) => cardMenu.open(e, cardMenuItems(t))} label={isEn ? 'More actions' : '更多操作'} />}
           </div>
           <div className="small muted" style={{ marginTop: 2 }}>{t.description}</div>
         </div>
@@ -687,6 +734,7 @@ export function WorkflowMarket({
           </div>
         </Card>
       )}
+      {cardMenu.node}
     </>
   );
 }

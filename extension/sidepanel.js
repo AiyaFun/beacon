@@ -303,9 +303,19 @@ async function loadCompetitors() {
 // 「能不能一键采」按账号如实标：X 靠 handle 开自己主页；创作者后台要登录态、
 // 公开作品页与 multi 账号没有「一个地址采全部」这回事，只能手动。
 function selfCollectHint(a) {
-  if (a.platform === 'x') return a.handle ? { ok: true, text: '可一键采集' } : { ok: false, text: '需在账号里补 handle' };
+  // 与 sw.js 的 SELF_COLLECT_URL / SELF_AUTO_ENTRY 同一份口径：
+  //   X / TikTok / YouTube —— 自有数据在自己公开主页上，有 handle 就能开；
+  //   视频号 / 抖音 / 小红书 / B站 —— 走创作者后台自动回填（要登录态，插件不替你登录）；
+  //   公众号 —— 可选模块，要在设置页授权一次。
+  if (a.platform === 'x' || a.platform === 'tiktok' || a.platform === 'youtube') {
+    return a.handle ? { ok: true, text: '可一键采集（自己的主页）' } : { ok: false, text: '需在账号里补 handle' };
+  }
+  if (['shipinhao', 'douyin', 'xiaohongshu', 'bilibili'].includes(a.platform)) {
+    return { ok: true, text: '可一键采集（创作者后台，需已登录）' };
+  }
+  if (a.platform === 'wechat') return { ok: false, text: '公众号后台 · 在设置页授权后可自动回填' };
   if (a.platform === 'multi') return { ok: false, text: '多平台账号 · 请在具体作品页回填' };
-  return { ok: false, text: '需打开创作者后台/作品页手动回填' };
+  return { ok: false, text: '需打开作品页手动回填' };
 }
 
 async function loadSelfList() {

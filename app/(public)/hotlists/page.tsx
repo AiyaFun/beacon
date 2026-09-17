@@ -1,4 +1,7 @@
 import type { Metadata } from 'next';
+import { pageMetadata } from '@/lib/geo/page-seo';
+import { itemListJsonLd, breadcrumbJsonLd, hotItemEntries } from '@/lib/geo/item-list';
+import { JsonLd } from '@/components/JsonLd';
 import { headers } from 'next/headers';
 import { recordCrawlerHitAsync } from '@/lib/geo/crawler-log';
 import Link from 'next/link';
@@ -21,38 +24,8 @@ import { getDictionary } from '@/lib/i18n/dict';
 
 export const dynamic = 'force-dynamic';
 
-// SEO 文案从 HOT_SOURCES 派生：此前写死「9 大平台」并点名快手/小红书/微信，而榜单源早已只剩 7 个、
-// 小红书明确移除（lib/constants.ts）。结构化数据与真实产品对不上，搜索引擎/AI 引擎会把它当虚假宣传。
-const HOT_SOURCE_COUNT = HOT_SOURCES.length;
-const HOT_SOURCE_NAMES = HOT_SOURCES.map((s) => sourceBrandName(s.key)).join('、');
-
-export const metadata: Metadata = {
-  title: `全网热榜聚合 · ${HOT_SOURCE_COUNT} 大平台实时热点与爆款风向标`,
-  description: `烽火台全网热点聚合中心：汇聚${HOT_SOURCE_NAMES}等 ${HOT_SOURCE_COUNT} 大主流平台实时热榜，自动聚类与去重，免登录可看。`,
-  keywords: [
-    '全网热榜',
-    '全网热点聚合',
-    '抖音热榜',
-    'B站热搜',
-    '微博热搜榜',
-    '知乎热榜',
-    '百度热搜',
-    '今日头条热榜',
-    '爆款选题库',
-    '实时热点追踪',
-    '自媒体找热点',
-    '热点趋势分析',
-  ],
-  alternates: {
-    canonical: '/hotlists',
-  },
-  openGraph: {
-    title: `全网热榜实时聚合 · ${HOT_SOURCE_COUNT} 大主流平台爆款风向标 | 烽火台`,
-    description: `每 ${HOT_INGEST_INTERVAL_MINUTES} 分钟同步一次全网 ${HOT_SOURCE_COUNT} 大平台热榜，自动话题聚类与敏感词过滤，助创作者快速捕捉爆款灵感。`,
-    url: '/hotlists',
-    type: 'website',
-  },
-};
+// 标题/描述/关键词/canonical 收在 lib/geo/page-seo.ts —— 见那里顶部「为什么收成一处」
+export const metadata: Metadata = pageMetadata('/hotlists');
 
 // 热点聚合中心：登录用户可「重新采集 / 账号×热点结合分析」；游客只读浏览公开热榜（演示页）。
 export default async function HotlistsPage() {
@@ -136,8 +109,31 @@ export default async function HotlistsPage() {
     if (quickPills.length >= 6) break;
   }
 
+  // ── 结构化数据：把这一页的榜单变成机器能直接摘的清单（2026-09-17）──────────
+  //
+  // 【为什么是这一页】全站公开可抓的十来个页里，只有这一页和 /topics-today 有真内容。
+  // 它们对模型此前是一整团 HTML：读得到字，读不出「这是一个榜单、第一条是什么」。
+  // AI 检索要引用一个来源，靠的正是这种能直接摘出条目的结构。
+  //
+  // 【三道过滤，缺一不可】
+  //   · isMock —— 示例数据**绝不能**出现在对外的结构化数据里。它进不了库是一回事，
+  //     从这里泄出去是另一回事：引擎会把编的热点当成我们声明的事实（见 beacon-mock-hotitem-leak）。
+  //   · 空标题 —— 在 itemListJsonLd 里统一丢弃。
+  //   · 条数上限 —— 同在那边，30 条。这段 JSON 会进 HTML，条数就是首屏体积。
+  //
+  // ⚠️ 零可见输出：<script type="application/ld+json"> 不渲染任何东西。
+  // 挑哪些条目、怎么排，判据收在 hotItemEntries 里（含「为什么不能按 rank 全局排序」）。
+  const hotEntries = hotItemEntries(items, sourceBrandName);
+
   return (
     <>
+      <JsonLd data={itemListJsonLd(
+        '/hotlists',
+        `全网热榜聚合 · ${HOT_SOURCES.length} 大平台实时热点`,
+        `${HOT_SOURCES.map((s) => sourceBrandName(s.key)).join('、')} 共 ${HOT_SOURCES.length} 个平台的实时热榜，每 ${HOT_INGEST_INTERVAL_MINUTES} 分钟同步一次，自动聚类去重。`,
+        hotEntries,
+      )} />
+      <JsonLd data={breadcrumbJsonLd('/hotlists', '全网热榜')} />
       {/* 紧凑头（2026-08-26 用户「占了比较大的篇幅、每次都像重刷」）：
           标题/页签/新鲜度/采集按钮收进一行；原副标题与两枚说明徽章降为悬停提示。
           三页共用同款头 + loading 骨架，切页签时头部纹丝不动。 */}

@@ -58,12 +58,27 @@ export const RECIPE_BROKEN_AT = 3;
 export const MAX_RECIPES_PER_WORKSPACE = 50;
 
 export type RecipeField = { key: string; label: string };
+
+/**
+ * 允许按属性取值的属性名（2026-09-15）。链接类字段要的是 href（文本是「查看」两个字，没用），
+ * 发布时间常挂在 <time datetime>。**只认这四个**：两个执行器（extension/tools/recipe-run.js 与
+ * lib/browser/local.ts 的 PICK_FN）都以此为准，模型提了别的属性名一律丢掉——
+ * 放行 onclick / data-xxx 这类属性等于让规则包能带走页面上任意一段字符串。
+ */
+export const RECIPE_ATTRS = ['href', 'src', 'datetime', 'title'] as const;
+export type RecipeAttr = (typeof RECIPE_ATTRS)[number];
+export function vetRecipeAttr(raw: unknown): RecipeAttr | undefined {
+  return (RECIPE_ATTRS as readonly string[]).includes(String(raw ?? '')) ? (raw as RecipeAttr) : undefined;
+}
+
 export type RecipeRule = {
   key: string;
   selectors: string[];
   anchors: string[];
   /** 从被动捕获的 JSON 响应里取值的路径（CDP 路专有；插件端会自然退回选择器与锚点） */
   jsonPaths?: string[];
+  /** 取这个属性而不是文本（见 RECIPE_ATTRS）。链接/时间类字段用 */
+  attr?: RecipeAttr;
 };
 
 /**
@@ -251,11 +266,13 @@ export async function learnFromSkeleton(input: LearnInput): Promise<{ ok: boolea
     '',
     '只输出 JSON：',
     '{"rules":[{"key":"字段key","selectors":["css选择器"],"anchors":["紧挨着它的固定文字"],'
-      + '"jsonPaths":["JSON里的路径"]}],'
+      + '"jsonPaths":["JSON里的路径"],"attr":"href"}],'
       + '"options":{"readySelector":"等它出现就算加载好了","rowSelector":"列表里一行的容器","scrollScreens":0}}',
     '',
     '几条要求：',
     '· 选择器、锚点、JSON 路径都必须**确实出现在上面给的材料里**，不要凭经验编。',
+    '· 字段标签里写着「链接」的，要取的是地址不是文字：给 "attr":"href"，选择器要指到那个 <a>（或它里面的元素）；',
+    '  「发布时间」若页面用 <time datetime> 就给 "attr":"datetime"。其它字段不要带 attr。attr 只认 href / src / datetime / title。',
     '· 类名看起来像随机哈希（如 css-1x2y3z、_3aBcD）时，优先用 [role=…] 或 [data-testid=…]，',
     '  它们在改版后活得久得多。',
     '· 页面是列表时给 rowSelector（**一行**的容器，不是整个列表的容器）；不是列表就不要给。',
@@ -293,9 +310,11 @@ export async function learnFromSkeleton(input: LearnInput): Promise<{ ok: boolea
       .filter((path) => pathSeenInHints(input.jsonHints ?? '', path))
       .slice(0, 4);
     if (v.pass || jsonPaths.length > 0) {
+      const attr = vetRecipeAttr(p.attr);
       verified.push({
         key: f.key, selectors: v.selectors, anchors: v.anchors,
         ...(jsonPaths.length ? { jsonPaths } : {}),
+        ...(attr ? { attr } : {}),
       });
     }
   }

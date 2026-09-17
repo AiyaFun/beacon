@@ -9,6 +9,7 @@ import { recordCollectionRun, type CollectionChannel } from './collection-run';
 import { recordCompetitorDaily } from '../insight/growth-store';
 import { FOLLOWERS_VIA, checkFollowers } from './parser-health';
 import { resolveIngestToken } from './token';
+import { RECIPE_PLATFORMS } from '../browser-task/kinds';
 
 export const INGEST_TOKEN_HEADER = 'x-beacon-ingest-token';
 
@@ -38,23 +39,34 @@ export async function workspaceByIngestToken(token: string | null | undefined) {
 // 公众号竞对数据只走服务端商业数据源（见 lib/adapters/competitor-real.ts 的 NewRank）与
 // 用户自己导出的文章导入（lib/ingest/wechat-export.ts）。
 export const PLUGIN_COLLECTABLE = new Set(['bilibili', 'douyin', 'xiaohongshu', 'x', 'youtube', 'tiktok']);
-
+// 靠**内置配方**采的平台（2026-09-15）：没有手写解析器，插件按服务端学出的规则读公开主页，
+// 站点要用户在侧边栏授权一次（lib/scrape/platform-recipes.ts）。
+export const RECIPE_COLLECTABLE = new Set<string>(RECIPE_PLATFORMS);
 export { competitorHomeUrl };
-
 export async function listSubscribedCompetitors(workspaceId: string) {
   const items = await prisma.watchlistItem.findMany({
     where: { workspaceId },
     orderBy: { addedAt: 'asc' },
-    select: { competitor: { select: { platform: true, handle: true, name: true, lastCrawledAt: true } } },
+    select: { competitor: { select: { id: true, platform: true, handle: true, name: true, lastCrawledAt: true } } },
   });
-  return items.map(({ competitor: c }) => ({
-    platform: c.platform,
-    handle: c.handle,
-    name: c.name,
-    lastCrawledAt: c.lastCrawledAt ? c.lastCrawledAt.toISOString() : null,
-    collectable: PLUGIN_COLLECTABLE.has(c.platform),
-    url: competitorHomeUrl(c.platform, c.handle),
-  }));
+  return items.map(({ competitor: c }) => {
+    const url = competitorHomeUrl(c.platform, c.handle);
+    const viaRecipe = RECIPE_COLLECTABLE.has(c.platform);
+    let origin: string | null = null;
+    if (viaRecipe && url) { try { origin = new URL(url).origin; } catch { origin = null; } }
+    return {
+      id: c.id,
+      platform: c.platform,
+      handle: c.handle,
+      name: c.name,
+      lastCrawledAt: c.lastCrawledAt ? c.lastCrawledAt.toISOString() : null,
+      collectable: PLUGIN_COLLECTABLE.has(c.platform) || viaRecipe,
+      // 插件据此决定走内容脚本（访问即采）还是配方（按规则读 + 首次要站点授权）
+      viaRecipe,
+      ...(origin ? { origin } : {}),
+      url,
+    };
+  });
 }
 
 // 见 lib/ingest/own-post.ts readCount：Number(null)/Number('') 皆为 0 且能过 isFinite 闸，

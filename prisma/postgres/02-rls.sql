@@ -99,7 +99,7 @@ END $$;
 DO $$
 DECLARE t text;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['BotIntegration','BotConversation','InspirationItem','ReaderComment','MediaAsset','CoverStylePreset','Notification','CollectionRun','IngestToken','AgentRun','PublishPlan','WorkflowRun','ParserIncident','ScheduledAgent','BrowserTask','TaskPreset','ProcedureSkill','ScrapeRecipe','ScrapeRecord','AiCitation','AgentLedger','AgentToolDef','AgentKnowledgeBinding','ContentWorkItem'] LOOP
+  FOREACH t IN ARRAY ARRAY['BotIntegration','BotConversation','InspirationItem','ReaderComment','MediaAsset','CoverStylePreset','Notification','CollectionRun','IngestToken','AgentRun','PublishPlan','WorkflowRun','ParserIncident','ScheduledAgent','BrowserTask','TaskPreset','ProcedureSkill','ScrapeRecipe','ScrapeRecord','AiCitation','AgentLedger','AgentToolDef','AgentKnowledgeBinding','ContentWorkItem','BrowserOpSession'] LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY;', t);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY;', t);
     EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON %I;', t);

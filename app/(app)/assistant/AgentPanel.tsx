@@ -10,6 +10,14 @@ import type { AgentTurn } from '@/lib/agent/run';
 import { SaveAsSkillButton } from '@/components/SaveAsSkillButton';
 import { CopyText } from '@/components/CopyText';
 import { parseGap, gapDevPrompt } from '@/lib/agent/gap-prompt';
+// 「几点几分」一律走 fmtTime（北京时间，见 lib/format.ts 头上那段）。
+// 这里原来是 toLocaleTimeString，即**看的人自己机器的时区**：
+//   · 这一整个面板是 'use client'，服务端（容器 = UTC）先渲染一遍、浏览器再渲染一遍，
+//     两边算出来的 HH:MM 不是同一个数 —— 每天都在制造 hydration 不匹配；
+//   · 出国或改过系统时区的用户，会看到「16:20 会自动重试」而运行记录里写着 00:20，
+//     同一件事两个时刻，没人分得清哪个是真的。
+// 退避时刻是服务端排的，产品其余一切时间语义也都锚在北京时间上，展示只能跟着它走。
+import { fmtTime } from '@/lib/format';
 import { useI18n } from '@/lib/i18n';
 
 // 执行面板：看某一次执行的过程，确认、追问、终止、接着跑。
@@ -27,15 +35,6 @@ import { useI18n } from '@/lib/i18n';
 // 恢复用的 actGetAgentRun 当时就写好了，只是一个调用方都没有（写了没接的老形状）。
 
 type ToolInfo = { name: string; label: string; write: boolean; costly: boolean; contract: boolean; description: string };
-
-/** 按看的人的本地时钟给「几点几分」（这是浏览器里的界面，用户自己的时区最直观） */
-function clockOf(iso: string, isEn: boolean): string {
-  try {
-    return new Date(iso).toLocaleTimeString(isEn ? 'en-US' : 'zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
-  } catch {
-    return iso;
-  }
-}
 
 /**
  * 等采集执行器时的说明卡：退避中 → 「第 N 次没成：原因，HH:MM 自动重试」+「现在重试」；
@@ -60,8 +59,8 @@ function WaitingTaskCard({ task, runId, mine, busy, isEn, onRetry }: {
           </div>
           <div className="small" style={{ marginTop: 4 }}>
             {isEn
-              ? `Will retry automatically at ${clockOf(task.retryAt!, true)} (attempt ${task.attempts + 1}).`
-              : `${clockOf(task.retryAt!, false)} 会自动重试（第 ${task.attempts + 1} 次）。`}
+              ? `Will retry automatically at ${fmtTime(task.retryAt!)} (Beijing time, attempt ${task.attempts + 1}).`
+              : `${fmtTime(task.retryAt!)} 会自动重试（第 ${task.attempts + 1} 次）。`}
           </div>
           {mine && (
             <button className="btn btn-sm" style={{ marginTop: 8 }} disabled={busy} onClick={() => onRetry(task.taskId, runId)}>
@@ -86,7 +85,7 @@ function WaitingTaskCard({ task, runId, mine, busy, isEn, onRetry }: {
           <ul className="small" style={{ margin: '6px 0 0', paddingLeft: 18, lineHeight: 1.7 }}>
             {task.log.map((h, i) => (
               <li key={i}>
-                {clockOf(h.at, isEn)} · {isEn ? `#${h.n}` : `第 ${h.n} 次`}
+                {fmtTime(h.at)} · {isEn ? `#${h.n}` : `第 ${h.n} 次`}
                 {h.inPlace ? (isEn ? ' (before an on-the-spot retry)' : '（客户端当场重试前的那次）') : ''}：{h.error}
               </li>
             ))}

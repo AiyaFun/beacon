@@ -6,6 +6,12 @@ import path from 'node:path';
 // 2. setupFiles 里给每个测试文件独立的临时 SQLite 库 —— 绝不碰 prisma/dev.db（那是开发种子数据）。
 // 3. 测试进程强制 dev 语义：生产态断言由用例自己用 vi.stubEnv 局部开启。
 export default defineConfig({
+  // JSX 用自动运行时（与 Next/tsconfig 的 "jsx": "preserve" + React 19 一致）。
+  // esbuild 默认是 classic transform，会把 JSX 编成 React.createElement，
+  // 而组件文件里并没有 `import React`（Next 不需要）——于是渲染时报 React is not defined。
+  // 2026-09-17 加：tests/geo/item-list.test.ts 要真渲染 <JsonLd/> 来验转义，
+  // 「渲染出来的东西对不对」只能靠渲染它本身来验。
+  esbuild: { jsx: 'automatic' },
   resolve: {
     alias: { '@': path.resolve(__dirname, './') },
   },

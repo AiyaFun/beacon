@@ -91,8 +91,14 @@ ROOT_MINT=$(cd "$WT" && find . -maxdepth 1 -name '*.ts' -exec grep -lE 'issueLoc
 #   ③ 入口注册表文件不在（同 ①，STRIP 循环已验）。
 # 只看代码行：注释里指名道姓地说「这个钩子是给它用的」是**应该保留**的线索，
 # 删了下一个人就不知道那个通用钩子为什么存在。
+# 【两处豁免，都是「文件在就用、不在就如实拒绝」的可选加载】（2026-09-16）
+#   · lib/browser/local-collect.ts：桌面客户端/本机浏览器进公众号后台时要注入这个可选模块，
+#     loadBackendSources 先 existsSync 再读，开源树里没有文件就回「这个发行版不带公众号后台模块」；
+#   · tests/api/executor-scripts-shipped.test.ts：按文件在不在断言两种行为。
+#   它们引用的是**文件名**而不是模块里的任何通路；模块被剥掉后这两处仍是对的。
 DANGLING=$(cd "$WT" && grep -rn "self-backend-wechat" \
   --include='*.js' --include='*.ts' --include='*.tsx' --include='*.json' \
+  --exclude='local-collect.ts' --exclude='executor-scripts-shipped.test.ts' \
   . --exclude-dir=.git --exclude-dir=node_modules 2>/dev/null \
   | grep -vE ':[0-9]+: *(//|\*|/\*)' | head -3 || true)
 [ -z "$DANGLING" ] || die "公开树里还有指向已剥离站点模块的引用：$DANGLING"

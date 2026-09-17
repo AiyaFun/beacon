@@ -66,6 +66,28 @@
     }
     if (d.__beacon === 'batch-collect') {
       chrome.runtime.sendMessage({ type: 'batch-collect' }).catch(() => {});
+      return;
+    }
+
+    // ── AI 在你日常浏览器里操作页面（2026-09-17）───────────────────────────────
+    //
+    // 【这条桥为什么就是「用户在场」的证明】本文件只注入烽火台自己的页面。也就是说：
+    // 没有一个他打开着的烽火台页面，就没有人发这些消息，插件那边一步都动不了。
+    // 服务端在这条路上碰不到插件——插件不为它轮询、不接它的直连（与 /api/ingest/tasks 那条
+    // 「排队等浏览器下次醒来」完全不同，那条才是无人值守的）。他关掉页面，动作立刻停。
+    //
+    // 【为什么这里不做动作校验】真正的闸在两个地方：sw.js（站点要授权过、只碰自己开的那一页）
+    // 与 content/agent-operate.js（动作白名单、不可逆点击停手）。在这里再抄一份只会让三处漂移，
+    // 而漂移的那份恰好是能被绕过的那份。这里只做转发，并把结果原样带回页面。
+    if (d.__beacon === 'op-start' || d.__beacon === 'op-step' || d.__beacon === 'op-end') {
+      const type = d.__beacon === 'op-start' ? 'beacon-op-start'
+        : d.__beacon === 'op-step' ? 'beacon-op-step' : 'beacon-op-end';
+      const payload = d.__beacon === 'op-start' ? { url: d.url } : d.__beacon === 'op-step' ? { step: d.step } : {};
+      chrome.runtime
+        .sendMessage({ type, ...payload })
+        .then((r) => window.postMessage({ __beacon: 'op-result', id: d.id, result: r || { ok: false, error: '插件没有返回结果' } }, '*'))
+        // 插件被禁用/重载时 sendMessage 会抛。如实回一条失败，别让页面那边一直等到超时
+        .catch((e) => window.postMessage({ __beacon: 'op-result', id: d.id, result: { ok: false, error: String((e && e.message) || e) } }, '*'));
     }
   });
 

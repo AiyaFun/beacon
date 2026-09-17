@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from 'react';
 import { Icon } from '@/components/icons';
+import { useContextMenu, type ContextMenuItem } from '@/components/ContextMenu';
 import { platformName } from '@/lib/constants';
 import {
   actAddInspiration,
@@ -93,6 +94,8 @@ export function InspirationBoard({ items }: { items: InspirationView[] }) {
     });
   }
 
+  const menu = useContextMenu();
+
   const { lang } = useI18n();
 
   const tabLabels: Record<string, string> = {
@@ -148,6 +151,18 @@ export function InspirationBoard({ items }: { items: InspirationView[] }) {
             <div
               key={it.id}
               style={{ padding: 12, borderRadius: 10, border: '1px solid var(--border)' }}
+              onContextMenu={(e) => menu.open(e, [
+                it.state === 'open'
+                  ? { key: 'archive', label: lang === 'en' ? 'Archive' : '归档', onSelect: () => run(() => actArchiveInspiration(it.id)) }
+                  : { key: 'restore', label: lang === 'en' ? 'Restore' : '放回待用', onSelect: () => run(() => actRestoreInspiration(it.id)) },
+                {
+                  key: 'delete',
+                  label: lang === 'en' ? 'Delete' : '删除',
+                  danger: true,
+                  confirm: lang === 'en' ? 'Click again to delete' : '再点一次，确认删除',
+                  onSelect: () => run(() => actDeleteInspiration(it.id)),
+                },
+              ] satisfies ContextMenuItem[])}
             >
               <div className="row-between" style={{ gap: 12, alignItems: 'flex-start' }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -237,6 +252,7 @@ export function InspirationBoard({ items }: { items: InspirationView[] }) {
               </div>
             </div>
           ))}
+          {menu.node}
         </div>
       )}
     </div>

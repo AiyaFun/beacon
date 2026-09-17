@@ -1,10 +1,13 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useTransition } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Empty } from '@/components/ui';
 import { useI18n } from '@/lib/i18n';
+import { useContextMenu, RowMoreButton, type ContextMenuItem } from '@/components/ContextMenu';
 import { VersionCompare, type CompareVersion } from './VersionCompare';
+import { actDeleteDraft } from './actions';
 
 // 左栏草稿列表：搜索 + 状态筛选 + 定高自滚。
 
@@ -46,16 +49,69 @@ export function DraftList({
   selectedId,
   emptyText,
   versions,
+  canEdit = false,
 }: {
   drafts: DraftRow[];
   selectedId?: string;
   emptyText: string;
   versions?: CompareVersion[];
+  /** viewer（含演示访客）不给删除项——服务端本来就会 throw，先在菜单里就不摆出来 */
+  canEdit?: boolean;
 }) {
   const { lang } = useI18n();
+  const router = useRouter();
+  const menu = useContextMenu();
   const [q, setQ] = useState('');
   const [status, setStatus] = useState('all');
   const [showFilter, setShowFilter] = useState(false);
+  const [err, setErr] = useState('');
+  const [, startTransition] = useTransition();
+
+  // 删掉的正好是当前打开的那篇，就回到 /studio（留在 ?draft=<已删> 上会是一页空编辑器）；
+  // 删的是别的，refresh 让服务端重新给一份列表即可。
+  async function removeDraft(d: DraftRow) {
+    setErr('');
+    let r: { ok: boolean; error?: string };
+    try {
+      r = await actDeleteDraft(d.id);
+    } catch {
+      // requireRole 这类「按设计拒绝」是抛出来的（见 actions.ts 顶部说明），
+      // 不接住的话在客户端就是一个没人处理的 rejection，界面上什么都不显示。
+      setErr(lang === 'en' ? 'You do not have permission to delete drafts.' : '当前身份没有删除草稿的权限');
+      return;
+    }
+    if (!r.ok) {
+      setErr(r.error ?? (lang === 'en' ? 'Delete failed' : '删除失败'));
+      return;
+    }
+    startTransition(() => {
+      if (d.id === selectedId) router.push('/studio');
+      else router.refresh();
+    });
+  }
+
+  function itemsFor(d: DraftRow): ContextMenuItem[] {
+    const list: ContextMenuItem[] = [
+      {
+        key: 'open',
+        label: lang === 'en' ? 'Open in new tab' : '在新标签页打开',
+        onSelect: () => { window.open(`/studio?draft=${d.id}`, '_blank', 'noopener'); },
+      },
+    ];
+    if (canEdit) {
+      list.push({
+        key: 'delete',
+        label: lang === 'en' ? 'Delete draft' : '删除草稿',
+        hint: d.versionCount > 1
+          ? (lang === 'en' ? `${d.versionCount} versions will go too` : `连同 ${d.versionCount} 个版本一起删`)
+          : undefined,
+        danger: true,
+        confirm: lang === 'en' ? 'Click again to delete' : '再点一次，确认删除',
+        onSelect: () => removeDraft(d),
+      });
+    }
+    return list;
+  }
 
   const statuses = useMemo(() => {
     const seen = new Map<string, { text: string; n: number }>();
@@ -141,10 +197,16 @@ export function DraftList({
             const tagCls = platformTagClass(d.platformName);
 
             return (
-              <div key={d.id}>
+              <div key={d.id} className="has-row-more">
+                <RowMoreButton
+                  className="row-more-abs"
+                  onOpen={(e) => menu.open(e, itemsFor(d))}
+                  label={lang === 'en' ? 'More actions' : '更多操作'}
+                />
                 <Link
                   href={`/studio?draft=${d.id}`}
                   className={`draft-row ${active ? 'active' : ''}`}
+                  onContextMenu={(e) => menu.open(e, itemsFor(d))}
                 >
                   <strong>{d.title}</strong>
                   <div className="draft-row-meta">
@@ -178,7 +240,9 @@ export function DraftList({
             );
           })
         )}
+        {err && <div className="small" style={{ color: 'var(--red)', padding: '6px 10px' }}>{err}</div>}
       </div>
+      {menu.node}
     </>
   );
 }

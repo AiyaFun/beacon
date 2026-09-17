@@ -3,6 +3,7 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Card } from '@/components/ui';
+import { useContextMenu, RowMoreButton, type ContextMenuItem } from '@/components/ContextMenu';
 import { actRunRecipeNow, actDeleteRecipe } from './recipe-actions';
 import { useI18n } from '@/lib/i18n/context';
 
@@ -61,6 +62,40 @@ export function RecipeList({ items, readOnly, canRun }: { items: RecipeView[]; r
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ id: string; text: string; ok: boolean } | null>(null);
   const router = useRouter();
+  const menu = useContextMenu();
+
+  function runNow(id: string) {
+    setMsg(null); setBusy(id);
+    start(async () => {
+      const res = await actRunRecipeNow(id);
+      setBusy(null);
+      setMsg({ id, text: res.detail ?? res.error ?? '', ok: res.ok });
+      router.refresh();
+    });
+  }
+
+  function remove(id: string) {
+    setMsg(null);
+    start(async () => {
+      const res = await actDeleteRecipe(id);
+      if (!res.ok) setMsg({ id, text: res.error ?? (isEn ? 'Failed to delete' : '删不掉'), ok: false });
+      else router.refresh();
+    });
+  }
+
+  function itemsFor(id: string): ContextMenuItem[] {
+    if (readOnly) return [];
+    const list: ContextMenuItem[] = [];
+    if (canRun) list.push({ key: 'run', label: isEn ? 'Run once' : '跑一次', onSelect: () => runNow(id) });
+    list.push({
+      key: 'delete',
+      label: isEn ? 'Delete recipe' : '删除配方',
+      danger: true,
+      confirm: isEn ? 'Click again to delete' : '再点一次，确认删除',
+      onSelect: () => remove(id),
+    });
+    return list;
+  }
 
   if (items.length === 0) {
     return (
@@ -90,7 +125,7 @@ export function RecipeList({ items, readOnly, canRun }: { items: RecipeView[]; r
         {items.map((r) => {
           const st = STATUS[r.status] ?? { text: r.status, textEn: r.status, cls: '', hint: '', hintEn: '' };
           return (
-            <div key={r.id} className="card" style={{ padding: 12 }}>
+            <div key={r.id} className="card has-row-more" style={{ padding: 12 }} onContextMenu={(e) => menu.open(e, itemsFor(r.id))}>
               <div className="row-between" style={{ gap: 8, flexWrap: 'wrap' }}>
                 <div style={{ minWidth: 0 }}>
                   <b className="small">{r.name}</b>
@@ -133,32 +168,18 @@ export function RecipeList({ items, readOnly, canRun }: { items: RecipeView[]; r
                     {canRun && (
                       <button
                         type="button" className="btn btn-sm btn-primary" disabled={pending}
-                        onClick={() => {
-                          setMsg(null); setBusy(r.id);
-                          start(async () => {
-                            const res = await actRunRecipeNow(r.id);
-                            setBusy(null);
-                            setMsg({ id: r.id, text: res.detail ?? res.error ?? '', ok: res.ok });
-                            router.refresh();
-                          });
-                        }}
+                        onClick={() => runNow(r.id)}
                       >
                         {busy === r.id && pending ? (isEn ? 'Running…' : '跑着…') : (isEn ? 'Run Once' : '跑一次')}
                       </button>
                     )}
                     <button
                       type="button" className="btn btn-sm btn-ghost" disabled={pending}
-                      onClick={() => {
-                        setMsg(null);
-                        start(async () => {
-                          const res = await actDeleteRecipe(r.id);
-                          if (!res.ok) setMsg({ id: r.id, text: res.error ?? (isEn ? 'Failed to delete' : '删不掉'), ok: false });
-                          else router.refresh();
-                        });
-                      }}
+                      onClick={() => remove(r.id)}
                     >
                       {isEn ? 'Delete' : '删除'}
                     </button>
+                    <RowMoreButton onOpen={(e) => menu.open(e, itemsFor(r.id))} label={isEn ? 'More actions' : '更多操作'} />
                   </div>
                 )}
               </div>
@@ -171,6 +192,7 @@ export function RecipeList({ items, readOnly, canRun }: { items: RecipeView[]; r
             </div>
           );
         })}
+        {menu.node}
       </div>
     </Card>
   );

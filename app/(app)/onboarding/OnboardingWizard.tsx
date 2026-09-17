@@ -276,8 +276,8 @@ export function OnboardingWizard({ initial, lang }: { initial: { niche: string; 
                 <span className="ob-tip-icon"><Icon.info size={16} /></span>
                 <div>
                   {en
-                    ? 'X / TikTok profiles can be backfilled automatically; Douyin, Xiaohongshu and Bilibili will store your handle, and sync engagement numbers via Desktop Agent or browser extension.'
-                    : 'X / TikTok 的主页能自动回填数据；抖音 / 小红书 / B 站会记下账号，互动数字要靠桌面客户端或浏览器插件采回。'}
+                    ? 'X / TikTok / YouTube profiles can be backfilled automatically; for Douyin, Xiaohongshu, Bilibili and Channels the browser extension can backfill your creator-studio numbers daily (or the AI can dispatch it).'
+                    : 'X / TikTok / YouTube 的主页能自动回填数据；抖音 / 小红书 / B 站 / 视频号的创作者后台数据，装了浏览器插件后可以每天自动回填，也可以直接让 AI 派活。'}
                 </div>
               </div>
             </div>

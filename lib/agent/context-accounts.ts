@@ -7,7 +7,7 @@
 import { prisma } from '../db';
 import { platformName } from '../constants';
 import { hasCollector, collectorKinds, collectorAgents } from '../browser-task';
-import { SELF_PROFILE_PLATFORMS } from '../browser-task/kinds';
+import { SELF_PROFILE_PLATFORMS, SELF_BACKEND_PLATFORMS, RECIPE_PLATFORMS } from '../browser-task/kinds';
 import { localBrowserState, LOCAL_BROWSER_WAKE_HINT } from '../browser-task/local-run';
 import { fmtDate } from '../format';
 
@@ -54,18 +54,30 @@ export function renderAccountsContext(c: AccountsContext): string {
   const acct = c.accounts.length
     ? c.accounts.map((a) => `- ${line(a)}`).join('\n')
     : '- （工作区里还没有账号）';
-  const oldPlugin = c.plugin.installed && c.plugin.kinds && !c.plugin.kinds.includes('collect_self_profile');
+  // 在线执行器（插件 + 桌面客户端的并集）自报的能力里缺哪一项，就说破那一项做不了：模型据此在派之前就能如实
+  // 告诉用户去更新，而不是派了被拒再回头解释。缺 collect_self_profile = 不会回填自己的主页；
+  // 缺 collect_self_backend = 不会回填创作者后台；缺 collect_competitor_recipe = 不会按配方采（微博等五平台）。
+  const missing = c.plugin.installed && c.plugin.kinds
+    ? [
+        ...(!c.plugin.kinds.includes('collect_self_profile') ? ['不会回填自己的主页'] : []),
+        ...(!c.plugin.kinds.includes('collect_self_backend') ? ['不会回填创作者后台'] : []),
+        ...(!c.plugin.kinds.includes('collect_competitor_recipe') ? ['不会按配方采微博/快手/知乎/头条号/百家号'] : []),
+      ]
+    : [];
+  const oldPlugin = missing.length > 0;
   const hasDesktop = c.executors?.includes('desktop');
   const hasPluginAgent = c.executors?.includes('plugin');
   // 【必须说清「谁来领、等多久」】只写「采集插件：没装」的话，模型会自己编出
   // 「需要浏览器插件，等你下次打开浏览器」——而用户登记的是桌面客户端，它每分钟领一次活。
   // 2026-09-04 真机撞到：用户没插件、有客户端，模型照样让他去开浏览器等插件。
+  // 版本旧了那句：三条路都会做后台/配方（2026-09-16），所以一律指路「更新插件或桌面客户端到 1.2.19」
+  const oldNote = oldPlugin ? `；**在线的执行器版本旧了，${missing.join('、')}**（派了会被拒或退到公开主页；如实告诉用户把插件或桌面客户端升到 1.2.19——客户端升完在它顶部那条「允许这台客户端操作浏览器采集？」点「允许」；整机版可直接用本机浏览器）` : '';
   const plugin = hasDesktop && hasPluginAgent
-    ? '桌面客户端（几秒内领走）与浏览器插件都在'
+    ? `桌面客户端（几秒内领走）与浏览器插件都在${oldNote}`
     : hasDesktop
-      ? '**桌面客户端已登记为采集执行器**（几秒内领走，通常一两分钟内跑完；用户这里没有浏览器插件，别提插件、别让他去开浏览器）'
+      ? `**桌面客户端已登记为采集执行器**（几秒内领走，通常一两分钟内跑完；用户这里没有浏览器插件，别提插件、别让他去开浏览器）${oldNote}`
       : c.plugin.installed
-        ? `浏览器插件已连接${c.plugin.lastSeenAt ? `（最近活跃 ${fmtDate(c.plugin.lastSeenAt)}）` : '（还没回传过数据）'}${oldPlugin ? '；**版本旧了，不会回填自己的主页**（派了会被拒，如实告诉用户去更新插件，或在桌面客户端顶部那条「允许这台客户端操作浏览器采集？」点「允许」）' : ''}`
+        ? `浏览器插件已连接${c.plugin.lastSeenAt ? `（最近活跃 ${fmtDate(c.plugin.lastSeenAt)}）` : '（还没回传过数据）'}${oldNote}`
         : '没有任何采集执行器（既没装插件，也没把桌面客户端登记为执行器）——采集任务派不出去，如实告诉用户去登记，别说成「已排队等浏览器」';
   const local = c.localBrowser === 'ready'
     ? '就绪（采集任务会直接用它当场跑完并返回结果，不排队）'
@@ -73,6 +85,8 @@ export function renderAccountsContext(c: AccountsContext): string {
       ? `已开启但此刻没在跑（Chrome 没带调试端口开着；这次只能排给插件。告诉用户${LOCAL_BROWSER_WAKE_HINT}就能当场采）`
       : '未开启';
   const selfProfile = SELF_PROFILE_PLATFORMS.map((p) => platformName(p) || p).join('/');
+  const selfBackend = SELF_BACKEND_PLATFORMS.map((p) => platformName(p) || p).join('/');
+  const recipe = RECIPE_PLATFORMS.map((p) => platformName(p) || p).join('/');
   return [
     '【你的账号与插件】',
     acct,
@@ -82,7 +96,9 @@ export function renderAccountsContext(c: AccountsContext): string {
       + '不要再问他要主页链接、也不要问采哪个；同平台有多个账号时用 account 参数点名（用户没点名就按「当前」那条）。',
     '- 走哪条路（本机浏览器 / 桌面客户端 / 插件）由系统按上面的状态自动定，**不要问用户选**；本机就绪时工具直接返回结果，拿到就接着答。'
       + '想让用户看进度时用文字说明，不要把工具调用写成 JSON 块给他看。',
-    `- 能派的自有回填只有：${selfProfile}（自己的主页，要有 handle）。别的平台（含公众号）如实说要在创作者后台页点插件侧栏手动回填，公众号连那条路都没有了。`,
+    `- 能派的自有回填（**每个平台都有路**，插件 / 桌面客户端 / 本机浏览器三条执行路都会做）：${selfBackend} 进创作者后台读数（完播率、流量来源只有后台有；公众号走插件要先在插件设置里对 mp.weixin.qq.com 授权一次，走桌面客户端不用）；${selfProfile} 采自己的公开主页（要有 handle；抖音/小红书/B站没有会进后台的执行器时才退到这条，只有公开数字）；${recipe} 按采集配方采自己的主页（要有 handle；第一次会先学规则）。都用同一个 kind=collect_self_profile 派，系统按平台与在线执行器自动分路。`,
+    `- 竞对：${recipe} 按采集配方采（第一次先学规则；走插件要先在插件侧边栏对该站点授权过一次，桌面客户端/本机浏览器不用），其余平台走主页解析器；公众号/视频号没有公开主页，竞对数据只能走数据源或导入。照常用 kind=collect_competitor 派。`,
+    '- 解析器/配方读不到时，桌面客户端/本机浏览器会把页面上可见的文字与链接带回，由模型直接从页面内容里读出作品与数字再入库（回执里会标「模型直读」，每个数字都核对过在页面上原样出现）。别因为「解析器没认出」就断言采不了。',
     // 页面上能做的，对话里也要能做：加账号 / 补 handle 都有工具，别把用户支去页面（2026-09-09）
     '- 用户说的平台上还没有他的账号：直接用 add_account 加（给主页链接，或 platform + handle），加好接着派，不要让他自己去页面加。',
     '- 账号没填 handle 时，问他主页 ID 或链接，拿到就用 update_account 补上，不要编一个。',

@@ -60,14 +60,38 @@
    * 【root 就是行边界】给了 rowSelector 时，每一行只在自己那棵子树里找——
    * 不这样的话，第二行取不到就会退到全局，把第一行的值当成自己的（跨条目串数）。
    */
+  // 允许按属性取值的字段：链接类字段要的是 href（文本是「查看」两个字，没用），
+  // 发布时间常挂在 <time datetime>。**只认这四个属性名**——与服务端 lib/scrape/recipe.ts 的
+  // 校验同一份清单，别的属性（onclick / data-xxx）服务端不会放行，这里也不读。
+  const PICK_ATTRS = ['href', 'src', 'datetime', 'title'];
+  function pickAttr(el, attr) {
+    let v = el.getAttribute(attr);
+    if (!v) return null;
+    v = v.trim();
+    if (attr === 'href' || attr === 'src') {
+      try { v = new URL(v, location.href).href; } catch { /* 相对地址解不开就原样给 */ }
+    }
+    return v.slice(0, 200);
+  }
   function pick(rule, root) {
+    const attr = rule.attr && PICK_ATTRS.includes(rule.attr) ? rule.attr : null;
     for (const sel of rule.selectors || []) {
       try {
         const el = root.querySelector(sel);
-        const v = el && el.textContent && el.textContent.trim();
+        if (!el) continue;
+        if (attr) {
+          // 选择器可能指到 <a> 里面的 span：往上找最近的带该属性的祖先（不出 root）
+          let host = el;
+          while (host && host !== root && !host.hasAttribute(attr)) host = host.parentElement;
+          const v = host && host !== root ? pickAttr(host, attr) : (el.hasAttribute(attr) ? pickAttr(el, attr) : null);
+          if (v) return v;
+          continue;
+        }
+        const v = el.textContent && el.textContent.trim();
         if (v) return v.slice(0, 200);
       } catch { /* 选择器写坏了就试下一个，不让整次抓取挂掉 */ }
     }
+    if (attr) return null; // 属性类字段不走文本锚点：锚点取的是相邻文字，不是链接
     // 锚点法：找到那段固定文字，取它**紧邻**的文本。
     // 【为什么限定紧邻而不是全局搜】抖音「关注 178 / 粉丝 328.3万」三个数字挨着，
     // 全局搜「粉丝」再取第一个数字，会取到关注数——这个事故真发生过。

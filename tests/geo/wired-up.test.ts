@@ -32,6 +32,17 @@ const WATCHED = [
   'lib/geo/citation.ts',
   'lib/geo/llms-txt.ts',
   'lib/geo/public-surface.ts',
+  // 【2026-09-17 扩进来的】每页 SEO 文案层。它的失效形态尤其隐蔽：
+  // pageMetadata 一旦没人调，页面就静默退回全站默认标题——不报错、页面照常渲染，
+  // 只有在搜索结果里才看得出来。keywords.ts 同理（两份清单没人引用 = 词白写了）。
+  'lib/geo/page-seo.ts',
+  'lib/geo/keywords.ts',
+  // 【2026-09-17 收录通道】这两个的「没人调」尤其致命：
+  // siteVerification 没接 = 站长平台永远验证不过；pushIndexNow/pushBaidu 没接 =
+  // 「主动推送」这个能力只存在于代码里。两者都不报错、页面都照常。
+  'lib/geo/verification.ts',
+  'lib/geo/submit.ts',
+  'lib/geo/item-list.ts',
   'lib/scrape/record.ts',
   'lib/scrape/json-capture.ts',
   // 【2026-08-29 扩进来的】上一轮这道守卫只盯 geo/scrape，**没盯 legal**——
@@ -174,7 +185,7 @@ describe('公开文件路由 vs middleware 白名单', () => {
   const mw = readFileSync(join(ROOT, 'middleware.ts'), 'utf8');
 
   /** app/ 下这些是给机器读的公开文件路由，都必须被放行。 */
-  const PUBLIC_FILE_ROUTES = ['/robots.txt', '/sitemap.xml', '/llms.txt'];
+  const PUBLIC_FILE_ROUTES = ['/robots.txt', '/sitemap.xml', '/llms.txt', '/indexnow-key.txt'];
 
   it.each(PUBLIC_FILE_ROUTES)('%s 在 PUBLIC_PATHS 里', (route) => {
     expect(
@@ -189,7 +200,7 @@ describe('公开文件路由 vs middleware 白名单', () => {
   // `Sitemap:` 会指向一个它自己 Disallow 掉的 URL——Search Console 报
   // 「已提交的站点地图无法读取（被 robots.txt 屏蔽）」。
   // /robots.txt 不在此列：按协议它从不受自己约束。
-  it.each(['/sitemap.xml', '/llms.txt'])('%s 也被 robots 自己放行', async (route) => {
+  it.each(['/sitemap.xml', '/llms.txt', '/indexnow-key.txt'])('%s 也被 robots 自己放行', async (route) => {
     const { PUBLIC_ALLOW } = await import('@/lib/geo/public-surface');
     expect(
       PUBLIC_ALLOW,

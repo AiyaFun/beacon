@@ -5,6 +5,7 @@ import {
   recordParserIncident, activeRulePack, autoAdoptIncident,
   MAX_SKELETON_CHARS, MAX_SCREENSHOT_CHARS,
 } from '@/lib/ingest/parser-learn';
+import { PARSER_SCOPES } from '@/lib/ingest/parser-scopes';
 import { PLATFORMS } from '@/lib/constants';
 import { log } from '@/lib/logger';
 
@@ -39,7 +40,9 @@ export async function GET(req: Request) {
 
 const schema = z.object({
   platform: z.string().min(1).max(30).refine((p) => p in PLATFORMS, { message: '未知平台' }),
-  scope: z.enum(['rival', 'self']),
+  // rival / self / publish / comments（2026-09-15 扩入后三者，见 lib/ingest/parser-scopes.ts）
+  scope: z.enum(PARSER_SCOPES),
+  // 40 够放命名空间字段名（publish.title / comments.container / backend.rows）
   field: z.string().min(1).max(40),
   note: z.string().max(300).optional(),
   // 骨架结构由服务端再脱敏，这里只把「别塞一个 10MB 的东西进来」这条挡住

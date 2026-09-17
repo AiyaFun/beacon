@@ -68,22 +68,38 @@ async function renderSelfAutoBlock() {
   selfAutoInfo = await chrome.runtime.sendMessage({ type: 'beacon-self-auto-info' }).catch(() => null);
   if (!selfAutoInfo?.available) { block.style.display = 'none'; return; }
   block.style.display = '';
+  const list = Array.isArray(selfAutoInfo.list) ? selfAutoInfo.list : [];
   const sub = document.getElementById('selfAutoSub');
-  if (sub && selfAutoInfo.label) {
-    sub.innerHTML = `开启后，每天在指定时间用后台标签页打开您<b>自己的${selfAutoInfo.label}</b>，`
-      + '只读您自己作品已渲染出来的指标（阅读/完读率等公开页拿不到的数字），采完自动关闭标签页。'
-      + '需要先授权站点、且登录态有效；不点击、不发布、不调用平台接口、不碰 Cookie。';
+  if (sub) {
+    const names = list.map((x) => x.label).join(' / ');
+    sub.innerHTML = `开启后，每天在指定时间用后台标签页依次打开您<b>自己的</b>创作者后台（${names || '视频号 / 抖音 / 小红书 / B站'}），`
+      + '只开工作区里真有账号的那几个；只读您自己作品已渲染出来的指标（完播率/完读率等公开页拿不到的数字），采完自动关闭标签页。'
+      + '需要登录态有效；不点击、不发布、不调用平台接口、不碰 Cookie、不替您登录。';
   }
+  // 逐个后台的状态：内置的四个在安装权限里；可选模块（公众号）要单独授权
+  const box = document.getElementById('selfAutoPlatforms');
+  if (box) {
+    box.innerHTML = '';
+    for (const x of list) {
+      const row = document.createElement('div');
+      row.className = 'setting-sub';
+      row.textContent = `· ${x.label}：${x.manifest ? '内置，无需授权' : (x.granted ? '已授权' : '未授权（下方「去授权」）')}`;
+      box.appendChild(row);
+    }
+  }
+  // 授权那一行只对可选模块有意义；开源发行版没有可选模块，整行隐藏
+  const grantRow = document.getElementById('selfAutoGrantRow');
+  if (grantRow) grantRow.style.display = selfAutoInfo.hasOptional ? '' : 'none';
   const btn = document.getElementById('selfAutoGrant');
   const gsub = document.getElementById('selfAutoGrantSub');
-  if (btn) {
+  if (btn && selfAutoInfo.hasOptional) {
     btn.querySelector('span').textContent = selfAutoInfo.granted ? '已授权' : '去授权';
     btn.disabled = !!selfAutoInfo.granted;
   }
-  if (gsub) {
+  if (gsub && selfAutoInfo.hasOptional) {
     gsub.textContent = selfAutoInfo.granted
       ? `已授权 ${selfAutoInfo.origin}（可在 chrome://extensions 的「网站权限」里随时撤销）`
-      : `${selfAutoInfo.origin} 不在插件的安装权限里——按需单独授权，随时可撤销。不授权则这一项完全不发生。`;
+      : `${selfAutoInfo.label}（${selfAutoInfo.origin}）不在插件的安装权限里——按需单独授权，随时可撤销。不授权则这一项完全不发生，其它后台照常。`;
   }
   await renderSelfAutoLog();
 }
@@ -129,15 +145,15 @@ selfAutoHourEl?.addEventListener('change', () => {
 });
 
 document.getElementById('selfAutoRunNow')?.addEventListener('click', async () => {
-  if (!selfAutoInfo?.granted) { show('请先点上面的「去授权」，没授权时一行都不会执行', false); return; }
-  show('已开始试跑：将在后台标签页打开你自己的后台并自动处理，结果会显示在下面那一行', true);
+  // 内置四个后台不需要授权；公众号没授权只是被跳过，不拦住整轮试跑
+  show('已开始试跑：将在后台标签页依次打开你自己的创作者后台并自动处理，结果会显示在下面那一行', true);
   const r = await chrome.runtime.sendMessage({ type: 'beacon-self-auto-run-now' }).catch(() => null);
   if (r && r.ok === false && r.message) show(r.message, false);
-  // 一轮最长 90 秒（SELF_AUTO_TIMEOUT_MS），中途每 3 秒刷一次；结果落盘后这行就会变。
+  // 每个后台最长 90 秒（SELF_AUTO_TIMEOUT_MS），最多五个后台串行；中途每 3 秒刷一次，结果落盘后这行就会变。
   const started = Date.now();
   const poll = setInterval(async () => {
     await renderSelfAutoLog();
-    if (Date.now() - started > 95000) clearInterval(poll);
+    if (Date.now() - started > 5 * 95000) clearInterval(poll);
   }, 3000);
 });
 

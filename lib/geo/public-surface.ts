@@ -34,7 +34,9 @@ export const PUBLIC_ALLOW: readonly string[] = [
   // 【别把它说得比实际严重】/robots.txt 按协议永远够得着（爬虫必须先取它才知道规则），
   // /hotlists 本来就在上面这行里，而爬虫来访计数是按**爬虫名**聚合、不按 path 分，
   // 所以产品里没有哪个数字会因此变错。真正的代价只有一处：sitemap 递交不了。
-  '/sitemap.xml', '/llms.txt',
+  // /indexnow-key.txt 同理（2026-09-17）：被 `Disallow: /` 封掉，引擎就读不到密钥，
+  // 于是每一次主动推送都会被静默丢弃——而推送接口照样回 200。
+  '/sitemap.xml', '/llms.txt', '/indexnow-key.txt',
 ] as const;
 
 /**

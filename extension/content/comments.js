@@ -53,6 +53,10 @@
   //   douyin / bilibili / xiaohongshu / youtube / x 五平台已校准；tiktok 未登录看不到评论，仍未校准。
   // 每个平台的取数策略写在各自条目的注释里。改任何一条选择器，必须同步 tools/comments-probe.js
   // 的副本并重跑探针（tests/ingest/comment-scope.test.ts 钉死两边一致）。
+  //
+  // 2026-09-15 起这张表落空时会走服务端学来的兜底选择器并上报骨架（见 findContainer / readItems），
+  // 但**这张表本身**只写真机校准过的东西——学来的规则住在 chrome.storage 的规则包里，不回填到这里；
+  // 要回填就得先跑探针拿真机证据。tiktok 这种没校准的，第一次真实用户打开评论区就会把骨架报上来。
   const PLATFORM_RULES = {
     douyin: {
       // 实测：video-comment / feed-comment 只存在 *-icon 变体（评论按钮），不是容器，已删。
@@ -169,26 +173,70 @@
     return null;
   }
 
+  // ── 采集自学习接线（2026-09-15）──
+  // 顺序与 common.js 的 beaconRuleSelectors 同一条规矩：手写规则先跑，下发规则只做兜底——
+  // 下发规则是应急补丁，不该盖过已经在真机上校准过的主解析器。
+  // 两个入口都做 typeof 守卫：本脚本由 executeScript 按需注入，common.js 走 manifest 的
+  // <all_urls> 组，通常已在同一个 isolated world 里，但「通常」不是「必然」——自学习是旁路，
+  // 旁路缺席时读评论必须照常工作。
+  // ⚠️ 只用**同步**版 __beaconRuleSelectorsSync：sw.js 读 `res?.result` 是同步取值，这个 IIFE
+  // 一旦为了等异步结果改成异步函数，返回的就是一个 Promise，整条采集链会静默拿到空结果。
+  //（`platform` 是主流程里的 const，这两个函数只会在它赋值之后被 findContainer / readItems 调到。）
+  function learnedSelectors(field) {
+    try {
+      if (typeof globalThis.__beaconRuleSelectorsSync !== 'function') return [];
+      const list = globalThis.__beaconRuleSelectorsSync(platform, field);
+      return Array.isArray(list) ? list : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function reportMiss(field, rootSelector) {
+    try {
+      if (typeof globalThis.__beaconReportParseMiss !== 'function') return;
+      globalThis.__beaconReportParseMiss(platform, 'comments', field, rootSelector);
+    } catch {
+      /* 旁路，出错就算了 */
+    }
+  }
+
   function findContainer(rules) {
+    // 返回值多带一个 sel（命中的选择器）：readItems 零命中时拿它当上报的根节点。
     for (const sel of rules.containers) {
       if (sel === 'bili-comments') {
         const el = document.querySelector(sel);
-        if (el && el.shadowRoot) return { el: el.shadowRoot, shadow: true };
-        if (el) return { el, shadow: false };
+        if (el && el.shadowRoot) return { el: el.shadowRoot, shadow: true, sel };
+        if (el) return { el, shadow: false, sel };
         continue;
       }
       const el = document.querySelector(sel);
-      if (el) return { el, shadow: false };
+      if (el) return { el, shadow: false, sel };
     }
+    // 手写候选全落空 → 试服务端学来的容器选择器（顺序不能反，见 learnedSelectors）。
+    // 学来的不走 bili-comments 那个 shadow 特例：那是真机校准出来的结构知识，模型从骨架里
+    // 看不见 shadow 边界，一律按普通元素处理；B站真改版了也只会 no_items 响亮失败，不会误采。
+    for (const sel of learnedSelectors('comments.container')) {
+      let el = null;
+      try { el = document.querySelector(sel); } catch { continue; }
+      if (el) return { el, shadow: false, sel, learned: true };
+    }
+    // 两轮都没有 → 把页面骨架报上去让服务端学；返回 null 让主流程照旧报 no_container。
+    // 根节点取 main（有的话）而不是 body：骨架有深度上限，从 body 起算评论区往往在上限之外。
+    reportMiss('comments.container', document.querySelector('main') ? 'main' : 'body');
     return null;
   }
 
   function readItems(container, rules) {
     const items = [];
+    // matched = 有没有任何一条条目选择器在容器里找到过元素。它与 items.length 不是一回事：
+    // 一页全是纯表情评论时选择器命中、正文全 null，那是页面的事，不是我们不认识结构。
+    let matched = false;
     for (const itemSel of rules.items) {
       let els = [];
       try { els = container.el.querySelectorAll(itemSel); } catch { continue; }
       if (els.length > 0) {
+        matched = true;
         for (const el of els) {
           if (items.length >= MAX_COMMENTS) break;
           let text = null;
@@ -205,6 +253,33 @@
         break;
       }
     }
+    if (matched) return items;
+
+    // 手写条目选择器一个都没命中 → 试服务端学来的（顺序不能反，见 learnedSelectors）。
+    // 学来的条目走最朴素的取文策略：rules.textInItem 里有选择器且在条目里能找到节点，就按
+    // extractText 的「命中即定局」取；找不到节点（或这个平台本来就没有 textInItem——抖音靠
+    // 时间锚点、B站靠 shadow 链，都是模型从骨架里学不到的结构知识）才退到条目自己的文本过
+    // finalizeText。这条退路带的是整条 item 的文本，昵称/时间可能混进来——所以它**只给学来的
+    // 条目用**（extractText 本身仍没有这个兜底，comment-scope 钉着），且后面的来源闸与形状闸
+    // 照样把关：混进时间戳整批拒发，宁可响亮失败也不出脏数据。
+    const textSels = Array.isArray(rules.textInItem) ? rules.textInItem : [];
+    for (const itemSel of learnedSelectors('comments.item')) {
+      let els = [];
+      try { els = container.el.querySelectorAll(itemSel); } catch { continue; }
+      if (els.length === 0) continue;
+      matched = true;
+      for (const el of els) {
+        if (items.length >= MAX_COMMENTS) break;
+        const hasTextNode = textSels.some((s) => { try { return !!el.querySelector(s); } catch { return false; } });
+        const text = hasTextNode ? extractText(el, textSels) : finalizeText(el.textContent);
+        if (text) items.push(text);
+      }
+      break;
+    }
+    // 两轮都没有条目命中 = 这一页的评论结构我们不认识：把容器的骨架报上去让服务端学。
+    // 容器是 shadowRoot（B站）时不报：__beaconReportParseMiss 按选择器从 document 取根，
+    // 取到的是 shadow 宿主，骨架里看不见 shadow 内部，报上去也是一棵空树。
+    if (!matched && !container.shadow) reportMiss('comments.item', container.sel);
     return items;
   }
 

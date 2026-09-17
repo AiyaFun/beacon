@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { prisma } from '@/lib/db';
 import { getSession } from '@/lib/session';
+import { can } from '@/lib/rbac';
 import { platformName, platformColor } from '@/lib/constants';
 import { relTime } from '@/lib/format';
 import { listInstalledSkills } from '@/lib/skills';
@@ -267,6 +268,7 @@ export default async function StudioPage({
           <DraftList
             drafts={draftRows}
             selectedId={selectedId}
+            canEdit={can(s.role, 'content.create')}
             emptyText={
               pendingTopic
                 ? (lang === 'en' ? 'No drafts yet — click "AI Generate Draft" above to start.' : '还没有草稿——点上面那条横幅里的「AI 生成初稿」，就按带过来的这条选题起一版')

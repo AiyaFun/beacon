@@ -3,6 +3,7 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Card } from '@/components/ui';
+import { useContextMenu, RowMoreButton, type ContextMenuItem } from '@/components/ContextMenu';
 import { actRunProcedure, actDeleteProcedure } from './procedure-actions';
 import { useI18n } from '@/lib/i18n/context';
 
@@ -27,6 +28,41 @@ export function ProcedureList({ items, readOnly }: { items: ProcView[]; readOnly
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const router = useRouter();
+  const menu = useContextMenu();
+
+  function runOnce(id: string) {
+    setErr(null); setBusy(id);
+    start(async () => {
+      const r = await actRunProcedure(id);
+      setBusy(null);
+      // 派出去之后跳到执行页看它跑——留在技能页只能干等
+      if (r.ok && r.runId) router.push(`/assistant?run=${r.runId}`);
+      else setErr(r.error ?? (isEn ? 'Failed to run' : '跑不起来'));
+    });
+  }
+
+  function remove(id: string) {
+    setErr(null);
+    start(async () => {
+      const r = await actDeleteProcedure(id);
+      if (!r.ok) setErr(r.error ?? (isEn ? 'Failed to delete' : '删不掉'));
+      else router.refresh();
+    });
+  }
+
+  function itemsFor(id: string): ContextMenuItem[] {
+    if (readOnly) return [];
+    return [
+      { key: 'run', label: isEn ? 'Run once' : '用一次', onSelect: () => runOnce(id) },
+      {
+        key: 'delete',
+        label: isEn ? 'Delete skill' : '删除技能',
+        danger: true,
+        confirm: isEn ? 'Click again to delete' : '再点一次，确认删除',
+        onSelect: () => remove(id),
+      },
+    ];
+  }
 
   if (items.length === 0) {
     return (
@@ -53,7 +89,7 @@ export function ProcedureList({ items, readOnly }: { items: ProcView[]; readOnly
       {err && <p className="small" style={{ color: 'var(--red)', marginTop: 0 }}>{err}</p>}
       <div className="stack" style={{ gap: 10 }}>
         {items.map((p) => (
-          <div key={p.id} className="card" style={{ padding: 12 }}>
+          <div key={p.id} className="card has-row-more" style={{ padding: 12 }} onContextMenu={(e) => menu.open(e, itemsFor(p.id))}>
             <div className="row-between" style={{ gap: 8, flexWrap: 'wrap' }}>
               <div style={{ minWidth: 0 }}>
                 <b className="small">{p.name}</b>
@@ -66,16 +102,7 @@ export function ProcedureList({ items, readOnly }: { items: ProcView[]; readOnly
                     type="button"
                     className="btn btn-sm btn-primary"
                     disabled={pending}
-                    onClick={() => {
-                      setErr(null); setBusy(p.id);
-                      start(async () => {
-                        const r = await actRunProcedure(p.id);
-                        setBusy(null);
-                        // 派出去之后跳到执行页看它跑——留在技能页只能干等
-                        if (r.ok && r.runId) router.push(`/assistant?run=${r.runId}`);
-                        else setErr(r.error ?? (isEn ? 'Failed to run' : '跑不起来'));
-                      });
-                    }}
+                    onClick={() => runOnce(p.id)}
                   >
                     {busy === p.id && pending ? (isEn ? 'Dispatching…' : '派发中…') : (isEn ? 'Run Once' : '用一次')}
                   </button>
@@ -83,17 +110,11 @@ export function ProcedureList({ items, readOnly }: { items: ProcView[]; readOnly
                     type="button"
                     className="btn btn-sm btn-ghost"
                     disabled={pending}
-                    onClick={() => {
-                      setErr(null);
-                      start(async () => {
-                        const r = await actDeleteProcedure(p.id);
-                        if (!r.ok) setErr(r.error ?? (isEn ? 'Failed to delete' : '删不掉'));
-                        else router.refresh();
-                      });
-                    }}
+                    onClick={() => remove(p.id)}
                   >
                     {isEn ? 'Delete' : '删除'}
                   </button>
+                  <RowMoreButton onOpen={(e) => menu.open(e, itemsFor(p.id))} label={isEn ? 'More actions' : '更多操作'} />
                 </div>
               )}
             </div>
@@ -104,6 +125,7 @@ export function ProcedureList({ items, readOnly }: { items: ProcView[]; readOnly
             )}
           </div>
         ))}
+        {menu.node}
       </div>
     </Card>
   );

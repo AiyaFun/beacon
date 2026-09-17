@@ -92,7 +92,7 @@ const I18N = {
     pageTitle: '桌面客户端与整机版',
     // 2026-09-05 重定位：客户端的理由是「数据自己回来」，不是「独立窗口」。网页功能一样不少这句仍然要说，
     // 但放在第二屏——这一页此前第一句就是「装不装都不影响使用」，等于自己劝人别装。
-    pageHint: '装上它，同行动态与你在 X / TikTok 主页的数据每天自动回流，不用装插件 · 网页功能一样不少',
+    pageHint: '装上它，同行动态与你在 X / TikTok / YouTube 主页的数据每天自动回流，不用装插件 · 网页功能一样不少',
     syncTitle: '为什么要装：数据自己回来',
     syncSub: '登录客户端即接管采集，不用装浏览器插件、不用生成和粘贴令牌',
     syncPoints: [
@@ -179,7 +179,7 @@ const I18N = {
   },
   en: {
     pageTitle: 'Desktop Client & Appliance',
-    pageHint: 'Install it and competitor updates plus your X / TikTok profile metrics flow back daily, no extension needed · Web has every feature too',
+    pageHint: 'Install it and competitor updates plus your X / TikTok / YouTube profile metrics flow back daily, no extension needed · Web has every feature too',
     syncTitle: 'Why install: data syncs itself',
     syncSub: 'Sign in once and the app takes over collection. No extension, no token pasting.',
     syncPoints: [

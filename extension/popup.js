@@ -261,14 +261,40 @@ function filterAndRenderList() {
     // 打开主页 / 没有入口。后者**置灰并说明**，不隐藏——
     // 藏起来用户会以为这个号没订阅上，置灰他至少知道「订阅了，但这个平台还采不动」。
     const canOpen = !!c.url;
-    go.textContent = canOpen ? (done ? '再采' : '打开采集') : '暂无入口';
-    if (!canOpen) {
-      go.disabled = true;
-      go.title = '这个平台还没有可直接打开的采集入口——先在网页端看它的说明';
+    // 配方平台（微博/快手/知乎/头条/百家号）没有内容脚本，打开主页不会「访问即采」：
+    // 由后台按服务端学出的配方读，首次要对该站点授权一次（申请必须在这里——弹窗点击是用户手势）
+    if (c.viaRecipe && canOpen) {
+      go.textContent = done ? '再采（配方）' : '按配方采集';
+      go.title = '首次会申请读取该站点的权限（只这一个站点，随时可在扩展页撤销）';
+      go.addEventListener('click', async () => {
+        go.disabled = true;
+        go.textContent = '采集中…';
+        try {
+          if (c.origin) {
+            let granted = false;
+            try { granted = await chrome.permissions.contains({ origins: [`${c.origin}/*`] }); } catch { granted = false; }
+            if (!granted) {
+              try { granted = await chrome.permissions.request({ origins: [`${c.origin}/*`] }); } catch { granted = false; }
+            }
+            if (!granted) { go.textContent = '未授权'; go.disabled = false; return; }
+          }
+          const r = await ask({ type: 'beacon-collect-recipe', competitorId: c.id });
+          go.textContent = r?.ok ? '已采' : '没采到';
+          go.title = (r && (r.note || r.error)) || '';
+        } finally {
+          setTimeout(() => { go.disabled = false; }, 1500);
+        }
+      });
+    } else {
+      go.textContent = canOpen ? (done ? '再采' : '打开采集') : '暂无入口';
+      if (!canOpen) {
+        go.disabled = true;
+        go.title = '这个平台还没有可直接打开的采集入口——先在网页端看它的说明';
+      }
+      go.addEventListener('click', () => {
+        if (canOpen) chrome.tabs.create({ url: c.url });
+      });
     }
-    go.addEventListener('click', () => {
-      if (canOpen) chrome.tabs.create({ url: c.url });
-    });
     row.appendChild(meta);
     row.appendChild(go);
     clistEl.appendChild(row);
@@ -545,9 +571,19 @@ async function getActiveTabContext() {
 // 「能不能一键采」按账号如实标：X 靠 handle 开自己主页；创作者后台要登录态、
 // 公开作品页与 multi 账号没有「一个地址采全部」这回事，只能手动。
 function selfCollectHint(a) {
-  if (a.platform === 'x') return a.handle ? { ok: true, text: '可一键采集' } : { ok: false, text: '需在账号里补 handle' };
+  // 与 sw.js 的 SELF_COLLECT_URL / SELF_AUTO_ENTRY 同一份口径：
+  //   X / TikTok / YouTube —— 自有数据在自己公开主页上，有 handle 就能开；
+  //   视频号 / 抖音 / 小红书 / B站 —— 走创作者后台自动回填（要登录态，插件不替你登录）；
+  //   公众号 —— 可选模块，要在设置页授权一次。
+  if (a.platform === 'x' || a.platform === 'tiktok' || a.platform === 'youtube') {
+    return a.handle ? { ok: true, text: '可一键采集（自己的主页）' } : { ok: false, text: '需在账号里补 handle' };
+  }
+  if (['shipinhao', 'douyin', 'xiaohongshu', 'bilibili'].includes(a.platform)) {
+    return { ok: true, text: '可一键采集（创作者后台，需已登录）' };
+  }
+  if (a.platform === 'wechat') return { ok: false, text: '公众号后台 · 在设置页授权后可自动回填' };
   if (a.platform === 'multi') return { ok: false, text: '多平台账号 · 请在具体作品页回填' };
-  return { ok: false, text: '需打开创作者后台/作品页手动回填' };
+  return { ok: false, text: '需打开作品页手动回填' };
 }
 
 async function loadSelfList() {

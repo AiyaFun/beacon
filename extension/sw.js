@@ -286,7 +286,7 @@ async function hasSiteGrant(origin) {
  * 在当前标签页跑一次配方。
  * 没授权就直接返回，让界面去引导用户点授权按钮——**绝不在这里偷偷申请**。
  */
-async function runRecipeOnTab(tabId, url) {
+async function runRecipeOnTab(tabId, url, extra = {}) {
   const recipe = await recipeForUrl(url);
   if (!recipe) return { ok: false, error: '这个页面没有对应的采集配方' };
   if (!(await hasSiteGrant(recipe.origin))) {
@@ -322,12 +322,20 @@ async function runRecipeOnTab(tabId, url) {
     // 插件那条路的采集结果只活在浏览器里，用户在站里一个字都查不到，
     // 而侧栏还显示「采集成功」。落库先于报结果：报结果那一步可能把配方标成 broken，
     // 但这次确实抓到东西了，数据该留下。
-    await post({
+    const dataRes = await post({
       kind: 'data', recipeId: recipe.id, url,
       values: out.values || {}, rows: out.rows || [], want: out.want || 0,
+      // 内置平台配方：告诉服务端这是哪条竞对的主页，它据此把行映射进竞对库；
+      // 带 accountId 的是自己的主页（collect_self_recipe），映射进自有作品
+      ...(extra.competitorId ? { competitorId: String(extra.competitorId) } : {}),
+      ...(extra.accountId ? { accountId: String(extra.accountId) } : {}),
     });
+    const dataJson = await dataRes.json().catch(() => ({}));
     await post({ kind: 'result', recipeId: recipe.id, ok: true });
-    return { ok: true, mode: 'scrape', values: out.values, got: out.got, want: out.want, rows: (out.rows || []).length };
+    return {
+      ok: true, mode: 'scrape', values: out.values, got: out.got, want: out.want, rows: (out.rows || []).length,
+      ...(dataJson && dataJson.mapped ? { mapped: dataJson.mapped } : {}),
+    };
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) };
   }
@@ -888,13 +896,34 @@ function armDailyAlarm() {
 // 它往 globalThis 上挂注册表（而不是直接改这里的 const）——那样它就不依赖本文件的作用域，
 // 单独跑得起来、也测得了。
 try { importScripts('sw-self-backends.js'); } catch { /* 没有可选后台模块，注册表保持为空 */ }
-const SELF_AUTO_ENTRY = globalThis.__beaconSelfAutoEntries || {};
+
+// ── 内置的四个创作者后台（2026-09-15）──
+// 这四个域名本来就在 manifest 的 content_scripts 里（self-backend.js 自动注入），
+// 不需要按需授权、也不需要 chrome.scripting 注入——所以 inject 为空、manifest 为真。
+// 此前只有公众号那个可选模块能「每天自动回填」，视频号/抖音/小红书/B站的后台数据
+// 全靠用户自己打开后台页点一次「这是我的作品」，而完播率/完读率只有后台才有，
+// 「算法教练样本不足」的根因就在这里。
+// 入口都是裸地址：后台会按登录态 302，重定向会丢掉我们自己拼的查询参数。
+// 具体走哪几页由 content/self-backend.js 里各后台的 autoRoutes 决定（先看页面导航里
+// 真实存在的「作品数据/内容管理」链接，再退到写死的候选地址）。
+const SELF_AUTO_CORE_ENTRIES = {
+  shipinhao: { origin: 'https://channels.weixin.qq.com', url: 'https://channels.weixin.qq.com/platform', label: '视频号助手', inject: [], manifest: true },
+  douyin: { origin: 'https://creator.douyin.com', url: 'https://creator.douyin.com/creator-micro/home', label: '抖音创作者中心', inject: [], manifest: true },
+  xiaohongshu: { origin: 'https://creator.xiaohongshu.com', url: 'https://creator.xiaohongshu.com/new/home', label: '小红书创作服务平台', inject: [], manifest: true },
+  bilibili: { origin: 'https://member.bilibili.com', url: 'https://member.bilibili.com/platform/home', label: 'B站创作中心', inject: [], manifest: true },
+};
+// 可选模块（公众号）排在后面：同名键以模块为准（目前没有重叠）
+const SELF_AUTO_ENTRY = { ...SELF_AUTO_CORE_ENTRIES, ...(globalThis.__beaconSelfAutoEntries || {}) };
 
 const SELF_AUTO_TIMEOUT_MS = 90000;
 let selfAutoRun = null;
+// 一轮「把所有后台各跑一遍」的批次状态（定时 / 试跑 / 一键采集我的数据 都走它）
+let selfAutoBatch = null;
 
-/** 有哪些平台可以自动回填。空数组 = 这个发行版不含任何可选后台模块。 */
+/** 有哪些平台可以自动回填：内置四个 + 这个发行版带的可选模块。 */
 function selfAutoPlatforms() { return Object.keys(SELF_AUTO_ENTRY); }
+/** 其中哪些是要按需授权的可选模块（开源发行版为空）。 */
+function selfAutoOptionalPlatforms() { return selfAutoPlatforms().filter((p) => !SELF_AUTO_ENTRY[p].manifest); }
 
 async function selfAutoSettings() {
   const s = await chrome.storage.sync.get(['selfAutoCollect', 'selfAutoHour']);
@@ -938,14 +967,20 @@ async function finishSelfAuto(note) {
   const zero = run.skipped > 0
     ? `这一轮认出了 ${run.skipped} 条作品但没读到指标，一条都没入库——请手动打开后台页点一次回填并看自检`
     : '这一轮没读到新数据（后台页可能没渲染完）';
-  const summary = note || (n > 0 ? `已自动回填 ${n} 条数据到数据看板` : zero);
+  const label = run.entry && run.entry.label ? `【${run.entry.label}】` : '';
+  const summary = label + (note || (n > 0 ? `已自动回填 ${n} 条数据到数据看板` : zero));
   // ⚠️ 系统通知是**收不到的**：macOS 上 Chrome 的通知权限没给就静默丢弃，用户看到的
   // 只有「一个标签页开了又关」。这条通道全程在后台跑、标签页采完就关，
   // 不落盘就等于没有任何可回看的交代——与定时采集的 lastScheduledCollectLog 同一套做法。
   await chrome.storage.local
     .set({ lastSelfAutoLog: { timestamp: Date.now(), ok: !note && n > 0, summary } })
     .catch(() => {});
-  notifySelfAuto(summary);
+  // quiet = 批次里的一站（runSelfAutoAll）或服务端派下来的活：结果由调用方汇总/回报，
+  // 这里不单独弹通知，免得四个后台各弹一条
+  if (!run.quiet) notifySelfAuto(summary);
+  if (typeof run.resolve === 'function') {
+    run.resolve({ ok: !note && n > 0, note: summary, updated: run.updated, created: run.created, skipped: run.skipped, error: run.error || note || null });
+  }
 }
 
 /**
@@ -957,6 +992,8 @@ async function finishSelfAuto(note) {
  * 它要先把自己的配置放进 __beaconBackendExtras，后者读的是加载那一刻的值。
  */
 async function injectSelfAuto(tabId, entry) {
+  // 内置后台：manifest 已经注入 self-backend.js，再注入一遍会让顶层 const 重复声明直接报错
+  if (!entry || !Array.isArray(entry.inject) || entry.inject.length === 0) return true;
   try {
     await chrome.scripting.executeScript({ target: { tabId }, files: entry.inject });
     return true;
@@ -973,10 +1010,11 @@ async function runSelfAuto(opts = {}) {
   if (!on && !requested) return { ok: false, message: '自动回填开关是关着的' };
   const platform = opts.platform || selfAutoPlatforms()[0];
   const entry = platform ? SELF_AUTO_ENTRY[platform] : null;
-  if (!entry) return { ok: false, message: '这个版本的插件没有可自动回填的创作者后台' };
+  if (!entry) return { ok: false, message: `这个版本的插件没有可自动回填的「${platform || '创作者'}」后台模块` };
   // 没授权就**什么都不做**，也绝不在这里偷偷申请：chrome.permissions.request 必须在
   // 用户手势里调（设置页那颗「授权」按钮）。说清楚要点哪儿，比静默失败有用。
-  if (!(await hasSiteGrant(entry.origin))) {
+  // 内置四个后台在 manifest 权限里，不需要这一步。
+  if (!entry.manifest && !(await hasSiteGrant(entry.origin))) {
     return { ok: false, needGrant: true, origin: entry.origin, message: `还没授权 ${entry.origin}——到插件设置页点一次「授权」再试` };
   }
   if (selfAutoRun) return { ok: false, message: '上一轮回填还没收尾' }; // 不叠加
@@ -997,12 +1035,65 @@ async function runSelfAuto(opts = {}) {
   }
   // interactive = 用户此刻主动点的（popup 的「采集我的数据」、设置页的「试跑」）。
   // 只有这种时候撞到未登录才把登录页切到前台：定时那轮多半人不在电脑前。
+  let resolve;
+  const done = new Promise((r) => { resolve = r; });
   selfAutoRun = {
-    tabId: tab.id, entry, step: 0, hops: 0, updated: 0, created: 0, skipped: 0,
-    interactive: !!(opts.force || opts.interactive), surfaced: false,
+    tabId: tab.id, entry, platform, step: 0, hops: 0, updated: 0, created: 0, skipped: 0,
+    // 服务端派活时账号已经解析好（accountId），回填只能记到它名下，不再按平台猜
+    accountId: opts.accountId || null,
+    // 定时那轮人不在电脑前：interactive 只在用户当场点击（force / interactive）时为真。
+    // 服务端派的活（collect_self_backend）显式传 interactive:false——它不是用户此刻点的。
+    interactive: opts.interactive === false ? false : !!(opts.force || opts.interactive),
+    surfaced: false,
+    quiet: !!opts.quiet,
+    resolve,
+    // 内容脚本在第一站算出的路线（导航里真实存在的数据页链接），后续每一站都按这份走
+    routes: null,
   };
   // 兜底：内容脚本任何一步没回话（页面改版、卡在登录页、跳转成环），都不能把标签页留在那儿
-  selfAutoRun.timer = setTimeout(() => { finishSelfAuto('自动回填超时：后台页没能在 90 秒内给出数据'); }, SELF_AUTO_TIMEOUT_MS);
+  selfAutoRun.timer = setTimeout(() => { finishSelfAuto('自动回填超时：后台页没能在 90 秒内给出数据（最常见的原因是这个后台没登录）'); }, SELF_AUTO_TIMEOUT_MS);
+  return { ok: true, done };
+}
+
+/**
+ * 把所有该跑的创作者后台各跑一遍（串行）。定时闹钟、设置页「立即试跑」、
+ * 「一键采集我的数据」三个入口都走它——不给任何一个入口开捷径。
+ *
+ * 【只开工作区里真有账号的后台】用户没有 B 站号，就别每天替他开一次 B 站创作中心。
+ * 【串行】自动回填一次只认一个标签页（selfAutoRun 是单例），并行只会互相踢掉。
+ */
+async function runSelfAutoAll(opts = {}) {
+  const { on } = await selfAutoSettings();
+  if (!on && !opts.force) return { ok: false, message: '自动回填开关是关着的' };
+  if (selfAutoBatch || selfAutoRun) return { ok: false, message: '上一轮回填还没收尾' };
+  const accounts = ((await getAccounts(true).catch(() => null)) || {}).accounts || [];
+  const wanted = selfAutoPlatforms().filter((p) => accounts.some((a) => a.platform === p));
+  if (wanted.length === 0) {
+    const msg = '工作区里没有视频号/抖音/小红书/B站/公众号的账号，没有要回填的创作者后台';
+    await chrome.storage.local.set({ lastSelfAutoLog: { timestamp: Date.now(), ok: false, summary: msg } }).catch(() => {});
+    return { ok: false, message: msg };
+  }
+  selfAutoBatch = { started: Date.now(), results: [] };
+  try {
+    for (const platform of wanted) {
+      const entry = SELF_AUTO_ENTRY[platform];
+      const r = await runSelfAuto({ ...opts, platform, quiet: true });
+      if (!r.ok) {
+        selfAutoBatch.results.push({ platform, ok: false, note: `【${entry.label}】${r.needGrant ? '未授权，跳过' : r.message}` });
+        continue;
+      }
+      const fin = await r.done;
+      selfAutoBatch.results.push({ platform, ok: !!fin.ok, note: fin.note });
+    }
+  } finally {
+    const results = selfAutoBatch ? selfAutoBatch.results : [];
+    selfAutoBatch = null;
+    const summary = results.map((r) => r.note).join('；') || '没有跑任何后台';
+    await chrome.storage.local
+      .set({ lastSelfAutoLog: { timestamp: Date.now(), ok: results.some((r) => r.ok), summary } })
+      .catch(() => {});
+    notifySelfAuto(summary);
+  }
   return { ok: true };
 }
 
@@ -1538,7 +1629,7 @@ chrome.runtime.onStartup.addListener(() => {
 // 静默吞掉的话，那条活会一直卡到租约过期再被别人领走，反复失败三次才判死。
 const MAX_TASKS_PER_WAKE = 3;
 
-const SUPPORTED_TASK_KINDS = ['collect_competitor', 'collect_self_profile', 'open_and_read'];
+const SUPPORTED_TASK_KINDS = ['collect_competitor', 'collect_self_profile', 'open_and_read', 'collect_self_backend', 'collect_competitor_recipe', 'collect_self_recipe'];
 
 async function claimBrowserTask() {
   const { host, token } = await getConfig();
@@ -1584,8 +1675,58 @@ async function runBrowserTask(task) {
     return { ok: true, note: `更新 ${(r && r.collected) || 0}/${(r && r.total) || 0}` };
   }
   if (task.kind === 'collect_self_profile') return collectSelfProfileTask(task);
+  if (task.kind === 'collect_self_backend') return collectSelfBackendTask(task);
+  if (task.kind === 'collect_competitor_recipe') return collectCompetitorRecipeTask(task);
+  if (task.kind === 'collect_self_recipe') return collectSelfRecipeTask(task);
   if (task.kind === 'open_and_read') return openAndRead(task.payload);
   return { ok: false, note: `这个版本的插件还不认识「${task.kind}」，请更新插件` };
+}
+
+/**
+ * 服务端派下来的「按配方采竞对」（微博/快手/知乎/头条/百家号——没有手写解析器的平台）。
+ * 与内容脚本那条路（collect_competitor）的区别只有取数方式：这里按服务端学出的规则读，
+ * 首次要用户在侧边栏/弹窗对该站点授权一次；仍然是后台标签页、只读、采完即关。
+ */
+async function collectCompetitorRecipeTask(task) {
+  if (batchRunning) return { ok: false, note: '插件正忙着别的采集，稍后重试' };
+  const { competitors } = await getCompetitors(true);
+  const c = (competitors || []).find((x) => String(x.id) === String(task.payload && task.payload.competitorId));
+  if (!c || !c.url) return { ok: false, note: '这条竞对不在本工作区的订阅清单里，或没有可打开的主页地址' };
+  return collectViaRecipe(c, { interactive: false });
+}
+
+/**
+ * 服务端派下来的「按配方回填我的主页」（微博/快手/知乎/头条号/百家号，2026-09-16）。
+ * 与竞对那条 collectViaRecipe 同一条路（同一份配方、同一个执行器、同样要先对站点授权一次），
+ * 只是把 accountId 带给服务端：行映射进这个账号的自有作品，不进竞对库。主页地址与竞对同一套拼法（SELF_COLLECT_URL）。
+ */
+async function collectSelfRecipeTask(task) {
+  if (batchRunning) return { ok: false, note: '插件正忙着别的采集，稍后重试' };
+  const platform = task.payload && task.payload.platform;
+  const handle = task.payload && task.payload.handle;
+  const accountId = task.accountId || (task.payload && task.payload.accountId) || null;
+  const url = selfCollectUrl({ platform, handle });
+  if (!url || !accountId) return { ok: false, note: '这个平台没有可打开的主页地址，或没带账号' };
+  const r = await collectViaRecipe({ id: null, name: `我的${platform}主页`, url }, { interactive: false, accountId });
+  return { ok: !!r.ok, note: r.note };
+}
+
+/**
+ * 服务端派下来的「回填我的创作者后台」（视频号/抖音/小红书/B站，公众号需可选模块+授权）。
+ * 与定时自动回填同一条路（runSelfAuto）：后台开标签页 → 站内走到作品数据页 → 读已渲染的行 → 回填。
+ * 账号由服务端解析好带在 payload 里，这里不猜归属。不是用户此刻点的，所以 interactive:false——
+ * 撞到未登录只如实回报，不把登录页弹到他脸上。
+ */
+async function collectSelfBackendTask(task) {
+  if (batchRunning || selfAutoRun || selfAutoBatch) return { ok: false, note: '插件正忙着别的采集，稍后重试' };
+  const platform = task.payload && task.payload.platform;
+  const accountId = task.accountId || (task.payload && task.payload.accountId) || null;
+  const r = await runSelfAuto({ platform, force: true, interactive: false, quiet: true, accountId });
+  if (!r.ok) {
+    return { ok: false, note: r.needGrant ? `${r.message}（公众号后台是可选模块，要先在插件设置页授权一次）` : r.message };
+  }
+  const fin = await r.done;
+  return { ok: !!fin.ok, note: fin.note };
 }
 
 /**
@@ -1705,7 +1846,7 @@ chrome.alarms.onAlarm.addListener((a) => {
   // 拉失败保留上一份缓存，见 refreshParserRules。
   if (a.name === 'beacon-daily') refreshParserRules().catch(() => {});
   if (a.name === 'beacon-daily') dailyReminder();
-  if (a.name === 'beacon-self-auto') runSelfAuto();
+  if (a.name === 'beacon-self-auto') runSelfAutoAll();
   if (a.name === 'beacon-scheduled-collect') runScheduledCollect();
   if (a.name === UPDATE_ALARM) checkForUpdate(true);
   // 顺着已有的两个采集闹钟领一次服务端派的活：不新开闹钟（多一个定时器就多一处会忘的状态，
@@ -1787,6 +1928,66 @@ async function liveViewOn() {
 // ——方向必须是内容脚本问过来：SW 往刚 create 的 tab sendMessage 会撞上脚本还没加载。
 const liveTabs = new Map();
 
+/**
+ * 等标签页加载完、且（配方给了 readySelector 时）那个元素已经出现。
+ * 用 executeScript 探，不用 chrome.tabs.onUpdated 读 tab.url——后者要 "tabs" 权限。
+ * 这一步需要站点授权（optional_host_permissions），调用方已经先查过 hasSiteGrant。
+ */
+async function waitForTabReady(tabId, readySelector, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const [res] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: (sel) => document.readyState === 'complete' && (!sel || !!document.querySelector(sel)),
+        args: [readySelector || ''],
+      });
+      if (res && res.result) {
+        // 没有 readySelector 的页面再多等一拍：SPA 的列表通常在 load 之后才渲染
+        if (!readySelector) await new Promise((r) => setTimeout(r, 2500));
+        return true;
+      }
+    } catch { /* 页面还在跳转/还没注入权限，继续等 */ }
+    await new Promise((r) => setTimeout(r, 800));
+  }
+  return false;
+}
+
+/**
+ * 按内置配方采一条竞对（微博/快手/知乎/头条/百家号）。三条路共用：服务端派活、批量采集、弹窗手点。
+ * 配方还在学习时上传骨架就算这一趟的产出（学会了下次才有数据）——如实报 ok:false 让上层知道没有数据入库。
+ * opts.nested = 在 batchCollect 里被调（batchRunning 由外层管）；opts.active = 用户当场点的，页面开在前台。
+ */
+async function collectViaRecipe(c, opts = {}) {
+  await refreshScrapeRecipes().catch(() => {});
+  const recipe = await recipeForUrl(c.url);
+  if (!recipe) return { ok: false, note: `${c.name}：服务端还没有这个站点的采集配方（更新烽火台服务端后重试）` };
+  if (!(await hasSiteGrant(recipe.origin))) {
+    return { ok: false, needGrant: true, origin: recipe.origin, note: `${c.name}：还没授权插件读取 ${recipe.origin}——在插件弹窗或侧边栏对这个站点点一次「授权」` };
+  }
+  if (!opts.nested) { batchRunning = true; startKeepAlive(); }
+  let tab = null;
+  try {
+    tab = await chrome.tabs.create({ url: c.url, active: !!opts.active });
+    const ready = await waitForTabReady(tab.id, recipe.options && recipe.options.readySelector, 20000);
+    if (!ready) return { ok: false, note: `${c.name}：页面 20 秒内没加载完（可能要先登录该平台，或网络慢）` };
+    // 竞对带 competitorId；自己的主页（collect_self_recipe）带 accountId——服务端据此决定映射进竞对库还是自有作品
+    const r = await runRecipeOnTab(tab.id, c.url, opts.accountId ? { accountId: opts.accountId } : { competitorId: c.id });
+    if (!r.ok) return { ok: false, note: `${c.name}：${r.error || '按配方采集失败'}` };
+    if (r.mode === 'learn') return { ok: false, note: `${c.name}：这个站点的配方还在学习——已上传页面结构，服务端学会规则后再采就有数据（学习结果：${r.learned || 0} 条规则）` };
+    if (r.mode === 'stale') return { ok: false, note: `${c.name}：站点改版、配方失效，已交回重学` };
+    const mapped = r.mapped || null;
+    const got = mapped && mapped.ok ? mapped.posts : 0;
+    if (mapped && !mapped.ok) return { ok: false, note: `${c.name}：按配方读到 ${r.rows || 0} 行，但没能入库——${mapped.reason || '未知原因'}` };
+    return { ok: true, note: `${c.name}：按配方采到 ${r.rows || 0} 行，入库 ${got} 条作品`, posts: got };
+  } catch (e) {
+    return { ok: false, note: `${c.name}：${(e && e.message) || '采集出错'}` };
+  } finally {
+    if (tab && tab.id != null) chrome.tabs.remove(tab.id).catch(() => {});
+    if (!opts.nested) { batchRunning = false; stopKeepAlive(); }
+  }
+}
+
 async function batchCollect(reportTabId, opts = {}) {
   if (batchRunning) { reportBatch(reportTabId, { type: 'batch-progress', busy: true }); return { busy: true }; }
   batchRunning = true;
@@ -1819,6 +2020,14 @@ async function batchCollect(reportTabId, opts = {}) {
     const live = opts.interactive === true && (await liveViewOn());
     for (const c of targets) {
       reportBatch(reportTabId, { type: 'batch-progress', done, total, current: c.name });
+      // 配方平台没有内容脚本，「访问即采」永远等不到信号——走配方那条路，成败照样计数
+      if (c.viaRecipe) {
+        const r = await collectViaRecipe(c, { nested: true, active: live });
+        if (r.ok) collected++;
+        else notes.push(r.note);
+        done++;
+        continue;
+      }
       let tab = null;
       let keep = false;
       try {
@@ -1870,16 +2079,43 @@ async function batchCollect(reportTabId, opts = {}) {
 // 【哪些账号能一键采】必须有一个「打开就能读到自有数据」的地址：
 //   · X / TikTok —— 没有创作者后台，自有数据就在自己主页上（见 content/x.js、content/tiktok.js），
 //     有 handle 就能开；TikTok 主页九宫格上每条封面都带播放量，一个地址能采一整页；
-//   · 创作者后台 —— 地址要登录态、还要在站内跳转，没有「打开就能读」这回事，
-//     只能由用户自己打开后台页再点回填；
-//   · B站/抖音/小红书的公开作品页 —— 一个账号对应 N 篇作品，没有「一个地址采全部」这回事；
+//   · 抖音/小红书/B站（2026-09-16 加）—— 公开主页与竞对主页是同一张页、同一个解析器（douyin.js / xhs.js /
+//     bilibili.js），有 handle 就能开；只有播放/点赞/评论这类公开数字，完播率仍要走创作者后台那条路
+//     （runSelfAutoAll），两条路的数据合并入库，互不覆盖；
+//   · 微博/快手/知乎/头条号/百家号（2026-09-16 加）—— 没有手写解析器，按内置配方采（collect_self_recipe），
+//     地址与 lib/competitor-url.ts competitorHomeUrl 同一套拼法；
+//   · 创作者后台 —— 地址要登录态、还要在站内跳转，走 runSelfAutoAll 那条自动回填路，不在这张表里；
 //   · multi（多平台）账号 —— 它不对应任何一个具体平台的页面。
 // 认不出入口的账号**如实标成不可一键采**，而不是白开一个标签页让用户以为在采。
 const SELF_COLLECT_URL = {
   x: (a) => (a.handle ? `https://x.com/${encodeURIComponent(String(a.handle).replace(/^@/, ''))}` : null),
   // TikTok 与 X 同类：没有创作者后台，自有数据（播放/点赞/评论/分享）就在自己主页的九宫格上。
   tiktok: (a) => (a.handle ? `https://www.tiktok.com/@${encodeURIComponent(String(a.handle).replace(/^@/, ''))}` : null),
+  // YouTube 频道页公开、不用登录，视频列表 + 播放量就在 /videos 上（content/youtube.js 已能认出
+  // 「这是我的频道」）。handle 是 @handle 或频道 ID（UC…），与 lib/competitor-url.ts 同口径。
+  youtube: (a) => {
+    const h = String(a.handle || '').replace(/^@/, '');
+    if (!h) return null;
+    return /^UC[\w-]{20,}$/.test(h) ? `https://www.youtube.com/channel/${h}/videos` : `https://www.youtube.com/@${encodeURIComponent(h)}/videos`;
+  },
+  // 与 lib/competitor-url.ts competitorHomeUrl 同一套拼法（handle 语义：bilibili=mid、douyin=sec_user_id、xiaohongshu=user_id）
+  bilibili: (a) => (a.handle ? `https://space.bilibili.com/${encodeURIComponent(String(a.handle))}` : null),
+  douyin: (a) => (a.handle ? `https://www.douyin.com/user/${encodeURIComponent(String(a.handle))}` : null),
+  xiaohongshu: (a) => (a.handle ? `https://www.xiaohongshu.com/user/profile/${encodeURIComponent(String(a.handle))}` : null),
+  // 配方平台：weibo=数字 uid 或昵称；kuaishou=profile 段；zhihu=people 段；toutiao=token；baijiahao=author.baidu.com/home/<id>
+  weibo: (a) => {
+    const h = String(a.handle || '');
+    if (!h) return null;
+    return /^\d{5,}$/.test(h) ? `https://weibo.com/u/${h}` : `https://weibo.com/n/${encodeURIComponent(h)}`;
+  },
+  kuaishou: (a) => (a.handle ? `https://www.kuaishou.com/profile/${encodeURIComponent(String(a.handle))}` : null),
+  zhihu: (a) => (a.handle ? `https://www.zhihu.com/people/${encodeURIComponent(String(a.handle))}` : null),
+  toutiao: (a) => (a.handle ? `https://www.toutiao.com/c/user/token/${encodeURIComponent(String(a.handle))}/` : null),
+  baijiahao: (a) => (a.handle ? `https://author.baidu.com/home/${encodeURIComponent(String(a.handle))}` : null),
 };
+
+/** 配方平台（没有内容脚本，「一键采集我的数据」时走 collectViaRecipe 而不是 collectFromTab） */
+const SELF_RECIPE_PLATFORMS = ['weibo', 'kuaishou', 'zhihu', 'toutiao', 'baijiahao'];
 
 function selfCollectUrl(account) {
   const make = SELF_COLLECT_URL[account?.platform];
@@ -2058,6 +2294,13 @@ async function batchCollectSelf(reportTabId) {
     const live = await liveViewOn();
     for (const { a, url } of targets) {
       reportBatch(reportTabId, { type: 'batch-self-progress', done, total, current: a.name });
+      // 配方平台没有内容脚本，「访问即采」永远等不到信号——走配方那条路（带 accountId，映射进自有作品）
+      if (SELF_RECIPE_PLATFORMS.includes(a.platform)) {
+        const r = await collectViaRecipe({ id: null, name: a.name, url }, { nested: true, active: live, accountId: a.id });
+        if (r.ok) posts += r.posts || 0;
+        done++;
+        continue;
+      }
       let tab = null;
       try {
         tab = await chrome.tabs.create({ url, active: live });
@@ -2081,7 +2324,7 @@ async function batchCollectSelf(reportTabId) {
 
     // 有可自动回填的创作者后台（要换 token、站内跳两次）就顺带触发一轮，它自带超时与通知
     const auto = accounts.find((a) => selfAutoPlatforms().includes(a.platform));
-    if (auto) runSelfAuto({ force: true });
+    if (auto) runSelfAutoAll({ force: true, interactive: true });
 
     reportBatch(reportTabId, { type: 'batch-self-done', total, posts, backend: !!auto });
     notifySelfAuto(
@@ -2105,9 +2348,137 @@ function respond(promise, sendResponse, what) {
     .catch((e) => sendResponse({ ok: false, error: `${what}出错：${e?.message || e}` }));
 }
 
+
+// ── AI 在你日常浏览器里操作页面：编排（2026-09-17）──────────────────────────
+//
+// 用户原话：「beacon 的插件也可以有这种的功能」「这样子就不用重新开启新的浏览器」。
+// 桌面客户端那条路要另起采集专用浏览器、每个平台重登一次；插件就活在他日常 Chrome 里，
+// 登录态全都在——这段代码就是把那个浏览器借给 AI 用的那一层。
+//
+// 【它凭什么可以存在，而「服务端远程驱动浏览器」不行】区别只有一个：**用户在不在场**。
+// 这条路的动作全部来自 content/bridge.js（只注入烽火台自己的页面）转发的 postMessage，
+// 也就是说：**必须有一个他打开着的烽火台页面在推动**。他关掉那个页面，动作就没人发了。
+// 服务端在这条路上碰不到插件——插件不为它轮询、不接它的直连。
+//
+// 【三条硬边界】
+//   ① 站点要**他自己在插件里授权过**（optional_host_permissions，与配方采集同一套）；
+//   ② 只操作**这段代码自己开的那一个标签页**（opTabId）。绝不碰他别的标签——
+//      网银、邮箱、公司后台都在那些标签里（与「绝不遍历已有标签页」同一条红线）；
+//   ③ 真正的动作闸在 content/agent-operate.js 里（动作白名单、不可逆点击停手），
+//      这里只负责把步骤送到那一页上去。
+let opTabId = null;
+let opOrigin = '';
+
+/** 目标页里跑一步。每次都先确保执行端在位——SPA 跳转/刷新会把注入的脚本冲掉。 */
+async function opRunInTab(step) {
+  if (opTabId == null) return { ok: false, error: '操作会话还没开始（没有已打开的目标页）' };
+  let tab = null;
+  try { tab = await chrome.tabs.get(opTabId); } catch { tab = null; }
+  if (!tab) { opTabId = null; return { ok: false, error: '目标标签页已经被关掉了' }; }
+  // 【落地后复验 origin】页面可能已经跳到别处（登录跳转、外链）。授权是按站点给的，
+  // 落到别的站点就必须停手——与 read-allowlist「按最终 URL 再验一次」同一课。
+  let cur = '';
+  try { cur = new URL(tab.url || '').origin; } catch { cur = ''; }
+  if (cur && opOrigin && cur !== opOrigin) {
+    return { ok: false, error: `这一页已经跳到 ${cur}，不是你授权的 ${opOrigin}，我停手了。` };
+  }
+  try {
+    await chrome.scripting.executeScript({ target: { tabId: opTabId }, files: ['content/agent-operate.js'] });
+  } catch (e) {
+    return { ok: false, error: `注入执行端失败：${(e && e.message) || e}` };
+  }
+  const [res] = await chrome.scripting.executeScript({
+    target: { tabId: opTabId },
+    func: (s) => globalThis.__beaconOpStep(s),
+    args: [step],
+  });
+  return (res && res.result) || { ok: false, error: '执行端没有返回结果' };
+}
+
+/** 开一条操作会话：检查授权 → 开一个**前台**标签页（他要看得见）→ 记住它。 */
+async function opStart(url) {
+  let origin = '';
+  try {
+    const u = new URL(String(url));
+    if (u.protocol !== 'https:') return { ok: false, error: '只能打开 https 地址' };
+    origin = u.origin;
+  } catch { return { ok: false, error: '网址格式不对' }; }
+
+  if (!(await hasSiteGrant(origin))) {
+    // 【绝不在这里偷偷申请】chrome.permissions.request 必须在用户手势里调，
+    // 而 SW 的 onMessage 不是手势上下文。说清楚要点哪儿，比静默失败有用。
+    return { ok: false, needGrant: true, origin, error: `还没授权插件读取 ${origin}——在插件弹窗里对这个站点点一次「授权」再让 AI 继续。` };
+  }
+  // active:true 是刻意的：这条路的前提就是他看着。悄悄在后台操作正是它不该做的事。
+  const tab = await chrome.tabs.create({ url: String(url), active: true });
+  opTabId = tab.id;
+  opOrigin = origin;
+  return { ok: true, tabId: tab.id, origin };
+}
+
+async function opEnd() {
+  if (opTabId != null) {
+    // 页面**留着不关**：他多半要接着看/接着自己操作（比如去点那个我们不替他点的发布按钮）
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: opTabId },
+        func: () => { const b = document.getElementById('__beacon_op_badge__'); if (b) b.remove(); },
+      });
+    } catch { /* 页面已关就算了 */ }
+  }
+  opTabId = null;
+  opOrigin = '';
+  return { ok: true };
+}
+
+/** 一步的总入口：navigate 与 wait 在这里做（要 chrome.tabs / 定时器），其余交给页面执行端。 */
+async function opStep(step) {
+  const action = step && step.action;
+  if (action === 'navigate') {
+    if (opTabId == null) return opStart(step.url);
+    let ok = false;
+    try { ok = new URL(String(step.url)).protocol === 'https:'; } catch { ok = false; }
+    if (!ok) return { ok: false, error: '只能跳转到 https 地址' };
+    // 跳转仍限制在已授权的站点内：授权是按站点给的
+    let origin = '';
+    try { origin = new URL(String(step.url)).origin; } catch { origin = ''; }
+    if (origin !== opOrigin) {
+      if (!(await hasSiteGrant(origin))) {
+        return { ok: false, needGrant: true, origin, error: `还没授权插件读取 ${origin}——在插件弹窗里对这个站点点一次「授权」。` };
+      }
+      opOrigin = origin;
+    }
+    await chrome.tabs.update(opTabId, { url: String(step.url) });
+    await new Promise((r) => setTimeout(r, 1500));
+    return { ok: true, navigated: String(step.url) };
+  }
+  if (action === 'wait') {
+    await new Promise((r) => setTimeout(r, Math.min(10, Math.max(0.5, Number(step.seconds) || 2)) * 1000));
+    return { ok: true, waited: true };
+  }
+  if (action === 'done') {
+    await opRunInTab({ action: 'done' }).catch(() => null);
+    return opEnd();
+  }
+  return opRunInTab(step);
+}
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   // ── 任意站点采集配方（0.9.11）。挂在**已有的** onMessage 上：
   //    再加一个 addListener 会把主通道顶掉（0.9.x 踩过，测试桩只留最后一个）。
+  // ── AI 操作页面（2026-09-17）。只可能来自 content/bridge.js（它只注入烽火台自己的页面）──
+  if (msg?.type === 'beacon-op-start') {
+    respond(opStart(msg.url), sendResponse, '开始浏览器操作');
+    return true;
+  }
+  if (msg?.type === 'beacon-op-step') {
+    respond(opStep(msg.step), sendResponse, '执行一步');
+    return true;
+  }
+  if (msg?.type === 'beacon-op-end') {
+    respond(opEnd(), sendResponse, '结束浏览器操作');
+    return true;
+  }
   if (msg?.type === 'beacon-recipes-refresh') {
     respond(refreshScrapeRecipes(), sendResponse, '拉取采集配方');
     return true;
@@ -2123,6 +2494,17 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   // 所以由侧栏按钮打过来」——**转发保不住手势**：MV3 里 SW 的 onMessage 处理器
   // 不是手势上下文，Chrome 会直接拒掉。所以申请那一步改由 sidepanel.js 在 click 里直接调
   //（侧栏是扩展页面，那里才作数），这条消息随之删掉。
+  // 弹窗竞对清单上的「按配方采集」：授权已在弹窗里（用户手势）申请好，这里只管采
+  if (msg?.type === 'beacon-collect-recipe') {
+    respond((async () => {
+      const { competitors } = await getCompetitors(true);
+      const c = (competitors || []).find((x) => String(x.id) === String(msg.competitorId));
+      if (!c || !c.url) return { ok: false, error: '这条竞对不在订阅清单里' };
+      const r = await collectViaRecipe(c, { active: true, interactive: true });
+      return r.ok ? { ok: true, note: r.note } : { ok: false, error: r.note, needGrant: !!r.needGrant, origin: r.origin };
+    })(), sendResponse, '按配方采集');
+    return true;
+  }
   if (msg?.type === 'beacon-recipe-match') {
     respond(
       recipeForUrl(msg.url).then(async (recipe) => (
@@ -2290,13 +2672,21 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === 'beacon-self-auto-info') {
     (async () => {
       const platforms = selfAutoPlatforms();
-      const entry = platforms[0] ? SELF_AUTO_ENTRY[platforms[0]] : null;
+      const list = [];
+      for (const p of platforms) {
+        const e = SELF_AUTO_ENTRY[p];
+        list.push({ platform: p, label: e.label, origin: e.origin, manifest: !!e.manifest, granted: e.manifest ? true : await hasSiteGrant(e.origin) });
+      }
+      // 设置页那颗「授权」按钮只对可选模块有意义（内置四个在 manifest 权限里）
+      const optional = list.find((x) => !x.manifest) || null;
       sendResponse({
         available: platforms.length > 0,
         platforms,
-        origin: entry?.origin ?? null,
-        label: entry?.label ?? null,
-        granted: entry ? await hasSiteGrant(entry.origin) : false,
+        list,
+        hasOptional: !!optional,
+        origin: optional?.origin ?? null,
+        label: optional?.label ?? null,
+        granted: optional ? optional.granted : true,
       });
     })();
     return true;
@@ -2304,7 +2694,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === 'beacon-self-auto-run-now') {
     // 与定时触发同一条路径（不给试跑开捷径，否则试跑通过不代表定时通过）。
     // 唯一的差别是 interactive：试跑时用户就在设置页看着，撞到未登录可以把登录页摆给他。
-    respond(runSelfAuto({ interactive: true, force: true }), sendResponse, '试跑回填');
+    respond(runSelfAutoAll({ interactive: true, force: true }), sendResponse, '试跑回填');
     return true;
   }
   // ── 自动回填三件套（只接受自己开的那个标签页） ──
@@ -2319,7 +2709,21 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       sendResponse({ auto: false });
       return undefined;
     }
-    sendResponse({ auto: true, step: selfAutoRun.step });
+    sendResponse({ auto: true, step: selfAutoRun.step, ...(selfAutoRun.routes ? { routes: selfAutoRun.routes } : {}) });
+    return undefined;
+  }
+  // 内置后台在第一站把「这一轮要走哪几页」算出来（导航里真实存在的链接 + 写死的候选），
+  // 交给 SW 记着：后续每一站按同一份走，否则换一页重算一次，step 就对不上了。
+  // 只收同源的绝对地址、最多 4 站；公众号模块不走这条（它的路线带 token，且本来就是确定的）。
+  if (msg?.type === 'beacon-self-auto-routes') {
+    if (isSelfAutoTab(_sender) && !selfAutoRun.routes) {
+      const origin = selfAutoRun.entry && selfAutoRun.entry.origin;
+      const routes = (Array.isArray(msg.routes) ? msg.routes : [])
+        .filter((u) => typeof u === 'string' && origin && u.startsWith(origin + '/'))
+        .slice(0, 4);
+      if (routes.length) selfAutoRun.routes = routes;
+    }
+    sendResponse({ ok: true, routes: selfAutoRun ? selfAutoRun.routes : null });
     return undefined;
   }
   if (msg?.type === 'beacon-self-auto-advance') {
@@ -2330,7 +2734,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg?.type === 'beacon-self-auto-payload') {
     if (!isSelfAutoTab(_sender)) { sendResponse({ ok: false }); return undefined; }
-    ingestSelf(msg.payload).then((r) => {
+    // 服务端派的活带着 accountId：这一趟是**为这个账号**开的后台，归属不再让 ingestSelf 猜
+    const payload = selfAutoRun.accountId ? { ...msg.payload, accountId: selfAutoRun.accountId } : msg.payload;
+    ingestSelf(payload).then((r) => {
       if (selfAutoRun && r?.ok) {
         selfAutoRun.updated += r.updated || 0;
         selfAutoRun.created += r.created || 0;

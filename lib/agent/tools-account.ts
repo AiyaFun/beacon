@@ -91,7 +91,7 @@ const addAccount: AgentTool = {
     description:
       '把用户自己在某个平台的账号登记进来（不是对标账号，对标用 add_competitor）。给主页链接或「平台 + handle」都行。' +
       '注册时的占位账号（没 handle 的「我的账号」）会被就地升级成这条；同平台同 handle 已存在则直接复用，不会建重。' +
-      '登记好之后就能派 collect_self_profile 回填它的数据。',
+      '登记好之后就能派 dispatch_browser_task(kind=collect_self_profile) 回填它的数据：x/tiktok/youtube 采自己的主页（要 handle），shipinhao/douyin/xiaohongshu/bilibili/wechat 由插件进创作者后台读数（不靠 handle）。',
     parameters: {
       type: 'object',
       properties: {

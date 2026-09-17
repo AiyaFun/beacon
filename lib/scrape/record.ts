@@ -59,9 +59,10 @@ export function sanitizeRows(raw: unknown): Record<string, string>[] {
 }
 
 /** 采集通道。与 CollectionRun 的通道词表同名同义，便于将来对齐。 */
-export type ScrapeChannel = 'server' | 'plugin_home' | 'manual';
+export type ScrapeChannel = 'server' | 'plugin_home' | 'manual' | 'desktop' | 'local_browser';
 
-const CHANNELS: ScrapeChannel[] = ['server', 'plugin_home', 'manual'];
+// desktop / local_browser：2026-09-16 起桌面客户端与本机浏览器也按配方采（lib/browser-task/local-run.ts）
+const CHANNELS: ScrapeChannel[] = ['server', 'plugin_home', 'manual', 'desktop', 'local_browser'];
 
 /** 通道名不认就退回 'manual'，不抛——一条采集不该因为通道名写错而整条丢掉。 */
 export function vetChannel(raw: unknown): ScrapeChannel {

@@ -93,6 +93,7 @@ model Workspace {
   memories        MemoryEntry[]
   agentLedgers AgentLedger[]
   tasks           TaskItem[]
+  browserOpSessions BrowserOpSession[]
   botIntegrations BotIntegration[]
   inspirations    InspirationItem[]
   readerComments  ReaderComment[]
@@ -1814,6 +1815,10 @@ model ScrapeRecipe {
   version     Int      @default(1)
   // learning=还没学会 | active=能用 | broken=连续抓不到，等重新学
   status      String   @default("learning")
+  // 内置平台配方（2026-09-15）：微博/快手/知乎/头条/百家号这五个平台没有手写解析器，
+  // 竞对主页改由服务端按工作区**自动播种**的配方采集。platformKey 就是平台 key；
+  // 用户自己建的配方为 null。按它区分：不计入用户配方上限、抓到的行要映射进竞对库。
+  platformKey String?
   // 连续抓不到几次。达到 RECIPE_BROKEN_AT 转 broken 并触发重学
   failCount   Int      @default(0)
   lastOkAt    DateTime?
@@ -1826,6 +1831,8 @@ model ScrapeRecipe {
 
   @@index([tenantId, workspaceId])
   @@index([workspaceId, origin])
+  // 一个工作区每个平台只播一份内置配方；用户配方 platformKey 为 NULL，唯一索引对 NULL 不生效
+  @@unique([workspaceId, platformKey])
 }
 
 model ProcedureSkill {
@@ -2196,6 +2203,43 @@ model BrowserTask {
   // 插件领活的主路径：按 workspace 找 pending 且没过期的
   @@index([workspaceId, status, expiresAt])
   @@index([status, leaseUntil])
+}
+
+/// AI 在用户**日常浏览器**里操作页面的一次会话（2026-09-17）。
+///
+/// 【它为什么不是 BrowserTask】BrowserTask 是「排队等浏览器下次醒来」——那是无人值守的语义：
+/// 可重试、有租约、48 小时内有效、用户不在也会跑。这条路的语义正相反：**只在用户当场看着时存在**。
+/// 所以它没有 attempts / leaseUntil / expiresAt，只有一个 lastSeenAt：
+/// 烽火台页面每次轮询都刷新它，**页面一关就不再刷新**，会话随即作废。
+/// 「人还在不在」不靠承诺，靠这个时间戳。
+model BrowserOpSession {
+  id          String   @id @default(cuid())
+  workspaceId String
+  /// 谁发起的（Member.id）。这条通道只为发起人服务——别人的页面轮询不到它
+  createdBy   String
+  /// 操作哪个站点（origin 全等比对）。用户必须在插件里对它单独授权过
+  origin      String
+  /// active=进行中 | done=正常结束 | aborted=用户喊停/页面关了 | superseded=被新会话取代
+  status      String   @default("active")
+  /// 当前待执行的一步（JSON OpStep）。页面轮询取走后清空——同一步绝不发两次
+  pendingStep String?
+  /// 上一步的执行结果（JSON）。AI 工具取走后清空
+  stepResult  String?
+  /// 撞上不可逆动作时停在这里等用户点确认（JSON：那一步 + 按钮文字）
+  awaitConfirm String?
+  /// 已经走了几步。上限见 lib/browser-op/actions.ts MAX_OP_STEPS
+  steps       Int      @default(0)
+  /// 页面每次轮询都更新。停止更新 = 人不在了 = 这条通道该断
+  lastSeenAt  DateTime @default(now())
+  /// 给用户看的操作日志（JSON 数组）：每一步做了什么、结果如何。审计与「我刚才让它干了啥」都看它
+  log         String   @default("[]")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  /// 页面轮询的主路径：本工作区、这个人发起的、还活着的那一条
+  @@index([workspaceId, createdBy, status])
 }
 
 model WorkflowRun {

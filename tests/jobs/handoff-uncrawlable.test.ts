@@ -151,3 +151,40 @@ describe('服务端够不着的竞对要转派给插件', () => {
     expect(n, '给演示工作区排了真实采集活 —— 那是只读展台').toBe(0);
   });
 });
+
+// ── 配方平台（2026-09-15）：微博/快手/知乎/头条/百家号靠内置配方采，只派给会做 collect_competitor_recipe 的插件 ──
+describe('配方平台只派给自报会做的插件', () => {
+  async function installCollectorWithKinds(kinds: string[]) {
+    await prisma.ingestToken.create({
+      data: {
+        lastUsedAt: new Date(), workspaceId: wsId, token: `bcn_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        label: '测试设备', kinds: JSON.stringify(kinds),
+      },
+    });
+  }
+
+  it('🔒 老插件（没自报 collect_competitor_recipe）：微博竞对不派——派了它会交回「更新 0/0」', async () => {
+    await watch('weibo');
+    await installCollectorWithKinds(['collect_competitor', 'collect_self_profile', 'open_and_read']);
+    await runCrawl();
+    expect(await tasks()).toHaveLength(0);
+  });
+
+  it('新插件：派的是 collect_competitor_recipe，不是 collect_competitor', async () => {
+    await watch('weibo');
+    await installCollectorWithKinds(['collect_competitor', 'collect_competitor_recipe']);
+    await runCrawl();
+    const list = await tasks();
+    expect(list).toHaveLength(1);
+    expect(list[0].kind).toBe('collect_competitor_recipe');
+  });
+
+  it('手写平台照旧派 collect_competitor，且配方平台被跳过时不占每工作区的名额', async () => {
+    await watch('shipinhao'); // 服务端够不着、插件也够不着：不派
+    await watch('weibo');
+    await watch('zhihu');
+    await installCollectorWithKinds(['collect_competitor']);
+    await runCrawl();
+    expect(await tasks()).toHaveLength(0);
+  });
+});

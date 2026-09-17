@@ -33,7 +33,8 @@ function unauthorized() {
  * POST /api/v1/browser-tasks —— 排一个浏览器任务。
  * body: { kind, competitor?, platform?, url?, limit? }
  *   - kind=collect_competitor：competitor 可以是监控列表里的 id、主页 handle 或名字（精确匹配）
- *   - kind=collect_self_profile：platform（目前支持 x / tiktok）
+ *   - kind=collect_self_profile：platform（PLATFORMS 里的每个平台都能派：创作者后台 shipinhao / douyin / xiaohongshu / bilibili / wechat 改派成 collect_self_backend；
+ *     公开主页 x / tiktok / youtube（抖音/小红书/B站在没有会进后台的执行器时退到这条）；配方平台 weibo / kuaishou / zhihu / toutiao / baijiahao 改派成 collect_self_recipe）
  *   - kind=open_and_read：url（必须在域白名单里，且工作区开过「让插件替我读网页」）
  */
 export async function POST(req: Request) {

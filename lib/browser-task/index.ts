@@ -88,6 +88,26 @@ export async function collectorAgents(workspaceId: string): Promise<Set<'plugin'
   return out;
 }
 
+/**
+ * 会做某一种 kind 的执行器是什么东西：插件 / 桌面客户端 / 两者（2026-09-16）。
+ * collectorAgents 答的是「谁在线」，这个答的是「谁会做这件事」——回执里说「已排给桌面客户端」
+ * 之前得先确认它真会领这种活（旧客户端只自报最初三种）。老式工作区令牌按老插件算：只会最初两种。
+ */
+export async function collectorAgentsFor(workspaceId: string, kind: string): Promise<Set<'plugin' | 'desktop'>> {
+  const { isDesktopExecutorLabel } = await import('@/lib/ingest/token');
+  const [rows, legacy] = await Promise.all([
+    prisma.ingestToken.findMany({ where: aliveTokenWhere(workspaceId), select: { label: true, kinds: true } }),
+    prisma.workspace.count({ where: { id: workspaceId, ingestToken: { not: null } } }),
+  ]);
+  const out = new Set<'plugin' | 'desktop'>();
+  if (legacy > 0 && (LEGACY_PLUGIN_KINDS as readonly string[]).includes(kind)) out.add('plugin');
+  for (const r of rows) {
+    const ks = r.kinds ? parseJson<string[]>(r.kinds, []) : [...LEGACY_PLUGIN_KINDS];
+    if (ks.includes(kind)) out.add(isDesktopExecutorLabel(r.label) ? 'desktop' : 'plugin');
+  }
+  return out;
+}
+
 /** 排一个活。payload 先过 zod——白名单之外的 kind 与形状一律拒收。 */
 /**
  * 取消被取代的同一个活，并把正在等它们的 AI 运行改指到 `keepId`（2026-09-04）。
@@ -132,14 +152,15 @@ export async function enqueueBrowserTask(input: {
   // 执行器若正拿着旧任务在跑，交回时会被 completeTask 拒掉（状态不是 claimed）——那次结果作废，
   // 页面再采一次；这一分钟的重复是「以新为准」的代价，比让用户对着一条卡住的任务干等要好。
   // 「同一个活」的判据不能只靠 payload 字符串逐字相等（键顺序/空格一变就失配，2026-09-04 真机验证时
-  // 手工插入的任务就没被认出来）。回填自己主页的活按 accountId 列判——同一账号同一 kind 就是同一个活。
+  // 手工插入的任务就没被认出来）。回填自己主页/后台的活按 accountId 列判——同一账号同一 kind 就是同一个活。
+  const selfKind = parsed.data.kind === 'collect_self_profile' || parsed.data.kind === 'collect_self_backend' || parsed.data.kind === 'collect_self_recipe';
   const sameWork = {
     workspaceId: input.workspaceId,
     kind: parsed.data.kind,
     expiresAt: { gt: new Date() },
     OR: [
       { payload: toJson(parsed.data) },
-      ...(input.accountId && parsed.data.kind === 'collect_self_profile' ? [{ accountId: input.accountId }] : []),
+      ...(input.accountId && selfKind ? [{ accountId: input.accountId }] : []),
     ],
   };
   const stale = await prisma.browserTask.findMany({

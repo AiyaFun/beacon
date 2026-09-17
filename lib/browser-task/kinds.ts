@@ -14,7 +14,14 @@ import { isReadAllowed } from './read-allowlist';
 //   ② 它需要用户的登录态吗？—— 需要的话必须在隐私政策里已披露的范围内。
 //   ③ 失败了要不要重试？—— 采集类可以重试；任何会**产生对外动作**的一律不重试。
 
-export const BROWSER_TASK_KINDS = ['collect_competitor', 'collect_self_profile', 'open_and_read'] as const;
+export const BROWSER_TASK_KINDS = [
+  'collect_competitor',
+  'collect_self_profile',
+  'open_and_read',
+  'collect_self_backend',
+  'collect_competitor_recipe',
+  'collect_self_recipe',
+] as const;
 export type BrowserTaskKind = (typeof BROWSER_TASK_KINDS)[number];
 
 /**
@@ -22,16 +29,20 @@ export type BrowserTaskKind = (typeof BROWSER_TASK_KINDS)[number];
  *
  * 它唯一支持的平台是公众号：插件开用户**自己**已登录的公众号后台、换 token、站内跳两次再读数。
  * 那条通道整条撤掉之后，这个 kind 没有任何平台可派——留着就是让服务端能排一个插件不会做的活，
- * 正是本文件顶部第 ① 条要防的事。创作者后台的自有数据现在只能由用户自己打开后台页、
- * 点插件侧栏「这是我的作品 · 回填数据看板」手动回填一次。
+ * 正是本文件顶部第 ① 条要防的事。
+ *
+ * 2026-09-15 起创作者后台的自有回填由 **collect_self_backend** 承担（见下）。它不是 collect_self
+ * 的复活：名字不同是刻意的——老插件对 collect_self 有一套只认公众号的步进机，认到旧名字就会去开
+ * mp.weixin.qq.com；新名字老插件不认识，会立刻交回「请更新插件」，而不是白开一个标签页等超时。
  */
 
 /**
- * 「回填自己主页上的数据」支持的平台（2026-09-03）。
+ * 「回填自己主页上的数据」支持的平台（2026-09-03；2026-09-15 加 YouTube）。
  *
- * 这些平台没有创作者后台，自有数据就摆在自己的公开主页上——X 的浏览量对所有人可见，
- * TikTok 主页九宫格每条封面都带播放量。插件的 `batchCollectSelf`（extension/sw.js 的
- * SELF_COLLECT_URL）早就能按 handle 打开这些主页回填，缺的只是服务端派活这条路：
+ * 这些平台的自有数据就摆在自己的公开主页上——X 的浏览量对所有人可见，
+ * TikTok 主页九宫格每条封面都带播放量，YouTube 频道页的视频列表带播放量、且插件的
+ * youtube.js 能认出「这是我自己的频道」。插件的 `batchCollectSelf`（extension/sw.js 的
+ * SELF_COLLECT_URL）按 handle 打开这些主页回填，服务端派活只是把账号与 handle 对上再排队：
  * 它曾与只认公众号的 collect_self 并存（那个 kind 已随公众号采集一起删除）：分成两个 kind
  * 而不是放宽一个 enum，是因为老版本插件拿到 collect_self + platform=x 会照着公众号那套步进机
  * 去开 mp.weixin.qq.com（它不看 platform），白开一个标签页等 90 秒超时；新 kind 老插件不认识，
@@ -39,12 +50,76 @@ export type BrowserTaskKind = (typeof BROWSER_TASK_KINDS)[number];
  *
  * 加平台的顺序仍然是：先给 SELF_COLLECT_URL 加入口并真机验证，再回来放宽这里。
  */
-export const SELF_PROFILE_PLATFORMS = ['x', 'tiktok'] as const;
+export const SELF_PROFILE_PLATFORMS = ['x', 'tiktok', 'youtube', 'douyin', 'xiaohongshu', 'bilibili'] as const;
 
-/** 用户说「回填我的 <平台>」时该派哪个 kind。null = 这个平台没有服务端能派的自有回填路。 */
-export function selfCollectKindFor(platform: string): 'collect_self_profile' | null {
+/**
+ * 【2026-09-16 起抖音/小红书/B站也能采自己的公开主页】用户原话：「每一个平台都可以通过插件或者调用浏览器
+ * 的方式采集对应的数据」。这三个平台的公开主页与竞对主页是同一张页、同一个解析器（douyin.js / xhs.js /
+ * bilibili.js 采竞对时就在读它），有 handle 就能开；公开页上只有播放/点赞/评论这类公开数字，完播率、
+ * 流量来源仍只有创作者后台才有——所以它们是**后台回填的退路**，不是替代：派活时后台优先，
+ * 没有会进后台的执行器（旧插件、旧客户端）才退到主页，且回执里要说破「这是公开数字」。
+ * 视频号/公众号没有公开主页，只有后台一条路。
+ */
+export function selfProfileFallbackFor(platform: string): boolean {
+  return (SELF_PROFILE_PLATFORMS as readonly string[]).includes(platform);
+}
+
+/**
+ * 「回填自己创作者后台的数据」支持的平台（2026-09-15）。
+ *
+ * 这些平台的自有数据不在公开主页上（完播率、粉丝画像、阅读来源只有后台有），住在各自的创作者后台：
+ * 视频号 channels.weixin.qq.com / 抖音 creator.douyin.com / 小红书 creator.xiaohongshu.com /
+ * B站 member.bilibili.com / 公众号 mp.weixin.qq.com。
+ *
+ * 【谁会做（2026-09-16 起三条路都会）】插件在用户日常登录着的 Chrome 里打开后台页、由内容脚本读数；
+ * 桌面客户端在**采集专用浏览器**（独立 profile，登录态长存，见 desktop/src-tauri/src/collect_browser.rs）
+ * 里打开同一批后台页，注入同一份 self-backend.js（从 /api/ingest/executor?kind=collect_self_backend 现取）
+ * 读数后交回；整机版的本机浏览器同理（lib/browser/local-collect.ts collectBackendLocal）。
+ * 后台入口地址在 lib/browser-task/backend-entries.ts（与 extension/sw.js 的 SELF_AUTO_CORE_ENTRIES 同一份，
+ * 有测试钉着）；站内走哪几页由 self-backend.js 的 autoRoutes 决定，三条路一份。
+ * 此前这里写的是「只有浏览器插件会做」——那是 2026-09-15 那一版的事实，用户 2026-09-16 明确要求
+ * 「每一个平台都可以通过插件或者调用浏览器的方式采集」，桌面客户端/本机浏览器随之补上。
+ *
+ * 【公众号是可选模块】插件里要先在设置页单独授权 mp.weixin.qq.com；桌面客户端/本机浏览器那条路不需要
+ * 授权（采集浏览器是我们自己的 profile），但要服务端这个发行版带 self-backend-wechat.js（开源发行版不带，
+ * loadBackendSources 会如实拒绝）。**服务端不知道插件授权状态**，派给插件之前只能把这句话预先告诉用户。
+ */
+export const SELF_BACKEND_PLATFORMS = ['shipinhao', 'douyin', 'xiaohongshu', 'bilibili', 'wechat'] as const;
+
+/**
+ * 没有手写解析器、靠「采集配方」采竞对的平台（2026-09-15）。
+ *
+ * 微博/快手/知乎/头条/百家号在 extension/content 里没有主页解析器，插件用服务端学出来的配方
+ * （lib/scrape/recipe.ts：先上传脱敏骨架 → 服务端学规则 → 插件按规则取值）去采；且插件对这些站点
+ * 是**按需单站点授权**——用户要先在侧边栏对该站点授权一次，插件才拿得到页面。
+ * 2026-09-16 起桌面客户端与本机浏览器也会做：服务端把 extension/tools/recipe-run.js 与这个工作区的
+ * 内置配方一起下发（/api/ingest/executor?kind=collect_competitor_recipe），执行器在采集浏览器里按规则取值、
+ * 把行/骨架原样交回，学习与映射仍在服务端一份（lib/browser-task/local-run.ts ingestRecipeOutcome）。
+ * 采集浏览器不需要站点授权（按需授权是 Chrome 扩展模型的事，独立 profile 没有这层）。
+ *
+ * 【自己的主页也走配方】这五个平台的用户自有账号（微博号/快手号/知乎号/头条号/百家号）与竞对是同一张
+ * 公开主页，同一份配方能读；kind=collect_self_recipe（platform + accountId + handle），行映射进自有作品
+ * 而不是竞对库（lib/scrape/platform-map.ts ingestPlatformRecipeRowsAsOwn）。
+ */
+export const RECIPE_PLATFORMS = ['weibo', 'kuaishou', 'zhihu', 'toutiao', 'baijiahao'] as const;
+
+/**
+ * 用户说「回填我的 <平台>」时**优先**该派哪个 kind（2026-09-16 起每个平台都有一条）。
+ * 创作者后台类 → collect_self_backend（抖音/小红书/B站也在主页表里，那是退路，见 selfProfileFallbackFor）；
+ * 主页类 → collect_self_profile；配方平台 → collect_self_recipe；
+ * null = 这个平台没有服务端能派的自有回填路（PLATFORMS 之外的键才会走到这里）。
+ */
+export function selfCollectKindFor(platform: string): 'collect_self_profile' | 'collect_self_backend' | 'collect_self_recipe' | null {
+  // 后台优先：抖音/小红书/B站既在后台表也在主页表，完播率/流量来源只有后台有——主页只是没执行器会进后台时的退路
+  if ((SELF_BACKEND_PLATFORMS as readonly string[]).includes(platform)) return 'collect_self_backend';
   if ((SELF_PROFILE_PLATFORMS as readonly string[]).includes(platform)) return 'collect_self_profile';
+  if ((RECIPE_PLATFORMS as readonly string[]).includes(platform)) return 'collect_self_recipe';
   return null;
+}
+
+/** 采某个平台的竞对该派哪个 kind：配方平台走 collect_competitor_recipe，其余走手写解析器那条 collect_competitor。 */
+export function competitorKindFor(platform: string): 'collect_competitor_recipe' | 'collect_competitor' {
+  return (RECIPE_PLATFORMS as readonly string[]).includes(platform) ? 'collect_competitor_recipe' : 'collect_competitor';
 }
 
 export const browserTaskPayloadSchema = z.discriminatedUnion('kind', [
@@ -84,6 +159,32 @@ export const browserTaskPayloadSchema = z.discriminatedUnion('kind', [
      */
     mode: z.enum(['article', 'text']).default('article'),
   }),
+  z.object({
+    kind: z.literal('collect_self_backend'),
+    /** 去哪个平台的**创作者后台**回填（见 SELF_BACKEND_PLATFORMS）。后台地址由插件自己知道，服务端不拼 */
+    platform: z.enum(SELF_BACKEND_PLATFORMS),
+    /**
+     * 记在哪个账号名下。服务端按工作区账号解析好再派。
+     * **不带 handle**：后台页认的是登录态，页面自己会说出这是哪个号；账号没填 handle 也不该拦住后台回填。
+     */
+    accountId: z.string().min(1).max(64),
+  }),
+  z.object({
+    kind: z.literal('collect_competitor_recipe'),
+    /** 要采的竞对（WatchlistItem 里必须有它，服务端建任务时校验）；平台必须在 RECIPE_PLATFORMS 里 */
+    competitorId: z.string().min(1).max(64),
+    /** 采几条作品。与 collect_competitor 同口径：插件端硬上限 50 */
+    limit: z.number().int().min(1).max(50).default(20),
+  }),
+  z.object({
+    kind: z.literal('collect_self_recipe'),
+    /** 去哪个配方平台的**自己主页**按配方回填（见 RECIPE_PLATFORMS） */
+    platform: z.enum(RECIPE_PLATFORMS),
+    /** 记在哪个账号名下。服务端按工作区账号解析好再派 */
+    accountId: z.string().min(1).max(64),
+    /** 主页地址由它拼（lib/competitor-url.ts competitorHomeUrl，插件端 SELF_COLLECT_URL 同一套拼法） */
+    handle: z.string().min(1).max(128),
+  }),
 ]);
 
 export type BrowserTaskPayload = z.infer<typeof browserTaskPayloadSchema>;
@@ -93,6 +194,9 @@ export const KIND_LABEL: Record<BrowserTaskKind, string> = {
   collect_competitor: '去采一个竞对',
   collect_self_profile: '去自己的主页回填数据',
   open_and_read: '去读一个网页',
+  collect_self_backend: '回填创作者后台',
+  collect_competitor_recipe: '按配方采集竞对',
+  collect_self_recipe: '按配方回填自己的主页',
 };
 
 /**
@@ -104,9 +208,12 @@ export const KIND_LABEL: Record<BrowserTaskKind, string> = {
  */
 export function retriable(kind: BrowserTaskKind): boolean {
   // open_and_read 也可以重试：它是纯读，多打开一次页面最多多花几秒。
+  // collect_self_backend / collect_competitor_recipe 同样是只读采集（进后台只**读**数、按配方只**取**值），
+  // 与 collect_competitor 同一档。
   // **将来若加了「替用户在创作后台填内容」这类会产生对外动作的任务，一律返回 false**
   // ——重试一次就是多发一条。
-  return kind === 'collect_competitor' || kind === 'collect_self_profile' || kind === 'open_and_read';
+  return kind === 'collect_competitor' || kind === 'collect_self_profile' || kind === 'open_and_read'
+    || kind === 'collect_self_backend' || kind === 'collect_competitor_recipe' || kind === 'collect_self_recipe';
 }
 
 /**

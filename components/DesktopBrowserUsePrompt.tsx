@@ -107,14 +107,14 @@ export function DesktopBrowserUsePrompt() {
           <div className="small muted" style={{ lineHeight: 1.7 }}>
             {isEn ? (
               <>
-                Collect without browser extensions: collection tasks dispatched by AI (collecting competitor profiles, backfilling your own X/TikTok profiles, reading webpages) are executed by the client in the background and returned directly.
+                Collect without browser extensions: collection tasks dispatched by AI (collecting competitor profiles on every platform, backfilling your own data — public profiles and creator studios alike — and reading webpages) are executed by the client in the background and returned directly.
                 Uses an <b>isolated collection browser</b> (runs separately from your daily Chrome without interference—<b>no need to close anything</b>).
                 The only setup is logging into each platform once: the first time a platform is accessed, the window will appear on the login page; session state persists afterward.
                 <b> Read-only</b>: does not click, fill, submit, or handle passwords for you.
               </>
             ) : (
               <>
-                不装插件也能采：AI 派的采集任务（采竞对主页、回填你自己的 X / TikTok 主页、读网页）由客户端在后台跑完，结果直接交回。
+                不装插件也能采：AI 派的采集任务（采各平台竞对主页、回填你自己的数据——公开主页与创作者后台都行、读网页）由客户端在后台跑完，结果直接交回。
                 用的是一个<b>独立的采集浏览器</b>（跟你日常的 Chrome 分开，互不影响，<b>你不用退出任何东西</b>）。
                 代价是每个平台要各登录一次：首次采某个平台时，它会把那个窗口摆到你面前停在登录页，登完之后登录态长期留着。
                 <b>只读</b>：不点击、不填写、不提交，不替你输账号密码。

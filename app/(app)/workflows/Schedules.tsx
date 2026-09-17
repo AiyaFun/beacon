@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { actCreateSchedule, actToggleSchedule, actDeleteSchedule, actSetScheduleModel } from './schedule-actions';
 import { scheduleWhen, DOW, DOW_EN } from '@/lib/workflow/schedule-format';
 import { Overlay } from '@/components/Overlay';
+import { useContextMenu, RowMoreButton, type ContextMenuItem } from '@/components/ContextMenu';
 import { useI18n } from '@/lib/i18n/context';
 
 // 定时智能体：让一条模板每天/每周自己跑。
@@ -66,6 +67,26 @@ export function Schedules({
       if (!r.ok) { setErr(r.error ?? (isEn ? 'Operation failed' : '操作失败')); return; }
       router.refresh();
     });
+  }
+
+  const menu = useContextMenu();
+
+  function itemsFor(r: { id: string; enabled: boolean }): ContextMenuItem[] {
+    if (readOnly) return [];
+    return [
+      {
+        key: 'toggle',
+        label: r.enabled ? (isEn ? 'Disable' : '停用') : (isEn ? 'Enable' : '启用'),
+        onSelect: () => run(() => actToggleSchedule(r.id, !r.enabled)),
+      },
+      {
+        key: 'delete',
+        label: isEn ? 'Delete schedule' : '删除定时任务',
+        danger: true,
+        confirm: isEn ? 'Click again to delete' : '再点一次，确认删除',
+        onSelect: () => run(() => actDeleteSchedule(r.id)),
+      },
+    ];
   }
 
   const full = rows.length >= maxSchedules;
@@ -130,7 +151,7 @@ export function Schedules({
       ) : (
         <div className="stack" style={{ gap: 2, marginBottom: 14 }}>
           {rows.map((r) => (
-            <div key={r.id} className="tool-row">
+            <div key={r.id} className="tool-row has-row-more" onContextMenu={(e) => menu.open(e, itemsFor(r))}>
               <span className="run-main">
                 <span className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
                   <strong style={{ fontSize: 13 }}>{r.templateName}</strong>
@@ -165,10 +186,12 @@ export function Schedules({
                   <button className="btn btn-sm btn-ghost" disabled={pending} onClick={() => run(() => actDeleteSchedule(r.id))}>
                     {isEn ? 'Delete' : '删除'}
                   </button>
+                  <RowMoreButton onOpen={(e) => menu.open(e, itemsFor(r))} label={isEn ? 'More actions' : '更多操作'} />
                 </span>
               )}
             </div>
           ))}
+          {menu.node}
         </div>
       )}
 

@@ -200,7 +200,7 @@ export async function Landing() {
           </div>
           <div className="landing-get-item">
             <b>{en ? 'Desktop app: data syncs itself' : '桌面客户端：数据自己回来'}</b>
-            <p>{en ? 'Mac / Windows. Competitor updates and your X / TikTok profile metrics flow back daily without the extension.' : 'Mac / Windows。同行动态与你在 X / TikTok 的主页数据每天自动回流，不用装插件。'}</p>
+            <p>{en ? 'Mac / Windows. Competitor updates and your X / TikTok / YouTube profile metrics flow back daily without the extension.' : 'Mac / Windows。同行动态与你在 X / TikTok / YouTube 的主页数据每天自动回流，不用装插件。'}</p>
             <div className="row wrap" style={{ gap: 8 }}>
               {rec ? (
                 <TrackLink event="download_click" meta={rec.os} href={rec.file} download className="btn btn-sm btn-primary">

@@ -1,8 +1,8 @@
 import { prisma } from '../db';
 import { platformName } from '../constants';
-import { collectorKinds, collectorAgents } from './index';
+import { collectorKinds, collectorAgents, collectorAgentsFor } from './index';
 import { competitorHomeUrl } from '@/lib/competitor-url';
-import { selfCollectKindFor, SELF_PROFILE_PLATFORMS } from './kinds';
+import { selfCollectKindFor, selfProfileFallbackFor, competitorKindFor, SELF_PROFILE_PLATFORMS, SELF_BACKEND_PLATFORMS, RECIPE_PLATFORMS } from './kinds';
 import { isReadAllowed, readAllowlistLabels } from './read-allowlist';
 
 // ── 排浏览器任务前的三道闸：唯一实现 ────────────────────────────────────────
@@ -26,17 +26,30 @@ import { isReadAllowed, readAllowlistLabels } from './read-allowlist';
 // 另有一件不是「闸」而是「解析」的事也收在这里：collect_self_profile 说的「我的 X 账号」到底是
 // 工作区里哪一条 CreatorAccount、它的 handle 是什么——插件和本机浏览器两条路都要用，
 // 且用户明确要求「我们都有 X 账号的信息和插件的信息，应该要有所关联」，不能再反问他。
+//
+// 【调用方只说三个动词，这里按平台映射到内部 kind】（2026-09-15）模型/外部调用面说的仍是
+// collect_self_profile / collect_competitor / open_and_read；「回填我的抖音」落到哪个 kind
+// （后台 collect_self_backend、主页 collect_self_profile 还是配方 collect_self_recipe）、「采这个微博竞对」
+// 走手写解析器还是配方（collect_competitor_recipe），由 kinds.ts 的三张平台表决定，调用方不用知道也不该知道。
+//
+// 【2026-09-16 起每个平台都有路，三条执行路都会做】用户原话「每一个平台都可以通过插件或者调用浏览器的方式
+// 采集对应的数据或者竞对的数据」。此前后台回填与配方采集只有插件会做；现在桌面客户端与本机浏览器也会
+// （在采集专用浏览器里注入同一份脚本），所以它们与主页类一样：本机就绪就标 local 当场跑；排队时按
+// **谁会做这种活**（collectorAgentsFor）说清回执；没有会做的执行器时指路「更新插件或桌面客户端」。
+// 抖音/小红书/B站多一条退路：没有会进后台的执行器时改采公开主页（只有公开数字，回执里说破）。
 
 export type VetVerdict =
   | {
       ok: true;
       payload: Record<string, unknown>;
-      /** 这批数据该记在谁名下（collect_self_profile 解析出来的账号）。没有就用调用方的当前账号 */
+      /** 这批数据该记在谁名下（collect_self_profile / collect_self_backend 解析出来的账号）。没有就用调用方的当前账号 */
       accountId?: string;
       /** 非空 = 本机浏览器此刻可用：调用方应当**当场**用它跑，而不是排队（本机优先于插件） */
       local?: { cdpUrl: string };
       /** 排队时谁会来领：只影响回执措辞（「已排给插件」vs「已排给你的桌面客户端」） */
       executors?: 'plugin' | 'desktop' | 'both';
+      /** 派是派了，但回执里要顺带提醒用户的一句（如公众号后台要先在插件设置里授权，服务端不知道授没授） */
+      note?: string;
     }
   | { ok: false; error: string; summary: string };
 
@@ -63,10 +76,28 @@ async function queuedExecutors(workspaceId: string): Promise<'plugin' | 'desktop
   return agents.has('desktop') && agents.has('plugin') ? 'both' : agents.has('desktop') ? 'desktop' : 'plugin';
 }
 
+/** 排队时谁会来领**这种活**（2026-09-16）：旧客户端只自报最初三种，回执不能把它说成会进后台。 */
+async function queuedExecutorsFor(workspaceId: string, kind: string): Promise<'plugin' | 'desktop' | 'both'> {
+  const agents = await collectorAgentsFor(workspaceId, kind);
+  return agents.has('desktop') && agents.has('plugin') ? 'both' : agents.has('desktop') ? 'desktop' : 'plugin';
+}
+
 const clampLimit = (n: number | undefined) => Math.min(50, Math.max(1, Math.round(n || 20)));
 
+/** 公众号后台是插件里的可选模块，且服务端不知道用户授没授权——派之前只能把这句预先说清（桌面客户端那条路不用授权） */
+const WECHAT_BACKEND_NOTE = '公众号后台是插件里的可选模块：走插件的话用户要先在插件设置里对 mp.weixin.qq.com 授权，没授权插件会直接拒绝这条活（不重试）；走桌面客户端/本机浏览器不用授权，但要在采集浏览器里登录过公众号后台。';
+/** 配方平台的回执提醒：第一次要先学规则；插件那条路要先授权站点 */
+const recipeNote = (name: string) =>
+  `${name}靠采集配方采：第一次打开会先把脱敏的页面结构交给模型学规则，学会后再采才有数据（学习那次会当场让模型直读页面兜底）；走插件的话用户要先在插件侧边栏对 ${name} 授权过一次，桌面客户端/本机浏览器不用授权。`;
+
 export async function vetBrowserTaskArgs(workspaceId: string, args: VetArgs, opts: VetOpts = {}): Promise<VetVerdict> {
-  const kind = args.kind;
+  // 内部 kind 也收：对外路由把 BROWSER_TASK_KINDS 整张表放行，调用方直接写 collect_self_backend /
+  // collect_competitor_recipe 时，按同一条平台映射走，不另开一份闸（闸只有一份，同一课）
+  const kind = args.kind === 'collect_self_backend'
+    ? 'collect_self_profile'
+    : args.kind === 'collect_competitor_recipe'
+      ? 'collect_competitor'
+      : args.kind;
 
   // 没装插件就别排：那条活会一直 pending 到 48 小时后过期，而调用方已经说过「已排给插件」，
   // 用户等两天什么都没发生也没人告诉他为什么。当场说清、并指路，比排一个没人领的活有用。
@@ -79,6 +110,12 @@ export async function vetBrowserTaskArgs(workspaceId: string, args: VetArgs, opt
   const caps = await collectorKinds(workspaceId);
   const hasPlugin = caps.size > 0;
   const OLD_PLUGIN = (label: string) => `你装的采集插件版本旧了，还不会做「${label}」。到「采集助手」页更新插件（zip 装的重新加载一次即可），或者在桌面客户端顶部那条「允许这台客户端操作浏览器采集？」点「允许」（不装插件也能采）；整机版也可以直接用本机浏览器。`;
+  // 创作者后台 / 配方采集：插件、桌面客户端、本机浏览器三条路都会做（2026-09-16），但都要 1.2.19 或更新的版本。
+  // 在线的执行器里没有一个会做时，两条路都指——用户用哪个就更新哪个。
+  const NEED_NEW_EXECUTOR = (label: string, extra = '') =>
+    `「${label}」要 1.2.19 或更新的插件 / 桌面客户端（整机版可直接用本机浏览器）。`
+    + `${hasPlugin ? '你现在在线的执行器里没有会做这件事的——' : '这个工作区还没有在线的采集执行器——'}`
+    + `到「采集助手」页安装或更新插件（zip 装的重新加载一次即可），或把桌面客户端升到 1.2.19 并在它顶部那条「允许这台客户端操作浏览器采集？」点「允许」。${extra}`;
   let local: { cdpUrl: string } | undefined = opts.localCdpUrl ? { cdpUrl: opts.localCdpUrl } : undefined;
   if (!local && !hasPlugin) {
     return {
@@ -135,6 +172,21 @@ export async function vetBrowserTaskArgs(workspaceId: string, args: VetArgs, opt
       where: { id: args.competitorId ?? '' },
       select: { platform: true, handle: true },
     });
+    // 【配方平台：能力闸在主页地址闸之前】微博/快手/知乎/头条/百家号没有手写解析器，插件靠服务端学出的
+    // 配方采（RECIPE_PLATFORMS 注释）。插件太旧时该说的是「更新插件并授权站点」，而不是「这个平台没有主页」；
+    // 两道闸都没过时前一句才是用户能动手的那句。
+    const recipe = comp ? competitorKindFor(comp.platform) === 'collect_competitor_recipe' : false;
+    if (recipe && !local && !caps.has('collect_competitor_recipe')) {
+      const name = platformName(comp!.platform) || comp!.platform;
+      return {
+        ok: false,
+        error: NEED_NEW_EXECUTOR(
+          `按配方采集${name}竞对`,
+          `${RECIPE_PLATFORMS.map((p) => platformName(p) || p).join('/')}这些平台没有手写解析器，靠服务端学出的采集配方去采；走插件的话更新之后还要在插件侧边栏对 ${name} 这个站点授权一次（插件对这些站点是按需单站点授权），桌面客户端不用。`,
+        ),
+        summary: '执行器太旧',
+      };
+    }
     if (!comp || !competitorHomeUrl(comp.platform, comp.handle)) {
       const name = comp ? (platformName(comp.platform) || comp.platform) : '这个平台';
       return {
@@ -144,6 +196,12 @@ export async function vetBrowserTaskArgs(workspaceId: string, args: VetArgs, opt
         summary: '这个平台没有可采的公开主页',
       };
     }
+    if (recipe) {
+      const name = platformName(comp!.platform) || comp!.platform;
+      const payload = { kind: 'collect_competitor_recipe', competitorId: args.competitorId ?? '', limit: clampLimit(args.limit) };
+      if (local) return { ok: true, payload, local, note: recipeNote(name) };
+      return { ok: true, payload, executors: await queuedExecutorsFor(workspaceId, 'collect_competitor_recipe'), note: recipeNote(name) };
+    }
   }
 
   // ── 回填自己的数据：把「我的 X 账号」落到具体的账号与 handle ──
@@ -151,13 +209,61 @@ export async function vetBrowserTaskArgs(workspaceId: string, args: VetArgs, opt
     const platform = (args.platform ?? '').trim();
     const target = selfCollectKindFor(platform);
     if (!target) {
-      const supported = SELF_PROFILE_PLATFORMS.map((p) => `${platformName(p) || p}（自己的主页）`).join('、');
+      const profiles = SELF_PROFILE_PLATFORMS.map((p) => platformName(p) || p).join('/');
+      const backends = SELF_BACKEND_PLATFORMS.map((p) => platformName(p) || p).join('/');
+      const recipes = RECIPE_PLATFORMS.map((p) => platformName(p) || p).join('/');
       return {
         ok: false,
-        error: `「回填自己的数据」目前能派的平台：${supported}。${platform ? `${platformName(platform) || platform}的自有数据` : '这个平台的自有数据'}要在创作者后台页点插件侧栏「这是我的作品 · 回填数据看板」手动回填一次。`,
+        error: `「回填自己的数据」能派的平台：${backends}（创作者后台）、${profiles}（自己的公开主页）、${recipes}（按配方采自己的主页）。`
+          + `${platform ? `${platformName(platform) || platform}` : '这个平台'}不在其中，没有服务端能派的自有回填路，如实告诉用户。`,
         summary: '这个平台没有可派的自有回填路',
       };
     }
+    const pname = platformName(platform) || platform;
+
+    if (target === 'collect_self_backend') {
+      // 【创作者后台：三条路都会做（2026-09-16）】本机就绪当场进；否则派给自报会做 collect_self_backend 的执行器
+      // （新插件 / 新桌面客户端）；抖音/小红书/B站没有会进后台的执行器时退到公开主页；视频号/公众号没有主页可退。
+      const wechatNote = platform === 'wechat' ? WECHAT_BACKEND_NOTE : '';
+      // handle 不是硬条件：后台页认的是登录态，页面自己会说出这是哪个号；没填 handle 的账号照样能回填
+      const picked = await resolveSelfAccount(workspaceId, platform, { ...opts, requireHandle: false });
+      if (!picked.ok) return { ok: false, error: picked.error, summary: picked.summary };
+      const payload = { kind: 'collect_self_backend', platform, accountId: picked.account.id };
+      if (local) return { ok: true, payload, accountId: picked.account.id, local, ...(wechatNote ? { note: wechatNote } : {}) };
+      if (caps.has('collect_self_backend')) {
+        return {
+          ok: true,
+          payload,
+          accountId: picked.account.id,
+          executors: await queuedExecutorsFor(workspaceId, 'collect_self_backend'),
+          ...(wechatNote ? { note: wechatNote } : {}),
+        };
+      }
+      // 退路：公开主页（只有公开数字）。要 handle——没填的话退不了，回到「更新执行器」那句
+      if (selfProfileFallbackFor(platform) && caps.has('collect_self_profile') && picked.account.handle) {
+        return {
+          ok: true,
+          payload: { kind: 'collect_self_profile', platform, accountId: picked.account.id, handle: picked.account.handle },
+          accountId: picked.account.id,
+          executors: await queuedExecutorsFor(workspaceId, 'collect_self_profile'),
+          note: `你在线的执行器版本旧，进不了${pname}创作者后台，这次改采${pname}的公开主页——只有播放/点赞/评论这类公开数字，没有完播率、流量来源；把插件或桌面客户端升到 1.2.19 之后会自动走后台。`,
+        };
+      }
+      return { ok: false, error: NEED_NEW_EXECUTOR(`回填${pname}创作者后台`, wechatNote), summary: '执行器太旧' };
+    }
+
+    if (target === 'collect_self_recipe') {
+      // 配方平台的自己主页：与竞对同一份配方，只是落进自有作品。要 handle 拼主页地址
+      const picked = await resolveSelfAccount(workspaceId, platform, opts);
+      if (!picked.ok) return { ok: false, error: picked.error, summary: picked.summary };
+      const payload = { kind: 'collect_self_recipe', platform, accountId: picked.account.id, handle: picked.account.handle };
+      if (local) return { ok: true, payload, accountId: picked.account.id, local, note: recipeNote(pname) };
+      if (!caps.has('collect_self_recipe')) {
+        return { ok: false, error: NEED_NEW_EXECUTOR(`按配方回填${pname}主页`, `走插件的话还要先在插件侧边栏对 ${pname} 授权一次。`), summary: '执行器太旧' };
+      }
+      return { ok: true, payload, accountId: picked.account.id, executors: await queuedExecutorsFor(workspaceId, 'collect_self_recipe'), note: recipeNote(pname) };
+    }
+
     if (!local && !caps.has('collect_self_profile')) {
       return { ok: false, error: OLD_PLUGIN('回填自己的主页'), summary: '插件太旧' };
     }
@@ -167,7 +273,7 @@ export async function vetBrowserTaskArgs(workspaceId: string, args: VetArgs, opt
       ok: true,
       payload: { kind: 'collect_self_profile', platform, accountId: picked.account.id, handle: picked.account.handle },
       accountId: picked.account.id,
-      ...(local ? { local } : { executors: await queuedExecutors(workspaceId) }),
+      ...(local ? { local } : { executors: await queuedExecutorsFor(workspaceId, 'collect_self_profile') }),
     };
   }
 
@@ -192,12 +298,14 @@ export type ResolvedSelfAccount =
  * 顺序：点名的（id / handle / 名字精确匹配）> 当前选中的账号（同平台才算）> 该平台唯一的一个。
  * 同平台有多个又没点名时**不猜**（多账号不替用户猜，同一课），把候选连名字一起列出来——
  * 但这句是给模型看的：系统提示里已经把账号清单给了它，它该自己点名，而不是回头问用户。
- * 没填 handle 的账号如实说「去账号页填 handle」：主页地址只能由 handle 拼出来。
+ * 没填 handle 的账号如实说「去账号页填 handle」：主页地址只能由 handle 拼出来——
+ * 但那是主页类回填的事；创作者后台回填传 `requireHandle: false`（后台页认登录态，不靠 handle 拼地址），
+ * 没 handle 就带空串回去，别拦。
  */
 export async function resolveSelfAccount(
   workspaceId: string,
   platform: string,
-  opts: Pick<VetOpts, 'preferAccountId' | 'accountRef'> = {},
+  opts: Pick<VetOpts, 'preferAccountId' | 'accountRef'> & { requireHandle?: boolean } = {},
 ): Promise<ResolvedSelfAccount> {
   const rows = await prisma.creatorAccount.findMany({
     where: { workspaceId, platform, status: 'active' },
@@ -238,7 +346,7 @@ export async function resolveSelfAccount(
   }
 
   const handle = (chosen!.handle ?? '').trim().replace(/^@/, '');
-  if (!handle) {
+  if (!handle && opts.requireHandle !== false) {
     return {
       ok: false,
       error: `${pname} 账号「${chosen!.name}」还没填主页 handle，拼不出主页地址。到「账号」页给它填上（X 就是 @ 后面那串），再来派回填。`,

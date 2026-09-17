@@ -2,6 +2,7 @@ import { prisma } from '@/lib/db';
 import { PageHead, Card, Stat, Empty } from '@/components/ui';
 import { fmtDateTime, fmtNum } from '@/lib/format';
 import { platformName } from '@/lib/constants';
+import { scopeLabel } from '@/lib/ingest/parser-scopes';
 import { sourceHealthBoard } from '@/lib/adapters/registry';
 import { crawlerSummary, CRAWLER_HIT_RETENTION_DAYS } from '@/lib/geo/crawler-log';
 import { beijingDayKey } from '@/lib/beijing';
@@ -227,7 +228,8 @@ export default async function OpsHealthPage() {
                 <div key={r.id} className="small">
                   <span className="muted">{fmtDateTime(r.ranAt)}</span>{' '}
                   <span className="badge badge-gray">{platformName(r.platform, lang) || r.platform}</span>{' '}
-                  <span className="muted">{r.scope === 'self' ? (isEn ? 'Self' : '自有') : (isEn ? 'Competitor' : '竞对')} · {r.channel}</span>
+                  {/* CollectionRun.scope 与解析事件共用 rival/self 两个值，文案从同一处取 */}
+                  <span className="muted">{scopeLabel(r.scope, lang)} · {r.channel}</span>
                   <div style={{ color: 'var(--amber)' }}>{r.note}</div>
                 </div>
               ))}

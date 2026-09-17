@@ -71,3 +71,38 @@ describe('competitorHomeUrl · 与解析互为逆运算', () => {
     expect(competitorHomeUrl('wechat', 'x')).toBeNull(); // 公众号无公开主页，插件采不了
   });
 });
+
+// ── 大陆图文/资讯平台（2026-09-15，靠内置配方采）──
+describe('大陆五平台：主页地址与解析互为逆运算', () => {
+  const cases: Array<[string, string, string]> = [
+    ['https://weibo.com/u/1234567890', 'weibo', '1234567890'],
+    ['https://m.weibo.cn/u/1234567890', 'weibo', '1234567890'],
+    ['https://weibo.com/1234567890', 'weibo', '1234567890'],
+    ['https://weibo.com/n/%E5%B0%8F%E7%8E%8B', 'weibo', '小王'],
+    ['https://www.kuaishou.com/profile/3xabc123', 'kuaishou', '3xabc123'],
+    ['https://www.zhihu.com/people/zhang-san-12', 'zhihu', 'zhang-san-12'],
+    ['https://www.zhihu.com/org/zhihu-official', 'zhihu', 'zhihu-official'],
+    ['https://www.toutiao.com/c/user/token/MS4wLjABAAAAtoken/', 'toutiao', 'MS4wLjABAAAAtoken'],
+    ['https://author.baidu.com/home/1650001234567890', 'baijiahao', '1650001234567890'],
+    ['https://baijiahao.baidu.com/u?app_id=1650001234567890', 'baijiahao', '1650001234567890'],
+  ];
+  for (const [url, platform, handle] of cases) {
+    it(`${url} → ${platform}/${handle}`, () => {
+      expect(parseCompetitorUrl(url)).toEqual({ platform, handle });
+    });
+  }
+
+  it('拼出来的主页地址再解析回去得到同一个 handle', () => {
+    for (const [platform, handle] of [['weibo', '1234567890'], ['weibo', '小王'], ['kuaishou', '3xabc'], ['zhihu', 'zhang-san'], ['toutiao', 'MS4wLjABAAAAtoken'], ['baijiahao', '165000123']] as const) {
+      const url = competitorHomeUrl(platform, handle);
+      expect(url, `${platform} 没有主页地址`).toBeTruthy();
+      expect(parseCompetitorUrl(url!)).toEqual({ platform, handle });
+    }
+  });
+
+  it('作品页/功能页不当成主页（知乎回答页、微博正文页、快手作品页）', () => {
+    expect(parseCompetitorUrl('https://www.zhihu.com/question/1/answer/2')).toBeNull();
+    expect(parseCompetitorUrl('https://weibo.com/1234567890/OaBcDeFgH')).toBeNull();
+    expect(parseCompetitorUrl('https://www.kuaishou.com/short-video/3xabc')).toBeNull();
+  });
+});

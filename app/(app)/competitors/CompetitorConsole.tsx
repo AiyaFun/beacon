@@ -1,12 +1,14 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { platformName, platformColor, PLATFORM_LIST } from '@/lib/constants';
 import { fmtNum, relTime } from '@/lib/format';
 import { Overlay } from '@/components/Overlay';
 import { AddCompetitorForm } from './AddCompetitorForm';
 import { ActionButton } from '@/components/ActionButton';
+import { useContextMenu, RowMoreButton, type ContextMenuItem } from '@/components/ContextMenu';
 import { actCrawlCompetitors, actRemoveWatch } from './actions';
 import { HubHeader } from '@/components/HubHeader';
 import { IntelTabs } from '@/components/IntelTabs';
@@ -47,6 +49,9 @@ export function CompetitorConsole({
   const { lang, dict } = useI18n();
   const isEn = lang === 'en';
 
+  const router = useRouter();
+  const menu = useContextMenu();
+  const [, startRemove] = useTransition();
   const [platformFilter, setPlatformFilter] = useState<string>(initialPlatform || 'all');
   const [windowFilter, setWindowFilter] = useState<'7d' | '30d'>('7d');
   const [showManageModal, setShowManageModal] = useState<boolean>(false);
@@ -180,13 +185,31 @@ export function CompetitorConsole({
                 ? Date.now() - new Date(acc.lastCrawledAt).getTime() > 7 * 86400000
                 : true;
 
+              // 右键这一行就能取消监控——原先只有「管理监控」弹层里那份清单能移除
+              const rowMenu: ContextMenuItem[] = [
+                {
+                  key: 'remove',
+                  label: isEn ? 'Stop watching' : '取消监控',
+                  hint: isEn ? 'Collected posts stay' : '已采到的作品不会删',
+                  danger: true,
+                  confirm: isEn ? 'Click again to remove' : '再点一次，确认移除',
+                  onSelect: () => startRemove(async () => {
+                    await actRemoveWatch(acc.watchId);
+                    router.refresh();
+                  }),
+                },
+              ];
+
               return (
+                // button 里不能再套 button（HTML 解析器会把内层拆出去，SSR 后 hydration 直接对不上），
+                // 所以「⋯」是这一层 div 的绝对定位子元素，和那颗大按钮平级
+                <div key={acc.competitorId} className="has-row-more">
                 <button
-                  key={acc.competitorId}
                   type="button"
                   className={`rival-account ${isActive ? 'active' : ''}`}
                   aria-pressed={isActive}
                   onClick={() => setSelectedId(acc.competitorId)}
+                  onContextMenu={(e) => menu.open(e, rowMenu)}
                 >
                   <span
                     className="avatar"
@@ -216,8 +239,11 @@ export function CompetitorConsole({
                     </span>
                   </span>
                 </button>
+                <RowMoreButton className="row-more-abs" onOpen={(e) => menu.open(e, rowMenu)} label={isEn ? 'More actions' : '更多操作'} />
+                </div>
               );
             })}
+            {menu.node}
           </div>
 
           {staleAccounts.length > 0 && (

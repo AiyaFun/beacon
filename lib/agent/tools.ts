@@ -25,6 +25,7 @@ import { PRODUCE_TOOLS } from './tools-produce';
 import { PLANNING_TOOLS } from './tools-draft-plan';
 import { LEDGER_TOOLS } from './tools-ledger';
 import { LOCAL_TOOLS } from './tools-local';
+import { OPERATE_TOOLS } from './tools-operate';
 import { ACCOUNT_TOOLS } from './tools-account';
 import { GAP_TOOLS } from './tools-gap';
 import { AUTHOR_TOOLS } from './tools-author';
@@ -366,9 +367,12 @@ const dispatchBrowserTask: AgentTool = {
   def: {
     name: 'dispatch_browser_task',
     description:
-      '把一件**只有浏览器能做**的事排给用户的采集插件：collect_competitor（去某个竞对主页采作品）、'
-      + 'collect_self_profile（回填用户自己的数据，要指定 platform：x / tiktok，去他自己的主页——'
+      '把一件**只有浏览器能做**的事交给用户的采集执行器（浏览器插件 / 桌面客户端 / 本机浏览器，每个平台都有路）：collect_competitor（去某个竞对采作品——'
+      + '微博/快手/知乎/头条/百家号的竞对按采集配方采（第一次先学规则；走插件要先在侧边栏对该站点授权一次，桌面客户端不用），其余平台走主页解析器；公众号/视频号没有公开主页）、'
+      + 'collect_self_profile（回填用户自己的数据，要指定 platform：shipinhao / douyin / xiaohongshu / bilibili / wechat 进他的创作者后台读数（完播率等只有后台有；'
+      + '抖音/小红书/B站没有会进后台的执行器时自动退到公开主页）；x / tiktok / youtube 去他自己的公开主页；weibo / kuaishou / zhihu / toutiao / baijiahao 按配方采他自己的主页——'
       + '账号与 handle 服务端按工作区账号自动对上，见系统提示里「你的账号与插件」，不要问用户要链接）。'
+      + '解析器/配方读不到时，执行器会把页面上可见的文字与链接带回，由模型直接从页面内容里读出数据（回执标「模型直读」）。'
       + '用在服务端拿不到数据时，比如需要完播率/粉丝画像这些只有创作后台才有的指标，或竞对数据太旧要刷新。'
       + '**本机浏览器就绪时（见系统提示里「你的账号与插件」）它会当场用本机 Chrome 采完并直接返回结果**，'
       + '不排队、不用问用户选哪条路。'
@@ -393,7 +397,13 @@ const dispatchBrowserTask: AgentTool = {
             + '。别的网址请改用 clip_url（服务端直接抓，不动用户的浏览器）。',
         },
         competitor_id: { type: 'string', description: 'kind=collect_competitor 时必填，来自 list_competitors' },
-        platform: { type: 'string', description: 'kind=collect_self_profile 时必填：x / tiktok（其它平台的自有数据服务端派不了——创作者后台要用户自己打开页面点插件侧栏）' },
+        platform: {
+          type: 'string',
+          description:
+            'kind=collect_self_profile 时必填，PLATFORMS 里的每个平台都能派：shipinhao / douyin / xiaohongshu / bilibili / wechat = 进他的创作者后台读数'
+            + '（插件、桌面客户端、本机浏览器都会做，要 1.2.19 或更新；wechat 走插件还要用户先在插件设置里对 mp.weixin.qq.com 授权一次，服务端不知道授没授）；'
+            + 'x / tiktok / youtube = 采他自己的公开主页；weibo / kuaishou / zhihu / toutiao / baijiahao = 按采集配方采他自己的主页。系统按平台与在线执行器自动分路。',
+        },
         account: { type: 'string', description: 'kind=collect_self_profile 且同平台有多个账号时点名一个：账号 id / handle / 名字（精确）。没有就按当前账号' },
         limit: { type: 'number', description: '采几条作品，默认 20，最多 50' },
         wait_for_result: {
@@ -464,9 +474,12 @@ const dispatchBrowserTask: AgentTool = {
     // 「插件」还是「桌面客户端」：用户原话「但是我没安装插件」——他登记的是客户端，回执却叫它插件
     const who = vetted.executors === 'desktop' ? '你的桌面客户端' : vetted.executors === 'both' ? '插件/桌面客户端' : '插件';
     const when = vetted.executors === 'desktop' ? '客户端几秒内领走，跑完自动交回' : `${who}下次醒来会执行`;
+    // 本机浏览器配了但没开着：说破为什么这次排队了（2026-09-16 起后台/配方也走本机，所以每种 kind 都提）
     const offlineNote = localState.state === 'offline'
       ? `（本机浏览器已开启但 Chrome 现在没带调试端口跑着，所以这次排给了${who}；想当场采，${LOCAL_BROWSER_WAKE_HINT}）`
       : '';
+    // vet 顺带的提醒（如公众号后台要先在插件设置里授权）：服务端不知道授没授，只能在回执里说破
+    const vetNote = vetted.note ? `提醒：${vetted.note}` : '';
     // 模型说「没这份数据我答不了」时，就把整次执行停在这儿等结果。
     // 叫醒由 lib/browser-task 在四种结局（完成/判死/过期/取消）上触发——
     // 只要有一种结局没人叫醒，这里就成了一次永远醒不来的运行，所以别在这里加新的等待类型。
@@ -475,13 +488,13 @@ const dispatchBrowserTask: AgentTool = {
         ok: true,
         data: { taskId: r.id, kind },
         waitFor: browserWaitToken(r.id),
-        summary: `已排给${who}：${label}${supersedeNote}。这次执行先停在这里等它的结果。${offlineNote}`,
+        summary: `已排给${who}：${label}${supersedeNote}。这次执行先停在这里等它的结果。${offlineNote}${vetNote}`,
       };
     }
     return {
       ok: true,
       data: { taskId: r.id, kind },
-      summary: `已排给${who}：${label}${supersedeNote}。${when}，现在还没有数据。${offlineNote}`,
+      summary: `已排给${who}：${label}${supersedeNote}。${when}，现在还没有数据。${offlineNote}${vetNote}`,
     };
   },
 };
@@ -871,6 +884,9 @@ export const AGENT_TOOLS: AgentTool[] = [
   listSchedules,
   dispatchBrowserTask,
   listBrowserTasks,
+  // 在用户**此刻打开着的**浏览器里一步步操作页面（2026-09-17）。与上面两个是两回事：
+  // 那两个是排队（他不在也会跑），这个只在他看着时有效——页面关掉通道就断。
+  ...OPERATE_TOOLS,
   // 数据与洞察类（查表现/单条作品/读者原声/爆款基因/算法诊断）。
   // 分文件只是为了这一份表不至于长到没人读得完——注册表仍然只有这一张，
   // 「没注册的 AI 就做不了」那条边界一点没变

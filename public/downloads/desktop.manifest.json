@@ -1,22 +1,22 @@
 {
   "name": "烽火台桌面客户端",
-  "version": "1.2.18",
+  "version": "1.2.19",
   "builds": [
     {
       "os": "mac",
       "arch": "aarch64",
       "ext": "dmg",
-      "file": "/downloads/beacon-desktop-1.2.18-mac-aarch64.dmg",
-      "sizeMB": 8.1,
-      "sha256": "637b080dedc727412955737c90803341239f69bc3730579b700b5509b9542152"
+      "file": "/downloads/beacon-desktop-1.2.19-mac-aarch64.dmg",
+      "sizeMB": 8.2,
+      "sha256": "a09b725d9988a7e0859463f6c09af3d1a84c121429adf81adb8df8e6c34bda7b"
     },
     {
       "os": "win",
       "arch": "x64",
       "ext": "exe",
-      "file": "/downloads/beacon-desktop-1.2.18-win-x64.exe",
+      "file": "/downloads/beacon-desktop-1.2.19-win-x64.exe",
       "sizeMB": 4.7,
-      "sha256": "0d682196c11b52ccad0e0897162c3ac0b22959a86a6aa1f6f811d12fc53c1663"
+      "sha256": "e45791dc0097728b24aca0c72a6960d103cb1755e454335e5e85da3ab4f4c01c"
     }
   ]
 }

@@ -4,6 +4,8 @@ import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Card } from '@/components/ui';
 import { useI18n } from '@/lib/i18n';
+// 纯常量文件（无服务端 import），client 组件可以直接引
+import { scopeLabel } from '@/lib/ingest/parser-scopes';
 import { actProposeSelectors, actActivateRule, actRollbackRule, actIgnoreIncident } from './actions';
 
 type Incident = {
@@ -66,7 +68,7 @@ export function ParserPanel({ incidents, rules }: { incidents: Incident[]; rules
                     <td>
                       {i.platformLabel} · {i.field}
                       <div className="small muted">
-                        {i.scope === 'self' ? (isEn ? 'Self Ingest' : '自有采集') : (isEn ? 'Competitor Ingest' : '竞对采集')}
+                        {scopeLabel(i.scope, lang)}
                         {i.note ? ` · ${i.note}` : ''}
                       </div>
                     </td>

@@ -49,7 +49,8 @@ describe('交活：写回带状态条件，被取代/取消的不复活（#13/#1
   it('🔒 交活路由先验状态/持有者再落库，且把 claimerId 传给 completeTask', () => {
     const src = strip(read('app/api/ingest/tasks/route.ts'));
     const guardAt = src.indexOf("cur.status !== 'claimed'");
-    const ingestAt = src.indexOf('ingestParsedPage');
+    // 2026-09-16 起交活入口收口成 ingestExecutorResult（四种原料一个分发），状态校验仍必须在它之前
+    const ingestAt = src.indexOf('ingestExecutorResult');
     expect(guardAt, '没有先验状态').toBeGreaterThan(-1);
     expect(guardAt, '状态校验在落库之后——作废的活照样改数据').toBeLessThan(ingestAt);
     expect(src).toMatch(/completeTask\([^)]*\}, claimerId\)/);

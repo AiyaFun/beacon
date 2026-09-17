@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { before } from '../helpers/anchor';
+import { before, between, orderedBefore } from '../helpers/anchor';
 
 // 2026-09-04 真机（Chrome 152 + x.com）：X 把页面上的语义锚点**全部拆掉**了——
 // document.querySelectorAll('[data-testid]').length === 0，也没有 [lang] / time[datetime] / [role=group]。
@@ -48,7 +48,13 @@ describe('🔒 X 解析器：锚点被拆掉之后仍然诚实', () => {
     const bt = fs.readFileSync(path.join(process.cwd(), 'lib/browser-task/index.ts'), 'utf8');
     expect(bt, '服务端没把执行器的内部错误码翻成人话').toMatch(/humanizeExecutorError/);
     expect(bt).toMatch(/parser_stale:/);
-    const ct = bt.slice(bt.indexOf('export async function completeTask('));
-    expect(ct.slice(0, 600), 'completeTask 没调用翻译，错误码会原样落库').toMatch(/humanizeExecutorError\(outcome\.error\)/);
+    // 【别用「函数开头 N 个字符里」当判据】原来这里是 slice(0, 600)：完全正确的代码
+    // 只要在签名上多加一段注释（2026-09-16 加 retriedAfter 时就是这样）就会把调用挤出窗口，
+    // 守卫报「没调用翻译」而其实调了——报错理由是假的。反过来更糟：窗口一旦被放宽，
+    // 「翻译挪到落库之后」这种真回归照样能溜过去。
+    // 改成按函数体切 + 断言顺序：翻译必须发生在**任何一次落库之前**，那才是这条守卫护的东西。
+    const ct = between(bt, 'export async function completeTask(', '\nexport ');
+    expect(ct, 'completeTask 没调用翻译，错误码会原样落库').toMatch(/humanizeExecutorError\(outcome\.error\)/);
+    orderedBefore(ct, 'humanizeExecutorError(outcome.error)', 'prisma.browserTask.update');
   });
 });

@@ -1,3 +1,5 @@
+import type { Metadata } from 'next';
+import { pageMetadata } from '@/lib/geo/page-seo';
 import { redirect } from 'next/navigation';
 import Image from 'next/image';
 import { getSessionOrNull } from '@/lib/session';
@@ -17,6 +19,11 @@ import { SLOGAN, SLOGAN_EN } from '@/lib/brand';
 import { getServerLang } from '@/lib/i18n/server';
 
 export const dynamic = 'force-dynamic';
+
+// 这一页在 sitemap.xml 里递交给了搜索引擎，却一直没有自己的标题与描述——
+// 静默沿用全站默认那一份，于是搜索结果里它和首页长得一模一样。
+// 文案收在 lib/geo/page-seo.ts，见那里顶部「这一层解决的是什么」。
+export const metadata: Metadata = pageMetadata('/login');
 
 // bye=tenant|member：刚刚完成账号注销后的回跳（app/(app)/settings/account-actions.ts）
 // next/from/ref（2026-09-05）：游客接力回到刚才那一页 / 从演示来的提示 / 邀请码

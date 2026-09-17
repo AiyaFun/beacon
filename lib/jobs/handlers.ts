@@ -677,28 +677,36 @@ const HANDOFF_PER_WORKSPACE = 3;
 
 async function handOffUncrawlable(workspaceId: string): Promise<number> {
   const { serverCanCrawl } = await import('../adapters/registry');
-  const { PLUGIN_COLLECTABLE } = await import('../ingest/competitor');
-  const { hasCollector, enqueueBrowserTask } = await import('../browser-task');
+  const { PLUGIN_COLLECTABLE, RECIPE_COLLECTABLE } = await import('../ingest/competitor');
+  const { hasCollector, enqueueBrowserTask, collectorKinds } = await import('../browser-task');
 
   const items = await prisma.watchlistItem.findMany({
     where: { workspaceId },
     select: { competitorId: true, competitor: { select: { platform: true } } },
   });
   const stuck = items.filter(
-    (i) => i.competitor && !serverCanCrawl(i.competitor.platform) && PLUGIN_COLLECTABLE.has(i.competitor.platform),
+    (i) => i.competitor && !serverCanCrawl(i.competitor.platform)
+      && (PLUGIN_COLLECTABLE.has(i.competitor.platform) || RECIPE_COLLECTABLE.has(i.competitor.platform)),
   );
   if (stuck.length === 0) return 0;
 
   // 闸②放在这里而不是循环外：没有竞对卡住的工作区不必白查一次令牌表
   if (!(await hasCollector(workspaceId))) return 0;
+  // 配方平台（微博/快手/知乎/头条/百家号）只派给自报会做 collect_competitor_recipe 的插件：
+  // 老插件拿到会照 collect_competitor 那套等内容脚本回话，20 秒超时后交回「更新 0/0」——看起来成功的失败
+  const caps = await collectorKinds(workspaceId);
 
   let n = 0;
-  for (const it of stuck.slice(0, HANDOFF_PER_WORKSPACE)) {
+  for (const it of stuck) {
+    if (n >= HANDOFF_PER_WORKSPACE) break;
+    const platform = it.competitor?.platform ?? '';
+    const viaRecipe = RECIPE_COLLECTABLE.has(platform);
+    if (viaRecipe && !caps.has('collect_competitor_recipe')) continue;
     // enqueueBrowserTask 自带去重（同一个 pending 的活不会排两遍），
     // 所以每两小时跑一次也不会越堆越多——插件没来领的那条会被复用
     const r = await enqueueBrowserTask({
       workspaceId,
-      payload: { kind: 'collect_competitor', competitorId: it.competitorId, limit: 20 },
+      payload: { kind: viaRecipe ? 'collect_competitor_recipe' : 'collect_competitor', competitorId: it.competitorId, limit: 20 },
       origin: 'schedule',
       createdBy: 'job:crawl_competitors',
     });

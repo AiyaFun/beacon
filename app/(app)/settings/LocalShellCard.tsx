@@ -48,7 +48,7 @@ export function LocalShellCard({
             <span className="muted" style={{ display: 'block', lineHeight: 1.8 }}>
               {isEn
                 ? 'When enabled, AI ingestion tasks (scraping competitors, backfilling your X/TikTok profiles, reading web pages) will prioritize running immediately on this machine and return results without queuing to the extension.'
-                : '开着的话，AI 的采集任务（采竞对主页、回填你自己的 X / TikTok 主页、读网页）优先用它当场跑完并直接给结果，不排给插件等。'}
+                : '开着的话，AI 的采集任务（采竞对主页、回填你自己的 X / TikTok / YouTube 主页、读网页）优先用它当场跑完并直接给结果，不排给插件等（创作者后台回填只有插件会做）。'}
             </span>
           </div>
         )}

@@ -3,6 +3,7 @@ import { parseJson, toJson } from '../json';
 import { llmComplete, llmVision } from '../llm/gateway';
 import { sendOpsAlert } from '../ops/alert';
 import { createLogger } from '../logger';
+import { type ParserScope, SCOPE_LABEL, FIELD_HINTS, isElementTarget } from './parser-scopes';
 
 const log = createLogger({ module: 'parser-learn' });
 
@@ -210,7 +211,8 @@ export function incidentFingerprint(platform: string, scope: string, field: stri
 export type RecordIncidentInput = {
   workspaceId: string;
   platform: string;
-  scope: 'rival' | 'self';
+  /** rival / self / publish / comments，见 parser-scopes.ts。库里存 string，入口这里收窄。 */
+  scope: ParserScope;
   field: string;
   skeleton?: unknown;
   /** 失败现场截图（dataUrl）。这里收 unknown，vetScreenshot 说了算——插件是可改的本地代码 */
@@ -264,7 +266,7 @@ export async function recordParserIncident(input: RecordIncidentInput): Promise<
     level: 'warn',
     title: `解析疑似失效：${input.platform} 的 ${input.field}`,
     lines: [
-      `${input.scope === 'self' ? '自有' : '竞对'}采集读不到「${input.field}」，已留结构样本待诊断。`,
+      `${SCOPE_LABEL[input.scope].zh}读不到「${input.field}」，已留结构样本待诊断。`,
       '到运维台 /ops/parser 可以让模型从脱敏结构里推断新锚点。',
     ],
     fingerprint: `parser-incident:${fingerprint}`,
@@ -357,9 +359,11 @@ export type ProposeResult =
  */
 async function screenshotHint(
   tenantId: string | null,
-  incident: { platform: string; field: string; screenshot: string },
+  incident: { platform: string; scope: string; field: string; screenshot: string },
 ): Promise<string | null> {
   if (!incident.screenshot) return null;
+  // 元素目标（发布页输入框 / 评论区 / 后台表格行）问的是「那个控件在哪」，不是「那个数在哪」
+  const element = isElementTarget(incident.scope, incident.field);
   const res = await llmVision(
     tenantId,
     [
@@ -367,9 +371,12 @@ async function screenshotHint(
         role: 'system',
         content:
           '你在帮排查一次网页数据解析失败。只回答两件事：'
-          + '① 目标字段的数值大概出现在截图哪个区域（如「头部资料区左侧」「作品卡片右下角标」）；'
-          + '② 它紧挨着什么标签文字（如「粉丝」「获赞」）。'
-          + '120 字以内，中文。看不到目标字段就如实说「截图里没看到」。不要编造类名或代码。',
+          + (element
+            ? '① 目标元素（输入框 / 编辑器 / 评论列表 / 数据表格）大概出现在截图哪个区域（如「页面中部表单区」「右侧评论栏」）；'
+              + '② 它附近有什么标签文字（如「标题」「正文」「评论」「作品数据」）。'
+            : '① 目标字段的数值大概出现在截图哪个区域（如「头部资料区左侧」「作品卡片右下角标」）；'
+              + '② 它紧挨着什么标签文字（如「粉丝」「获赞」）。')
+          + '120 字以内，中文。看不到目标就如实说「截图里没看到」。不要编造类名或代码。',
       },
       {
         role: 'user',
@@ -397,6 +404,14 @@ export async function proposeSelectors(incidentId: string, tenantId: string | nu
   // 有截图就先要一份视觉描述（没配视觉模型 = null，不影响主链路）
   const hint = await screenshotHint(tenantId, incident).catch(() => null);
 
+  // 【元素目标 vs 数字目标】publish / comments 范围、以及 self 的 backend.rows，找的是
+  // 输入框 / 容器 / 表格行这种**元素**，不是某个 NUM 位。提示词照旧写「定位目标数字」的话，
+  // 模型会认真地给一条指向骨架里某个 NUM 的选择器——类名真在骨架里，验证照过，
+  // 下发后插件往那儿填标题当然填不进去。所以两种目标用两套措辞，且元素目标下 anchors 允许为空。
+  // 骨架验证（verifyAgainstSkeleton）对两种目标一视同仁，不因此放松。
+  const elementTarget = isElementTarget(incident.scope, incident.field);
+  const fieldHint = FIELD_HINTS[incident.field];
+
   const res = await llmComplete(
     tenantId,
     'diagnosis',
@@ -405,10 +420,14 @@ export async function proposeSelectors(incidentId: string, tenantId: string | nu
         role: 'system',
         content: [
           '你是网页解析专家。给你一份**脱敏后的 DOM 结构骨架**（文本已被替换成形状：NUM=数字、CJK=中文段落），',
-          '请推断出能定位到目标字段的 CSS 选择器候选，以及可用于就近取数的文本锚点。',
+          elementTarget
+            ? '请推断出能定位到目标**元素**（输入框 / 编辑器 / 列表容器 / 表格行——是元素本身，不是某个数字）的 CSS 选择器候选。'
+            : '请推断出能定位到目标字段的 CSS 选择器候选，以及可用于就近取数的文本锚点。',
           '要求：',
           '- selectors 按可靠性排序，优先用 data-* 埋点属性，其次语义化类名，最后结构路径；',
-          '- anchors 是页面上紧挨着目标数字的**短标签文字**（如「粉丝」「获赞」），没有就给空数组；',
+          elementTarget
+            ? '- 目标是元素不是数字，anchors 通常用不上：只有元素旁边确实有稳定的短标签文字（如「标题」「评论」）才给，否则给空数组；'
+            : '- anchors 是页面上紧挨着目标数字的**短标签文字**（如「粉丝」「获赞」），没有就给空数组；',
           '- 拿不准就少给几条，**绝不编造**骨架里不存在的类名或属性。',
           '只输出 JSON：{"selectors":["..."],"anchors":["..."],"note":"一句话说明依据"}',
         ].join('\n'),
@@ -416,7 +435,10 @@ export async function proposeSelectors(incidentId: string, tenantId: string | nu
       {
         role: 'user',
         content:
-          `平台：${incident.platform}\n目标字段：${incident.field}\n结构骨架：\n${incident.skeleton}`
+          `平台：${incident.platform}\n目标字段：${incident.field}`
+          // 命名空间字段自带一句「要找什么元素」（parser-scopes.ts FIELD_HINTS）；旧的数字字段没有
+          + (fieldHint ? `\n字段说明：${fieldHint}` : '')
+          + `\n结构骨架：\n${incident.skeleton}`
           // 视觉描述只帮模型判断「该往骨架的哪一片找」，类名依据仍然只能来自骨架本身
           + (hint ? `\n\n失败现场截图的视觉描述（另一模型看图所得，仅供定位参考，不能作为类名依据）：${hint}` : ''),
       },
@@ -501,6 +523,10 @@ export async function rollbackRule(platform: string, field: string, reviewedBy: 
 //   ① 机器验证：候选 token 必须真在骨架里（proposeSelectors 内已剔编造）；
 //   ② 冷却：同 platform+field 的自动规则 24h 内被人回滚过 → 不再自动，留给人审；
 //   ③ 兜底：下发后仍有既有的量级闸/坏值拒绝（parser-health）挡住学歪了的规则。
+//
+// 【范围无关】这里没有任何按 scope 分支的逻辑，publish / comments / self.backend.rows
+//（2026-09-15 扩入）走的是同一条路：同样过骨架验证、同样冷却、同样告警。规则与冷却
+// 都按 platform+field 查，而新字段名自带命名空间（parser-scopes.ts），不会与旧字段同键。
 export async function autoAdoptIncident(
   incidentId: string,
   tenantId: string | null,

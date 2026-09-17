@@ -1,3 +1,5 @@
+import type { Metadata } from 'next';
+import { pageMetadata } from '@/lib/geo/page-seo';
 import Link from 'next/link';
 import { DesktopExecutorCard } from '@/components/DesktopExecutorCard';
 import { Card, Stat, Empty, Fold } from '@/components/ui';
@@ -80,6 +82,11 @@ function BrowserCardView({
 }
 
 export const dynamic = 'force-dynamic';
+
+// 这一页在 sitemap.xml 里递交给了搜索引擎，却一直没有自己的标题与描述——
+// 静默沿用全站默认那一份，于是搜索结果里它和首页长得一模一样。
+// 文案收在 lib/geo/page-seo.ts，见那里顶部「这一层解决的是什么」。
+export const metadata: Metadata = pageMetadata('/extension');
 
 export default async function ExtensionPage() {
   // 未登录也能看（2026-09-05）：商店链接与 zip 下载对陌生人开放；令牌/执行器等登录态内容只给登录用户

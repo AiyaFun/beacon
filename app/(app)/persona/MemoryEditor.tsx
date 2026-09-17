@@ -2,7 +2,8 @@
 
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { actUpdateMemory } from './actions';
+import { useContextMenu, type ContextMenuItem } from '@/components/ContextMenu';
+import { actUpdateMemory, actDeleteMemory } from './actions';
 import { MemoryDeleteButton } from './MemoryDeleteButton';
 import { useI18n } from '@/lib/i18n';
 
@@ -19,6 +20,22 @@ export function MemoryEditor({ id, content }: { id: string; content: string }) {
   const [err, setErr] = useState('');
   const [pending, start] = useTransition();
   const router = useRouter();
+  const menu = useContextMenu();
+
+  const menuItems: ContextMenuItem[] = [
+    { key: 'edit', label: isEn ? 'Edit' : '编辑', onSelect: () => setEditing(true) },
+    {
+      key: 'delete',
+      label: isEn ? 'Delete memory' : '删除记忆',
+      hint: isEn ? 'The account brain stops referring to it' : '删掉后账号大脑不再参考它',
+      danger: true,
+      confirm: isEn ? 'Click again to delete' : '再点一次，确认删除',
+      onSelect: async () => {
+        await actDeleteMemory(id);
+        router.refresh();
+      },
+    },
+  ];
 
   function save() {
     setErr('');
@@ -41,7 +58,7 @@ export function MemoryEditor({ id, content }: { id: string; content: string }) {
 
   if (!editing) {
     return (
-      <div className="row-between" style={{ alignItems: 'flex-start', gap: 10 }}>
+      <div className="row-between" style={{ alignItems: 'flex-start', gap: 10 }} onContextMenu={(e) => menu.open(e, menuItems)}>
         <div className="small" style={{ flex: 1 }}>{content}</div>
         <div className="row" style={{ gap: 4, flexShrink: 0 }}>
           <button
@@ -54,6 +71,7 @@ export function MemoryEditor({ id, content }: { id: string; content: string }) {
           </button>
           <MemoryDeleteButton id={id} />
         </div>
+        {menu.node}
       </div>
     );
   }

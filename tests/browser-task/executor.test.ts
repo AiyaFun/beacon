@@ -99,15 +99,20 @@ describe('真机暴露的两处（2026-09-04）', () => {
   it('🔒 先等执行上下文，再 evaluate —— 否则报错与真实原因毫不相干', () => {
     // 真机：新开的页头几秒里 Runtime.evaluate 回「Cannot find default execution context」，
     // readyState 那个循环用 unwrap_or_default 吞掉了它，空转到超时后由登录墙那行抛出。
+    // 2026-09-16 起「等页面能用」抽成三种任务共用的 settle()：等上下文在它里面，run_in_page 先 settle 再判登录墙
+    const st = exCode.indexOf('async fn settle(');
+    expect(st, '找不到 settle').toBeGreaterThan(-1);
+    const settleBody = exCode.slice(st, exCode.indexOf('async fn ', st + 10));
+    expect(settleBody, '没有等执行上下文这一步').toContain('ctx_ready');
+    expect(settleBody).toMatch(/拿不到执行上下文/);
     const i = exCode.indexOf('async fn run_in_page');
     expect(i, '找不到 run_in_page').toBeGreaterThan(-1);
     const body = exCode.slice(i);
-    const ctxAt = body.indexOf('ctx_ready');
+    const settleAt = body.indexOf('settle(page).await?');
     // 登录墙判据的**调用点**（不是函数签名里的参数名），所以找 eval 那一行
     const wallAt = body.indexOf('({login_wall})()');
-    expect(ctxAt, '没有等执行上下文这一步').toBeGreaterThan(-1);
-    expect(wallAt, '等上下文必须在跑登录墙判据之前').toBeGreaterThan(ctxAt);
-    expect(body).toMatch(/拿不到执行上下文/);
+    expect(settleAt, 'run_in_page 没有先 settle').toBeGreaterThan(-1);
+    expect(wallAt, '等上下文必须在跑登录墙判据之前').toBeGreaterThan(settleAt);
   });
 
   it('🔒 登录墙：推到前台的必须是**执行器自己那一页**，且每轮重新导航再判', () => {
@@ -130,10 +135,14 @@ describe('真机暴露的两处（2026-09-04）', () => {
     // 2026-09-04 真机（小红书）：主页整页跳转到 /login?redirectPath=…，跳转发生在第一次
     // readyState=complete 之后。不等就在旧地址上判，什么都判不出来 → 走到「采到 0 条」
     // → 报「这个号可能还没发过内容」，与事实完全不符。
+    // 地址稳定那一段住在 settle() 里；run_in_page 判登录墙之前必须先 settle
+    const st = exCode.indexOf('async fn settle(');
+    const settleBody = exCode.slice(st, exCode.indexOf('async fn ', st + 10));
+    expect(settleBody, '没等地址稳定').toMatch(/location\.href/);
+    expect(settleBody, '没有「地址不再变化」的判据').toMatch(/stable/);
     const i = exCode.indexOf('async fn run_in_page(');
     const seg = exCode.slice(i, exCode.indexOf('({login_wall})()', i));
-    expect(seg, '没等地址稳定就去判登录墙').toMatch(/location\.href/);
-    expect(seg, '没有「地址不再变化」的判据').toMatch(/stable/);
+    expect(seg, '没先 settle 就去判登录墙').toContain('settle(page).await?');
   });
 
   it('🔒 要用户登录时绝不把那一页清掉，也不记进停靠页', () => {
@@ -449,9 +458,10 @@ describe('🔒 接线', () => {
     expect(r).toContain('resolveIngestToken(req.headers.get(INGEST_TOKEN_HEADER), { kinds: kindsHeader })');
     expect(r).toContain('parseKindsHeader(kindsHeader))');
     expect(r).toContain('executorTarget(task)');
-    orderedBefore(r, 'ingestParsedPage({', 'await completeTask(auth.workspace.id, taskId');
+    // 2026-09-16 起交回的原料有四种（主页解析器产物 / 后台读数 / 配方结局 / 页面直读），入口收口成 ingestExecutorResult
+    orderedBefore(r, 'ingestExecutorResult({', 'await completeTask(auth.workspace.id, taskId');
     // 解析结果落库失败 = 这次任务失败，不能把回执写成成功
-    expect(between(r, 'ingestParsedPage({', 'await completeTask(')).toContain('okFlag = false; errorText = r.error');
+    expect(between(r, 'ingestExecutorResult({', 'await completeTask(')).toContain('okFlag = false; errorText = r.error');
   });
 
   it('执行器脚本端点：同一把令牌鉴权；脚本来自 local-collect（三条路一个解析器）', () => {

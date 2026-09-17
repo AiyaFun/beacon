@@ -45,6 +45,9 @@ const EXEMPT: Record<string, string> = {
   Workspace: '已在 workspaces 里导出',
 
   // ② 运行日志与中间态：有自己的到期清理，不是用户配出来的东西
+  // 只活 180 秒的操作通道：页面一关就作废，结束即无意义。它不是用户「配」出来的东西，
+  // 也不存任何页面内容（只存做过哪几步的一句话日志），导出它等于导出一份已经死掉的握手记录。
+  BrowserOpSession: 'AI 操作浏览器的实时会话，闲置 180 秒即失效，不是用户配置',
   AgentRun: 'AI 执行的运行日志，90 天自动清理',
   AgentStep: '执行步骤流水，跟着 AgentRun 走',
   AgentRunNote: '执行过程中的追问，跟着 AgentRun 走',

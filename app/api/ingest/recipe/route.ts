@@ -6,6 +6,8 @@ import { MAX_SKELETON_CHARS } from '@/lib/ingest/parser-learn';
 import { learnFromSkeleton, recordScrapeResult, parseOptions } from '@/lib/scrape/recipe';
 import { isSiteRemovalRequested } from '@/lib/legal/removal';
 import { saveScrapeRecord } from '@/lib/scrape/record';
+import { ensurePlatformRecipes } from '@/lib/scrape/platform-recipes';
+import { ingestPlatformRecipeRows, ingestPlatformRecipeRowsAsOwn } from '@/lib/scrape/platform-map';
 
 // 任意站点采集配方的插件通道（与采集回传同一枚工作区令牌）：
 //   GET  → 拉这个工作区的配方（插件按 origin 匹配当前页面）
@@ -38,13 +40,17 @@ export async function GET(req: Request) {
   const ws = await workspaceByIngestToken(req.headers.get(INGEST_TOKEN_HEADER));
   if (!ws) return NextResponse.json({ ok: false, error: INGEST_TOKEN_INVALID }, { status: 401, headers: CORS });
 
+  // 内置平台配方按工作区播种（幂等）：装了插件的工作区第一次拉清单就有，没装的一份都不建。
+  // 播种失败不该让用户自己的配方也拉不到——旁路
+  await ensurePlatformRecipes(ws.tenantId, ws.id).catch(() => null);
+
   const rows = await prisma.scrapeRecipe.findMany({
     where: { workspaceId: ws.id, status: { in: ['learning', 'active', 'broken'] } },
     orderBy: { updatedAt: 'desc' },
     take: 100,
     select: {
       id: true, name: true, origin: true, pathPattern: true,
-      rules: true, options: true, status: true, version: true,
+      rules: true, options: true, status: true, version: true, platformKey: true,
     },
   });
 
@@ -52,7 +58,7 @@ export async function GET(req: Request) {
     ok: true,
     recipes: rows.map((r) => ({
       id: r.id, name: r.name, origin: r.origin, pathPattern: r.pathPattern,
-      status: r.status, version: r.version,
+      status: r.status, version: r.version, platformKey: r.platformKey ?? null,
       options: parseOptions(r.options),
       // learning / broken 时 rules 可能是空的或过时的——插件据 status 决定是「照着抓」还是「去学」
       rules: (() => { try { return JSON.parse(r.rules); } catch { return []; } })(),
@@ -79,6 +85,10 @@ const schema = z.discriminatedUnion('kind', [
     // 列表行。形状由服务端 sanitizeRows 说了算（每行过同一套 key 白名单与长度闸、上限 50 行）
     rows: z.array(z.record(z.string())).max(200).optional(),
     want: z.number().int().min(0).max(50).optional(),
+    // 内置平台配方：插件打开的是哪条竞对的主页。有它就不必从 URL 反推 handle（微博 /n/昵称 会 302 成 /u/id）
+    competitorId: z.string().min(1).max(64).optional(),
+    // 内置平台配方·自己的主页（2026-09-16，collect_self_recipe）：行映射进这个账号的自有作品，不进竞对库
+    accountId: z.string().min(1).max(64).optional(),
   }),
 ]);
 
@@ -102,7 +112,7 @@ export async function POST(req: Request) {
   // 配方必须属于这枚令牌的工作区——不然任何一枚令牌都能拿别人的 recipeId 去写
   const owned = await prisma.scrapeRecipe.findFirst({
     where: { id: parsed.data.recipeId, workspaceId: ws.id },
-    select: { id: true, tenantId: true, origin: true },
+    select: { id: true, tenantId: true, origin: true, platformKey: true },
   });
   if (!owned) return NextResponse.json({ ok: false, error: '找不到这个配方' }, { status: 404, headers: CORS });
 
@@ -143,7 +153,20 @@ export async function POST(req: Request) {
       url: parsed.data.url, values: parsed.data.values, rows: parsed.data.rows,
       want: parsed.data.want ?? 0, channel: 'plugin_home',
     });
-    return NextResponse.json({ ok: true, ...r }, { headers: CORS });
+    // 内置平台配方：把行映射进竞对库（只补已订阅竞对，不建档）；带 accountId 的是自己的主页，映射进自有作品。
+    // 映射失败不影响 ScrapeRecord 已落库
+    const mapped = owned.platformKey
+      ? await (parsed.data.accountId
+        ? ingestPlatformRecipeRowsAsOwn({
+          workspaceId: ws.id, platformKey: owned.platformKey,
+          values: parsed.data.values, rows: parsed.data.rows ?? [], accountId: parsed.data.accountId, channel: 'plugin_home',
+        })
+        : ingestPlatformRecipeRows({
+          workspaceId: ws.id, platformKey: owned.platformKey, url: parsed.data.url,
+          values: parsed.data.values, rows: parsed.data.rows ?? [], competitorId: parsed.data.competitorId ?? null,
+        })).catch((e: unknown) => ({ ok: false as const, posts: 0 as const, skipped: 0, reason: String((e as Error)?.message ?? e) }))
+      : null;
+    return NextResponse.json({ ok: true, ...r, ...(mapped ? { mapped } : {}) }, { headers: CORS });
   }
 
   const r = await recordScrapeResult(owned.id, ws.id, parsed.data.ok);

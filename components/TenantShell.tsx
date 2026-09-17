@@ -4,6 +4,7 @@ import { ExpiryBanner } from '@/components/ExpiryBanner';
 import { LegalUpdateBanner } from '@/components/LegalUpdateBanner';
 import { DesktopBrowserUsePrompt } from '@/components/DesktopBrowserUsePrompt';
 import { GlobalAIAssistant } from '@/components/GlobalAIAssistant';
+import { BrowserOpRelay } from '@/components/BrowserOpRelay';
 import { TaskSidebar } from '@/components/TaskSidebar';
 import { SidebarUser } from '@/components/SidebarUser';
 import { resolvePlatformAdmin } from '@/lib/ops/admin';
@@ -103,6 +104,10 @@ export async function TenantShell({
         </div>
       </div>
       <GlobalAIAssistant accountName={accountName} />
+      {/* AI 在你日常浏览器里操作页面时的中继与可见界面（2026-09-17）。
+          它在运行 = 你打开着烽火台页面 = 你在场；关掉这个页面，那条操作通道立刻断。
+          没装插件的用户这里完全不轮询，也不渲染任何东西。 */}
+      {!demo && <BrowserOpRelay />}
     </div>
   );
 }

@@ -11,11 +11,13 @@ import { log } from '../logger';
 export type CollectionScope = 'self' | 'rival';
 
 /** 采集通道。谁在采、在哪采——同一批数据的可信度与频率约束都由它决定 */
-export type CollectionChannel = 'plugin_home' | 'plugin_backend' | 'local_browser' | 'desktop' | 'server' | 'import' | 'manual';
+export type CollectionChannel = 'plugin_home' | 'plugin_backend' | 'plugin_recipe' | 'local_browser' | 'desktop' | 'server' | 'import' | 'manual';
 
 export const CHANNEL_LABEL: Record<CollectionChannel, string> = {
   plugin_home: '插件·主页',
   plugin_backend: '插件·后台',
+  // 内置平台配方（微博/快手/知乎/头条/百家号）：插件按服务端学出的规则读竞对公开主页
+  plugin_recipe: '插件·配方',
   // 没装插件时由整机版/桌面端驱动本机 Chrome 采的（lib/browser/local-collect.ts）。
   // 单列一档：它与插件同一套解析器，但触发方式不同，台账上要分得清
   local_browser: '本机浏览器',
@@ -28,6 +30,7 @@ export const CHANNEL_LABEL: Record<CollectionChannel, string> = {
 export const CHANNEL_LABEL_EN: Record<CollectionChannel, string> = {
   plugin_home: 'Plugin · Homepage',
   plugin_backend: 'Plugin · Studio',
+  plugin_recipe: 'Plugin · Recipe',
   local_browser: 'Local Browser',
   desktop: 'Desktop Collector',
   server: 'Server Scheduled',

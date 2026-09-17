@@ -519,6 +519,10 @@ async function beaconRunCollect(deep) {
       const gotPosts = payload && payload.posts && payload.posts.length > 0;
       const gotAccount = payload && (payload.dailyStats || payload.audience);
       if (!gotPosts && !gotAccount) {
+        // 用户当场点了「这是我的作品」却一行都没读到：把脱敏骨架交给自学习链路
+        // （self-backend.js 里会先判这一页有没有表/列表，站错了页不报）。
+        // 与竞对主页的 followers/handle 上报同一条路，修好的行选择器当天下发，不用发版。
+        if (typeof globalThis.__beaconReportBackendMiss === 'function') globalThis.__beaconReportBackendMiss();
         return { ok: false, error: '没读到数据——请确认已打开「数据中心 · 作品数据」或「粉丝/受众分析」页并等内容加载完，再试一次' };
       }
       return { ok: true, payload };
@@ -858,6 +862,12 @@ function beaconPlatformOf() {
   if (h.includes('tiktok')) return 'tiktok';
   if (h.includes('x.com') || h.includes('twitter')) return 'x';
   if (h.includes('weixin')) return 'wechat';
+  // 大陆图文/资讯平台（发布填充脚本跑在它们的后台上，失效上报要带对平台名）
+  if (h.includes('zhihu')) return 'zhihu';
+  if (h.includes('toutiao')) return 'toutiao';
+  if (h.includes('baijiahao') || h.includes('baidu.com')) return 'baijiahao';
+  if (h.includes('kuaishou')) return 'kuaishou';
+  if (h.includes('weibo')) return 'weibo';
   return 'unknown';
 }
 globalThis.__beaconPlatformOf = beaconPlatformOf;
@@ -879,3 +889,36 @@ async function beaconRuleSelectors(platform, field) {
   }
 }
 globalThis.__beaconRuleSelectors = beaconRuleSelectors;
+
+/**
+ * 同一份规则包的**同步**读法（2026-09-15）。
+ *
+ * 【为什么要有第二个入口】chrome.storage 只有异步接口，而三处消费方是同步的：
+ * comments.js 由 chrome.scripting 按需注入、sw.js 同步读它的返回值；publish-fill.js 的
+ * 填表流程与 self-backend.js 的行识别也都是同步函数。让它们全改成异步等于重写三条主链路。
+ * 所以 common.js 加载时把规则包读进内存一次，之后 storage 一变就跟着刷新——
+ * 消费方拿到的最多是「上一秒」的规则包，对一份一天更新一次的东西足够了。
+ *
+ * 【顺序不变】下发规则永远排在手写选择器之后（见 beaconRuleSelectors 上面那段）。
+ */
+let beaconRulePackCache = [];
+function beaconLoadRulePack() {
+  try {
+    chrome.storage.local.get('parserRules', (r) => {
+      void chrome.runtime.lastError;
+      const pack = r && r.parserRules && r.parserRules.rules;
+      beaconRulePackCache = Array.isArray(pack) ? pack : [];
+    });
+  } catch { /* 非扩展环境（单测）没有 storage */ }
+}
+function beaconRuleSelectorsSync(platform, field) {
+  const hit = beaconRulePackCache.find((r) => r && r.platform === platform && r.field === field);
+  return hit && Array.isArray(hit.selectors) ? hit.selectors.filter((s) => typeof s === 'string' && s.trim()) : [];
+}
+globalThis.__beaconRuleSelectorsSync = beaconRuleSelectorsSync;
+beaconLoadRulePack();
+try {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes && changes.parserRules) beaconLoadRulePack();
+  });
+} catch { /* 同上 */ }

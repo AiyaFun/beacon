@@ -6757,3 +6757,80 @@ button.metric-cell:focus-visible { outline: 2px solid var(--accent); outline-off
   border-top-left-radius: var(--radius);
   opacity: 0.6;
 }
+
+/* ── 右键菜单（components/ContextMenu.tsx）──────────────────────────────
+   z-index 要压过 Overlay 的遮罩（1000）：弹层里的列表也能右键，菜单被遮罩盖住等于点不到。 */
+.ctx-menu {
+  position: fixed;
+  z-index: 1001;
+  min-width: 172px;
+  max-width: 260px;
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+}
+.ctx-menu-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  padding: 7px 9px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.3;
+  text-align: left;
+}
+.ctx-menu-item:hover:not(:disabled),
+.ctx-menu-item:focus-visible {
+  background: var(--surface-2);
+  outline: none;
+}
+.ctx-menu-item.danger { color: var(--red); }
+.ctx-menu-item.danger:hover:not(:disabled),
+.ctx-menu-item.danger:focus-visible { background: var(--red-soft); }
+.ctx-menu-item.armed { background: var(--red-soft); color: var(--red); font-weight: 650; }
+.ctx-menu-item:disabled { opacity: 0.45; cursor: default; }
+.ctx-menu-hint { font-size: 11px; color: var(--text-3); }
+
+/* 行尾「⋯」：右键的等价入口，给触屏和键盘用。平时透明，悬停/聚焦才显形 */
+.row-more {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+  font-size: 15px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+.row-more:hover { background: var(--surface-3); color: var(--text); }
+.row-more:focus-visible { opacity: 1; outline: 2px solid var(--brand); outline-offset: 1px; }
+.has-row-more { position: relative; }
+.has-row-more:hover .row-more,
+.has-row-more:focus-within .row-more { opacity: 1; }
+.row-more-abs {
+  position: absolute;
+  top: 7px;
+  right: 6px;
+  z-index: 2;
+}
+/* 触屏没有 hover，常驻显示 */
+@media (hover: none) {
+  .row-more { opacity: 1; }
+}
+/* 标题给右上角那颗「⋯」让出位置，长标题不会压到它底下 */
+.has-row-more .draft-row strong { padding-right: 22px; }

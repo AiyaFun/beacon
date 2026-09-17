@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from 'react';
 import { Icon } from '@/components/icons';
+import { useContextMenu, RowMoreButton, type ContextMenuItem, type ContextMenuHandle } from '@/components/ContextMenu';
 import { actCreateMaterial, actUpdateMaterial, actDeleteMaterial } from './actions';
 import { MATERIAL_TYPES, type MaterialItem, type MaterialType } from './types';
 import { fmtDateFull } from '@/lib/format';
@@ -20,6 +21,7 @@ const TYPE_BADGES: Record<MaterialType, string> = {
 
 export function MaterialEditor({ items }: Props) {
   const { lang } = useI18n();
+  const menu = useContextMenu();
   const [list, setList] = useState(items);
   const [editId, setEditId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
@@ -78,10 +80,12 @@ export function MaterialEditor({ items }: Props) {
             onEdit={() => setEditId(editId === m.id ? null : m.id)}
             onUpdated={(updated) => setList(list.map((x) => x.id === updated.id ? updated : x))}
             onDeleted={() => setList(list.filter((x) => x.id !== m.id))}
+            menu={menu}
             lang={lang}
           />
         ))}
       </div>
+      {menu.node}
     </div>
   );
 }
@@ -160,6 +164,7 @@ function MaterialCard({
   onEdit,
   onUpdated,
   onDeleted,
+  menu,
   lang,
 }: {
   item: MaterialItem;
@@ -167,6 +172,7 @@ function MaterialCard({
   onEdit: () => void;
   onUpdated: (m: MaterialItem) => void;
   onDeleted: () => void;
+  menu: ContextMenuHandle;
   lang?: string;
 }) {
   const [content, setContent] = useState(item.content);
@@ -193,6 +199,18 @@ function MaterialCard({
 
   const typeInfo = MATERIAL_TYPES[item.type] || MATERIAL_TYPES.experience;
   const badge = TYPE_BADGES[item.type] || 'badge-gray';
+
+  // 右键菜单：删除原先只在「点开卡片进编辑态」之后才露面，想删一条得先假装要改它。
+  const menuItems: ContextMenuItem[] = [
+    { key: 'edit', label: lang === 'en' ? 'Edit' : '编辑', onSelect: onEdit },
+    {
+      key: 'delete',
+      label: lang === 'en' ? 'Delete material' : '删除素材',
+      danger: true,
+      confirm: lang === 'en' ? 'Click again to delete' : '再点一次，确认删除',
+      onSelect: remove,
+    },
+  ];
 
   if (editing) {
     return (
@@ -229,9 +247,10 @@ function MaterialCard({
 
   return (
     <div
-      className="card"
+      className="card has-row-more"
       style={{ padding: 12, boxShadow: 'none', background: 'var(--surface-2)', cursor: 'pointer' }}
       onClick={onEdit}
+      onContextMenu={(e) => menu.open(e, menuItems)}
     >
       <div className="row" style={{ gap: 8, marginBottom: 6 }}>
         <span className={`badge ${badge}`} style={{ fontSize: 10 }}>
@@ -242,6 +261,10 @@ function MaterialCard({
         ))}
         <div style={{ flex: 1 }} />
         <span className="small muted">{fmtDateFull(item.createdAt)}</span>
+        <RowMoreButton
+          onOpen={(e) => menu.open(e, menuItems)}
+          label={lang === 'en' ? 'More actions' : '更多操作'}
+        />
       </div>
       <div className="small" style={{ lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
         {item.content.length > 200 ? item.content.slice(0, 200) + '…' : item.content}

@@ -99,19 +99,20 @@ export async function POST(req: Request) {
       select: { payload: true },
     });
     const payload = browserTaskPayloadSchema.safeParse(parseJson<unknown>(task?.payload ?? '{}', {}));
-    if (payload.success && (payload.data.kind === 'collect_self_profile' || payload.data.kind === 'collect_competitor')) {
-      const { ingestParsedPage } = await import('@/lib/browser-task/local-run');
-      const r = await ingestParsedPage({
+    if (payload.success && payload.data.kind !== 'open_and_read') {
+      // 主页解析器产物 / 创作者后台读数 / 配方结局 / 页面直读——四种原料一个入口分发（2026-09-16）
+      const { ingestExecutorResult } = await import('@/lib/browser-task/local-run');
+      const r = await ingestExecutorResult({
         workspaceId: auth.workspace.id,
         payload: payload.data,
-        parsed: body.parsed as Parameters<typeof ingestParsedPage>[0]['parsed'],
+        parsed: body.parsed as Parameters<typeof ingestExecutorResult>[0]['parsed'],
         channel: 'desktop',
         via: '桌面客户端',
       });
       if (r.ok) resultText = r.summary;
       else { okFlag = false; errorText = r.error; }
     } else {
-      okFlag = false; errorText = '这条任务不是采主页类的，不该带 parsed 回来';
+      okFlag = false; errorText = '这条任务不是采集类的，不该带 parsed 回来';
     }
   }
 

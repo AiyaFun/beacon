@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
+import { useContextMenu, type ContextMenuItem } from '@/components/ContextMenu';
 import { actSavePreset, actTogglePreset, actDeletePreset } from './preset-actions';
 import { AUTH_GROUPS, groupOf, toolsForGroups, type AuthGroupKey } from '@/lib/agent/auth-groups';
 import { useI18n } from '@/lib/i18n/context';
@@ -46,6 +47,7 @@ export function PresetManager({
   const [pending, start] = useTransition();
   const [editing, setEditing] = useState<PresetRow | null>(null);
   const [err, setErr] = useState('');
+  const menu = useContextMenu();
 
   const blank = (): PresetRow => ({
     id: '', title: '', goal: '', agentTemplateId: null,
@@ -97,7 +99,26 @@ export function PresetManager({
 
       <div className="stack" style={{ gap: 8 }}>
         {presets.map((p) => (
-          <div key={p.id} className="row-between wrap" style={{ gap: 8, padding: '8px 0', borderTop: '1px solid var(--line)' }}>
+          <div
+            key={p.id}
+            className="row-between wrap has-row-more"
+            style={{ gap: 8, padding: '8px 0', borderTop: '1px solid var(--line)' }}
+            onContextMenu={(e) => menu.open(e, [
+              { key: 'edit', label: isEn ? 'Edit' : '编辑', onSelect: () => setEditing(p) },
+              {
+                key: 'toggle',
+                label: p.enabled ? (isEn ? 'Disable' : '停用') : (isEn ? 'Enable' : '启用'),
+                onSelect: () => act(() => actTogglePreset(p.id, !p.enabled)),
+              },
+              {
+                key: 'delete',
+                label: isEn ? 'Delete preset' : '删除一键任务',
+                danger: true,
+                confirm: isEn ? 'Click again to delete' : '再点一次，确认删除',
+                onSelect: () => act(() => actDeletePreset(p.id)),
+              },
+            ] satisfies ContextMenuItem[])}
+          >
             <span className="row wrap" style={{ gap: 8, minWidth: 0, alignItems: 'baseline' }}>
               <strong className="small">⚡ {p.title}</strong>
               <span className="small muted" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -122,6 +143,7 @@ export function PresetManager({
             </span>
           </div>
         ))}
+        {menu.node}
       </div>
 
       {editing && <PresetForm row={editing} agents={agents} tools={tools} models={models} pending={pending} onCancel={() => setEditing(null)} onSave={save} />}

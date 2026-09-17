@@ -1,4 +1,7 @@
 import type { Metadata } from 'next';
+import { pageMetadata } from '@/lib/geo/page-seo';
+import { itemListJsonLd, breadcrumbJsonLd } from '@/lib/geo/item-list';
+import { JsonLd } from '@/components/JsonLd';
 import Link from 'next/link';
 import { headers } from 'next/headers';
 import { prisma } from '@/lib/db';
@@ -16,32 +19,8 @@ import { beijingDayKey } from '@/lib/beijing';
 import { recordCrawlerHitAsync } from '@/lib/geo/crawler-log';
 
 export const dynamic = 'force-dynamic';
-export const metadata: Metadata = {
-  title: '今日选题榜 · 跨平台扩散话题与常青流量节点推荐',
-  description: '按垂直赛道智能推荐今日高潜选题：精选跨平台正在扩散的焦点话题、不依赖热点的爆款常青题以及未来 30 天流量爆发节点，每条自带「为什么是今天」深度研判理由，免登录可看。',
-  keywords: [
-    '今日选题榜',
-    '爆款选题推荐',
-    '跨平台扩散话题',
-    '常青选题库',
-    '流量节点日历',
-    '自媒体选题灵感',
-    '抖音爆款选题',
-    '小红书热门选题',
-    '公众号深度选题',
-    'B站视频策划',
-    '垂直赛道选题',
-  ],
-  alternates: {
-    canonical: '/topics-today',
-  },
-  openGraph: {
-    title: '今日选题榜 · 跨平台扩散话题与常青流量节点推荐 | 烽火台',
-    description: '每天早上一份带理由的选题推荐，跨平台扩散话题 + 常青选题公式 + 30天节点日历。',
-    url: '/topics-today',
-    type: 'website',
-  },
-};
+// 标题/描述/关键词/canonical 收在 lib/geo/page-seo.ts —— 见那里顶部「为什么收成一处」
+export const metadata: Metadata = pageMetadata('/topics-today');
 
 // 公开「今日选题榜」（2026-09-05 增长缺口整改）。
 //
@@ -78,8 +57,34 @@ export default async function TopicsTodayPage({ searchParams }: { searchParams: 
     ? { rising: 'rising', peak: 'peak', decay: 'cooling', cooling: 'cooling', faded: 'faded' }
     : { rising: '上升中', peak: '峰值', decay: '降温', cooling: '降温', faded: '已退' };
 
+  // ── 结构化数据（2026-09-17）：这一页与 /hotlists 是全站仅有的两个有真内容的公开页。
+  //    把「今天可以做什么选题」变成一个机器能直接摘的清单——AI 检索要引用一个来源，
+  //    靠的正是这种结构，而不是一段描述它的散文。见 lib/geo/item-list.ts 顶部。
+  //
+  //    clusters 已经在查询里过滤了 isSensitive；常青题与节点日历是纯计算产物，没有示例数据。
+  //    三类条目合并成一个清单，各自在 description 里写明来源——
+  //    模型摘走一条时，「这是热点扩散题还是常青题」是它最需要的那句话。
+  const topicEntries = [
+    ...clusters.map((c) => ({
+      name: c.title,
+      description: `跨平台扩散中的话题${c.lifecycle ? `（${life[c.lifecycle] ?? c.lifecycle}）` : ''}`,
+    })),
+    ...evergreen.map((e) => ({ name: e.title, description: `常青选题：${e.why}` })),
+    ...nodes.map((n) => ({
+      name: n.node.name,
+      description: `流量节点，还有 ${n.daysUntil} 天`,
+    })),
+  ];
+
   return (
     <div className="pub-page">
+      <JsonLd data={itemListJsonLd(
+        '/topics-today',
+        `今日选题榜 · ${day}`,
+        '按赛道给出今天可做的选题：跨平台正在扩散的话题、不依赖热点的常青题、未来 30 天的流量节点，每条带「为什么是今天」。',
+        topicEntries,
+      )} />
+      <JsonLd data={breadcrumbJsonLd('/topics-today', '今日选题榜')} />
       <TrackView name="landing_view" meta="topics-today" />
       <HubHeader
         title={en ? `Today’s topics · ${day}` : `今日选题榜 · ${day}`}

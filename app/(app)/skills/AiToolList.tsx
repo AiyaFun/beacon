@@ -3,6 +3,7 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { Card } from '@/components/ui';
+import { useContextMenu, RowMoreButton, type ContextMenuItem } from '@/components/ContextMenu';
 import { actSetAiToolStatus, actDeleteAiTool } from './ai-tool-actions';
 import { useI18n } from '@/lib/i18n/context';
 
@@ -32,6 +33,26 @@ export function AiToolList({ items, readOnly, supported }: { items: AiToolView[]
   const router = useRouter();
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState('');
+  const menu = useContextMenu();
+
+  function itemsFor(t: AiToolView): ContextMenuItem[] {
+    if (readOnly) return [];
+    const list: ContextMenuItem[] = [];
+    if (t.status !== 'enabled' && supported) {
+      list.push({ key: 'enable', label: isEn ? 'Enable' : '启用', onSelect: () => act(() => actSetAiToolStatus(t.id, 'enabled')) });
+    }
+    if (t.status === 'enabled') {
+      list.push({ key: 'disable', label: isEn ? 'Disable' : '停用', onSelect: () => act(() => actSetAiToolStatus(t.id, 'disabled')) });
+    }
+    list.push({
+      key: 'delete',
+      label: isEn ? 'Delete tool' : '删除工具',
+      danger: true,
+      confirm: isEn ? 'Click again to delete' : '再点一次，确认删除',
+      onSelect: () => act(() => actDeleteAiTool(t.id)),
+    });
+    return list;
+  }
 
   function act(fn: () => Promise<{ ok: boolean; error?: string }>) {
     setMsg('');
@@ -64,7 +85,7 @@ export function AiToolList({ items, readOnly, supported }: { items: AiToolView[]
       ) : (
         <div className="stack" style={{ gap: 10 }}>
           {items.map((t) => (
-            <div key={t.id} className="card" style={{ padding: 12 }}>
+            <div key={t.id} className="card has-row-more" style={{ padding: 12 }} onContextMenu={(e) => menu.open(e, itemsFor(t))}>
               <div className="row-between wrap" style={{ gap: 8 }}>
                 <span className="row wrap" style={{ gap: 6, alignItems: 'center' }}>
                   <b>{t.label}</b>
@@ -88,6 +109,7 @@ export function AiToolList({ items, readOnly, supported }: { items: AiToolView[]
                     <button className="btn btn-sm btn-ghost" disabled={pending} onClick={() => act(() => actDeleteAiTool(t.id))}>
                       {isEn ? 'Delete' : '删除'}
                     </button>
+                    <RowMoreButton onOpen={(e) => menu.open(e, itemsFor(t))} label={isEn ? 'More actions' : '更多操作'} />
                   </span>
                 )}
               </div>
@@ -105,6 +127,7 @@ export function AiToolList({ items, readOnly, supported }: { items: AiToolView[]
         </div>
       )}
       {msg && <p className="small" style={{ color: 'var(--red)', marginTop: 8 }}>{msg}</p>}
+      {menu.node}
     </Card>
   );
 }

@@ -158,10 +158,27 @@ const PICK_FN = `(args) => {
   // 一条规则在某个根节点下取值。**根节点是行边界**：给了 rowSelector 时，
   // 每一行只在自己那棵子树里找——不这样的话，第二行取不到就会退到全局，
   // 把第一行的值当成自己的（跨条目串数，这个事故真发生过）。
+  // 属性类字段（链接 href / 时间 datetime）：与插件执行器同一份清单，选择器指到 <a> 里面时往上找带该属性的祖先
+  const ATTRS = ['href', 'src', 'datetime', 'title'];
+  const pickAttr = (el, attr) => {
+    let v = el.getAttribute(attr); if (!v) return null; v = v.trim();
+    if (attr === 'href' || attr === 'src') { try { v = new URL(v, location.href).href; } catch {} }
+    return v.slice(0, 200);
+  };
   const pick = (rule, root) => {
+    const attr = rule.attr && ATTRS.includes(rule.attr) ? rule.attr : null;
     for (const sel of rule.selectors || []) {
-      try { const el = root.querySelector(sel); const v = el && el.textContent && el.textContent.trim(); if (v) return v.slice(0, 200); } catch {}
+      try {
+        const el = root.querySelector(sel); if (!el) continue;
+        if (attr) {
+          let host = el; while (host && host !== root && !host.hasAttribute(attr)) host = host.parentElement;
+          const v = host && host !== root ? pickAttr(host, attr) : (el.hasAttribute(attr) ? pickAttr(el, attr) : null);
+          if (v) return v; continue;
+        }
+        const v = el.textContent && el.textContent.trim(); if (v) return v.slice(0, 200);
+      } catch {}
     }
+    if (attr) return null;
     for (const anchor of rule.anchors || []) {
       const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
       let n;

@@ -70,12 +70,53 @@ describe('服务端不许排一个插件不会做的活', () => {
     const good = await enq({ kind: 'collect_self_profile', platform: 'x', accountId: 'acc1', handle: 'aiyafun' });
     expect(good.ok).toBe(true);
     expect((await enq({ kind: 'collect_self_profile', platform: 'tiktok', accountId: 'acc1', handle: 'me' })).ok).toBe(true);
-    for (const p of ['wechat', 'douyin', 'xiaohongshu', 'bilibili']) {
+    // 2026-09-16 起抖音/小红书/B站的公开主页也能采（后台回填的退路）
+    for (const p of ['douyin', 'xiaohongshu', 'bilibili']) {
+      expect((await enq({ kind: 'collect_self_profile', platform: p, accountId: 'acc1', handle: 'h' })).ok, `${p} 该放行`).toBe(true);
+    }
+    // 公众号/视频号没有公开主页；配方平台走 collect_self_recipe，不混进这个 kind
+    for (const p of ['wechat', 'shipinhao', 'weibo']) {
       expect((await enq({ kind: 'collect_self_profile', platform: p, accountId: 'acc1', handle: 'h' })).ok, `${p} 不该放行`).toBe(false);
     }
     // 没有账号/handle 的不许入队：插件那头不再猜归属，也拼不出主页地址
     expect((await enq({ kind: 'collect_self_profile', platform: 'x', handle: 'h' })).ok).toBe(false);
     expect((await enq({ kind: 'collect_self_profile', platform: 'x', accountId: 'acc1' })).ok).toBe(false);
+  });
+
+  it('collect_self_backend：只放行五个创作者后台平台，要账号、不要 handle（2026-09-15）', async () => {
+    for (const p of ['shipinhao', 'douyin', 'xiaohongshu', 'bilibili', 'wechat']) {
+      expect((await enq({ kind: 'collect_self_backend', platform: p, accountId: 'acc1' })).ok, `${p} 该放行`).toBe(true);
+    }
+    // 主页类平台不许混进后台 kind：它们没有创作者后台，插件会白开一个页
+    for (const p of ['x', 'tiktok', 'youtube', 'weibo']) {
+      expect((await enq({ kind: 'collect_self_backend', platform: p, accountId: 'acc1' })).ok, `${p} 不该放行`).toBe(false);
+    }
+    expect((await enq({ kind: 'collect_self_backend', platform: 'douyin' })).ok, '没账号不许入队').toBe(false);
+  });
+
+  it('collect_self_backend 与主页回填同一条去重规则：同一账号同一 kind 就是同一个活（键顺序不同也算）', async () => {
+    const raw = await prisma.browserTask.create({
+      data: { workspaceId: wsId, accountId: 'acc1', kind: 'collect_self_backend', payload: JSON.stringify({ accountId: 'acc1', platform: 'douyin', kind: 'collect_self_backend' }), status: 'pending', origin: 'user', expiresAt: new Date(Date.now() + 3600e3), createdBy: 'm1' },
+    });
+    const r = await enq({ kind: 'collect_self_backend', platform: 'douyin', accountId: 'acc1' }, { accountId: 'acc1' });
+    expect(r.ok && r.superseded, '同一账号的后台回填没被认成同一个活').toEqual([raw.id]);
+  });
+
+  it('collect_self_recipe：只放行五个配方平台，要账号与 handle（2026-09-16）', async () => {
+    for (const p of ['weibo', 'kuaishou', 'zhihu', 'toutiao', 'baijiahao']) {
+      expect((await enq({ kind: 'collect_self_recipe', platform: p, accountId: 'acc1', handle: 'h' })).ok, `${p} 该放行`).toBe(true);
+    }
+    for (const p of ['x', 'douyin', 'wechat']) {
+      expect((await enq({ kind: 'collect_self_recipe', platform: p, accountId: 'acc1', handle: 'h' })).ok, `${p} 不该放行`).toBe(false);
+    }
+    expect((await enq({ kind: 'collect_self_recipe', platform: 'weibo', handle: 'h' })).ok, '没账号不许入队').toBe(false);
+    expect((await enq({ kind: 'collect_self_recipe', platform: 'weibo', accountId: 'acc1' })).ok, '没 handle 拼不出主页').toBe(false);
+  });
+
+  it('collect_competitor_recipe：与 collect_competitor 同形（competitorId + limit ≤ 50）', async () => {
+    expect((await enq({ kind: 'collect_competitor_recipe', competitorId: 'c1', limit: 20 })).ok).toBe(true);
+    expect((await enq({ kind: 'collect_competitor_recipe', competitorId: 'c1', limit: 500 })).ok).toBe(false);
+    expect((await enq({ kind: 'collect_competitor_recipe', limit: 5 })).ok).toBe(false);
   });
 
   it('插件那张 SELF_COLLECT_URL 真的有 x 与 tiktok——SELF_PROFILE_PLATFORMS 只能是它的子集', async () => {

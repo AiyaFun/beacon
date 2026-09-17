@@ -46,6 +46,21 @@ export function competitorHomeUrl(platform: string, handle: string): string | nu
       return /^UC[\w-]{20,}$/.test(handle)
         ? `https://www.youtube.com/channel/${handle}`
         : `https://www.youtube.com/@${encodeURIComponent(safeDecode(handle.replace(/^@/, '')))}`;
+    // ── 大陆图文/资讯平台（2026-09-15，靠内置配方采，见 lib/scrape/platform-recipes.ts）──
+    // handle 语义：weibo=数字 uid 或昵称（/u/<uid> 与 /n/<昵称> 两种主页形态）；kuaishou=profile 段；
+    // zhihu=people 段（url_token）；toutiao=token；baijiahao=author.baidu.com/home/<id>。
+    case 'weibo':
+      return /^\d{5,}$/.test(handle)
+        ? `https://weibo.com/u/${handle}`
+        : `https://weibo.com/n/${encodeURIComponent(safeDecode(handle))}`;
+    case 'kuaishou':
+      return `https://www.kuaishou.com/profile/${encodeURIComponent(handle)}`;
+    case 'zhihu':
+      return `https://www.zhihu.com/people/${encodeURIComponent(safeDecode(handle))}`;
+    case 'toutiao':
+      return `https://www.toutiao.com/c/user/token/${encodeURIComponent(handle)}/`;
+    case 'baijiahao':
+      return `https://author.baidu.com/home/${encodeURIComponent(handle)}`;
     default:
       return null;
   }
@@ -118,6 +133,36 @@ export function parseCompetitorUrl(input: string): ParsedCompetitor | null {
   if (host === 'x.com' || host.endsWith('.x.com') || host === 'twitter.com' || host.endsWith('.twitter.com')) {
     const name = (segs[0] || '').replace(/^@/, '');
     return name && !X_RESERVED.has(name.toLowerCase()) ? { platform: 'x', handle: name } : null;
+  }
+
+  // ── 大陆图文/资讯平台（2026-09-15）──
+  // 微博：weibo.com/u/<uid> | weibo.com/n/<昵称> | weibo.com/<uid> | m.weibo.cn/u/<uid> | m.weibo.cn/profile/<uid>
+  if (host === 'weibo.com' || host.endsWith('.weibo.com') || host === 'weibo.cn' || host.endsWith('.weibo.cn')) {
+    if ((segs[0] === 'u' || segs[0] === 'profile') && /^\d{5,}$/.test(segs[1] || '')) return { platform: 'weibo', handle: segs[1] };
+    if (segs[0] === 'n' && segs[1]) return { platform: 'weibo', handle: safeDecode(segs[1]) };
+    if (/^\d{5,}$/.test(segs[0] || '') && !segs[1]) return { platform: 'weibo', handle: segs[0] };
+    return null;
+  }
+  // 快手：kuaishou.com/profile/<id>
+  if (host === 'kuaishou.com' || host.endsWith('.kuaishou.com')) {
+    return segs[0] === 'profile' && segs[1] ? { platform: 'kuaishou', handle: safeDecode(segs[1]) } : null;
+  }
+  // 知乎：zhihu.com/people/<url_token> | zhihu.com/org/<url_token>
+  if (host === 'zhihu.com' || host.endsWith('.zhihu.com')) {
+    return (segs[0] === 'people' || segs[0] === 'org') && segs[1] ? { platform: 'zhihu', handle: safeDecode(segs[1]) } : null;
+  }
+  // 头条号：toutiao.com/c/user/token/<token>/
+  if (host === 'toutiao.com' || host.endsWith('.toutiao.com')) {
+    const i = segs.indexOf('token');
+    return segs[0] === 'c' && segs[1] === 'user' && i >= 0 && segs[i + 1] ? { platform: 'toutiao', handle: segs[i + 1] } : null;
+  }
+  // 百家号：author.baidu.com/home/<id> | baijiahao.baidu.com/u?app_id=<id>
+  if (host === 'author.baidu.com') {
+    return segs[0] === 'home' && segs[1] ? { platform: 'baijiahao', handle: segs[1] } : null;
+  }
+  if (host === 'baijiahao.baidu.com') {
+    const id = u.searchParams.get('app_id');
+    return segs[0] === 'u' && id ? { platform: 'baijiahao', handle: id } : null;
   }
 
   return null;

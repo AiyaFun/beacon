@@ -1,7 +1,12 @@
+import type { Metadata } from 'next';
+import { pageMetadata } from '@/lib/geo/page-seo';
 import Link from 'next/link';
 import { LEGAL_VERSION } from '@/lib/legal';
 
-export const metadata = { title: '服务条款 — 烽火台' };
+// 此前这里写的是 `title: '服务条款 — 烽火台'`，而根布局的 title.template 会再拼一次
+// 「| 烽火台 · 跨平台内容作战室」，实际输出两遍品牌名；而且从来没有 description。
+// 文案收在 lib/geo/page-seo.ts。
+export const metadata: Metadata = pageMetadata('/legal/terms');
 
 export default function TermsPage() {
   return (

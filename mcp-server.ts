@@ -121,10 +121,10 @@ const TOOLS = [
     name: 'beacon_collect_self',
     description:
       '让用户的浏览器打开**他本人的主页**回填自有数据（自有数据就在公开主页上的平台）。'
-      + '目前支持 platform=x / tiktok。异步排队，插件在线时执行；本机浏览器可用时当场执行。',
+      + '自己的主页：platform=x / tiktok / youtube；创作者后台：shipinhao / douyin / xiaohongshu / bilibili / wechat（公众号要先在插件设置页授权）。异步排队，插件在线时执行；本机浏览器可用时当场执行（后台类只有插件会做）。',
     inputSchema: {
       type: 'object',
-      properties: { platform: { type: 'string', description: '目前支持 x / tiktok' } },
+      properties: { platform: { type: 'string', description: 'x / tiktok / youtube（自己的主页）或 shipinhao / douyin / xiaohongshu / bilibili / wechat（创作者后台）' } },
       required: ['platform'],
     },
   },

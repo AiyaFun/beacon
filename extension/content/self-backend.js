@@ -549,7 +549,21 @@ function beaconRowsFor(cfg) {
   const rows = beaconDataRows(cfg);
   if (rows.some((r) => beaconRowId(r, cfg))) return beaconDropContainers(rows, cfg);
   const extra = beaconStructuralRows().filter((e) => !rows.includes(e));
-  return beaconDropContainers(rows.concat(extra), cfg);
+  const merged = rows.concat(extra);
+  if (merged.some((r) => beaconRowId(r, cfg))) return beaconDropContainers(merged, cfg);
+  // 服务端下发的行选择器（自学习闭环从真实失败现场学来的），排在手写与结构兜底**之后**：
+  // 下发规则是应急补丁，不该盖过已经在真机上校准过的判据（与 common.js 同一条顺序规则）。
+  const learned = beaconLearnedRows(cfg).filter((e) => !merged.includes(e));
+  return beaconDropContainers(merged.concat(learned), cfg);
+}
+
+function beaconLearnedRows(cfg) {
+  try {
+    const fn = globalThis.__beaconRuleSelectorsSync;
+    const sels = typeof fn === 'function' ? fn(cfg.platform, 'backend.rows') : [];
+    if (!sels || !sels.length) return [];
+    return beaconQueryAll(sels.join(', ')).filter((e) => !beaconIsNavNode(e) && !beaconIsHidden(e) && !beaconIsOwnUi(e));
+  } catch { return []; }
 }
 
 function beaconVisibleHeaders() {
@@ -745,6 +759,71 @@ function beaconScanAttrs(row, cfg) {
 // 单独授权后按需注入的后台（目前只有公众号，见 content/self-backend-wechat.js）。
 // 它们先于本文件加载，把自己的配置放进那个全局对象，这里合并进来——
 // 少一个文件（开源发行版就少这一个）只是少一个后台，其余四个照常工作。
+// ── 内置四个后台的自动回填路线（2026-09-15）──────────────────────────────
+//
+// 【为什么不写死一条地址】这些后台都是 SPA，路径几个月一换；写死一条等于赌它不改版。
+// 做法分两层：① 先在**当前页面的导航里**找真实存在的「作品数据 / 内容管理」链接——
+// 后台改版时菜单文字比路径稳得多；② 再退到几条写死的候选地址。两层都是只读 DOM，
+// 不点任何按钮。路线在第一站算好交给 SW 记着（beacon-self-auto-routes），
+// 之后每一站按同一份走，否则换一页重算一次，step 就对不上了。
+//
+// 【没登录怎么办】登录页/登录弹层上一行数据都没有；识别出来就带 needLogin 中止，
+// 由 SW 决定要不要把这一页切到前台交给用户扫码（只在用户当场点击时）。
+// 插件**不替用户登录**：不填表单、不点按钮、不碰二维码。
+const BEACON_DATA_LINK_TEXT = /作品数据|内容数据|数据中心|数据分析|作品管理|内容管理|稿件管理|笔记管理|视频管理|动态管理|作品列表|数据概览/;
+
+function beaconDiscoverDataRoutes(cfg) {
+  const out = [];
+  try {
+    for (const a of document.querySelectorAll('a[href]')) {
+      if (out.length >= 3) break;
+      const text = beaconNorm(a.textContent || '');
+      if (!text || text.length > 12 || !BEACON_DATA_LINK_TEXT.test(text)) continue;
+      let u;
+      try { u = new URL(a.getAttribute('href') || '', location.href); } catch { continue; }
+      if (u.origin !== location.origin) continue;
+      if (u.href === location.href) continue;
+      if (cfg.dataPaths && !cfg.dataPaths.some((re) => re.test(u.pathname + u.search + u.hash))) continue;
+      if (!out.includes(u.href)) out.push(u.href);
+    }
+  } catch { /* 导航读不到就只用候选 */ }
+  return out;
+}
+
+function beaconCoreAutoRoutes(cfg, u) {
+  const base = (u && u.origin) || location.origin;
+  const discovered = beaconDiscoverDataRoutes(cfg);
+  const candidates = (cfg.autoCandidates || []).map((path) => base + path);
+  const routes = [];
+  for (const r of discovered.concat(candidates)) if (!routes.includes(r)) routes.push(r);
+  return routes.slice(0, 4);
+}
+
+// 登录页 / 同地址弹出的登录层：有密码框或二维码，且页面文字在说「请登录」。
+function beaconLooksLikeLoginPage(cfg) {
+  const route = beaconRoute();
+  if (cfg.loginPaths && cfg.loginPaths.some((re) => re.test(route))) return true;
+  let ui = null;
+  try {
+    ui = document.querySelector('input[type="password"], [class*="qrcode" i], [class*="login" i] canvas, [class*="login" i] img');
+  } catch { ui = null; }
+  if (!ui || beaconIsHidden(ui)) return false;
+  const text = beaconNorm(document.body ? document.body.textContent : '');
+  return /扫码登录|请登录|立即登录|手机号登录|密码登录|登录后/.test(text);
+}
+
+// 一行都没认出来时把脱敏骨架交给自学习链路（scope=self, field=backend.rows）。
+// 先判这一页有没有表/列表：停在首页概览上报一个「行选择器失效」，只会把运维台引向错的方向。
+function beaconReportBackendMiss() {
+  try {
+    const cfg = BACKENDS[location.hostname];
+    if (!cfg || typeof globalThis.__beaconReportParseMiss !== 'function') return;
+    if (!document.querySelector('table, [role="table"], [role="list"], [class*="list" i], [class*="table" i]')) return;
+    globalThis.__beaconReportParseMiss(cfg.platform, 'self', 'backend.rows', 'main, [role="main"], body');
+  } catch { /* 旁路 */ }
+}
+globalThis.__beaconReportBackendMiss = beaconReportBackendMiss;
+
 const BACKENDS = {
   ...(globalThis.__beaconBackendExtras || {}),
   // ── 微信视频号 ──
@@ -768,6 +847,12 @@ const BACKENDS = {
       return /^[A-Za-z0-9_=-]{16,128}$/.test(v) ? v : null;
     },
     urlOf: (id) => `https://channels.weixin.qq.com/web/pages/feed?eid=${id}`,
+    // 自动回填：候选地址未经真机校准（真机登录态只有用户有），所以先看导航再退到它们
+    autoCandidates: ['/platform/statistic/post', '/platform/post/list'],
+    dataPaths: [/statistic|post|data|content/i],
+    loginPaths: [/login/i],
+    pinRoutes: true,
+    autoRoutes(u) { return beaconCoreAutoRoutes(this, u); },
   },
 
 
@@ -799,6 +884,11 @@ const BACKENDS = {
     // 挡掉「点赞数 123456」这类误命中（属性名筛选已挡掉 13 位时间戳那一类）。
     bareIdOf: (v) => (/^\d{10,25}$/.test(v) ? v : null),
     urlOf: (id) => `https://www.douyin.com/video/${id}`,
+    autoCandidates: ['/creator-micro/data-center/content', '/creator-micro/content/manage', '/creator-micro/data/stats/works'],
+    dataPaths: [/data|content|stats|manage/i],
+    loginPaths: [/login|passport/i],
+    pinRoutes: true,
+    autoRoutes(u) { return beaconCoreAutoRoutes(this, u); },
   },
 
   // ── 小红书创作者后台 ──
@@ -831,6 +921,11 @@ const BACKENDS = {
     // 靠 NOT_ID_ATTR 把 data-user-id / data-author-id 这类属性名先排除掉（见 beaconIdFromValue）。
     bareIdOf: (v) => (/^[0-9a-f]{24}$/i.test(v) ? v : null),
     urlOf: (id) => `https://www.xiaohongshu.com/explore/${id}`,
+    autoCandidates: ['/statistics/data-analysis', '/new/note-manager', '/creator/notes'],
+    dataPaths: [/statistic|note|data|analys/i],
+    loginPaths: [/login/i],
+    pinRoutes: true,
+    autoRoutes(u) { return beaconCoreAutoRoutes(this, u); },
   },
 
   // ── B站创作中心 ──
@@ -850,6 +945,11 @@ const BACKENDS = {
       return m ? m[1] : null;
     },
     urlOf: (id) => `https://www.bilibili.com/video/${id}`,
+    autoCandidates: ['/platform/data-up/video', '/platform/upload-manager/article', '/platform/data-up/overview'],
+    dataPaths: [/data-up|upload-manager|data|video|article/i],
+    loginPaths: [/login|passport/i],
+    pinRoutes: true,
+    autoRoutes(u) { return beaconCoreAutoRoutes(this, u); },
   },
 };
 
@@ -1389,9 +1489,23 @@ async function beaconAutoRun() {
     return;
   }
 
+  // 内置后台：停在登录页/登录层上就别往下走了。needLogin 让 SW 在用户当场点击时把这一页切到前台。
+  if (cfg.pinRoutes && beaconLooksLikeLoginPage(cfg)) {
+    await beaconAutoSend('beacon-self-auto-abort', {
+      reason: '创作者后台未登录，本轮自动回填已停止（当场点击时会把登录页切到前台，登录后自动继续）',
+      needLogin: true,
+    });
+    return;
+  }
+
   let u;
   try { u = new URL(location.href); } catch { return; }
-  const routes = cfg.autoRoutes(u);
+  // 第一站算出的路线由 SW 记着，后面每一站按同一份走（见 BEACON_DATA_LINK_TEXT 上方说明）
+  let routes = Array.isArray(hello.routes) && hello.routes.length ? hello.routes : cfg.autoRoutes(u);
+  if (cfg.pinRoutes && !hello.routes && routes && routes.length) {
+    const pinned = await beaconAutoSend('beacon-self-auto-routes', { routes });
+    if (pinned && Array.isArray(pinned.routes) && pinned.routes.length) routes = pinned.routes;
+  }
   if (!routes || routes.length === 0) {
     // 走不下去就停手：**绝不尝试登录**（不填表单、不点按钮、不碰二维码）。
     // ⚠️ 理由必须分得清「没登录」和「登录了但这一页取不到 token」——这条通道全程静默，
@@ -1415,12 +1529,41 @@ async function beaconAutoRun() {
 
   const payload = await beaconAutoWaitForData();
   if (payload) await beaconAutoSend('beacon-self-auto-payload', { payload });
+  // 等满了仍一行没读到：这一页确实是数据页却认不出行 → 交骨架去学（站错了页不报，见函数内判据）
+  else beaconReportBackendMiss();
 
   const adv = await beaconAutoSend('beacon-self-auto-advance');
   const next = adv && Number.isInteger(adv.step) ? adv.step : routes.length;
   if (next < routes.length) location.href = routes[next];
   else await beaconAutoSend('beacon-self-auto-done');
 }
+
+// ── 供桌面客户端 / 本机浏览器（CDP 注入）用的探针（2026-09-16）──
+// 那两条路把本文件原样注入到**采集专用浏览器**里打开的后台页（服务端 /api/ingest/executor 下发），
+// 没有 service worker 可问，所以「这一页是哪个后台 / 停在登录页没有 / 是不是数据页 / 该走哪几站」
+// 由这个函数一次性答给注入方，判据与 beaconAutoRun 完全同一套（BACKENDS 表 + autoRoutes +
+// beaconLooksLikeLoginPage），不另起一套。纯读、无副作用、不发消息。
+// 注入方拿到 routes 后自己逐站导航，每站再注入一次本文件、调 __beaconParse 读数——
+// 与 sw.js 编排插件那条路的步骤一一对应，只是「问 SW 下一站是谁」换成了「注入方自己数」。
+globalThis.__beaconBackendProbe = function (href) {
+  const cfg = BACKENDS[location.hostname];
+  if (!cfg) return { known: false, platform: null, login: false, onDataPage: false, routes: [], noRoutes: null };
+  let login = false;
+  try { login = !!(cfg.pinRoutes && beaconLooksLikeLoginPage(cfg)); } catch { login = false; }
+  let routes = [];
+  try { routes = (cfg.autoRoutes && cfg.autoRoutes(new URL(href || location.href))) || []; } catch { routes = []; }
+  const onDataPage = cfg.dataPaths ? cfg.dataPaths.some((re) => re.test(beaconRoute())) : true;
+  const info = (typeof cfg.noRoutesInfo === 'function' && cfg.noRoutesInfo()) || null;
+  return {
+    known: true,
+    platform: cfg.platform,
+    login,
+    onDataPage,
+    routes: routes.slice(0, 4),
+    // 走不下去时那句话（公众号：分得清「没登录」和「登着但这页没 token」），注入方原样转给用户
+    noRoutes: routes.length ? null : info,
+  };
+};
 
 // 供测试与现场排查：算出这一轮要走哪几个页面，纯函数、无副作用、不发消息。
 // token 的处理是这条通道里最敏感的一环，必须能被单独验证。

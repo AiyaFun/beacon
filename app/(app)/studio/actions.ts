@@ -1356,6 +1356,48 @@ export async function actAdoptTitle(draftId: string, title: string): Promise<{ o
   return { ok: true };
 }
 
+// ── 删草稿 ────────────────────────────────────────────────────────────────
+//
+// 不可撤销，所以三件事必须做对：
+//
+// ① **开着的内容工单挂着它就不许删**。工单的 draftId 是松引用（没建外键），删了不会报错，
+//    只会让那张工单永远停在「已有草稿」这一格上却点不开——静默坏掉。先让人把工单处理完。
+//
+// ② **发布记录不跟着删，只把指针摘掉**。PublishRecord 存着标题/定稿正文/回流上来的播放互动，
+//    它是「看效果」那半个产品的全部家底；草稿是创作过程，发布记录是经营结果，删前者不该连坐后者。
+//    留着 draftId 指向一条已经不存在的草稿则是另一种坏——查不到的 id 比 null 更难排查。
+//
+// ③ 版本（DraftVersion）与合规检测（ComplianceCheck）由外键 Cascade 带走；
+//    封面/配图（MediaAsset）刻意不动——它们本来就同时挂在图库里，删稿不该把用户的图一起烧了。
+//    发布计划（PublishPlan）也不动：它的每条任务已经把标题正文抄了一份，自成一体，
+//    列表那边早就按「查不到就显示（草稿已删除）」写好了（lib/publish/plan.ts）。
+export async function actDeleteDraft(draftId: string): Promise<{ ok: boolean; error?: string }> {
+  const s = await getSession();
+  requireRole(s, 'content.create');
+
+  const draft = await prisma.draft.findFirst({
+    where: { id: draftId, accountId: s.accountId },
+    select: { id: true },
+  });
+  if (!draft) return { ok: false, error: '草稿不存在' };
+
+  const blocking = await prisma.contentWorkItem.count({
+    where: { draftId: draft.id, workspaceId: s.workspaceId, status: 'open' },
+  });
+  if (blocking > 0) {
+    return { ok: false, error: '这篇稿子挂在还开着的内容工单上，先在「任务记录 → 内容工单」里处理完那一单再删' };
+  }
+
+  await prisma.$transaction([
+    prisma.publishRecord.updateMany({ where: { draftId: draft.id, accountId: s.accountId }, data: { draftId: null } }),
+    prisma.draft.delete({ where: { id: draft.id } }),
+  ]);
+
+  revalidatePath('/studio');
+  revalidatePath('/publish');
+  return { ok: true };
+}
+
 // ─────────────────────────── 一稿多平台派生 ───────────────────────────
 //
 // 兑现「跨平台内容作战室」在创作端的那一半：一份稿子 → N 个平台各一份**独立草稿**

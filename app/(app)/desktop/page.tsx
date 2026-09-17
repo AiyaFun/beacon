@@ -1,3 +1,5 @@
+import type { Metadata } from 'next';
+import { pageMetadata } from '@/lib/geo/page-seo';
 import { headers } from 'next/headers';
 import { can } from '@/lib/edition';
 import { getSessionOrNull } from '@/lib/session';
@@ -9,6 +11,11 @@ import { DesktopView } from './DesktopView';
 import pkg from '@/package.json';
 
 export const dynamic = 'force-dynamic';
+
+// 这一页在 sitemap.xml 里递交给了搜索引擎，却一直没有自己的标题与描述——
+// 静默沿用全站默认那一份，于是搜索结果里它和首页长得一模一样。
+// 文案收在 lib/geo/page-seo.ts，见那里顶部「这一层解决的是什么」。
+export const metadata: Metadata = pageMetadata('/desktop');
 
 export default async function DesktopPage() {
   // 未登录也能看（2026-09-05）：陌生人看一眼有没有 Windows 版不该先填手机号。
