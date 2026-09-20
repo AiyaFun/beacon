@@ -25,8 +25,13 @@
 // 否则「三个通宵」会被拆成「三」而与「三成」误判为同一个数。
 const NUM_RE = /\d+(?:\.\d+)?%?|[一二三四五六七八九十百千万亿两俩半]+(?:成|倍|个|次|年|月|天|周|小时|分钟|万|千|百)?/g;
 
-// 太常见、单独出现时没有事实含量的词，不参与比对（「一下」「一直」「一些」里的「一」之类）
-const NOISE = new Set(['一', '二', '三', '半', '两', '俩', '十', '百', '千', '万']);
+// 太常见、单独出现时没有事实含量的词，不参与比对（「一下」「一直」「一些」里的「一」之类）。
+//
+// 「一个」「一次」也在内（2026-09-17 补）：中文里它们绝大多数时候是不定冠词而不是数量——
+// 「是一个能平躺的地方」并没有声称任何数目。此前它们算数，于是改写只要多写一句
+// 「一个…」，整版就会被判成「凭空多出数字」而作废。**「三个」「两次」不在此列**：
+// 那是真的在说数目（「三个通宵」那一例的教训还在，见下面那条注释）。
+const NOISE = new Set(['一', '二', '三', '半', '两', '俩', '十', '百', '千', '万', '一个', '一次']);
 
 export function extractNumbers(text: string): string[] {
   const out = new Set<string>();
@@ -171,13 +176,28 @@ function clip(s: string, max = 24): string {
   return s.length > max ? `${s.slice(0, max)}…` : s;
 }
 
+/**
+ * 行首的列表序号（「1. 」「2、」「3)」）是**排版**，不是事实。
+ *
+ * 2026-09-17 真机：去 AI 味那一轮把稿子改成了带编号的小标题，于是「3」「4」被当成
+ * 「改写后凭空出现的数字」，整版作废、退回原稿——**这一道从 1.3.77 起就在悄悄丢掉改好的稿子**。
+ * 比对前先把行首序号摘掉；句中的「第 3 条」「3 个月」一个都不动（那才是事实）。
+ */
+export function stripListOrdinals(text: string): string {
+  // 「.」「)」后面必须跟空格才算序号——否则「3.14 是圆周率」会被切成「14 是圆周率」。
+  // 顿号「、」不吃这条：中文列表写「2、第二条」不留空格，而「3、」也不可能是小数点。
+  return (text ?? '').replace(/^[ \t]*\d{1,2}(?:[.)）][ \t]+|、[ \t]*)/gm, '');
+}
+
 export function checkFactDrift(before: string, after: string): FactDrift {
   const src = before ?? '';
   const dst = after ?? '';
   const srcBare = bare(src);
 
-  const beforeNums = new Set(extractNumbers(src));
-  const added = extractNumbers(dst).filter((n) => {
+  // 数字比对**只在摘掉行首序号之后**做（见 stripListOrdinals）。引语与来源不受影响：
+  // 那两样比的是整句内容，序号在不在都一样。
+  const beforeNums = new Set(extractNumbers(stripListOrdinals(src)));
+  const added = extractNumbers(stripListOrdinals(dst)).filter((n) => {
     if (beforeNums.has(n)) return false;
     // 「20%」在原文里以「20」出现过就不算新——只是换了个写法。
     // ⚠️ 只对**阿拉伯数字**做这种归一：中文数字这么做会把「三成」当成原文里的「三个通宵」，

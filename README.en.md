@@ -29,6 +29,7 @@
 <p align="center">
   <a href="#download--install">Download</a> ·
   <a href="#what-problem-does-it-solve">What It Solves</a> ·
+  <a href="#how-beacon-compares-to-openclaw-and-hermes-agent">vs OpenClaw / Hermes</a> ·
   <a href="#not-supported-yet--in-progress">Not Supported Yet</a> ·
   <a href="#who-is-it-for">Who It's For</a> ·
   <a href="#quick-start">Quick Start</a> ·
@@ -121,7 +122,7 @@ Beacon brings all three into one platform so you don't have to juggle a dozen ap
 | **Topic Engine** | A panel of 12 AI personas reviews topics from different angles, tailored to your creator profile |
 | **Writing Workshop** | AI-assisted drafting, one-click multi-platform rewriting, humanness scoring, fact-drift detection, automatic AIGC labeling |
 | **Compliance Check** | 4-tier sensitive word library with per-platform rules — scan before you publish |
-| **Browser Extension** | One-click inspiration clipping, self-account data sync, competitor content collection (**never touches the WeChat Official Account back office** — see below) |
+| **Browser Extension** | One-click inspiration clipping, self-account data sync, competitor content collection (the open-source build **never touches the WeChat Official Account back office** — see "Not Supported Yet") |
 | **Bot Integration** | Feishu (Lark) group bot for trending alerts and natural language queries |
 | **Analytics Dashboard** | Unified multi-account dashboard with trend analysis and weekly reports |
 | **One-Click Publishing** | WeChat Official Accounts go through the official API (drafts only by default); for Douyin / Xiaohongshu / Bilibili / WeChat Channels the extension fills the back-office form and **stops before the publish button** — you press it |
@@ -131,74 +132,70 @@ Beacon brings all three into one platform so you don't have to juggle a dozen ap
 | **Reader Voice** | Collects comments on your own posts and on competitors', feeding them back as topic evidence and gap analysis |
 | **Growth Tracking** | Daily follower/engagement snapshots and trends for your accounts and for competitors — a metric a platform does not expose stays blank instead of being recorded as 0 |
 
-## What's New (August 2026)
+## How Beacon Compares to OpenClaw and Hermes Agent
 
-This round fills in everything that happens *after* the draft is written. The system used to hand
-you a finished piece and stop; pasting, publishing and collecting the results were all on you.
+Beacon also ships agents, skills, memory, scheduled jobs and chat bots, so it is often compared with
+[OpenClaw](https://github.com/openclaw/openclaw) and [Hermes Agent](https://github.com/NousResearch/hermes-agent).
 
-- **One-click publishing**: builds a cross-platform publishing plan. WeChat Official Accounts go
-  through the official API into the draft box (mass-send is a separate, explicit opt-in — we don't
-  make irreversible calls for you); for Douyin / Xiaohongshu / Bilibili / WeChat Channels the
-  extension fills title, body and hashtags into the creator back office and **stops before the
-  publish button**; YouTube / X / TikTok are labelled "manual" with the actual reason (needs the
-  video file / needs a paid API tier / needs a business entity) rather than pretending to support
-  them. "Filled into the back office" and "published" stay two different words.
-- **AI agent**: the assistant can now call registered tools on your behalf. Every write and every
-  paid call is confirmed step by step, and a run aborts outright when no real model is configured —
-  a mock would happily answer "done, I've taken care of it," which is worse than doing nothing.
-- **Workflow templates**: installable multi-step routines; each step reports its own result, and
-  the ones that cost money say so up front.
-- **AI cover studio and in-article illustrations**: covers at each platform's ratio, with a
-  reusable portrait and style library. Covers carry a visible watermark plus embedded provenance
-  metadata; in-article illustrations never render text.
-- **Self-healing parsers**: when a platform redesign breaks collection, the extension uploads only
-  a **redacted structural skeleton** (numbers become NUM, long CJK runs become CJK, attribute names
-  only). Selectors proposed by the model are candidates — a human has to adopt them before they
-  take effect.
-- **Platform ops console**: cross-tenant plans and status, platform AI providers and budgets,
-  parser rule adoption — every action audited.
-- **One page for keys**: model providers, image generation, publishing credentials, collection
-  tokens and bot secrets in one place, with a **side-effect-free** connectivity check (no test
-  messages sent, no images actually generated; webhook-only bots are honestly marked "can't test").
+In one sentence: **those two are general-purpose agent runtimes; Beacon is a vertical product for content
+operations.** They give you an assistant that can do anything you describe. Beacon gives you one pipeline out of
+the box — trending topics, competitors, topic selection, drafting, compliance, publishing, review — and the agent
+is only one layer of it. They are not substitutes: Beacon ships an MCP server, so either of them can call it as a
+tool (see the end of this section).
 
-## Removed: WeChat Official Account **competitor** scraping (2026-09-03)
+### What they have in common
 
-**What changed**: the channel that used *your own logged-in WeChat Official Account back office*
-to look up **other people's** accounts is gone — calling the back office's own `searchbiz`
-(search an account by name) and `appmsgpublish` (list that account's already-published public
-articles) endpoints to fetch a competitor's article list. **This one is not coming back.**
+- **Open source and runnable on your own machine**, with no lock-in to a single model vendor.
+- **The same execution core**: a goal → call a tool → read the result → decide the next step loop, with context
+  compression and a budget / round cap.
+- **Skills, persistent memory, scheduled jobs and sub-tasks** — what the agent learns is kept, runs on schedule,
+  and leaves a record.
+- **Work can be dispatched from chat**: say one sentence in a group, the task runs in the background, and the
+  result comes back to the same conversation.
+- **All three can drive a browser** to read pages.
 
-**What stays**: reading **your own** posts' numbers in **your own** back office (reads, "wow",
-read-through rate — none of which are on a public page, and read-through is the first signal the
-Official Account algorithm uses). That is the same channel, under the same constraints, as the
-WeChat Channels / Douyin / Xiaohongshu / Bilibili creator back offices. Two differences:
-`mp.weixin.qq.com` is **not among the extension's install-time permissions** — you grant it once
-from the extension's settings page (revocable at any time) — and it ships as an **optional module
-of the official build**: this open-source repository **does not include it** (it is removed at
-publish time per the strip list in `scripts/publish-github.sh`; without it the registry inside the
-extension is empty and the settings block does not render).
+### Where they differ
 
-**Why**: those endpoints are **not part of WeChat's official open API**. Calling them in an
-automated way **may violate the WeChat Official Accounts Platform service agreement** ("no
-unofficial interfaces", "no automated access"), and if it does, the account that gets rate-limited,
-feature-blocked or penalised is **your own** — we cannot appeal on your behalf.
+| Dimension | Beacon | OpenClaw | Hermes Agent |
+|---|---|---|---|
+| **Positioning** | Vertical product for content operations; the agent is one layer | General-purpose personal AI assistant that runs on your own devices | General-purpose self-improving agent (Nous Research) that "grows with you" |
+| **What you get out of the box** | Domain data and UI: multi-source trending lists, competitor library, six-dimension topic scoring, per-platform formats, sensitive-word library, analytics dashboard | An assistant wired to 20+ chat channels that can act on your devices; what it does depends on skills and plugins | An agent with a terminal, memory and skills; what it does depends on what you ask and what it accumulates |
+| **Main entry point** | Web workspace (one dispatch box on the home page) + group bots + desktop client / browser extension | Chat channels + companion apps per OS (voice, screen, device actions) | Terminal CLI + messaging gateway |
+| **Chat channels** | Mostly Chinese workplace IM: Feishu (Lark), WeCom, DingTalk, WeChat; plus Telegram and Slack | WhatsApp, Telegram, Slack, Discord, iMessage, Signal, Teams and more | Telegram, Discord, Slack, WhatsApp, Signal, email |
+| **Deployment** | Multi-tenant SaaS / desktop client / appliance (local SQLite) | Self-hosted only; a local Gateway is the control plane | Self-hosted, from a small VPS to serverless; seven terminal backends (local, Docker, SSH, Modal, …) |
+| **Where skills come from** | Steps are distilled only from **real execution traces**; a model may draft one, but **a human must enable it** | Skills / plugins, distributed through ClawHub | Skills are created **autonomously** after complex tasks and improved during use (closed learning loop) |
+| **Memory** | Isolated per account, confidence decays over time; scanned for prompt injection on write and again before injection; declarative sentences only, no imperatives | Sessions, memory and credentials stay on your machine | Persistent memory + full-text search across sessions + user modeling |
+| **Execution boundary** | Seven role bots, each with its own tool allowlist; three authorization levels; irreversible actions (publish / delete / pay / follow) **always stop and hand the click to you**; local shell exists only in the appliance build and is hard-off in SaaS | General execution within your machine's permissions (commands, browser, device actions) | General terminal execution with approval for dangerous commands |
+| **What the browser is for** | Read-only collection and pre-filling publish forms: an action allowlist, no arbitrary script execution by the model; your logins stay in your own browser; no fingerprint spoofing | General browser control | General web / browser tools |
+| **Models** | Any OpenAI-compatible endpoint (DeepSeek, Qwen, Kimi, GLM, MiniMax, …); the appliance build can use a ChatGPT subscription | Claude, Codex, local models and others, pluggable | Any model (Nous Portal, OpenRouter, OpenAI, custom endpoints) |
+| **Stack** | TypeScript · Next.js · Prisma | TypeScript · Node.js | Python |
+| **License** | AGPL-3.0 + commercial license | MIT | MIT |
 
-The feature shipped with three mitigations: off by default, a separate one-time risk
-acknowledgement, and hard-coded conservative throttling (one collection per account per 12h,
-5 accounts per round, 3–6s between requests, 30-minute stop on any rate-limit signal). Those
-**lower the probability but cannot remove the risk** — and the risk sat on the user's account while
-the payoff was a list of article titles. That trade does not pay, so the whole channel is gone
-rather than getting one more guardrail.
+### What we borrowed, and what we deliberately did not
 
-**What to use instead**:
+Beacon's agent layer was written after reading both projects at source level. For the record:
 
-| What it used to do | What to do now |
-|---|---|
-| Collect a competitor Official Account's article list | Configure `BEACON_NEWRANK_KEY` (a commercial data source; the server fetches it, your account is never used), or export JSON locally with [wechat-article-exporter](https://github.com/jooooock/wechat-article-exporter) and import it under "Competitors → Import WeChat articles" |
-| Sync your own Official Account metrics | **Kept** (official build): grant the site once in the extension's settings, then sync manually or on a daily schedule |
-| Publishing to Official Accounts | **Unaffected** — it uses WeChat's official API (drafts) |
+- **Borrowed**: scanning memory for prompt injection before it is written; pruning old tool results (without a
+  model call) before compressing context; a hard-line list of local commands that no authorization level can
+  unlock; redacting secrets from command output before it enters context; catching up once on scheduled jobs
+  missed during downtime (all from Hermes). Semantic extraction of page content, and role / aria / text anchors
+  instead of brittle class names (from the OpenClaw school of browser tooling).
+- **Deliberately not borrowed**: writing skills and memory automatically in the background — that is Hermes'
+  signature feature, but Beacon's memory is carried into **every generation** and its skills operate **real
+  accounts**, so the rule stays "a model may draft, a human must enable". Session / fingerprint pools — that is
+  fighting platform risk control, and the cost lands on the user's account. Multiple terminal backends and
+  sandboxed execution of model-written code — they have no place in a SaaS architecture.
 
-Data already collected is untouched and is not deleted.
+### Which one to pick, and using them together
+
+- You want a personal assistant you can **ask to do anything** → OpenClaw or Hermes Agent.
+- You want **a reasoned topic list every morning** and the whole pipeline from topic to review → Beacon.
+- Already running one of the other two: `mcp-server.ts` at the repository root exposes 7 tools (dispatch a task,
+  check progress, collect competitor data, collect your own data, read a page, …), so any MCP-capable agent can
+  use Beacon as its content-operations toolbox.
+
+<sub>The descriptions of OpenClaw and Hermes Agent are based on their public READMEs and source code. Both projects
+move fast — their own repositories are the source of truth.</sub>
 
 ## Not Supported Yet / In Progress
 

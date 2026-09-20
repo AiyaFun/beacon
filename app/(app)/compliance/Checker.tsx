@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useTransition } from 'react';
 import { PLATFORM_LIST, platformName } from '@/lib/constants';
 import { actCheck, actRewriteSafe, type CheckResult } from './actions';
 import type { WordHit } from '@/lib/compliance/engine';
+import { applyHit, applyAllHits, applySnippet, canApply } from '@/lib/compliance/apply';
 import { useI18n } from '@/lib/i18n';
 
 const SAMPLE = '这款面膜效果最好，全网第一，100%有效，包治百病。加微信私聊拉你进群，还能治愈你的敏感肌。';
@@ -123,6 +124,8 @@ export function Checker({ drafts = [], canCheck }: { drafts?: DraftOption[]; can
   }, []);
 
   const totalHits = (result?.hits.length ?? 0) + (result?.semantic?.hits.length ?? 0);
+  // 能一键改的：有替代说法、且位置对得上当前正文（改过正文的旧报告一律不给按钮）
+  const fixableHits = (result?.hits ?? []).filter((h) => canApply(text, h));
 
   return (
     <div className="surface checker-grid">
@@ -197,6 +200,36 @@ export function Checker({ drafts = [], canCheck }: { drafts?: DraftOption[]; can
                     ? 'Requires revision before publish. Statutory redlines will block export.'
                     : '发布前需要修改，法律级红线将阻止导出。'}
                 </div>
+                {/* 一键修改（2026-09-17）：此前这一页只能一条一条点「使用建议」，
+                    而「AI 安全改写」的 runRewrite 早就写好了、却没有任何按钮调它
+                    ——典型的「写了没接」。两条路都给出来：
+                      · 有替代说法的，直接按位置换掉（不花额度）；
+                      · 没有替代说法的红线词，交给模型整句重写。 */}
+                <div className="row wrap" style={{ gap: 8, marginTop: 10 }}>
+                  {fixableHits.length > 0 && (
+                    <button
+                      className="btn small"
+                      disabled={checking}
+                      onClick={() => {
+                        const r = applyAllHits(text, fixableHits);
+                        if (r.applied === 0) return;
+                        setText(r.text);
+                        runCheckFor(r.text, platform, draftId || undefined);
+                      }}
+                      title={isEn ? 'Replace every term that has a suggested wording' : '把所有给得出替代说法的命中一次改掉'}
+                    >
+                      {isEn ? `Fix all ${fixableHits.length}` : `一键改掉这 ${fixableHits.length} 处`}
+                    </button>
+                  )}
+                  <button
+                    className="btn small"
+                    disabled={!canCheck || rewriting || !text.trim()}
+                    onClick={runRewrite}
+                    title={isEn ? 'Let AI rewrite the whole text to a compliant version (uses AI quota)' : '让 AI 把整段改写成合规版本（会消耗 AI 额度），适合没有替代说法的红线词'}
+                  >
+                    {rewriting ? (isEn ? 'Rewriting…' : '改写中…') : (isEn ? 'AI Safe Rewrite' : 'AI 安全改写整段')}
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="result-summary" style={{ background: 'rgba(16, 185, 129, 0.1)', color: '#059669' }}>
@@ -215,20 +248,21 @@ export function Checker({ drafts = [], canCheck }: { drafts?: DraftOption[]; can
                     {h.tier === 'legal' ? (isEn ? 'Legal' : '法律级') : h.tier === 'platform' ? (isEn ? 'Platform' : '平台级') : (isEn ? 'Industry' : '行业级')}
                   </span>
                   <strong>{h.word}</strong>
-                  {h.suggestion && (
+                  {/* 按**位置**替换，不是 replaceAll：文中三处同一个词，用户点的是这一处，
+                      不该把另外两处一起改掉；而且 replaceAll 之后其余命中的偏移全错位。
+                      正文被手改过导致位置对不上时，canApply 为 false，按钮直接不出现。 */}
+                  {canApply(text, h) && (
                     <button
                       className="btn small"
                       style={{ marginLeft: 'auto' }}
                       onClick={() => {
-                        const rep = h.suggestion || '';
-                        if (rep) {
-                          const next = text.replaceAll(h.word, rep);
-                          setText(next);
-                          runCheckFor(next, platform, draftId || undefined);
-                        }
+                        const next = applyHit(text, h);
+                        if (next === text) return;
+                        setText(next);
+                        runCheckFor(next, platform, draftId || undefined);
                       }}
                     >
-                      {isEn ? 'Use Suggestion' : '使用建议'}
+                      {isEn ? 'Use Suggestion' : '改掉这一处'}
                     </button>
                   )}
                 </div>
@@ -251,7 +285,8 @@ export function Checker({ drafts = [], canCheck }: { drafts?: DraftOption[]; can
                       className="btn small"
                       style={{ marginLeft: 'auto' }}
                       onClick={() => {
-                        const next = text.replace(sh.snippet, sh.suggestion || '');
+                        const next = applySnippet(text, sh.snippet, sh.suggestion || '');
+                        if (next === text) return;
                         setText(next);
                         runCheckFor(next, platform, draftId || undefined);
                       }}
@@ -263,6 +298,31 @@ export function Checker({ drafts = [], canCheck }: { drafts?: DraftOption[]; can
                 <p>{sh.reason || (isEn ? 'May trigger platform community rules.' : '可能触发站外引流或违规导流规则，建议改为平台内咨询或删除。')}</p>
               </div>
             ))}
+            {rewrite && (
+              <div className="risk-item" style={{ borderColor: 'var(--brand)' }}>
+                <div className="risk-item-head">
+                  <span className="tag brand">{isEn ? 'AI Rewrite' : 'AI 改写'}</span>
+                  <strong>{RISK_BADGE[rewrite.check.riskLevel]?.[isEn ? 'labelEn' : 'label'] ?? ''}</strong>
+                  {rewrite.mocked && (
+                    <span className="badge badge-amber" style={{ marginLeft: 6 }}>
+                      {isEn ? 'Demo output' : '演示产出（未接真实模型）'}
+                    </span>
+                  )}
+                  <button
+                    className="btn small primary"
+                    style={{ marginLeft: 'auto' }}
+                    onClick={() => {
+                      setText(rewrite.text);
+                      setRewrite(null);
+                      runCheckFor(rewrite.text, platform, draftId || undefined);
+                    }}
+                  >
+                    {isEn ? 'Use this version' : '用这一版'}
+                  </button>
+                </div>
+                <p style={{ whiteSpace: 'pre-wrap' }}>{rewrite.text}</p>
+              </div>
+            )}
           </>
         ) : (
           <div className="result-summary">

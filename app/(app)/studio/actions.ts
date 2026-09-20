@@ -31,7 +31,8 @@ import { buildTitlePrompt, parseTitleMatrix, diagnoseTitle, type TitleCandidate,
 import { familyPlatforms } from '@/lib/studio/family';
 import { buildOutlinePrompt, buildVoicePrompt, cleanOutline } from '@/lib/studio/two-stage';
 import { safePersona, PLATFORM_STYLE, resolveDraftTarget, loadDraftContext, buildDraftMessages, persistDraftVersion, DRAFT_HYGIENE_BLOCK } from '@/lib/studio/draft-core';
-import { platformFormatBlock, tidyDraft } from '@/lib/studio/platform-format';
+import { platformFormatBlock, platformHardSpec, tidyDraft } from '@/lib/studio/platform-format';
+import { checkPlatformFit, type FormatFitReport } from '@/lib/studio/format-check';
 import { finishDraft } from '@/lib/studio/humanize-pass';
 import { buildSkillBriefBlock, type SkillBrief } from '@/lib/skills/brief';
 import type { Metrics } from '@/lib/json';
@@ -309,6 +310,10 @@ export type CoachDiagnoseResult = {
   // 此前合规命中只在「改写结果」卡里出现：等于写完一整篇才知道哪个词不能用，
   // 而且只告诉你命中了什么，不告诉你在哪儿。
   compliance: { hits: WordHit[]; riskLevel: string };
+  // 平台格式体检（2026-09-17）：零 LLM，搭同一次防抖的车。
+  // 「像不像人写的」有分看了，「合不合这个平台」此前在编辑器里一个字都没有——
+  // 而用户的原话正是「不符合各个平台的意思」。
+  fit: FormatFitReport;
 };
 
 // 实时诊断：确定性规则引擎（零 LLM），编辑器防抖高频调用
@@ -328,6 +333,7 @@ export async function actCoachDiagnose(
   ]);
   const diag = analyzeContent(body, platform, { title: draftTitle, baseline });
   const humanize = humanizeReport(body, platform);
+  const fit = checkPlatformFit(body, platform);
 
   // ⚠️ 所有命中的 start/end 都是相对 **body（trim 过）** 算的，而调用方要拿它去标注**原始 text**。
   // 正文前面有空行时两者会整体错位，高亮就会盖在隔壁的字上。在出口一次性补回前导空白的长度，
@@ -345,6 +351,7 @@ export async function actCoachDiagnose(
     signals: rules.map((r) => ({ signal: r.signal, advice: r.advice, confidence: r.confidence })),
     humanize: { ...humanize, hits: humanize.hits.map(shift) },
     compliance: { hits: compliance.hits.map(shift), riskLevel: compliance.riskLevel },
+    fit,
   };
 }
 
@@ -384,7 +391,7 @@ export async function actCoachOptimize(
     accountId: s.accountId,
     account,
     platform,
-    blocks: ['fingerprint', 'exemplar', 'catchphrase', 'memory'],
+    blocks: ['fingerprint', 'exemplar', 'voice', 'catchphrase', 'memory'],
     memoryQuery: body.slice(0, 100),
   });
 
@@ -475,7 +482,7 @@ export async function actRewrite(
     accountId: s.accountId,
     account,
     platform,
-    blocks: ['fingerprint', 'exemplar', 'catchphrase', 'material', 'memory'],
+    blocks: ['fingerprint', 'exemplar', 'voice', 'catchphrase', 'material', 'memory'],
     memoryQuery: body.slice(0, 100),
   });
   try {
@@ -586,7 +593,8 @@ export async function actDraft(
               platformName: platformName(platform),
               outline,
               personaBlock: personaPromptBlock(persona),
-              voiceBlock: [accountCtx.parts.exemplar, accountCtx.parts.catchphrase, accountCtx.parts.fingerprint]
+              // voice 排最前：深度模式第二段只管表达，「谁在说、管读者叫什么」是这一段的第一条约束
+              voiceBlock: [accountCtx.parts.voice, accountCtx.parts.exemplar, accountCtx.parts.catchphrase, accountCtx.parts.fingerprint]
                 .filter(Boolean).join('\n\n'),
               styleHint: PLATFORM_STYLE[platform],
               formatBlock: platformFormatBlock(platform), // 字数/标题/分段/标签/结尾，可执行的格式说明
@@ -594,7 +602,7 @@ export async function actDraft(
               hygieneBlock: DRAFT_HYGIENE_BLOCK,
             }),
           },
-          { role: 'user', content: outline },
+          { role: 'user', content: `${outline}\n\n本篇硬指标：${platformHardSpec(platform)}` },
         ], { temperature: 0.85 });
 
         content = tidyDraft(voiceRes.text, platform);
@@ -741,7 +749,7 @@ export async function actRunSkill(
     accountId: s.accountId,
     account,
     platform: brief?.platform || draft.platform,
-    blocks: ['fingerprint', 'exemplar', 'catchphrase', 'material', 'memory'],
+    blocks: ['fingerprint', 'exemplar', 'voice', 'catchphrase', 'material', 'memory'],
     memoryQuery: draft.title,
   });
 
@@ -945,7 +953,7 @@ export async function actReviseByAdvice(
     accountId: s.accountId,
     account,
     platform: draft.platform,
-    blocks: ['fingerprint', 'exemplar', 'catchphrase', 'material', 'memory'],
+    blocks: ['fingerprint', 'exemplar', 'voice', 'catchphrase', 'material', 'memory'],
     memoryQuery: draft.title,
   });
   const adviceBlock = opinions
@@ -1054,7 +1062,7 @@ export async function actCreateDraft(input: {
     accountId: s.accountId,
     account,
     platform,
-    blocks: ['fingerprint', 'exemplar', 'catchphrase', 'material', 'memory'],
+    blocks: ['fingerprint', 'exemplar', 'voice', 'catchphrase', 'material', 'memory'],
     memoryQuery: body.slice(0, 100),
   });
   try {
@@ -1082,7 +1090,8 @@ export async function actCreateDraft(input: {
               platformName: platformName(platform),
               outline,
               personaBlock: personaPromptBlock(persona),
-              voiceBlock: [accountCtx.parts.exemplar, accountCtx.parts.catchphrase, accountCtx.parts.fingerprint]
+              // voice 排最前：深度模式第二段只管表达，「谁在说、管读者叫什么」是这一段的第一条约束
+              voiceBlock: [accountCtx.parts.voice, accountCtx.parts.exemplar, accountCtx.parts.catchphrase, accountCtx.parts.fingerprint]
                 .filter(Boolean).join('\n\n'),
               styleHint: PLATFORM_STYLE[platform],
               formatBlock: platformFormatBlock(platform),
@@ -1090,7 +1099,7 @@ export async function actCreateDraft(input: {
               hygieneBlock: DRAFT_HYGIENE_BLOCK,
             }),
           },
-          { role: 'user', content: outline },
+          { role: 'user', content: `${outline}\n\n本篇硬指标：${platformHardSpec(platform)}` },
         ], { temperature: 0.85 });
         const deepContent = voiceRes.mocked ? tidyDraft(voiceRes.text, platform) : (await finishDraft({ tenantId: s.tenantId, text: tidyDraft(voiceRes.text, platform), platform, persona, accountCtx })).text;
         if (deepContent) {
@@ -1132,7 +1141,7 @@ export async function actCreateDraft(input: {
           '语感要求：句子长短要有起伏，不要句句工整、段段等长。只输出正文。',
         ].filter(Boolean).join('\n\n'),
       },
-      { role: 'user', content: `我的想法：${body.slice(0, 1500)}` },
+      { role: 'user', content: `我的想法：${body.slice(0, 1500)}\n\n本篇硬指标：${platformHardSpec(platform)}` },
     ], { temperature: 0.8 });
 
     const content = res.mocked ? tidyDraft(res.text, platform) : (await finishDraft({ tenantId: s.tenantId, text: tidyDraft(res.text, platform), platform, persona, accountCtx })).text;
@@ -1197,7 +1206,7 @@ export async function actDeflavor(text: string, platform: string): Promise<Defla
     accountId: s.accountId,
     account,
     platform,
-    blocks: ['exemplar', 'catchphrase', 'fingerprint'],
+    blocks: ['exemplar', 'voice', 'catchphrase', 'fingerprint'],
     maxChars: 4000,
   });
   const hasExemplar = !!accountCtx.parts.exemplar;
@@ -1460,7 +1469,7 @@ export async function actDeriveToPlatform(
       accountId: s.accountId,
       account,
       platform,
-      blocks: ['fingerprint', 'exemplar', 'catchphrase', 'memory'],
+      blocks: ['fingerprint', 'exemplar', 'voice', 'catchphrase', 'memory'],
       memoryQuery: draft!.title,
       maxChars: 4000,
     });
@@ -1475,11 +1484,14 @@ export async function actDeriveToPlatform(
           personaPromptBlock(persona),
           accountCtx.text,
           aiFlavorBanBlock(),
+          // 派生此前缺这一块：于是「一稿多平台」得到的是同一篇稿子按不同字数剪了几刀，
+          // 每个平台的模板腔原样搬过去（栏目名/每段 emoji/讨好收尾）。
+          DRAFT_HYGIENE_BLOCK,
           '不要新增原文没有的事实、数据或案例。',
           '不要输出「标题：」「正文：」这类标签或字段名，直接给能一次性粘贴出去的成品。只输出改写后的正文。',
         ].filter(Boolean).join('\n\n'),
       },
-      { role: 'user', content: source.content },
+      { role: 'user', content: `${source.content}\n\n本篇硬指标：${platformHardSpec(platform)}` },
     ], { temperature: 0.7 });
 
     const content = res.mocked ? tidyDraft(res.text, platform) : (await finishDraft({ tenantId: s.tenantId, text: tidyDraft(res.text, platform), platform, persona, accountCtx })).text;

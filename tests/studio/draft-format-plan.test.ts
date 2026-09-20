@@ -48,7 +48,7 @@ describe('① 平台格式', () => {
     expect(platformFormatBlock('nope')).toContain('【目标平台的格式');
   });
 
-  it('清洗：markdown 小标题只留文字、加粗去星号、分割线删掉、字段标签脱掉，#话题# 与序号不动', () => {
+  it('清洗：markdown 记号脱掉、字段标签脱掉、#话题# 与序号不动', () => {
     const raw = [
       '### 📌【目标客群：谁会来？】',
       '',
@@ -64,13 +64,43 @@ describe('① 平台格式', () => {
     expect(out).not.toMatch(/^#{1,6}\s/m);
     expect(out).not.toContain('**');
     expect(out).not.toMatch(/^---$/m);
-    expect(out).toContain('📌【目标客群：谁会来？】'); // 只脱 markdown 记号，文字本身不丢
     expect(out).toContain('传统影院：主要面向周末人群。');
     expect(out).toContain('真正的标题');
     expect(out).not.toContain('标题：');
     expect(out).toContain('1. 第一点');
     expect(out).toContain('#午休影院# #打工人#');
     expect(tidyDraft('', 'douyin')).toBe('');
+  });
+
+  // 2026-09-17：这一条以前断言的是「文字本身不丢」——于是「📌【目标客群：谁会来？】」
+  // 原样留在稿子里，正是用户说的「一眼就是 AI 写的」那一层。现在按平台分开处理。
+  it('🔒 栏目标签行：不能用小标题的平台整行删掉，能用的平台脱壳留文字，第一行的标题永远保住', () => {
+    const raw = ['【1.2 元睡 2.5 小时，午休影院值不值】', '', '正文第一句。', '', '📌【目标客群】', '', '白领上班族。'].join('\n');
+
+    const xhs = tidyDraft(raw, 'xiaohongshu'); // title=true, headings=false
+    expect(xhs).toContain('1.2 元睡 2.5 小时'); // 首行是标题，不许当栏目删掉
+    expect(xhs).not.toContain('目标客群'); // 栏目行整行删掉
+    expect(xhs).toContain('白领上班族。'); // 栏目下面的内容一个字不动
+
+    const wechat = tidyDraft(raw, 'wechat'); // headings=true
+    expect(wechat).toContain('目标客群'); // 允许小标题的平台只脱壳
+    expect(wechat).not.toContain('【目标客群】');
+  });
+
+  it('🔒 emoji 独占一行 → 并回上一句（真机上模型每段后面都另起一行摆一个）', () => {
+    const raw = ['上周三中午，我路过一家影城。', '😲', '', '谁在为这 1.2 元买单？', '💡'].join('\n');
+    const out = tidyDraft(raw, 'xiaohongshu');
+    expect(out).toBe('上周三中午，我路过一家影城。 😲\n\n谁在为这 1.2 元买单？ 💡');
+    expect(out.split('\n').some((l) => /^[\p{Extended_Pictographic}\s]+$/u.test(l) && l.trim())).toBe(false);
+    // 开头就摆一个、前面没有句子可并的，整行丢掉
+    expect(tidyDraft('🎬\n\n正文第一句。', 'xiaohongshu')).toBe('正文第一句。');
+  });
+
+  it('🔒 口播稿里的 emoji 一个不留（emoji 是念不出来的）', () => {
+    const raw = '👀 中午十二点，写字楼下的电影院开始卖床位💤。';
+    expect(tidyDraft(raw, 'douyin')).toBe('中午十二点，写字楼下的电影院开始卖床位。');
+    // 图文平台不动 emoji：小红书真人天天在用
+    expect(tidyDraft(raw, 'xiaohongshu')).toContain('👀');
   });
 });
 

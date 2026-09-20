@@ -9,6 +9,7 @@ import { TierBadge } from '@/components/ui';
 import { Icon } from '@/components/icons';
 import { HighlightedEditor, type Mark } from './HighlightedEditor';
 import { supportsMarkdown, hasMarkdownMarkers, mdLiteToHtml, mdLiteToPlain } from '@/lib/studio/markdown';
+import { applyHit, applyAllHits, canApply, normalizeSuggestion } from '@/lib/compliance/apply';
 import { copyRichText } from '@/lib/clipboard/rich';
 import { actRewrite, actSaveHumanVersion, actCoachDiagnose, actCoachOptimize, actDeflavor, type CoachDiagnoseResult } from './actions';
 import { applyLinePrefix as applyLinePrefixAt, wrapSelection as wrapSelectionAt, type EditResult } from './md-lite-edit';
@@ -371,6 +372,8 @@ export function Rewriter({
   // 编辑框下面那条「有哪些词」：合规命中要能点开看建议，所以列在这儿（镜像层是 pointer-events:none，
   // 挂不了 tooltip）。套话的明细在教练卡里已经有一份，这里只报个数，不重复列。
   const inlineHits = coach && coachFor === text ? coach.compliance.hits : [];
+  // 能一键改的那些：有替代说法、且位置还对得上（正文被手改过就对不上了，见 lib/compliance/apply）
+  const fixableHits = inlineHits.filter((h) => canApply(text, h));
   const aiHitCount = coach && coachFor === text ? coach.humanize.hits.length : 0;
 
   const renderCoachCard = (coach || coachLoading) ? (
@@ -478,6 +481,40 @@ export function Rewriter({
               </div>
             )}
           </div>
+
+          {/* 平台格式体检（2026-09-17）：与人味体检并列的第二把尺子。
+              人味分回答「像不像人写的」，这一段回答「合不合这个平台」——
+              字数、标题行、话题标签、段落长度、emoji、排版记号，全是能一眼核对的东西。 */}
+          <div className="divider" style={{ margin: '6px 0' }} />
+          <div className="row-between" style={{ marginBottom: 6 }}>
+            <div className="row" style={{ gap: 6, alignItems: 'center' }}>
+              <Icon.check size={14} style={{ color: 'var(--brand)' }} />
+              <b className="small" style={{ fontSize: 13 }}>{isEn ? 'Platform Fit' : '平台格式体检'}</b>
+              <span className="small muted">{isEn ? `Does it look like ${platformName(platform, lang)}` : `合不合${platformName(platform, lang)}的形`}</span>
+            </div>
+            {coach.fit.violations.length === 0 ? (
+              <span className="badge badge-green">{isEn ? 'Fits' : '符合'}</span>
+            ) : (
+              <span className={`badge ${coach.fit.badCount > 0 ? 'badge-red' : 'badge-amber'}`}>
+                {coach.fit.badCount > 0
+                  ? (isEn ? `${coach.fit.badCount} hard issue(s)` : `${coach.fit.badCount} 处硬伤`)
+                  : (isEn ? `${coach.fit.violations.length} nit(s)` : `${coach.fit.violations.length} 处偏差`)}
+              </span>
+            )}
+          </div>
+          {coach.fit.violations.length > 0 && (
+            <div className="stack" style={{ gap: 8 }}>
+              {coach.fit.violations.map((v, i) => (
+                <div key={`fit${i}`} className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
+                  <span className={`dot ${v.severity === 'bad' ? 'dot-red' : 'dot-amber'}`} style={{ marginTop: 5, flexShrink: 0 }} />
+                  <div className="small" style={{ lineHeight: 1.6 }}>
+                    <span style={{ color: 'var(--text)' }}>{v.finding}</span>
+                    <div className="muted">→ {v.fix}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
 
           {coach.signals.length > 0 && (
             <>
@@ -836,16 +873,53 @@ export function Rewriter({
                 {isEn ? `${inlineHits.length} terms flagged:` : `正文里标出 ${inlineHits.length} 处用词：`}
               </span>
             )}
-            {inlineHits.slice(0, 10).map((h, i) => (
-              <span
-                key={i}
-                className={`badge ${h.action === 'block' ? 'badge-red' : 'badge-amber'}`}
-                title={`${h.action === 'block' ? (isEn ? 'Blocked' : '禁用') : h.action === 'warn' ? (isEn ? 'Caution' : '慎用') : (isEn ? 'Suggest' : '建议')}${h.suggestion ? ` → ${h.suggestion}` : ''}`}
-              >
-                {h.word}
-              </span>
-            ))}
+            {/* 命中项可**点着改**（2026-09-17）：此前这些只是带 tooltip 的标签，
+                用户知道「这个词不能用」，却还得自己回正文里找、自己换。
+                有建议的做成按钮，点一下就按**位置**换掉那一处（lib/compliance/apply）。 */}
+            {inlineHits.slice(0, 10).map((h, i) =>
+              canApply(text, h) ? (
+                <button
+                  key={i}
+                  type="button"
+                  className={`badge ${h.action === 'block' ? 'badge-red' : 'badge-amber'}`}
+                  style={{ cursor: 'pointer', border: 'none' }}
+                  title={`${h.action === 'block' ? (isEn ? 'Blocked' : '禁用') : h.action === 'warn' ? (isEn ? 'Caution' : '慎用') : (isEn ? 'Suggest' : '建议')}｜${isEn ? 'click to replace this one' : '点击只替换这一处'}`}
+                  onClick={() => setText(applyHit(text, h))}
+                >
+                  {/* 显示的必须是**真正会替进去的那个词**（脱掉词库的括号壳），
+                      不能直接印 h.suggestion——那样按钮上写着「（私信我）」，替进去的却是「私信我」 */}
+                  {h.word} → {normalizeSuggestion(h.suggestion)}
+                </button>
+              ) : (
+                <span
+                  key={i}
+                  className={`badge ${h.action === 'block' ? 'badge-red' : 'badge-amber'}`}
+                  title={`${h.action === 'block' ? (isEn ? 'Blocked' : '禁用') : h.action === 'warn' ? (isEn ? 'Caution' : '慎用') : (isEn ? 'Suggest' : '建议')}${h.suggestion ? ` → ${h.suggestion}` : (isEn ? '｜no suggested wording, rewrite it yourself' : '｜没有可替换的说法，需要自己改')}`}
+                >
+                  {h.word}
+                </span>
+              ),
+            )}
             {inlineHits.length > 10 && <span className="small muted">{isEn ? `(${inlineHits.length} total)` : `等 ${inlineHits.length} 处`}</span>}
+            {fixableHits.length > 1 && (
+              <button
+                type="button"
+                className="btn btn-sm"
+                style={{ height: 24, padding: '0 8px', fontSize: 11.5 }}
+                title={isEn ? 'Replace every flagged term that has a suggested wording' : '把所有给得出替代说法的命中一次改掉；没有建议的红线词留着自己改'}
+                onClick={() => {
+                  const r = applyAllHits(text, fixableHits);
+                  setText(r.text);
+                  setSaved(
+                    isEn
+                      ? `Replaced ${r.applied} term(s)${r.skipped ? `, ${r.skipped} need manual rewrite` : ''}`
+                      : `已替换 ${r.applied} 处${r.skipped ? `，还有 ${r.skipped} 处没有替代说法，要自己改` : ''}`,
+                  );
+                }}
+              >
+                {isEn ? `Fix all ${fixableHits.length}` : `一键改掉这 ${fixableHits.length} 处`}
+              </button>
+            )}
             {aiHitCount > 0 && (
               <span className="small muted">
                 {isEn ? `· ${aiHitCount} cliches flagged` : `· 另有 ${aiHitCount} 处套话（虚线标注）`}

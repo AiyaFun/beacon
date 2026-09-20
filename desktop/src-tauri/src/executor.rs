@@ -276,7 +276,12 @@ async fn poll_and_run(app: &AppHandle, cfg: &ExecutorConfig) -> Result<(), Strin
             return Err("采集令牌已被吊销，登记已解除。请在页面顶部重新点「允许」。".into());
         }
         let v: serde_json::Value = res.json().await.map_err(|e| format!("领活回应不是 JSON：{e}"))?;
+        let supports_need_login = server_supports_need_login(&v);
         let Some(task) = v.get("task").filter(|t| !t.is_null()) else { return Ok(()) };
+        // 把「这台服务端认不认得中途求助」随任务带下去：execute 里没有领活回应可看
+        let mut task = task.clone();
+        task["__supportsNeedLogin"] = serde_json::Value::Bool(supports_need_login);
+        let task = &task;
         let task_id = task["id"].as_str().unwrap_or("").to_string();
         if task_id.is_empty() {
             return Ok(());
@@ -449,11 +454,18 @@ async fn execute(app: &AppHandle, client: &reqwest::Client, cfg: &ExecutorConfig
     let collect = scripts["collect"].as_str().ok_or("脚本包里没有采集函数")?;
     let read_text = scripts["readText"].as_str().ok_or("脚本包里没有读正文函数")?;
 
+    // 旧服务端不认识 need_login，一律不发（见 server_supports_need_login）
+    let help = task["id"]
+        .as_str()
+        .filter(|_| task["__supportsNeedLogin"] == true)
+        .map(|id| LoginHelp { client, cfg, task_id: id.to_string(), platform: platform.clone() });
+    let help = help.as_ref();
+
     let mut page = Cdp::open(app, &url).await?;
     let r = match kind {
-        "collect_self_backend" => run_backend(&mut page, &url, login_wall, &scripts).await,
-        "collect_competitor_recipe" | "collect_self_recipe" => run_recipe(&mut page, &url, login_wall, &scripts).await,
-        _ => run_in_page(&mut page, &url, kind, login_wall, collect, read_text, &scripts).await,
+        "collect_self_backend" => run_backend(&mut page, &url, login_wall, &scripts, help).await,
+        "collect_competitor_recipe" | "collect_self_recipe" => run_recipe(&mut page, &url, login_wall, &scripts, help).await,
+        _ => run_in_page(&mut page, &url, kind, login_wall, collect, read_text, &scripts, help).await,
     };
     // 【让他去登录时绝不清页】否则我们一边说「窗口停在这一页请登录」，一边把它导航回 about:blank
     // ——2026-09-04 真机（小红书）撞到的正是这个。park=false 时页面原样留着，也不记进 parked，
@@ -467,6 +479,75 @@ async fn execute(app: &AppHandle, client: &reqwest::Client, cfg: &ExecutorConfig
     r
 }
 
+/// 登录求助的上下文：卡在登录页时，把那一页拍下来发给**派活的那个人**（2026-09-17）。
+///
+/// 【为什么要有这一步】执行器本来就会停在登录页等人（见下面的 wait_for_login），但用户多半
+/// 是在群里 @机器人 派的活，此刻人在手机上：他既不知道卡住了，也够不着这台机器。
+/// 国内平台登录几乎都是扫码——把那一页发给他，手机一扫就过了，这次采集接着跑完。
+///
+/// 【边界】只上报，不改任务状态；服务端只私聊发给发起人，绝不进群（二维码等于一把钥匙）。
+/// 发不出去也不影响这次等待——人可能就坐在机器前面。
+pub struct LoginHelp<'a> {
+    pub client: &'a reqwest::Client,
+    pub cfg: &'a ExecutorConfig,
+    pub task_id: String,
+    pub platform: String,
+}
+
+/// 服务端认不认得 `action:'need_login'`（领活时它自报 supports）。
+///
+/// 【为什么要判】用户的服务端和客户端是分别升级的。**旧服务端不认识 action**——
+/// 它只会看到「一次没带 ok 的交付」，于是把这条正在等人登录的活判成失败、退避重排。
+/// 所以宁可不发：老服务端上这个功能就是没有，而不是把采集搞坏。
+fn server_supports_need_login(claim: &serde_json::Value) -> bool {
+    claim["supports"]
+        .as_array()
+        .map(|a| a.iter().any(|v| v.as_str() == Some("need_login")))
+        .unwrap_or(false)
+}
+
+/// 截一张能过闸的图：服务端 vetScreenshot 卡 150000 字符（WAF 的请求体阈值推出来的），
+/// 所以先按 0.7 缩放 + q55 拍，超了再退一档 0.5 + q40；还超就不带图（求助照发）。
+async fn login_shot(page: &mut Cdp) -> Option<String> {
+    for (scale, quality) in [(0.7_f64, 55_u32), (0.5, 40)] {
+        let r = page
+            .call(
+                "Page.captureScreenshot",
+                serde_json::json!({ "format": "jpeg", "quality": quality, "captureBeyondViewport": false, "optimizeForSpeed": true }),
+            )
+            .await;
+        let Ok(v) = r else { return None };
+        let Some(b64) = v["data"].as_str() else { return None };
+        let url = format!("data:image/jpeg;base64,{b64}");
+        if url.len() <= 150_000 { return Some(url); }
+        // 缩放交给下一轮：Page.captureScreenshot 不认 scale，只能靠 quality 降；
+        // 两档都超说明这一页本来就重（少见），那就不带图
+        let _ = scale;
+    }
+    None
+}
+
+/// 上报一次「我卡在登录页了」。不改任务状态，服务端只私聊发给派活的人。
+async fn ask_login_help(page: &mut Cdp, help: Option<&LoginHelp<'_>>, page_url: &str) {
+    let Some(h) = help else { return };
+    let shot = login_shot(page).await;
+    let mut body = serde_json::json!({
+        "taskId": h.task_id,
+        "action": "need_login",
+        "url": page_url,
+        "platform": h.platform,
+        "reason": "采集停在登录页，扫完码我接着采",
+    });
+    if let Some(s) = shot { body["screenshot"] = serde_json::Value::String(s); }
+    let _ = h
+        .client
+        .post(format!("{}/api/ingest/tasks", h.cfg.base))
+        .header("x-beacon-ingest-token", &h.cfg.token)
+        .json(&body)
+        .send()
+        .await;
+}
+
 /// 摆出这一页、等用户在**这一页**登录完（两条判据路径共用）。
 ///
 /// 【为什么必须共用】2026-09-04 真机（小红书）：硬信号那条会等，软信号（loggedOut）那条却
@@ -475,8 +556,10 @@ async fn execute(app: &AppHandle, client: &reqwest::Client, cfg: &ExecutorConfig
 /// 两条路都走这里，且**要用户登录时绝不清页**（见 close 的 park 参数）。
 ///
 /// 返回 true = 他登上了（页面已重新导航回目标页、渲染完毕，可以接着采）。
-async fn wait_for_login(page: &mut Cdp, page_url: &str, login_wall: &str) -> bool {
+async fn wait_for_login(page: &mut Cdp, page_url: &str, login_wall: &str, help: Option<&LoginHelp<'_>>) -> bool {
     let _ = page.call("Page.bringToFront", serde_json::json!({})).await;
+    // 先把这一页发给派活的人（他多半不在这台机器前面），再开始等
+    ask_login_help(page, help, page_url).await;
     let _ = page.eval(BADGE_LOGIN, false).await;
     crate::collect_browser::focus_window();
     for _ in 0..LOGIN_WAIT_ROUNDS {
@@ -571,6 +654,7 @@ async fn run_in_page(
     collect: &str,
     read_text: &str,
     scripts: &serde_json::Value,
+    help: Option<&LoginHelp<'_>>,
 ) -> Result<Outcome, String> {
     settle(page).await?;
 
@@ -583,7 +667,7 @@ async fn run_in_page(
             // 等在这里天经地义。把窗口摆到他面前，然后每 3 秒回头看一眼登录墙还在不在，最多等 5 分钟。
             // **只摆页面、只等待，密码永远他自己输**（红线不变）。
             // 两条判据路径共用同一套等待（见 wait_for_login 的说明）
-            if !wait_for_login(page, page_url, login_wall).await {
+            if !wait_for_login(page, page_url, login_wall, help).await {
                 return Err(format!("等你在采集浏览器里登录这个平台（{why}），等了几分钟还没登上，这次先停了。那个窗口还停在登录页，登好之后再派一次即可，之后几个月都不用再登。我不会替你输入账号密码。"));
             }
         } else {
@@ -633,7 +717,7 @@ async fn run_in_page(
                     let why = v["why"].as_str().unwrap_or("");
                     // 软信号也要等他登完（用户 2026-09-04：「碰到需要登录的时候应该等待」）。
                     // 登上之后重跑一遍解析，别让他白登一次还要再派。
-                    if wait_for_login(page, page_url, login_wall).await {
+                    if wait_for_login(page, page_url, login_wall, help).await {
                         for src in scripts["scripts"].as_array().into_iter().flatten() {
                             if let Some(code) = src.as_str() { let _ = page.eval_script(code).await; }
                         }
@@ -665,8 +749,11 @@ async fn inject_and_probe(page: &mut Cdp, srcs: &[String], probe_fn: &str) -> Re
 
 /// 创作者后台：等用户在**这一页**登录完（与 wait_for_login 同一套摆前台 + 每 3 秒回入口页复判，
 /// 只是判据换成后台探针 + 通用登录墙两条一起看）。返回 true = 登上了。
-async fn wait_for_backend_login(page: &mut Cdp, entry_url: &str, srcs: &[String], probe_fn: &str, login_wall: &str) -> bool {
+async fn wait_for_backend_login(page: &mut Cdp, entry_url: &str, srcs: &[String], probe_fn: &str, login_wall: &str, help: Option<&LoginHelp<'_>>) -> bool {
     let _ = page.call("Page.bringToFront", serde_json::json!({})).await;
+    // 创作者后台是最常撞登录墙、也最值得把那一页发出去的一类：扫完码这次就能把完播率、
+    // 粉丝画像读回来，而这些数字只有后台才有
+    ask_login_help(page, help, entry_url).await;
     let _ = page.eval(BADGE_LOGIN, false).await;
     crate::collect_browser::focus_window();
     for _ in 0..LOGIN_WAIT_ROUNDS {
@@ -691,7 +778,7 @@ async fn wait_for_backend_login(page: &mut Cdp, entry_url: &str, srcs: &[String]
 /// 脚本是插件那份 self-backend.js（服务端 /api/ingest/executor?kind=collect_self_backend 下发），
 /// 站内走哪几页由它的 autoRoutes 算——与插件那条路同一套判据，只是「问 SW 下一站」换成了这里自己数。
 /// 只读、不点、不填；未登录就把窗口摆到用户面前等他登（密码永远他自己输）。
-async fn run_backend(page: &mut Cdp, entry_url: &str, login_wall: &str, scripts: &serde_json::Value) -> Result<Outcome, String> {
+async fn run_backend(page: &mut Cdp, entry_url: &str, login_wall: &str, scripts: &serde_json::Value, help: Option<&LoginHelp<'_>>) -> Result<Outcome, String> {
     let probe_fn = scripts["backendProbe"].as_str().ok_or("脚本包里没有后台探针")?;
     let collect_fn = scripts["backendCollect"].as_str().ok_or("脚本包里没有后台读数函数")?;
     let srcs: Vec<String> = scripts["scripts"]
@@ -711,7 +798,7 @@ async fn run_backend(page: &mut Cdp, entry_url: &str, login_wall: &str, scripts:
     }
     let mut probe = inject_and_probe(page, &srcs, probe_fn).await?;
     if probe["login"] == true || (generic["walled"] == true && generic["kind"] == "login") {
-        if !wait_for_backend_login(page, entry_url, &srcs, probe_fn, login_wall).await {
+        if !wait_for_backend_login(page, entry_url, &srcs, probe_fn, login_wall, help).await {
             return Err("等你在采集浏览器里登录这个创作者后台，等了几分钟还没登上，这次先停了。那个窗口还停在登录页，登好之后再派一次即可，之后几个月都不用再登。我不会替你输入账号密码。".into());
         }
         probe = inject_and_probe(page, &srcs, probe_fn).await?;
@@ -766,7 +853,7 @@ async fn run_backend(page: &mut Cdp, entry_url: &str, login_wall: &str, scripts:
 
 /// 按配方采一页（2026-09-16）：规则/选项由服务端随脚本包给（recipe），页面里跑的是插件那份 recipe-run.js
 /// 原样包一层（recipeRun）。三种结局（scrape / learn / stale）与页面直读一起原样交回，学习与映射在服务端。
-async fn run_recipe(page: &mut Cdp, page_url: &str, login_wall: &str, scripts: &serde_json::Value) -> Result<Outcome, String> {
+async fn run_recipe(page: &mut Cdp, page_url: &str, login_wall: &str, scripts: &serde_json::Value, help: Option<&LoginHelp<'_>>) -> Result<Outcome, String> {
     let run_fn = scripts["recipeRun"].as_str().ok_or("脚本包里没有配方执行器")?;
     let ready_fn = scripts["recipeReady"].as_str().unwrap_or("() => true");
     let recipe = scripts["recipe"].clone();
@@ -778,7 +865,7 @@ async fn run_recipe(page: &mut Cdp, page_url: &str, login_wall: &str, scripts: &
     if wall["walled"] == true {
         let why = wall["why"].as_str().unwrap_or("");
         if wall["kind"] == "login" {
-            if !wait_for_login(page, page_url, login_wall).await {
+            if !wait_for_login(page, page_url, login_wall, help).await {
                 return Err(format!("等你在采集浏览器里登录这个平台（{why}），等了几分钟还没登上，这次先停了。那个窗口还停在登录页，登好之后再派一次即可，之后几个月都不用再登。我不会替你输入账号密码。"));
             }
         } else {

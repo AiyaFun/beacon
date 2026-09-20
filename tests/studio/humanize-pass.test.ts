@@ -82,14 +82,36 @@ describe('改稿', () => {
     expect(String(msgs[1].content)).toBe(AI_TEXT);
   });
 
+  // 【成本口径】改稿最多调两次模型：第二次只在「第一次确实改好了，但平台格式还剩硬伤」
+  // 时才发生（小红书这篇两版都没有标题行，所以会走到第二轮）。干净的稿子一次都不调。
   it('改得更像人 → 采用改后的，note 报人味分变化', async () => {
     llm.reply = { text: HUMAN_TEXT, mocked: false };
     const r = await humanizePass('t', AI_TEXT, 'xiaohongshu');
-    expect(llm.calls).toBe(1);
+    expect(llm.calls).toBeLessThanOrEqual(2);
+    expect(llm.calls).toBeGreaterThanOrEqual(1);
     expect(r.changed).toBe(true);
     expect(r.text).toBe(HUMAN_TEXT);
     expect(r.note).toMatch(/已自动去 AI 味/);
     expect(r.before).not.toBeNull();
+  });
+
+  it('🔒 平台格式没有硬伤了就收手，只调一次模型（抖音不要标题行）', async () => {
+    llm.reply = { text: HUMAN_TEXT, mocked: false };
+    const r = await humanizePass('t', AI_TEXT, 'douyin');
+    expect(llm.calls).toBe(1);
+    expect(r.changed).toBe(true);
+    expect(r.rounds).toBe(1);
+  });
+
+  it('🔒 「正文偏短」不许触发改写——补字数只能靠编内容，与「一个字都不许加」冲突', async () => {
+    // 150-450 字的抖音口播稿，这篇只有 100 出头：报给用户看，但不为它多花一次额度
+    const short = '中午十二点，写字楼下的电影院开始卖床位。一张票一块二，能睡两个半小时。这个价格解决了一个很多人不好意思说出口的问题：中午没地方躺。';
+    const v = judgeDraft(short, 'douyin');
+    expect(v.fit.violations.some((x) => x.code === 'chars_short')).toBe(true);
+    expect(v.fit.repairable.some((x) => x.code === 'chars_short')).toBe(false);
+    const r = await humanizePass('t', short, 'douyin');
+    expect(llm.calls).toBe(0);
+    expect(r.changed).toBe(false);
   });
 
   it('🔒 改出来的一版冒出原文没有的数字 → 作废用原稿（改稿不许添事实）', async () => {

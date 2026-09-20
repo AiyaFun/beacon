@@ -364,6 +364,19 @@ const dispatchBrowserTask: AgentTool = {
   label: '派活给浏览器插件',
   action: 'competitor.manage',
   write: true,
+  /**
+   * 8 分钟：**由等待预算推出来的，不是拍脑袋的**。
+   *
+   * 排队那条路这个工具立刻返回，用不上这么久；但本机浏览器那条路（整机/桌面）
+   * 撞上登录墙时会把登录页私发给发起人、然后等他扫码，预算是
+   * lib/browser/local-collect.ts 的 LOGIN_WAIT_BUDGET_MS（5 分钟），
+   * 加上打开页面、注入解析器、逐站读数的时间。
+   *
+   * 【为什么必须大于等待预算】桌面执行器 2026-09-04 就栽过一次完全一样的跤：
+   * 超时写死 120 秒，而登录等待要 5 分钟——用户正在输密码，上游已经报「超时」了，
+   * 那句「去窗口里登录」永远执行不到。改其中一个数，另一个要跟着改。
+   */
+  timeoutMs: 8 * 60_000,
   def: {
     name: 'dispatch_browser_task',
     description:
@@ -443,6 +456,8 @@ const dispatchBrowserTask: AgentTool = {
         cdpUrl: vetted.local.cdpUrl,
         workspaceId: ctx.workspaceId,
         payload: payload as BrowserTaskPayload,
+        // 有人在等这一步（AI 执行就是被人派出来的）：撞登录墙时把那一页私发给他、等他扫码
+        help: { runId: ctx.runId ?? null },
       });
       if (!done.ok) return { ok: false, error: done.error, summary: done.summary };
       return { ok: true, data: { local: true, ...(done.data ?? {}) }, summary: done.summary };

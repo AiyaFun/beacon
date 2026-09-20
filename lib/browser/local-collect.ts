@@ -175,6 +175,96 @@ export function loadParserSources(platform: string): { ok: true; scripts: string
   }
 }
 
+
+// ── 撞上登录墙时：拍一张给派活的人，然后等他扫码（2026-09-17）─────────────────
+//
+// 【为什么值得等】整机/桌面这条路上，用户多半不在电脑前（他是在群里 @机器人 派的活）。
+// 国内平台的登录几乎都是扫码：把那一页拍给他，手机扫一下就过了，这次采集接着跑完，
+// 不用「失败 → 他回到电脑前登录 → 再派一次」。
+//
+// 【三条边界】
+//   ① **只在有人等的时候等**（help 不传就一秒都不等）：定时批量采集那条路一等就是几分钟，
+//      而本机浏览器是串行锁（collecting），会把后面的活全堵住；
+//   ② 只等**登录**，不等风控：验证码/频控不是登录能解决的，等了也白等；
+//   ③ 预算与工具超时是**一对**：LOGIN_WAIT_BUDGET_MS 变了，dispatch_browser_task 的
+//      timeoutMs 要跟着变，否则人正在扫码、上游已经判这步超时了（桌面执行器那边
+//      2026-09-04 就栽过这一跤，见 executor.rs 的长注释）。
+export type LoginHelpCtx = {
+  workspaceId: string;
+  runId?: string | null;
+  taskId?: string | null;
+  platform?: string | null;
+};
+
+/** 等用户扫码的预算。改它必须同时改 lib/agent/tools.ts 里 dispatch_browser_task 的 timeoutMs。 */
+export const LOGIN_WAIT_BUDGET_MS = 5 * 60_000;
+const LOGIN_POLL_MS = 4000;
+
+/**
+ * 截图压到机器人能收的大小；拍不了就不拍（求助照发，只是没图）。
+ *
+ * ⚠️ 拍的**只有我们自己新开的这一页**（page.screenshot 是按页拍的，不是截屏）：
+ * 用户日常 Chrome 里别的标签、别的窗口一律拍不到。这与本文件既有的纪律是同一条——
+ * 只在默认上下文里新开一页，绝不遍历、绝不读他已经开着的标签。
+ */
+async function shotOf(page: { screenshot: (o: Record<string, unknown>) => Promise<Buffer> }): Promise<{ data: Buffer; mime: string } | null> {
+  try {
+    const data = await page.screenshot({ type: 'jpeg', quality: 60 });
+    const { MAX_BOT_IMAGE_BYTES } = await import('../bot/image');
+    if (!data || data.length === 0 || data.length > MAX_BOT_IMAGE_BYTES) return null;
+    return { data, mime: 'image/jpeg' };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 把那一页发给他，然后等他登录。返回 true = 已登录，可以接着采。
+ * 绝不抛：求助或截图失败都只是「没等到」，按原来的登录墙错误走。
+ */
+async function askAndWaitForLogin(
+  // 结构化类型而不是 import playwright 的 Page：这个文件里 playwright 是**动态 import** 的
+  //（整机包里才有 playwright-core，SaaS 上连装都没装），顶上不能有它的类型引用
+  page: {
+    screenshot: (o: Record<string, unknown>) => Promise<Buffer>;
+    goto: (u: string, o?: Record<string, unknown>) => Promise<unknown>;
+    waitForTimeout: (ms: number) => Promise<void>;
+    url: () => string;
+  },
+  url: string,
+  help: LoginHelpCtx | undefined,
+  stillWalled: () => Promise<boolean>,
+): Promise<boolean> {
+  if (!help) return false;
+  try {
+    const { requestLoginHelp } = await import('../bot/login-help');
+    await requestLoginHelp({
+      workspaceId: help.workspaceId,
+      runId: help.runId ?? null,
+      taskId: help.taskId ?? null,
+      platform: help.platform ?? null,
+      url: page.url() || url,
+      reason: '采集停在登录页，扫完码我接着采',
+      screenshot: await shotOf(page),
+    });
+  } catch {
+    // 通知发不出去也照样等：人可能就在机器前面
+  }
+  const rounds = Math.max(1, Math.floor(LOGIN_WAIT_BUDGET_MS / LOGIN_POLL_MS));
+  for (let i = 0; i < rounds; i += 1) {
+    await page.waitForTimeout(LOGIN_POLL_MS);
+    try {
+      // 登录成功后站点多半把他带去别处，每轮都回到目标页再判（与 executor.rs 同一口径）
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20_000 });
+      await page.waitForTimeout(1200);
+      if (!(await stillWalled())) return true;
+    } catch {
+      // 这一轮没判成（页面正在跳转），下一轮再说
+    }
+  }
+  return false;
+}
+
 let collecting = false;
 export function isLocalCollecting(): boolean {
   return collecting;
@@ -189,7 +279,7 @@ export async function collectPlatformPageLocal(
   cdpUrl: string,
   url: string,
   platform: string,
-  opts: { deep?: boolean } = {},
+  opts: { deep?: boolean; help?: LoginHelpCtx } = {},
 ): Promise<LocalCollectResult> {
   const vet = vetCdpUrl(cdpUrl);
   if (!vet.ok) return { ok: false, error: vet.error! };
@@ -225,13 +315,18 @@ export async function collectPlatformPageLocal(
       const title = (await page.title()).slice(0, 200);
       const wall = await page.evaluate(LOGIN_WALL_FN) as { walled: boolean; kind: string; why: string };
       if (wall.walled) {
-        return {
-          ok: false,
-          needsLogin: wall.kind === 'login',
-          error: wall.kind === 'login'
-            ? `这个主页要求登录（${wall.why}）。在你的 Chrome 里登录一次该平台再派（我不会替你输入账号密码）。`
-            : `这个站点这次要求人机验证或提示访问过于频繁（${wall.why}），过一阵再试。我们不会替你过验证码。`,
-        };
+        const cleared = wall.kind === 'login'
+          ? await askAndWaitForLogin(page, url, opts.help, async () => ((await page.evaluate(LOGIN_WALL_FN)) as { walled: boolean }).walled)
+          : false;
+        if (!cleared) {
+          return {
+            ok: false,
+            needsLogin: wall.kind === 'login',
+            error: wall.kind === 'login'
+              ? `这个主页要求登录（${wall.why}）。${opts.help ? '我已经把那一页发给你了，登录后再派一次就行。' : '在你的 Chrome 里登录一次该平台再派（我不会替你输入账号密码）。'}`
+              : `这个站点这次要求人机验证或提示访问过于频繁（${wall.why}），过一阵再试。我们不会替你过验证码。`,
+          };
+        }
       }
       for (const s of src.scripts) await page.addScriptTag({ content: s });
       const r = await page.evaluate(COLLECT_FN, { deep: opts.deep !== false }) as
@@ -361,7 +456,7 @@ export type LocalBackendResult =
  * 只读、只新开一页、用完关；登录页如实报出来（本机浏览器是用户日常的 Chrome，不弹到前台等他登——
  * 这条路是任务派下来的，人未必在电脑前）。
  */
-export async function collectBackendLocal(cdpUrl: string, platform: string): Promise<LocalBackendResult> {
+export async function collectBackendLocal(cdpUrl: string, platform: string, opts: { help?: LoginHelpCtx } = {}): Promise<LocalBackendResult> {
   const vet = vetCdpUrl(cdpUrl);
   if (!vet.ok) return { ok: false, error: vet.error! };
   const entry = backendEntryFor(platform);
@@ -390,9 +485,20 @@ export async function collectBackendLocal(cdpUrl: string, platform: string): Pro
       await page.goto(entry.url, { waitUntil: 'domcontentloaded', timeout: 20_000 });
       await page.waitForTimeout(2500);
       await inject();
-      const probe = await page.evaluate(BACKEND_PROBE_FN) as { known: boolean; login: boolean; routes: string[]; noRoutes: { reason?: string; needLogin?: boolean } | null };
+      let probe = await page.evaluate(BACKEND_PROBE_FN) as { known: boolean; login: boolean; routes: string[]; noRoutes: { reason?: string; needLogin?: boolean } | null };
       if (!probe.known) return { ok: false, error: `打开 ${entry.label} 后被带到了一个不认识的页面（${page.url().slice(0, 120)}），没法读数` };
-      if (probe.login) return { ok: false, needsLogin: true, error: `${entry.label}还没登录。在本机浏览器里登录一次再派（我不会替你输入账号密码）。` };
+      if (probe.login) {
+        // 后台这条路最常撞登录墙，也最值得等：扫完码这次就能把完播率、粉丝画像读回来。
+        // 每轮重判前要**重新注入**探针脚本——页面导航过一次，上一轮注入的东西没了。
+        const cleared = await askAndWaitForLogin(page, entry.url, opts.help, async () => {
+          await inject();
+          probe = await page.evaluate(BACKEND_PROBE_FN) as typeof probe;
+          return probe.login;
+        });
+        if (!cleared) {
+          return { ok: false, needsLogin: true, error: `${entry.label}还没登录。${opts.help ? '我已经把登录页发给你了，登录后再派一次就行。' : '在本机浏览器里登录一次再派（我不会替你输入账号密码）。'}` };
+        }
+      }
       const routes = (probe.routes ?? []).slice(0, 4);
       if (routes.length === 0) {
         return { ok: false, needsLogin: !!probe.noRoutes?.needLogin, error: probe.noRoutes?.reason || `${entry.label}里没找到「作品数据/内容管理」页的入口，这次没读到` };
@@ -457,7 +563,7 @@ export type LocalRecipeResult =
   | { ok: false; error: string; needsLogin?: boolean; connectFailed?: boolean };
 
 /** 用本机浏览器按配方采一页；顺带把页面可见文字与链接带回（配方还没学会时模型直读兜底）。 */
-export async function collectRecipeLocal(cdpUrl: string, url: string, recipe: RecipeForExecutor): Promise<LocalRecipeResult> {
+export async function collectRecipeLocal(cdpUrl: string, url: string, recipe: RecipeForExecutor, opts: { help?: LoginHelpCtx } = {}): Promise<LocalRecipeResult> {
   const vet = vetCdpUrl(cdpUrl);
   if (!vet.ok) return { ok: false, error: vet.error! };
   let origin = '';
@@ -486,13 +592,18 @@ export async function collectRecipeLocal(cdpUrl: string, url: string, recipe: Re
       await page.waitForTimeout(1500);
       const wall = await page.evaluate(LOGIN_WALL_FN) as { walled: boolean; kind: string; why: string };
       if (wall.walled) {
-        return {
-          ok: false,
-          needsLogin: wall.kind === 'login',
-          error: wall.kind === 'login'
-            ? `这个主页要求登录（${wall.why}）。在你的 Chrome 里登录一次该平台再派（我不会替你输入账号密码）。`
-            : `这个站点这次要求人机验证或提示访问过于频繁（${wall.why}），过一阵再试。我们不会替你过验证码。`,
-        };
+        const cleared = wall.kind === 'login'
+          ? await askAndWaitForLogin(page, url, opts.help, async () => ((await page.evaluate(LOGIN_WALL_FN)) as { walled: boolean }).walled)
+          : false;
+        if (!cleared) {
+          return {
+            ok: false,
+            needsLogin: wall.kind === 'login',
+            error: wall.kind === 'login'
+              ? `这个主页要求登录（${wall.why}）。${opts.help ? '我已经把那一页发给你了，登录后再派一次就行。' : '在你的 Chrome 里登录一次该平台再派（我不会替你输入账号密码）。'}`
+              : `这个站点这次要求人机验证或提示访问过于频繁（${wall.why}），过一阵再试。我们不会替你过验证码。`,
+          };
+        }
       }
       const ready = String((recipe.options as { readySelector?: unknown })?.readySelector ?? '');
       for (let i = 0; i < 20; i += 1) {

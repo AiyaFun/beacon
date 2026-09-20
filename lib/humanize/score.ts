@@ -1,4 +1,5 @@
 import { scanAiFlavor, AI_FLAVOR_CATEGORY_LABEL, type AiFlavorHit } from './lexicon';
+import { structureReport, type StructureStats } from './structure';
 
 // 人味分：一篇稿子「像不像人写的」的**确定性**体检（零 LLM、可高频调用、可解释）。
 //
@@ -7,6 +8,12 @@ import { scanAiFlavor, AI_FLAVOR_CATEGORY_LABEL, type AiFlavorHit } from './lexi
 // 句句都是完整主谓宾、每隔几句来一组对仗、外加一批模型偏爱的套话。
 // 人写东西是不均匀的——忽长忽短，会有半句话，会有一个词单独成段。
 // 所以这里量的是「方差」和「密度」，而不是「词好不好」。这也是它能做成规则而非 LLM 的原因。
+//
+// ⚠️ 2026-09-17 补：只量方差会**漏掉最典型的那一类 AI 稿**。真机那份
+// 「### 📌【目标客群】+ 每段 emoji + 我亲自去体验了一下 + 欢迎在评论区分享你的看法哦😊」
+// 在旧版这里拿了 90 分——栏目化排版恰恰把方差拉高了。所以现在还并入
+// structure.ts 的**结构性指纹**（栏目名/装饰 emoji/分点模板/讨好收尾/凭空亲历/空转副词），
+// 它是计数型的，**短文本上照样成立**，不受下面 sufficient 那道门的约束。
 //
 // ─────────────── 两条纪律 ───────────────
 // ① **阈值是方向性经验值，不是平台官方参数**——与 algorithm/content-optimizer.ts 同一约定，
@@ -37,6 +44,8 @@ export type HumanizeMetrics = {
   shortRatio: number;
   /** 每千字套话加权命中 */
   flavorPer1k: number;
+  /** 结构性指纹的原始计数（栏目名/段首 emoji 占比/定义式分点…） */
+  structure: StructureStats;
 };
 
 export type HumanizeReport = {
@@ -110,6 +119,9 @@ export function humanizeReport(text: string, platform?: string): HumanizeReport 
   const paragraphs = splitParagraphs(body);
   const lens = sentences.map((s) => s.length);
   const hits = scanAiFlavor(body);
+  // 结构性指纹：先算，它的 findings 要排在最前面——用户一眼看到的该是
+  // 「整篇被切成了表格」，而不是「句长变异系数 0.42」。
+  const struct = structureReport(body, platform);
 
   const per1k = (n: number) => (chars > 0 ? round2((n / chars) * 1000) : 0);
   const weightedFlavor = hits.reduce((a, h) => a + h.weight, 0);
@@ -122,10 +134,11 @@ export function humanizeReport(text: string, platform?: string): HumanizeReport 
     parallelPer1k: per1k(countParallel(body)),
     shortRatio: lens.length ? round2(lens.filter((l) => l <= 8).length / lens.length) : 0,
     flavorPer1k: per1k(weightedFlavor),
+    structure: struct.stats,
   };
 
-  const findings: HumanizeFinding[] = [];
-  let penalty = 0;
+  const findings: HumanizeFinding[] = [...struct.findings];
+  let penalty = struct.penalty;
 
   // ── 套话密度 ──（唯一一条在短文本上也算数的指标：命中就是命中，不需要分布）
   const heavy = hits.filter((h) => h.weight === 3);
@@ -226,7 +239,8 @@ export function humanizeReport(text: string, platform?: string): HumanizeReport 
           dimension: '口语碎句',
           severity: 'warn',
           finding: `短句（≤8 字）只占 ${Math.round(metrics.shortRatio * 100)}%，几乎句句是完整书面句`,
-          advice: '加几句真人说话的碎句：「就这么简单。」「我当时懵了。」——这类句子在口语平台是节奏支点。',
+          // 不给示例句：advice 会进修复提示词，给了句子模型就会把它抄进正文
+        advice: '加几句真人说话的碎句——三五个字一句、不完整也行，它们在口语平台是节奏支点。',
         });
       } else if (metrics.shortRatio < 0.15) {
         penalty += 4;

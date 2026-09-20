@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   checkFactDrift,
   extractNumbers,
+  stripListOrdinals,
   extractQuotes,
   extractSourceClaims,
   MIN_QUOTE_CHARS,
@@ -301,5 +302,39 @@ describe('🔒 采纳闸的接线（源码级）', () => {
       .filter((l) => !l.trim().startsWith('//'))
       .join('\n');
     expect(live).toMatch(/setUrlsChecked\(false\)/);
+  });
+});
+
+// ── 行首序号不是事实（2026-09-17 真机）──────────────────────────────
+describe('🔒 列表序号不算新数字', () => {
+  const BEFORE = ['午休影院一张票 1.2 元，能睡 2.5 小时。', '', '上座率从 8% 涨到 60%。'].join('\n');
+  const AFTER = [
+    '午休影院一张票 1.2 元，能睡 2.5 小时。',
+    '',
+    '1. 上座率从 8% 涨到 60%。',
+    '2. 卖的不是电影，是一个能平躺的地方。',
+    '3. 白天的厅空着也是空着。',
+  ].join('\n');
+
+  it('改写时把要点编上号 → 不算凭空多出数字（这一条曾让改好的稿子整版作废）', () => {
+    expect(checkFactDrift(BEFORE, AFTER).level).toBe('none');
+  });
+
+  it('「一个」是不定冠词不是数量；「三个」仍然算数', () => {
+    expect(extractNumbers('是一个能平躺的地方')).not.toContain('一个');
+    expect(extractNumbers('熬了三个通宵')).toContain('三个');
+    expect(checkFactDrift('白天的厅空着。', '白天的厅空着，那是一个能平躺的地方。').level).toBe('none');
+    expect(checkFactDrift('白天的厅空着。', '白天的厅空着，我熬了三个通宵。').level).toBe('number');
+  });
+
+  it('句中的数字照旧要管：编出来的「3 个月」一定要报', () => {
+    const faked = BEFORE + '\n\n1. 老板说 3 个月就回本了。';
+    expect(checkFactDrift(BEFORE, faked).level).toBe('number');
+    expect(checkFactDrift(BEFORE, faked).added.join('')).toContain('3');
+  });
+
+  it('只摘行首序号，不动别处；小数点不许被当成序号', () => {
+    expect(stripListOrdinals('1. 第一条\n2、第二条\n3) 第三条\n句中的 3. 不动')).toBe('第一条\n第二条\n第三条\n句中的 3. 不动');
+    expect(stripListOrdinals('3.14 是圆周率')).toBe('3.14 是圆周率');
   });
 });

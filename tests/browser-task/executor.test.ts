@@ -163,10 +163,13 @@ describe('真机暴露的两处（2026-09-04）', () => {
   it('🔒 硬信号与软信号两条路都走同一套等待（软信号那条不许直接判死）', () => {
     expect(exCode, '没有共用的等待例程').toMatch(/async fn wait_for_login\(/);
     const soft = exCode.slice(exCode.indexOf('v["loggedOut"] == true'), exCode.indexOf('v["loggedOut"] == true') + 900);
-    expect(soft, '软信号那条没等用户登录就判死了').toMatch(/wait_for_login\(page, page_url, login_wall\)/);
+    // 2026-09-17 起这个例程多了一个 help 参数（撞登录墙时把那一页私发给派活的人），
+    // 判据只认「调的是同一个例程」，不锁死参数个数——锁死了每加一个参数就要来改一次，
+    // 而这条守卫要守的是「软信号那条不许直接判死」，不是签名长什么样
+    expect(soft, '软信号那条没等用户登录就判死了').toMatch(/wait_for_login\(page, page_url, login_wall[,)]/);
     expect(soft, '登上之后没重跑解析，用户白登一次还要再派').toMatch(/Outcome::Parsed\(p2\)/);
     const hard = exCode.slice(exCode.indexOf('wall["kind"] == "login"'), exCode.indexOf('wall["kind"] == "login"') + 700);
-    expect(hard).toMatch(/wait_for_login\(page, page_url, login_wall\)/);
+    expect(hard).toMatch(/wait_for_login\(page, page_url, login_wall[,)]/);
   });
 
   it('🔒 采集页上有可见标识，登录时换成「请在这一页登录」', () => {

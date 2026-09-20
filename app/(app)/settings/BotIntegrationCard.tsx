@@ -489,9 +489,23 @@ export function BotIntegrationCard({ rows, callbackBase, agentOptions, pollerRun
                   ) : r.provider === 'wechat' ? (
                     <span className="badge badge-blue" title={isEn ? 'Official WeChat bot protocol for agents' : '微信官方面向智能体的机器人接口'}>{isEn ? 'Official iLink · Reply Only' : '官方 iLink · 只答不推'}</span>
                   ) : r.inboundKey ? (
-                    <span className="badge badge-blue">{isEn ? 'Bidirectional App' : '双向全能 (自建应用)'}</span>
+                    <span
+                      className="badge badge-blue"
+                      title={isEn
+                        ? 'Custom app mode can also DM you privately — e.g. when a collection job is stuck on a login page, the QR code is sent to you alone, never to the group.'
+                        : '自建应用还能私聊发给你本人：采集卡在登录页时，登录二维码只私发给派活的人，不会进群（二维码等于一把钥匙）'}
+                    >
+                      {isEn ? 'Bidirectional App' : '双向全能 (自建应用)'}
+                    </span>
                   ) : (
-                    <span className="badge badge-amber">{isEn ? 'Outbound Webhook' : '出站 Webhook'}</span>
+                    <span
+                      className="badge badge-amber"
+                      title={isEn
+                        ? 'Group webhook can only post to that one group — it cannot DM a person, so a stuck login page can only be reported as text.'
+                        : '群 Webhook 只能往那一个群发，没法私聊某个人：采集卡在登录页时只能在群里留一句文字，二维码发不过来（换成自建应用就能私发）'}
+                    >
+                      {isEn ? 'Outbound Webhook' : '出站 Webhook'}
+                    </span>
                   )}
                   {r.hasSignSecret && <span className="badge badge-gray">{isEn ? 'Signed Webhook' : '已启加签校验'}</span>}
                 </div>

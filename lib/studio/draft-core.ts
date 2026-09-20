@@ -5,7 +5,7 @@ import { aiFlavorBanBlock } from '../humanize/lexicon';
 import { platformName, type PlatformKey } from '../constants';
 import { writeMemory } from '../memory/core';
 import type { ChatMessage } from '../llm/types';
-import { platformFormatBlock } from './platform-format';
+import { platformFormatBlock, platformHardSpec } from './platform-format';
 import { ANGLE_SHAPE_LABELS, ANGLE_SHAPE_RULES, normalizeAngleShape } from '../topic/scoring';
 import { buildBattleCards, formatViews, type BattleReference } from '../topic/battlecard';
 
@@ -220,7 +220,7 @@ export async function loadDraftContext(input: {
     accountId: input.accountId,
     account: account ?? undefined,
     platform: input.target.platform,
-    blocks: ['fingerprint', 'exemplar', 'catchphrase', 'material', 'memory'],
+    blocks: ['fingerprint', 'exemplar', 'voice', 'catchphrase', 'material', 'memory'],
     memoryQuery: [input.target.topicTitle, input.target.topicAngle].filter(Boolean).join(' '),
   });
   const selectionCtx = await buildSelectionContext(input.target.topic);
@@ -269,6 +269,9 @@ export function buildDraftMessages(target: DraftTarget, ctx: DraftContext): { me
           `选题：${target.topicTitle}`,
           `差异化切入角：${target.topicAngle || '（自行确定）'}`,
           shape ? `答案结构：${ANGLE_SHAPE_LABELS[shape]}` : '',
+          // 硬指标在 user 消息里再钉一次：system 块被长上下文稀释后，最先被忘掉的
+          // 就是字数、标题行、话题标签这三样——而它们恰恰是「一眼看出不是这个平台的」那几样。
+          `本篇硬指标：${platformHardSpec(target.platform)}`,
         ].filter(Boolean).join('\n'),
       },
     ],

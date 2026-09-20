@@ -9,7 +9,7 @@ import { can as editionCan } from '../edition';
 import { vetCdpUrl, browseLocal } from '../browser/local';
 import {
   collectPlatformPageLocal, collectBackendLocal, collectRecipeLocal,
-  type ParsedPagePayload, type PageRead, type BackendPayload, type RecipeOutcome, type RecipeForExecutor,
+  type ParsedPagePayload, type PageRead, type BackendPayload, type RecipeOutcome, type RecipeForExecutor, type LoginHelpCtx,
 } from '../browser/local-collect';
 import { extractPostsFromPage } from '../browser/page-read-extract';
 import { competitorHomeUrl } from '../competitor-url';
@@ -398,13 +398,22 @@ export async function runBrowserTaskLocally(input: {
   cdpUrl: string;
   workspaceId: string;
   payload: BrowserTaskPayload;
+  /**
+   * 撞上登录墙时找谁（2026-09-17）。**只有「有人在等」的调用方才传**：
+   * 传了就会把登录页私发给他、并等他扫码（最多 LOGIN_WAIT_BUDGET_MS）；
+   * 不传就是老行为——如实报「还没登录」，一秒都不等。
+   * 定时批量采集那条路一定不要传：本机浏览器是串行锁，一等就把后面的活全堵住。
+   */
+  help?: Omit<LoginHelpCtx, 'workspaceId' | 'platform'> | null;
 }): Promise<LocalRunResult> {
   const { cdpUrl, workspaceId, payload } = input;
   const label = KIND_LABEL[payload.kind];
+  const helpFor = (platform: string): LoginHelpCtx | undefined =>
+    input.help ? { workspaceId, platform, runId: input.help.runId ?? null, taskId: input.help.taskId ?? null } : undefined;
 
   // 创作者后台（2026-09-16 起本机浏览器也进）：入口 → 探针 → 逐站读数，脚本是插件那份 self-backend.js
   if (payload.kind === 'collect_self_backend') {
-    const r = await collectBackendLocal(cdpUrl, payload.platform);
+    const r = await collectBackendLocal(cdpUrl, payload.platform, { help: helpFor(payload.platform) });
     if (!r.ok) return { ok: false, error: r.error, summary: `本机浏览器没采到：${label}` };
     return ingestBackendPayload({ workspaceId, payload, backend: r.payload, channel: 'local_browser', via: '本机浏览器' });
   }
@@ -415,7 +424,7 @@ export async function runBrowserTaskLocally(input: {
     if (!target) return { ok: false, error: '拼不出这个主页的地址', summary: '没有主页地址' };
     const recipe = await platformRecipeFor(workspaceId, target.platform);
     if (!recipe) return { ok: false, error: `${target.platform} 的内置配方还没播种（服务端太旧？）`, summary: '没有配方' };
-    const r = await collectRecipeLocal(cdpUrl, target.url, recipe);
+    const r = await collectRecipeLocal(cdpUrl, target.url, recipe, { help: helpFor(target.platform) });
     if (!r.ok) return { ok: false, error: r.error, summary: `本机浏览器没采到：${label}` };
     return ingestRecipeOutcome({ workspaceId, payload, recipe, outcome: r.outcome, read: r.read, url: r.finalUrl || target.url, channel: 'local_browser', via: '本机浏览器' });
   }
@@ -433,7 +442,7 @@ export async function runBrowserTaskLocally(input: {
 
   const target = await executorTarget({ kind: payload.kind, payload });
   if (!target) return { ok: false, error: `${payload.kind === 'collect_competitor' ? '竞对' : payload.platform} 没有公开主页可开`, summary: '没有主页地址' };
-  const r = await collectPlatformPageLocal(cdpUrl, target.url, target.platform, { deep: true });
+  const r = await collectPlatformPageLocal(cdpUrl, target.url, target.platform, { deep: true, help: helpFor(target.platform) });
   if (!r.ok) {
     // 解析器认不出但页面读回来了：模型直读兜底（页面直读，2026-09-16）
     if (r.read) {

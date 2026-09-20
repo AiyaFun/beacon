@@ -25,7 +25,7 @@ export function chatRefOf(provider: string, integrationId: string, chatId: strin
   return `${provider}:${integrationId}:${chatId}`;
 }
 
-function parseChatRef(ref: string): { provider: string; integrationId: string; chatId: string } | null {
+export function parseChatRef(ref: string): { provider: string; integrationId: string; chatId: string } | null {
   const first = ref.indexOf(':');
   if (first < 0) return null;
   const second = ref.indexOf(':', first + 1);

@@ -185,10 +185,44 @@ const VAGUE_QUANTIFIER: AiFlavorEntry[] = [
 // 上限取 6 个汉字：短语与半句话的分界，既有的黑话最长也就到这（「一一为你揭晓」）。
 // 开场/结尾套话是整句模板（「你怎么看？欢迎在评论区留言」），本来就长，不受这条约束——
 // 它们出现在句首句尾，跟句中的合规词很少同区间。
+
+// ─────────────── 当代模型口癖（2026-09-17 补）───────────────
+// 前面那几批收的是 2023 年那一代的「公文腔」。现在的模型早就不写「在这个信息爆炸的时代」了，
+// 它写的是下面这些：一句「不得不说」起兴、一句「那么问题来了」转折、一句「欢迎在评论区
+// 分享你的看法」收尾。**旧词表一条都匹配不上**——真机那份 881 字的小红书初稿，
+// 套话命中数是 0。
+//
+// 收词时特意拆短：旧条目「你怎么看？欢迎在评论区留言」是**整句**，模型实际写的是
+// 「欢迎在评论区分享你的看法哦」，字符串差一个字就一处都不报。短核心串才拦得住。
+// 位置在 DECLARE 之后、VAGUE_QUANTIFIER 之前：不挤占前面那批 weight 3 的禁用词名额
+// （aiFlavorBanBlock 现在按权重排序，见下）。
+const MODERN: AiFlavorEntry[] = [
+  { word: '那么问题来了', category: 'transition', weight: 3, suggestion: '删掉，直接把问题问出来' },
+  { word: '欢迎在评论区', category: 'closing', weight: 3, suggestion: '换成一个具体到能回答的问题' },
+  { word: '欢迎大家在评论', category: 'closing', weight: 3, suggestion: '换成一个具体到能回答的问题' },
+  { word: '以上就是', category: 'closing', weight: 3, suggestion: '删掉，最后一句直接说结论' },
+  { word: '看到这里', category: 'closing', weight: 2, suggestion: '删掉这句铺垫' },
+  { word: '看完这篇', category: 'closing', weight: 2, suggestion: '删掉这句铺垫' },
+  { word: '不得不说', category: 'transition', weight: 2, suggestion: '删掉，直接说那件事' },
+  { word: '值得一提的是', category: 'transition', weight: 3, suggestion: '删掉，把后面那句直接说出来' },
+  { word: '说到底', category: 'transition', weight: 1, suggestion: '换成一句你自己的结论' },
+  { word: '总的来看', category: 'transition', weight: 2, suggestion: '换成一句你自己的结论' },
+  { word: '一起来看看', category: 'declare', weight: 2, suggestion: '删掉，直接开始讲' },
+  { word: '带你了解', category: 'declare', weight: 2, suggestion: '删掉；读者不关心你的目录' },
+  { word: '你是不是也', category: 'opener', weight: 2, suggestion: '换成一个具体的人或场景' },
+  { word: '在我看来', category: 'opener', weight: 1, suggestion: '直接给判断，不用先声明这是你的看法' },
+  { word: '堪称', category: 'jargon', weight: 2, suggestion: '给个具体的比较对象' },
+  { word: '的福音', category: 'jargon', weight: 2, suggestion: '说清到底解决了谁的什么问题' },
+  { word: '划时代', category: 'jargon', weight: 2, suggestion: '删掉' },
+  { word: '天花板', category: 'jargon', weight: 1, suggestion: '说清比谁高、高多少' },
+  { word: '细思极恐', category: 'jargon', weight: 2, suggestion: '把那件可怕的事直接说出来' },
+  { word: '狠狠拿捏', category: 'jargon', weight: 2, suggestion: '说清抓住了什么' },
+];
+
 export const JARGON_MAX_WORD_LEN = 6;
 
 export const AI_FLAVOR_LEXICON: AiFlavorEntry[] = [
-  ...OPENER, ...TRANSITION, ...JARGON, ...CLOSING, ...OFFICIALESE, ...DECLARE, ...VAGUE_QUANTIFIER,
+  ...OPENER, ...TRANSITION, ...JARGON, ...CLOSING, ...OFFICIALESE, ...DECLARE, ...MODERN, ...VAGUE_QUANTIFIER,
 ];
 
 export type AiFlavorHit = {
@@ -231,7 +265,15 @@ export function scanAiFlavor(text: string): AiFlavorHit[] {
 // 给 LLM 的负面清单：只列权重 3 与 2 的词（权重 1 的词人也常用，写进禁令会把稿子改得别扭）。
 // 截断到 60 条以内——prompt 里的禁令一长，模型的注意力反而会被这张表本身占满。
 export function aiFlavorBanBlock(limit = 60): string {
-  const words = AI_FLAVOR_LEXICON.filter((e) => e.weight >= 2).map((e) => e.word).slice(0, limit);
+  // **先按权重排，再截断**（2026-09-17）。原先是按数组顺序取前 60 条，而 weight≥2 的词
+  // 早就有 89 条——排在后面的 DECLARE（「接下来我将」「本文将从」）整批被挤出去了，
+  // 而它们恰恰是「几乎只有模型这么写」的一档。按权重排之后，weight 3 的一条不落，
+  // 名额有剩才轮到 weight 2；同权重内仍按数组顺序，保证输出稳定可测。
+  const ranked = AI_FLAVOR_LEXICON
+    .map((e, i) => ({ e, i }))
+    .filter(({ e }) => e.weight >= 2)
+    .sort((a, b) => b.e.weight - a.e.weight || a.i - b.i);
+  const words = ranked.slice(0, limit).map(({ e }) => e.word);
   return [
     '【禁用词表：以下是大模型写作的典型套话，一个都不要出现】',
     words.join('、'),

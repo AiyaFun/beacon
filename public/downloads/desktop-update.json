@@ -1,14 +1,14 @@
 {
-  "version": "1.2.19",
-  "pub_date": "2026-09-17T01:38:15.651Z",
+  "version": "1.2.20",
+  "pub_date": "2026-09-18T02:06:24.652Z",
   "platforms": {
     "darwin-aarch64": {
-      "url": "https://beacon.iyunci.cn/downloads/beacon-desktop-1.2.19-mac-aarch64.update.tar.gz",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUdUFpL0lzZXdzcUhNOE5TUUd5S3BKcVU3bUlOaG5QangxK3NycDBqOFBHTDVnMEw1cnpEcHJoTSthZzZDT09FN01CV01PVGVPTWRuK0NQRW1qM0RDd2ZRMTFnVzk1cXdNPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5NjA5MDk1CWZpbGU6YmVhY29uLWRlc2t0b3AtMS4yLjE5LW1hYy1hYXJjaDY0LnVwZGF0ZS50YXIuZ3oKeTZ2UFQ4dmFGZHcvWFlUQ1UrL1B4WkdHa0ppVFNlKzNEMndyN3BLYkJtdkNkZkpTMzNIQ1FjR3RKeDB4UVV6bXlvdUVha0FCUWxSdjZHUkQvNDBmQ0E9PQo="
+      "url": "https://beacon.iyunci.cn/downloads/beacon-desktop-1.2.20-mac-aarch64.update.tar.gz",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUdUFpL0lzZXdzcUV2RUZVWHJHT0pyd1djQWJCSWxzL0NGeCtiUUpjMVROR0w0cS96NEtBV05jVXllQVU2eXgzOVduUG4rYmFNdHF4SjVmQkpnM2ZkSUViRHhyZHN1WmdvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5Njk3MTg0CWZpbGU6YmVhY29uLWRlc2t0b3AtMS4yLjIwLW1hYy1hYXJjaDY0LnVwZGF0ZS50YXIuZ3oKTW5PUFF0eXNZdXVxdlhXb1JPVnAwcVgwUU9HbWoyTjkxTFEzajQ4TzM4ZUhCOHdoa2I3cHlrYUJ1d1ZBRzF2QllzY3RGeVRvY1pDcFhMQWJ6VUEyQkE9PQo="
     },
     "windows-x86_64": {
-      "url": "https://beacon.iyunci.cn/downloads/beacon-desktop-1.2.19-win-x64.exe",
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUdUFpL0lzZXdzcURDWE9mYXk4UHVWOFNsNmlxTzRhcjBCQ01lalhlZG5vSWNLZDFmM09xcGtIZ1hVWTc4aWFQWTcvVGlZMm1OM3BNR1lVVXRSYU9lRlkyeHVsUkk5UUFrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5NjA5MDk1CWZpbGU6YmVhY29uLWRlc2t0b3AtMS4yLjE5LXdpbi14NjQuZXhlCll2SGgra2J4cTk3NW5iOEZCRk5EY0htQjM0aFFNODdsckJGTXgwOHVqN0JTK05uaVRVVmIra1VPb1NJSUtFT25wT01vL1BSZXpxY1B4RTBEd3ZQMUN3PT0K"
+      "url": "https://beacon.iyunci.cn/downloads/beacon-desktop-1.2.20-win-x64.exe",
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVUdUFpL0lzZXdzcUpJcGlxMnlESDM1UFUwaTZhb0czWkgzUGtLbkNMN0ZUWHZEY05XSDVDZjVyQ3NRRTgrcHArOXZKKzlNbkFaOU15TkFPTW9od21WZjI4M0VMU3ROZ1FBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg5Njk3MTg0CWZpbGU6YmVhY29uLWRlc2t0b3AtMS4yLjIwLXdpbi14NjQuZXhlCnV6dnhWRmdhV1VZL3RQclQzUFRCMU5OdTRVdENaVTVWYkVtYXEvN2lPUnRpQ2tHcjhvQnh6dlVpMmVlMnNXUDl4VnQrVzFLQ0FMakpnMmJBTWw3S0J3PT0K"
     }
   }
 }

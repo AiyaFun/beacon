@@ -4,6 +4,7 @@ import { readPersona, personaPromptBlock, type PersonaCard } from './persona';
 import { readFingerprint, fingerprintPromptBlock, type StyleFingerprint } from './style';
 import { materialContextForAccount, catchphrasePromptBlock, loadMaterials } from './material';
 import { buildMemoryContext } from './memory/core';
+import { analyzeVoice, voicePromptBlock, type VoiceSpec } from './humanize/voice';
 import { buildBaseline, type MetricBaseline } from './algorithm/coach';
 import { heatForSort } from './insight/heat';
 import { accountPlatformProfiles } from './insight/learn';
@@ -19,6 +20,9 @@ import { topBuckets } from './ingest/own-account';
 //   persona     人设卡（personaPromptBlock）
 //   fingerprint 风格指纹（fingerprintPromptBlock，含被数据验证的擅长选题）
 //   exemplar    风格原句样本（few-shot：他自己写过的整段真文字，见下方 exemplarBlock 的长注释）
+//   voice       说话方式规格（从同一批样本里**量**出来的：人称/怎么叫读者/句长/标点/emoji，
+//               lib/humanize/voice.ts）。样本给的是「像不像」，这一块给的是「照没照做」——
+//               它同时是成稿收口那一道的判据（checkVoiceFit）
 //   catchphrase 口头禅（语气资产，与素材分开）
 //   material    素材库（真实经历/观点，差异化生成原料）
 //   memory      长期记忆（语义召回，可带 query）
@@ -32,6 +36,7 @@ export type AccountContextBlock =
   | 'persona'
   | 'fingerprint'
   | 'exemplar'
+  | 'voice'
   | 'catchphrase'
   | 'material'
   | 'memory'
@@ -57,6 +62,12 @@ export interface AccountContextInput {
 export interface AccountContext {
   persona: PersonaCard;
   fingerprint: StyleFingerprint;
+  /**
+   * 说话方式规格。请求了 'voice' 块才有；没请求或样本不足时仍然给得出（source 会标明
+   * 是量出来的还是按人设默认的）。成稿收口用它验人称与称呼，所以它必须随上下文一起走，
+   * 不能让每个出口各自再算一遍。
+   */
+  voice: VoiceSpec | null;
   // 各块文本（空块为空串，未请求的块 key 缺席）
   parts: Partial<Record<AccountContextBlock, string>>;
   // 按可读顺序拼好、已做预算裁剪的完整上下文
@@ -65,8 +76,9 @@ export interface AccountContext {
 
 // 阅读顺序：人设 → 指纹 → 原句样本 → 口头禅 → 素材 → 基线 → 竞对 → 记忆
 // （记忆放最后，标注「可能过时仅供参考」贴近其语义）
+// voice 紧跟 persona：视角、人称、怎么称呼读者，是动笔前就要定下的事，放在最前面才有约束力。
 const READ_ORDER: AccountContextBlock[] = [
-  'persona', 'fingerprint', 'exemplar', 'catchphrase', 'material', 'baseline', 'audience', 'competitor', 'memory',
+  'persona', 'voice', 'fingerprint', 'exemplar', 'catchphrase', 'material', 'baseline', 'audience', 'competitor', 'memory',
 ];
 // 预算吃紧时的保留优先级：人设与记忆是「你是谁 + 你的口味」的地基，最先保；素材/竞对最先舍。
 // audience 排在 fingerprint 之后：它是「读者是谁」的事实，比竞对/素材更该保。
@@ -74,8 +86,9 @@ const READ_ORDER: AccountContextBlock[] = [
 // ⚠️ exemplar **排在 fingerprint 之前**，这是本表唯一一处需要解释的顺序：
 // 指纹是把文风压成「幽默(80%)」这样的标签，是有损压缩；原句样本是无损的。
 // 预算只够留一个时，留原句——模型能从三段真文字里学到的东西，远多于三个形容词。
+// voice 排第二：它只有七八行，却是整份上下文里唯一**可执行又可验证**的说话方式约束。
 const KEEP_PRIORITY: AccountContextBlock[] = [
-  'persona', 'exemplar', 'memory', 'baseline', 'catchphrase', 'audience', 'fingerprint', 'competitor', 'material',
+  'persona', 'voice', 'exemplar', 'memory', 'baseline', 'catchphrase', 'audience', 'fingerprint', 'competitor', 'material',
 ];
 
 export async function buildAccountContext(input: AccountContextInput): Promise<AccountContext> {
@@ -104,8 +117,23 @@ export async function buildAccountContext(input: AccountContextInput): Promise<A
   if (want.has('catchphrase')) {
     jobs.push(loadMaterials(accountId).then((m) => { parts.catchphrase = catchphrasePromptBlock(m); }));
   }
-  if (want.has('exemplar')) {
-    jobs.push(exemplarBlock(accountId, input.platform).then((t) => { parts.exemplar = t; }));
+  // exemplar 与 voice 吃的是**同一批**样本：取一次，两处用。
+  // 分开各取一次不只是多一次查库，更会出现「样本块里是 A 文，规格是按 B 文量的」这种
+  // 对不上的局面（取样序里有 updatedAt 排序，两次调用之间用户存一条素材就会错位）。
+  let voice: VoiceSpec | null = null;
+  if (want.has('exemplar') || want.has('voice')) {
+    jobs.push((async () => {
+      const [list, materials] = await Promise.all([
+        loadExemplars(accountId, input.platform),
+        want.has('voice') ? loadMaterials(accountId) : Promise.resolve([]),
+      ]);
+      if (want.has('exemplar')) parts.exemplar = renderExemplarBlock(list);
+      if (want.has('voice')) {
+        const catchphrases = materials.filter((m) => m.type === 'catchphrase').map((m) => m.content.slice(0, 60));
+        voice = analyzeVoice(list.map((e) => e.text), persona, catchphrases);
+        parts.voice = voicePromptBlock(voice);
+      }
+    })());
   }
   if (want.has('baseline')) {
     jobs.push(accountBaselineBlock(accountId, input.platform).then((t) => { parts.baseline = t; }));
@@ -122,7 +150,7 @@ export async function buildAccountContext(input: AccountContextInput): Promise<A
   await Promise.all(jobs);
 
   const text = composeParts(parts, input.maxChars);
-  return { persona, fingerprint, parts, text };
+  return { persona, fingerprint, voice, parts, text };
 }
 
 // 按保留优先级做预算裁剪，再按阅读顺序拼装
