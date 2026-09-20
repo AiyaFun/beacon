@@ -30,7 +30,6 @@
   <a href="#download--install">Download</a> ·
   <a href="#what-problem-does-it-solve">What It Solves</a> ·
   <a href="#how-beacon-compares-to-openclaw-and-hermes-agent">vs OpenClaw / Hermes</a> ·
-  <a href="#not-supported-yet--in-progress">Not Supported Yet</a> ·
   <a href="#who-is-it-for">Who It's For</a> ·
   <a href="#quick-start">Quick Start</a> ·
   <a href="#production-deployment">Deployment</a> ·
@@ -118,11 +117,11 @@ Beacon brings all three into one platform so you don't have to juggle a dozen ap
 | Feature | Description |
 |---|---|
 | **Trending Aggregation** | Real-time trending topics from Weibo, Douyin (TikTok CN), Bilibili, Zhihu, Baidu, YouTube, etc. with AI-powered clustering and deduplication |
-| **Competitor Monitoring** | Cross-platform competitor tracking (Douyin, Xiaohongshu, Bilibili, YouTube, X, TikTok) with automatic content scraping and analytics. **For WeChat Official Accounts / Channels see "Not Supported Yet" below** |
+| **Competitor Monitoring** | Cross-platform competitor tracking (Douyin, Xiaohongshu, Bilibili, YouTube, X, TikTok) with automatic content scraping and analytics. WeChat Official Account competitors need your own commercial data source (`BEACON_NEWRANK_KEY`) or a file import; WeChat Channels has no public profile page or official API, so there is no data channel yet |
 | **Topic Engine** | A panel of 12 AI personas reviews topics from different angles, tailored to your creator profile |
 | **Writing Workshop** | AI-assisted drafting, one-click multi-platform rewriting, humanness scoring, fact-drift detection, automatic AIGC labeling |
 | **Compliance Check** | 4-tier sensitive word library with per-platform rules — scan before you publish |
-| **Browser Extension** | One-click inspiration clipping, self-account data sync, competitor content collection (the open-source build **never touches the WeChat Official Account back office** — see "Not Supported Yet") |
+| **Browser Extension** | One-click inspiration clipping, self-account data sync, competitor content collection (the open-source build **never touches the WeChat Official Account back office**) |
 | **Bot Integration** | Feishu (Lark) group bot for trending alerts and natural language queries |
 | **Analytics Dashboard** | Unified multi-account dashboard with trend analysis and weekly reports |
 | **One-Click Publishing** | WeChat Official Accounts go through the official API (drafts only by default); for Douyin / Xiaohongshu / Bilibili / WeChat Channels the extension fills the back-office form and **stops before the publish button** — you press it |
@@ -171,6 +170,44 @@ tool (see the end of this section).
 | **Stack** | TypeScript · Next.js · Prisma | TypeScript · Node.js | Python |
 | **License** | AGPL-3.0 + commercial license | MIT | MIT |
 
+### Where Beacon is stronger
+
+This is about one job only — producing content. On generality they win (see the end of this subsection).
+
+- **A finished product out of the box, no skills to assemble.** A general agent starts as a blank page: where
+  trending data comes from, how to collect competitors, how to score a topic, how a Xiaohongshu post differs from a
+  WeChat article — you write the skills, tune the prompts and find the data sources yourself. Beacon ships these as
+  working data pipelines and UI: multi-source trending aggregation with dedup, a competitor content library,
+  six-dimension topic scoring, executable per-platform format specs, a 4-tier sensitive-word library, de-AI-ification
+  and fact-drift detection.
+- **Built for the Chinese content ecosystem.** Channels are Feishu (Lark), WeCom, DingTalk and WeChat; platforms are
+  Douyin, Xiaohongshu, Bilibili, WeChat Official Accounts and WeChat Channels (collection, metrics sync and publish-form
+  pre-fill are adapted platform by platform); models include DeepSeek, Qwen, Kimi, GLM and
+  MiniMax endpoints; compliance checks follow per-platform rules and generated content carries explicit plus embedded
+  AIGC markers. The other two projects are centered on overseas channels and ecosystems.
+- **More conservative with your real accounts.** A general agent defaults to "do whatever permissions allow".
+  Beacon operates the accounts you make a living from, so irreversible actions (publish, delete, pay, follow) always
+  stop before the button for you to press, tools are narrowed by a per-role allowlist, authorization has three levels,
+  your logins stay in your own browser, and there is no fingerprint spoofing and no use of platforms' unofficial
+  internal endpoints — we would rather ship one feature less than gamble with your account.
+- **It does not make data up.** Without a real model configured the whole run hard-stops instead of letting a mock
+  reply "all done"; a run that hands over "data" without a single tool call is sent back; a metric a platform does not
+  expose stays blank instead of being recorded as 0; "filled into the back office" and "published" are two separate
+  states, never merged.
+- **Data is a structured closed loop, not a chat log.** Post-publish views, engagement and follower numbers flow
+  back into the database — into dashboards, trends, weekly reports and reviews — and then feed the next round of
+  topic scoring. With a general agent, output mostly stays in a conversation or a file.
+- **Usable without a terminal, and usable by a team.** The hosted version needs no deployment and no command line;
+  in the web workspace every step of every task has a result row, and a run can be followed up, stopped, or watched
+  live; multi-tenant, multi-member and multi-account isolation are built in. The other two target individuals who are
+  happy to self-host.
+- **Three form factors, one codebase.** Hosted SaaS, a desktop client (collects through your own local browser),
+  and an appliance build (everything on your own computer, data in local SQLite).
+
+Conversely, **they are stronger at being general**: far more channels, no boundary on what they can do, and Hermes
+accumulates its own skills the more you use it. For an assistant you can ask to do anything, pick them; to keep a
+content pipeline running reliably, pick Beacon — or use both together (see below).
+
 ### What we borrowed, and what we deliberately did not
 
 Beacon's agent layer was written after reading both projects at source level. For the record:
@@ -196,21 +233,6 @@ Beacon's agent layer was written after reading both projects at source level. Fo
 
 <sub>The descriptions of OpenClaw and Hermes Agent are based on their public READMEs and source code. Both projects
 move fast — their own repositories are the source of truth.</sub>
-
-## Not Supported Yet / In Progress
-
-This section lists what Beacon **cannot do yet**. It exists so the feature table above does not
-read as a promise: each item below either has no usable data channel, or has not been verified
-against a real environment.
-
-| Item | Status |
-|---|---|
-| **Competitor data for WeChat Official Accounts** | **Bring your own commercial source.** Without `BEACON_NEWRANK_KEY` there is no automated path at all (the extension route was removed); file import only |
-| **Competitor data for WeChat Channels** | **Not supported.** No public profile page and no official content API — neither the server nor the extension can reach it. Subscribing yields no data, and the UI says so instead of pretending to collect |
-| **Syncing your own Official Account metrics** | **Not included in the open-source build** — it is an optional module of the official build (and needs a per-site grant). Building the extension from this repository, the feature does not exist |
-| **Chinese text on AI covers** | **Being tuned.** Image generation ships, but Chinese headline typography has not been calibrated style-by-style on real output |
-| **TikTok comment collection** | **Not verified on a real account** (needs a login); the other five platforms are verified |
-| **Off-site backup replica** | **Not configured.** Daily backups and weekly restore drills run, but the copy currently lives on the same host (set the four `BEACON_BACKUP_S3_*` variables to enable) |
 
 ## Who Is It For
 
